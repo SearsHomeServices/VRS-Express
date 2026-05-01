@@ -44,7 +44,7 @@ PORT = "5000"
 
 [deployment]
 deploymentTarget = "vm"
-run = ["bash", "-c", "NODE_ENV=production node dist/index.cjs"]
+run = ["node", "./dist/index.cjs"]
 build = ["npm", "run", "build"]
 
 [workflows]
