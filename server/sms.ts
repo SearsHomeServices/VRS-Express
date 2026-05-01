@@ -6,13 +6,23 @@ import { storage } from "./storage";
 // "Standard turnaround is a few minutes during business hours" but was
 // firing 24/7 — a tech submitting at midnight got a text claiming an
 // agent would review shortly when no agent was on shift. This helper
-// gates the after-hours wording. VRS staffing window: Mon-Fri 8am-6pm
-// America/Chicago. en-GB locale is used because en-US can return a
-// 12-hour clock for `hour: "2-digit"` with `hour12: false` on some
-// Node ICU builds, while en-GB reliably returns "00"-"23".
-export function isAfterHoursCentral(now: Date = new Date()): boolean {
+// gates the after-hours wording.
+//
+// 2026-05-01 — GM bug report: tech got the after-hours SMS at 8:50 AM
+// ET (during business hours). Root cause: this helper was using
+// America/Chicago + 8am–6pm. The canonical VRS staffing window per
+// shared/business-hours.ts is 8am–8pm Eastern. Switched timezone +
+// end-hour to match. Function renamed Central → Eastern. Weekend
+// gating preserved on the assumption VRS is Mon–Fri only — note that
+// shared/business-hours.ts is 7-day, so if Tyler confirms VRS now
+// runs weekends, delete the Sat/Sun short-circuit below.
+//
+// en-GB locale is used because en-US can return a 12-hour clock for
+// `hour: "2-digit"` with `hour12: false` on some Node ICU builds,
+// while en-GB reliably returns "00"-"23".
+export function isAfterHoursEastern(now: Date = new Date()): boolean {
   const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/Chicago",
+    timeZone: "America/New_York",
     weekday: "short",
     hour: "2-digit",
     hour12: false,
@@ -23,7 +33,7 @@ export function isAfterHoursCentral(now: Date = new Date()): boolean {
   const hour = Number(hourStr);
   if (weekday === "Sat" || weekday === "Sun") return true;
   if (Number.isNaN(hour)) return false; // Safety net — never gate when we can't parse
-  return hour < 8 || hour >= 18;
+  return hour < 8 || hour >= 20;
 }
 
 function normalizePhone(phone: string): string {
@@ -340,10 +350,12 @@ export async function buildSubmissionReceivedMessage(
   const isExternal = wt === "american_home_shield" || wt === "first_american";
   const isNla = requestType === "parts_nla";
   // 2026-04-30 — Tyler request: route to an after-hours variant when the
-  // submission lands outside Mon-Fri 8am-6pm Central. Day variants keep
+  // submission lands outside Mon-Fri 8am-8pm Eastern. Day variants keep
   // their existing copy; after-hours variants tell the tech to expect a
   // next-business-day response and explicitly release them from the site.
-  const afterHours = isAfterHoursCentral();
+  // (2026-05-01: timezone/end-hour corrected per GM bug report — see
+  // isAfterHoursEastern docblock.)
+  const afterHours = isAfterHoursEastern();
 
   const dayKey = isNla
     ? "submission_received.nla"
@@ -375,15 +387,15 @@ export async function buildSubmissionReceivedMessage(
     // a multi-day wait, which combined with the claim-SMS "DO NOT LEAVE
     // THE SITE" wording was making them stand by at the home for hours.
     waitCopy = afterHours
-      ? "NLA submission received outside of VRS parts-team hours (Mon–Fri 8am–6pm Central). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available."
+      ? "NLA submission received outside of VRS parts-team hours (Mon–Fri 8am–8pm EST). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available."
       : "NLA submission received by the VRS parts team. Typical turnaround is same-day. Reschedule this call for later today and move on to your next stop — you'll receive a follow-up text with the sourcing decision.";
   } else if (isExternal) {
     waitCopy = afterHours
-      ? "This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (Mon–Fri 8am–6pm Central) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
+      ? "This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (Mon–Fri 8am–8pm EST) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
       : "This is an external-warranty request (AHS / First American). Approvals require a provider callback and can take longer than standard Sears Protect tickets. Please remain at the site until you receive the approval/rejection text.";
   } else {
     waitCopy = afterHours
-      ? "Your submission was received outside of standard VRS hours (Mon–Fri 8am–6pm Central). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
+      ? "Your submission was received outside of standard VRS hours (Mon–Fri 8am–8pm EST). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
       : "A VRS agent will review your request shortly. Standard turnaround is a few minutes during business hours. Please remain at the site until you receive the approval/rejection text.";
   }
 

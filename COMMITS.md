@@ -3140,3 +3140,70 @@ went beyond that scope.
 - `server/routes.ts` — agent filters type gains `reviewedBy?: number`;
   vrs_agent + completedToday branch sets it.
 
+
+---
+
+## 2026-05-01 — After-hours SMS gate: timezone + end-hour fix (GM bug report)
+
+**Trigger:** GM screenshot. Tech submitted at 8:50 AM Eastern and received the
+"submission was received outside of standard VRS hours" SMS. Wording also said
+"Mon–Fri 8am–6pm Central" — GM asked it to read "8am EST to 8pm EST".
+
+**Root cause** — `server/sms.ts` `isAfterHoursCentral()` was using
+`America/Chicago` and an end hour of 18 (6 PM). At 8:50 AM ET it's 7:50 AM CT
+which is < 8 AM → the gate returned `true` and the after-hours variant fired
+50 minutes into the actual business window. Independently, the canonical VRS
+staffing window per `shared/business-hours.ts` is **8 AM–8 PM Eastern, 7 days**
+— so the SMS gate was inconsistent with the source of truth in *two* axes
+(timezone and end-hour) plus the wording was three-axes wrong (also calendar).
+
+**Fix (minimal scope per GM ask):**
+- `server/sms.ts` — `isAfterHoursCentral` → `isAfterHoursEastern`. Timezone
+  switched to `America/New_York`, end-hour 18 → 20. Single call site at the
+  `submission_received` builder updated. Weekend (Sat/Sun) gating preserved.
+- `server/sms.ts` — three hardcoded fallback strings (NLA / external-warranty /
+  standard) updated: "Mon–Fri 8am–6pm Central" → "Mon–Fri 8am–8pm EST".
+- `server/seed.ts` — same three strings in the `_after_hours` template seeds.
+  On boot, `upsertDefaultCommunicationTemplate` refreshes rows where
+  `isDefault=true && currentVersion=1` (i.e. unedited defaults); admin-edited
+  rows are preserved untouched. Verified in dev DB after restart — all 3
+  `submission_received.*_after_hours` rows now carry the new wording.
+
+**Verification:**
+- Unit-tested `isAfterHoursEastern` with 6 timestamps. GM's exact scenario
+  (Fri 2026-05-01 8:50 AM ET) → `false` (in-window). Boundary cases:
+  7:59 AM ET → true, 8:00 AM ET → false, 7:59 PM ET → false, 8:00 PM ET → true,
+  Sat noon ET → true.
+- `npx tsc --noEmit` clean for `server/sms.ts` and `server/seed.ts`.
+
+**Inconsistency flagged for Tyler's confirmation** — `shared/business-hours.ts`
+treats VRS as 7-day (its docblock explicitly notes "weekends are NOT excluded;
+add a WEEKEND_DAYS short-circuit if VRS is closed Sat/Sun"). The SMS gate
+preserves Mon–Fri-only (matches the original `isAfterHoursCentral` behavior).
+Two readings:
+  1. SMS gate is correct (VRS is Mon–Fri); shared/business-hours.ts needs
+     weekend exclusion → out of scope, didn't touch.
+  2. shared/business-hours.ts is correct (VRS is 7-day); SMS gate is wrong
+     to fire after-hours on weekends → would mean dropping the Sat/Sun
+     short-circuit and the "Mon–Fri" prefix in the seeded templates.
+GM's note didn't mention weekends so I left this alone. Tyler — say the word
+and I'll align in either direction.
+
+**Production note** — Three production templates in `communication_templates`
+were seeded at original deploy. If admin has not edited them via the admin UI
+(`isDefault=true && currentVersion=1`), the next prod deploy/restart will
+auto-refresh them via the seed upsert. If admin has edited them manually,
+the seed will leave them alone and the old wording will persist — manual
+update via admin UI required in that case.
+
+**Files touched:**
+- `server/sms.ts` — `isAfterHoursCentral` → `isAfterHoursEastern` (tz + end
+  hour), call-site rename, three fallback strings.
+- `server/seed.ts` — three `_after_hours` template seed bodies.
+
+**Files explicitly NOT touched (per Tyler's hard rules):**
+- `shared/schema.ts` — no DB schema changes.
+- `package.json` — no dep changes.
+- Smartsheet form schema — untouched.
+- `shared/business-hours.ts` — left alone pending Tyler's call on the
+  weekend question above.
