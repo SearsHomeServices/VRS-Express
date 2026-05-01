@@ -3395,3 +3395,74 @@ DB failure.**
   `client/src/components/business-hours-section.tsx`,
   `client/src/pages/admin-dashboard.tsx`,
   `client/src/pages/agent-dashboard.tsx`.
+
+---
+
+## 2026-05-01 — DIAGNOSTIC: surface the real cause of `proc_id="Not Found"` in production
+
+**Symptom (reported by Tyler via screenshot of SO# 8555-13677111):**
+"Why do some orders still show ProcID Not Found?"
+
+**Investigation findings:**
+- Last successful Snowflake-backed lookup in prod: submission 551 at
+  `2026-05-01 02:20:04 UTC` (9:20 PM CDT, 2026-04-30).
+- Morning publish of `ea5f429` rolled out at 5:53 AM CDT today.
+- Every submission since the publish (16/16 today) has stored
+  `proc_id = 'Not Found'` and `client_nm = 'Not Found'`.
+- Snowflake itself is healthy: from this workspace, the same credentials
+  + `normalizePrivateKey` connect in ~800ms and return the correct row
+  (`13677111 → FAA01A / First American Home Buyers`).
+- Prod was returning the catch-block fallback. The catch in
+  `server/services/snowflake.ts::getSnowflakeSDK()` was masking the real
+  `require()` error with the literal string
+  `"snowflake-sdk is not available in this environment"`, so the
+  deployment console gave us no signal about which lower-level failure
+  (missing module, libc mismatch, native-binding load error, etc.) was
+  actually responsible.
+
+**Diagnostic-only changes (no behavior change to any user-facing path):**
+- `server/services/snowflake.ts::getSnowflakeSDK()` — preserve the original
+  `require()` error: include `e.code` + `e.message` in the wrapped error's
+  message, attach the original `e` as `cause`. The existing swallowing
+  catch in `fetchProcIdForServiceOrder` continues to fall back to
+  `"Not Found"` exactly as before, but its `console.error` line now
+  includes the real diagnostic string.
+- `server/services/snowflake.ts::probeSnowflakeSDK()` — new exported
+  helper that attempts the load once and returns
+  `{ ok, version?, error?, errorCode?, errorStack? }`. Pure diagnostic;
+  never throws.
+- `server/index.ts` — calls `probeSnowflakeSDK()` once at the top of the
+  bootstrap IIFE and logs a single line:
+    - success → `[snowflake-probe] OK version=2.3.4`
+    - failure → `[snowflake-probe] FAIL code=… error="…" stack="…"`
+  Wrapped in a defensive try/catch even though the probe itself is
+  no-throw. Does not affect listen ordering, health-probe latency, or
+  any request path.
+
+**No changes to:**
+- `package.json`, `package-lock.json`, `script/build.ts` (snowflake-sdk
+  remains in `external: denylist` — unchanged).
+- DB schema, Smartsheet form, deployment `[deployment]` block.
+- Submission write path (`fetchProcIdForServiceOrder` still falls back to
+  `"Not Found"` on any error; no retry/backfill added — that is a
+  separate proposal pending root-cause confirmation).
+
+**Verification:**
+- `npm run build` clean (server bundle 6.2 MB, no warnings beyond the
+  pre-existing size note).
+- `PORT=5099 NODE_ENV=production node dist/index.cjs` — bundle boots in
+  ~7s, probe line emits FIRST in the log stream:
+  `[snowflake-probe] OK version=2.3.4`, then seeders skip cleanly,
+  WebSocket up, port bound, `GET /` → HTTP 200.
+- Probe logs `OK` in the workspace because the SDK loads here. The same
+  line in the deployment console after the next publish will be the
+  authoritative answer about why prod can't load it.
+
+**Next step (post-deploy):**
+Read the first `[snowflake-probe]` line from the deployment console after
+the next publish; pick the targeted fix from there (re-add to runtime
+image, swap libc variant, bundle inline if feasible, or add a
+"rehydrate Not Found" backfill).
+
+**Files touched:**
+- `server/services/snowflake.ts`, `server/index.ts`.

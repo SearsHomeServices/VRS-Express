@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupWebSocket } from "./websocket";
 import { loadConfig as loadBusinessHoursConfig } from "./business-hours-config";
+import { probeSnowflakeSDK } from "./services/snowflake";
 
 const app = express();
 const httpServer = createServer(app);
@@ -62,6 +63,26 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Tyler 2026-05-01 — diagnostic probe for runtime-image regression where
+  // the production Reserved-VM publish (commit ea5f429, 5:53 AM CDT) caused
+  // every Snowflake-backed proc_id/client_nm lookup to silently fall back
+  // to "Not Found". Logs a single line at startup so we can tell from the
+  // deployment console whether the SDK is loadable in this image.
+  // Pure logging — never throws, never blocks.
+  try {
+    const probe = probeSnowflakeSDK();
+    if (probe.ok) {
+      log(`[snowflake-probe] OK version=${probe.version || "unknown"}`);
+    } else {
+      log(
+        `[snowflake-probe] FAIL code=${probe.errorCode || "n/a"} error="${probe.error}" stack="${probe.errorStack}"`,
+      );
+    }
+  } catch (probeErr: any) {
+    // Belt-and-suspenders: probe is supposed to be no-throw.
+    log(`[snowflake-probe] internal error: ${probeErr?.message || String(probeErr)}`);
+  }
+
   // Warm the business-hours config cache before any request can hit the SMS
   // gate or analytics aggregations. Falls back to compile-time defaults if
   // the system_settings row is missing, malformed, or the DB read fails.

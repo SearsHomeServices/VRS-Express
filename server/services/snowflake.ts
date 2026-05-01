@@ -1,14 +1,62 @@
 let snowflake: any = null;
 
+// Tyler 2026-05-01 — production-environment Snowflake load failures were
+// surfacing as the generic literal "snowflake-sdk is not available in this
+// environment", which made it impossible to tell from the deployment logs
+// whether the package was missing, the native binding mismatched the runtime
+// libc, or some other lower-level failure. Preserve the underlying require()
+// error verbatim (message + stack via `cause`) so the swallowing catch in
+// fetchProcIdForServiceOrder logs the real diagnostic.
 function getSnowflakeSDK() {
   if (!snowflake) {
     try {
       snowflake = require("snowflake-sdk");
-    } catch (e) {
-      throw new Error("snowflake-sdk is not available in this environment");
+    } catch (e: any) {
+      const wrapped = new Error(
+        `snowflake-sdk is not available in this environment: ${e?.code || ""} ${e?.message || String(e)}`.trim(),
+      );
+      (wrapped as any).cause = e;
+      throw wrapped;
     }
   }
   return snowflake;
+}
+
+// Tyler 2026-05-01 — startup-probe helper so the bootstrap can log a single
+// definitive line per process about whether the Snowflake SDK is loadable in
+// the current runtime image. Pure diagnostic — never throws.
+export function probeSnowflakeSDK(): {
+  ok: boolean;
+  version?: string;
+  error?: string;
+  errorCode?: string;
+  errorStack?: string;
+} {
+  try {
+    const sdk = getSnowflakeSDK();
+    let version: string | undefined;
+    try {
+      // best-effort version read — the SDK exposes it under a couple of
+      // historical paths depending on packaging; either is fine for the log.
+      version =
+        sdk?.VERSION ||
+        sdk?.Version ||
+        require("snowflake-sdk/package.json")?.version;
+    } catch {
+      version = undefined;
+    }
+    return { ok: true, version };
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: e?.message || String(e),
+      errorCode: e?.cause?.code || e?.code,
+      errorStack: (e?.cause?.stack || e?.stack || "")
+        .split("\n")
+        .slice(0, 5)
+        .join(" | "),
+    };
+  }
 }
 
 interface SnowflakeTechRow {
