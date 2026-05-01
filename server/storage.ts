@@ -89,6 +89,7 @@ export interface IStorage {
     stage2Status?: string;
     applianceType?: string;
     assignedTo?: number;
+    reviewedBy?: number;
     requestType?: string;
     excludeRequestType?: string;
     divisionFilter?: string[];
@@ -566,6 +567,12 @@ export class DatabaseStorage implements IStorage {
     stage2Status?: string;
     applianceType?: string;
     assignedTo?: number;
+    // Tyler 2026-05-02: agent's "Completed today" tab needs to see tickets
+    // they REJECTED — but reject paths null `assignedTo` (routes.ts:1547,
+    // :1585, :1971), so filtering by assignedTo dropped every rejection.
+    // `reviewedBy` is set on every /process and /process-nla action and
+    // is the auditable "who actioned this" column. Caller picks one.
+    reviewedBy?: number;
     requestType?: string;
     excludeRequestType?: string;
     divisionFilter?: string[];
@@ -589,6 +596,9 @@ export class DatabaseStorage implements IStorage {
     }
     if (filters?.assignedTo !== undefined) {
       conditions.push(eq(submissions.assignedTo, filters.assignedTo));
+    }
+    if (filters?.reviewedBy !== undefined) {
+      conditions.push(eq(submissions.reviewedBy, filters.reviewedBy));
     }
     if (filters?.requestType !== undefined) {
       conditions.push(eq(submissions.requestType, filters.requestType));
@@ -618,8 +628,11 @@ export class DatabaseStorage implements IStorage {
       conditions.push(
         sql`${submissions.reviewedAt} >= ${today}` as any
       );
+      // Tyler 2026-05-02: include `rejected_closed` so the "reject and close"
+      // path (warranty-not-covered) also surfaces in the agent's completed
+      // history. Was previously dropped from the IN list silently.
       conditions.push(
-        sql`${submissions.ticketStatus} IN ('completed', 'approved', 'rejected', 'invalid')` as any
+        sql`${submissions.ticketStatus} IN ('completed', 'approved', 'rejected', 'rejected_closed', 'invalid')` as any
       );
     }
 
@@ -669,22 +682,37 @@ export class DatabaseStorage implements IStorage {
   async getCompletedTodayCount(agentId?: number): Promise<number> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    // Tyler 2026-05-02: predicate now mirrors the Completed-today list query
+    // exactly (see getSubmissionsWithTechnician completedToday branch + the
+    // route-layer dedup in routes.ts /api/submissions). Previously this
+    // counted by `stage1Status IN ('approved','rejected') AND stage1ReviewedAt
+    // >= today` while the list filtered by `ticketStatus IN
+    // ('completed','approved','rejected','rejected_closed','invalid') AND
+    // reviewedAt >= today`, so the tile and the tab disagreed (missing
+    // `invalid`/`rejected_closed`, plus stage1 timestamps drift from
+    // /process reviewedAt). Architect (debug-major-bluejay) flagged this.
     const conditions: any[] = [
-      or(
-        eq(submissions.stage1Status, "approved"),
-        eq(submissions.stage1Status, "rejected")
-      ),
-      sql`${submissions.stage1ReviewedAt} >= ${today}`,
+      sql`${submissions.reviewedAt} >= ${today}`,
+      sql`${submissions.ticketStatus} IN ('completed', 'approved', 'rejected', 'rejected_closed', 'invalid')`,
       sql`${submissions.requestType} != 'parts_nla'`,
     ];
     if (agentId !== undefined) {
-      conditions.push(eq(submissions.assignedTo, agentId));
+      // Was `assignedTo` which is cleared on every reject (see /process
+      // reject + reject_and_close + nla_reject paths). The tile silently
+      // under-reported by exactly the number of rejections each agent did.
+      conditions.push(eq(submissions.reviewedBy, agentId));
     }
+    // Dedupe resubmission chains so a ticket the agent rejected and then
+    // re-actioned on resubmission counts once — matches the per-chain dedup
+    // applied to the completed list view in routes.ts so the header tile
+    // and the tab row count agree.
     const result = await db
-      .select({ count: sql<number>`count(*)` })
+      .select({
+        count: sql<number>`count(distinct coalesce(${submissions.resubmissionOf}, ${submissions.id}))`,
+      })
       .from(submissions)
       .where(and(...conditions));
-    return result[0]?.count || 0;
+    return Number(result[0]?.count) || 0;
   }
 
   async getAgentQueueCount(agentId?: number): Promise<number> {

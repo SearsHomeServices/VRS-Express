@@ -2991,3 +2991,107 @@ Inner `JSON.parse` is wrapped in its own try so non-JSON literals fall through t
 
 ### Not touched (deliberate)
 - Targeted vitest harness for "concurrent /process → 1×200 + 1×409", "SMS throw still 200", and "hydration matrix" — architect flagged as a useful next step but it's a NEW test file, not a fix; out of scope for this round and does not need to ship before the user re-validates the four findings.
+
+---
+
+## 2026-05-02 — Agent Completed-today: surface rejected tickets + dedupe chains
+
+**Tyler's report**: agent processes 10 tickets (4 rejected, some resubmitted) and
+the Completed tab only shows 6 — the rejects vanish, and resubmissions appear as
+brand-new tickets per agent instead of grouping under the original chain.
+
+### Root cause
+
+The agent Completed-tab query filtered by `assignedTo = agentId`. But every
+reject path nulls `assignedTo`:
+- `server/routes.ts:1547` — /process action `reject`
+- `server/routes.ts:1585` — /process action `reject_and_close`
+- `server/routes.ts:1971` — /process-nla action `nla_reject`
+
+So as soon as a ticket was rejected it became orphaned to the agent's view.
+The auditable column for "who actioned this ticket" is `reviewedBy`, set on
+every action via the base updateData (`server/routes.ts:1450`) and on every
+NLA branch.
+
+Secondary issues found:
+1. The completedToday `IN (...)` list in `getSubmissionsWithTechnician` was
+   missing `'rejected_closed'`, so even before the assignedTo bug, the
+   "reject and close" flow would have been invisible.
+2. `getCompletedTodayCount` had the same `assignedTo` bug AND counted raw rows
+   without chain dedup — so the header tile and the list could disagree.
+3. Resubmits create NEW rows pointing at the chain ROOT via `resubmissionOf`
+   (routes.ts:660-666). With no dedup, an agent who rejected then re-actioned
+   on resubmission saw the chain twice.
+
+### Fix
+
+**`server/storage.ts`**
+- `IStorage.getSubmissionsWithTechnician` — added optional `reviewedBy?: number`
+  filter to the interface signature.
+- `getSubmissionsWithTechnician` impl — added `reviewedBy` filter wiring;
+  added `'rejected_closed'` to the completedToday status IN list.
+- `getCompletedTodayCount` — switched `assignedTo` → `reviewedBy`; switched
+  `count(*)` → `count(distinct coalesce(resubmission_of, id))` so the tile
+  matches the deduped list shown in the tab.
+
+**`server/routes.ts`** — `/api/submissions`
+- Local `filters` type extended with `reviewedBy?: number`.
+- vrs_agent + isCompletedToday branch sets `filters.reviewedBy = user.id`
+  instead of `filters.assignedTo = user.id`.
+- After fetch (vrs_agent + completedToday only) dedup by
+  `COALESCE(resubmissionOf, id)`, keeping the row with the latest `reviewedAt`,
+  then sort desc by reviewedAt. Runs BEFORE the search filter so search hits
+  the deduped result.
+
+### Scope notes
+
+- Admin / super_admin views unchanged (filters.assignedTo is not set for them
+  on this branch, and the dedup is gated on `user.role === 'vrs_agent'`).
+- NLA-completed view (`requestType=parts_nla&completedToday=true`) flows
+  through the same code path and benefits from the same fix — NLA rejects
+  also nulled assignedTo (routes.ts:1971), so they were silently invisible
+  too. `getNlaCompletedTodayCount` already used `reviewedBy` so it was not
+  affected; left untouched per scope discipline.
+- `assignedTo` itself is intentionally left null on reject — reject means the
+  ticket is no longer "owned" by anyone for queue purposes. The fix is the
+  history filter, not the action's data shape.
+
+### Files changed
+
+- `server/storage.ts` (interface + impl + count)
+- `server/routes.ts` (filters type + agent branch + chain dedup)
+
+
+### Follow-up: align tile predicate with list (architect-flagged)
+
+Architect (debug-major-bluejay) caught a tile/list parity gap: the original
+`getCompletedTodayCount` filtered by `stage1Status IN ('approved','rejected')`
++ `stage1ReviewedAt >= today`, while the deduped list filters by `ticketStatus
+IN ('completed','approved','rejected','rejected_closed','invalid')` +
+`reviewedAt >= today`. Tile would have under-reported `invalid` and
+`rejected_closed` and could drift on stage1 timestamps.
+
+Patched `getCompletedTodayCount` to use the same predicate as the list:
+- `reviewedAt >= today`
+- `ticketStatus IN ('completed','approved','rejected','rejected_closed','invalid')`
+- `requestType != 'parts_nla'`
+- `reviewedBy = agentId` (when scoped)
+- `count(distinct coalesce(resubmission_of, id))` (chain dedup)
+
+Tile and tab now agree row-for-row.
+
+
+### Verification
+
+- `tsc --noEmit` clean for changed files (only pre-existing errors elsewhere).
+- Architect (subagent_debug-major-bluejay): PASS on `reviewedBy` coverage,
+  chain-dedup correctness for all chain shapes, no visibility widening,
+  `rejected_closed` correctness. Single MED finding (tile/list predicate
+  mismatch) addressed in the follow-up patch above.
+- Playwright e2e smoke (subagent 28e06394): logged in as sysadmin, pulled
+  the JWT from localStorage, called the three modified endpoints with
+  Bearer auth — all returned HTTP 200 with the expected body shape. The
+  /admin dashboard rendered without app-side errors. (Test reported a
+  failure only because of pre-existing Vite HMR websocket errors in the
+  Replit dev environment, which are unrelated to this change.)
+

@@ -858,6 +858,10 @@ export async function registerRoutes(
         stage1Status?: string;
         stage2Status?: string;
         assignedTo?: number;
+        // Tyler 2026-05-02: see storage.ts comment — needed so the agent's
+        // Completed-today view surfaces tickets they REJECTED (which null
+        // assignedTo).
+        reviewedBy?: number;
         applianceType?: string;
         requestType?: string;
         excludeRequestType?: string;
@@ -883,7 +887,12 @@ export async function registerRoutes(
         } else if (ticketStatusFilter === "pending") {
           filters.assignedTo = user.id;
         } else if (isCompletedToday) {
-          filters.assignedTo = user.id;
+          // Tyler 2026-05-02: was `assignedTo = user.id`, but reject paths
+          // null `assignedTo` (routes.ts /process: ~1547, ~1585; /process-nla:
+          // ~1971), so every rejected ticket disappeared from the agent's
+          // Completed tab. `reviewedBy` is the auditable column and is set on
+          // every action via the base updateData (~1450) and every NLA branch.
+          filters.reviewedBy = user.id;
         } else {
           filters.assignedTo = user.id;
         }
@@ -912,6 +921,35 @@ export async function registerRoutes(
 
       if (user.role === "vrs_agent" || user.role === "admin" || user.role === "super_admin") {
         let result = await storage.getSubmissionsWithTechnician(filters, completedToday);
+
+        // Tyler 2026-05-02: dedupe resubmission chains for the agent's
+        // Completed-today view. Resubmits create NEW rows pointing at the
+        // chain ROOT via `resubmissionOf` (routes.ts:660-666), so a ticket
+        // the agent rejected and then re-actioned on resubmission would show
+        // twice. Key on COALESCE(resubmissionOf, id) and keep the latest
+        // `reviewedAt` so the row reflects the chain's current state. Done
+        // at the route layer (not storage) so admin / overall views are
+        // unaffected. Runs BEFORE search so the search filter operates on
+        // the deduped result and totals match what the user sees.
+        if (
+          completedToday &&
+          user.role === "vrs_agent" &&
+          filters.reviewedBy !== undefined
+        ) {
+          const reviewedAtMs = (s: typeof result[number]) =>
+            s.reviewedAt ? new Date(s.reviewedAt as any).getTime() : 0;
+          const byChain = new Map<number, typeof result[number]>();
+          for (const sub of result) {
+            const chainRoot = sub.resubmissionOf ?? sub.id;
+            const existing = byChain.get(chainRoot);
+            if (!existing || reviewedAtMs(sub) >= reviewedAtMs(existing)) {
+              byChain.set(chainRoot, sub);
+            }
+          }
+          result = Array.from(byChain.values()).sort(
+            (a, b) => reviewedAtMs(b) - reviewedAtMs(a)
+          );
+        }
 
         const search = req.query.search as string | undefined;
         if (search && result.length > 0) {
