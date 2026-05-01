@@ -8,7 +8,10 @@ import { registerObjectStorageRoutes } from "./replit_integrations/object_storag
 import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
-import { INTAKE_FORM_GO_LIVE_UTC } from "@shared/intake-form-config";
+import {
+  INTAKE_FORM_GO_LIVE_UTC,
+  isTerminalTicketStatusForIntake,
+} from "@shared/intake-form-config";
 import * as fs from "fs";
 import * as path from "path";
 import { createWriteStream, createReadStream } from "fs";
@@ -3970,43 +3973,32 @@ export async function registerRoutes(
           });
         }
 
-        // Tyler 2026-04-30: NLA parts tickets must fill out the
-        // (NLA-specific) Smartsheet intake form just like AUTH tickets.
-        // Branch the "is intake required" rules by requestType:
+        // Tyler 2026-04-30 / 2026-05-01: terminal-status set is shared
+        // across AUTH and NLA via isTerminalTicketStatusForIntake (single
+        // source of truth in shared/intake-form-config.ts). Both branches
+        // require an intake form on every terminal outcome:
+        //   AUTH/Infestation:  approved | completed | rejected | rejected_closed | invalid
+        //   NLA:                          completed | rejected | rejected_closed | invalid
+        //                                 (NLA never writes "approved")
+        // Non-terminal statuses (`pending` for AUTH pre-action,
+        // `queued` for NLA escalated to P-Card) stay not_approved here.
         //
-        //   NLA: required when ticketStatus is any post-processing terminal
-        //        state set by /process-nla — completed (most success
-        //        actions), rejected (nla_reject), invalid (nla_invalid).
-        //        NLA tickets do NOT have authCode, so the authCode gate
-        //        does not apply. queued (nla_escalate_to_pcard) hands
-        //        the ticket off to a P-Card agent and stays not_approved
-        //        from the original agent's perspective; the receiving
-        //        P-Card agent will see required:true after their own
-        //        nla_pcard_confirm sets ticketStatus=completed.
-        //
-        //   AUTH/Infestation: unchanged behavior — requires both
-        //        ticketStatus in {approved, completed} AND a non-empty
-        //        authCode. Tyler 2026-04-28 (intake-tab disappearance
-        //        bug): the Authorize handler writes ticketStatus
-        //        ="completed" — NOT "approved" (schema enum has both;
-        //        no code path actually writes "approved"). The "approved"
-        //        branch is kept for forward-compat.
-        if (isNla) {
-          const nlaTerminal =
-            sub.ticketStatus === "completed" ||
-            sub.ticketStatus === "rejected" ||
-            sub.ticketStatus === "rejected_closed" ||
-            sub.ticketStatus === "invalid";
-          if (!nlaTerminal) {
-            return res.status(200).json({ required: false, recorded: false, reason: "not_approved" });
-          }
-          return res.status(200).json({ required: true, recorded: false });
-        }
-
-        if (sub.ticketStatus !== "approved" && sub.ticketStatus !== "completed") {
+        // The authCode subgate ONLY applies to AUTH approved|completed —
+        // a successful authorization without an authCode is a data-quality
+        // hole (caller is expected to re-authorize). Rejected /
+        // rejected_closed / invalid AUTH tickets never have an authCode
+        // by design (no auth was issued), so the subgate is skipped for
+        // those — without that carve-out, AUTH-rejected confirms would
+        // fall through to no_auth_code and the agent would be stuck
+        // exactly like sub 566 was on 2026-05-01 (see COMMITS.md entry).
+        if (!isTerminalTicketStatusForIntake(sub.ticketStatus)) {
           return res.status(200).json({ required: false, recorded: false, reason: "not_approved" });
         }
-        if (!sub.authCode) {
+        if (
+          !isNla &&
+          (sub.ticketStatus === "approved" || sub.ticketStatus === "completed") &&
+          !sub.authCode
+        ) {
           return res.status(200).json({ required: false, recorded: false, reason: "no_auth_code" });
         }
         return res.status(200).json({ required: true, recorded: false });
@@ -4169,24 +4161,25 @@ export async function registerRoutes(
           });
         }
 
-        // Tyler 2026-04-30 (NLA parity): the original AUTH-only check
-        // accepted only `approved|completed`. NLA actions can resolve to
-        // `completed` (most success actions), `rejected` (nla_reject), or
-        // `invalid` (nla_invalid) — and Tyler's design (see
-        // processMutation.onSuccess comment) is "agent fills out intake
-        // form for every terminal outcome". Branch by requestType so AUTH
-        // behavior is unchanged but NLA can confirm intake on any
-        // terminal status. `pending` (pre-action) and `queued`
-        // (escalated to P-Card — handed off) remain blocked.
+        // Tyler 2026-04-30 / 2026-05-01: terminal-status predicate is
+        // shared across AUTH and NLA via isTerminalTicketStatusForIntake.
+        // See shared/intake-form-config.ts for the full rationale and
+        // the AUTH/NLA terminal sets.
+        //
+        // Tyler's design intent (see processMutation.onSuccess comment +
+        // shared/intake-form-config.ts) is "agent fills out intake form
+        // for every terminal outcome". Pre-2026-05-01 the AUTH branch
+        // was inadvertently narrower than the NLA branch — sub 566
+        // (SO 8380-13677352) and 5 other AUTH-rejected tickets were
+        // stuck behind this gate today even though the agents had
+        // already submitted the Smartsheet form successfully (the
+        // IntakeFormTab iframe loads for any ticket per the 2026-04-28
+        // requirement change). `pending` (AUTH pre-action) and `queued`
+        // (NLA escalated to P-Card — handed off to a different agent)
+        // remain blocked.
         const status = owned.submission.ticketStatus;
         const isNla = owned.submission.requestType === "parts_nla";
-        const statusOkForConfirm = isNla
-          ? status === "completed" ||
-            status === "rejected" ||
-            status === "rejected_closed" ||
-            status === "invalid"
-          : status === "approved" || status === "completed";
-        if (!statusOkForConfirm) {
+        if (!isTerminalTicketStatusForIntake(status)) {
           console.warn(`${tag("not-approved")} status=fail ticketStatus=${status} isNla=${isNla}`);
           return res.status(409).json({
             error: "This ticket has not been processed yet — finish reviewing it before recording the intake form.",

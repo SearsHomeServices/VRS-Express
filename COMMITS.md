@@ -3466,3 +3466,104 @@ image, swap libc variant, bundle inline if feasible, or add a
 
 **Files touched:**
 - `server/services/snowflake.ts`, `server/index.ts`.
+
+---
+
+## 2026-05-01 — P1 FIX: AUTH-rejected tickets stuck behind intake-confirm gate
+
+**Symptom (Hamed Jabarkhail, 12:42 PM CDT):**
+"8380-13677352 the confirm button isn't working — I was watching the
+tech close it, submitted the intake and got confirmation but the
+confirm button is showing this error" — toast: `Could not record
+intake — This ticket has not been processed yet — finish reviewing it
+before recording the intake form.`
+
+**Scope (production at time of fix):** 7 submissions stuck with intake
+forms successfully posted to Smartsheet but no `intake_forms` audit row:
+
+| sub | SO | branch | status | agent |
+|-----|-----------------|---------------|----------|------------------|
+| 552 | 7084-13660607   | authorization | rejected | Zorn Jones       |
+| 557 | 7084-13678799   | authorization | rejected | Zorn Jones       |
+| 561 | 8555-13677111   | authorization | rejected | Jesse Gonzales   |
+| 562 | 8555-13677111   | authorization | rejected | Jesse Gonzales   |
+| 564 | 5555-56897988   | parts_nla     | rejected | Ian Vandyke      |
+| 566 | 8380-13677352   | authorization | rejected | Mark Mogensen    |
+| 567 | 7084-13670931   | authorization | rejected | Maneul Quinones  |
+
+(Sub 564 is NLA — that branch already accepted `rejected` pre-fix, so
+that one was just in flight at the time of the snapshot. The other 6
+are the actual AUTH-rejected drift cases.)
+
+**Root cause — drift between AUTH and NLA terminal-status sets across
+4 sites (one source of truth was missing):**
+
+1. `server/routes.ts` POST `/intake-form/confirm` pre-flight gate
+2. `server/routes.ts` GET  `/intake-form-status` required-flag computation
+3. `server/storage.ts` `atomicCreateIntakeForm` in-transaction re-check
+4. `shared/intake-form-config.ts` `deriveIntakeFormStatus` (admin column)
+
+NLA was widened to `{completed, rejected, rejected_closed, invalid}`
+on 2026-04-30 (and the helper was widened again 2026-05-01) to match
+Tyler's "intake form for every terminal outcome" design. AUTH was
+inadvertently left at `{approved, completed}`. Compounding factors
+that turned this into a P1 instead of just a confused-UX bug:
+
+- The IntakeFormTab iframe loads for **every** ticket regardless of
+  status (Tyler removed the `!required && !recorded` early-exit gate
+  on 2026-04-28). So the agent CAN submit the Smartsheet form for an
+  AUTH-rejected ticket.
+- The Smartsheet form post is independent of our app — it succeeds.
+- Only the local `/confirm` POST 409s. Real intake data is now in
+  Smartsheet with no matching row in `intake_forms`. Audit gap.
+
+**Fix (single source of truth in `shared/intake-form-config.ts`):**
+
+- New export `TERMINAL_TICKET_STATUSES_FOR_INTAKE` =
+  `["approved","completed","rejected","rejected_closed","invalid"]`
+  + helper `isTerminalTicketStatusForIntake(status)`.
+- `deriveIntakeFormStatus` now uses the helper — AUTH branch broadens
+  to match NLA. NLA never writes "approved" so its accepted set is a
+  natural subset; no NLA behavior change.
+- `server/routes.ts` GET `/intake-form-status`: collapses both
+  branches onto the helper. The `authCode` subgate is preserved but
+  ONLY for AUTH `approved|completed` (rejected/invalid AUTH tickets
+  never have an authCode by design — they were never authorized).
+  Without this carve-out the relaxed terminal set would just fall
+  through to a `no_auth_code` 200 and the agent would still be stuck.
+- `server/routes.ts` POST `/intake-form/confirm`: pre-flight gate uses
+  the helper.
+- `server/storage.ts` `atomicCreateIntakeForm`: in-transaction
+  re-check uses the helper. Without this, AUTH-rejected confirms
+  would tx-409 even after the route gate was relaxed.
+
+**Non-changes (intentional):**
+
+- Non-terminal statuses still rejected: `pending` (AUTH pre-action) and
+  `queued` (NLA escalated to P-Card — handed off to a different agent).
+- The `INTAKE_FORM_GO_LIVE_UTC` cutoff is unchanged.
+- No DB schema changes. No Smartsheet form changes. No package.json
+  changes. No deployment block changes.
+- The 7 stuck rows are NOT auto-backfilled. The intended remediation
+  is for the 6 affected agents to reopen each affected ticket and
+  click "Confirm" — the iframe will re-render the Smartsheet form
+  but the agent does NOT need to re-submit it (their submission
+  already went through earlier today). Just check the attestation
+  box and click Confirm. Once confirmed, the local `intake_forms`
+  row is created and the green "Intake recorded" banner appears.
+
+**Verification:**
+
+- `npm run build` clean (server bundle 6.2 MB).
+- `PORT=5099 NODE_ENV=production node dist/index.cjs` boots in ~6s,
+  snowflake probe still emits first
+  (`[snowflake-probe] OK version=2.3.4`), port bound, `GET /` → HTTP 200.
+- Type-check shows no new errors in any of the 4 touched files
+  (`shared/intake-form-config.ts`, `server/routes.ts`,
+  `server/storage.ts`). Pre-existing unrelated errors elsewhere
+  unchanged.
+
+**Files touched:**
+- `shared/intake-form-config.ts` (new export + helper, derive helper updated)
+- `server/routes.ts` (import, GET status branches collapsed, POST confirm gate)
+- `server/storage.ts` (import, in-tx re-check)

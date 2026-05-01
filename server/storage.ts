@@ -43,6 +43,7 @@ import {
   CommunicationTemplateVersion,
 } from "@shared/schema";
 import { getBusinessElapsedMs } from "@shared/business-hours";
+import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
 import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
 
 // Initialize database connection
@@ -1483,14 +1484,13 @@ export class DatabaseStorage implements IStorage {
       }
       const lockedRow = locked as { ticket_status: string; request_type: string };
       const lockedStatus = lockedRow.ticket_status;
-      const lockedIsNla = lockedRow.request_type === "parts_nla";
-      const statusOk = lockedIsNla
-        ? lockedStatus === "completed" ||
-          lockedStatus === "rejected" ||
-          lockedStatus === "rejected_closed" ||
-          lockedStatus === "invalid"
-        : lockedStatus === "approved" || lockedStatus === "completed";
-      if (!statusOk) {
+      // Tyler 2026-05-01 (P1 fix — sub 566): collapsed the AUTH/NLA branch
+      // here onto the shared isTerminalTicketStatusForIntake predicate so
+      // the in-transaction re-check matches the route pre-flight gate
+      // exactly. Without this, AUTH-rejected confirms would tx-409 here
+      // even after the route-level gate was relaxed. NLA never writes
+      // "approved" so its accepted set is naturally a subset.
+      if (!isTerminalTicketStatusForIntake(lockedStatus)) {
         return {
           ok: false as const,
           reason: "not_approved" as const,
