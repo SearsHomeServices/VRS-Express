@@ -3095,3 +3095,48 @@ Tile and tab now agree row-for-row.
   failure only because of pre-existing Vite HMR websocket errors in the
   Replit dev environment, which are unrelated to this change.)
 
+
+---
+
+## 2026-05-02 — Scope correction: revert chain dedup + IN-list + count rewrite
+
+Tyler clarified scope: the only bug is "agents could not see all the tickets
+they processed because they were not seeing the rejected ones — they were
+only seeing the approved ones." Reverting the parts of the prior change that
+went beyond that scope.
+
+### Reverted
+
+- **`server/routes.ts`** — removed the chain dedup block in the agent
+  Completed-today branch. The agent's tab will now show every row that
+  matches `reviewedBy=user.id`, including separate rows for resubmissions.
+  If Tyler later wants chain grouping, that's a separate ask.
+- **`server/storage.ts:getSubmissionsWithTechnician`** — removed
+  `'rejected_closed'` from the completedToday `IN` list. Restored the
+  original `('completed','approved','rejected','invalid')`.
+- **`server/storage.ts:getCompletedTodayCount`** — restored the original
+  predicate (`stage1Status IN ('approved','rejected')` +
+  `stage1ReviewedAt >= today`) and `count(*)`. Confirmed by inspection that
+  every /process action sets both `stage1Status` and `stage1ReviewedAt`
+  alongside `reviewedBy`/`reviewedAt` (routes.ts:1471, 1534, 1557, 1595,
+  1613), so the original count predicate captures the same set of agent
+  actions the list shows.
+
+### Kept (the actual fix)
+
+- **`server/storage.ts`** — `reviewedBy?: number` filter on
+  `getSubmissionsWithTechnician` (interface + impl). Necessary plumbing.
+- **`server/routes.ts`** — for `vrs_agent + completedToday`,
+  `filters.reviewedBy = user.id` instead of `filters.assignedTo = user.id`.
+  This is the one-line fix for the rejected-tickets-vanishing bug.
+- **`server/storage.ts:getCompletedTodayCount`** — `assignedTo` →
+  `reviewedBy` in the agent-scoped condition. Required so the dashboard
+  tile doesn't disagree with the now-fixed Completed-today list.
+
+### Files changed (final)
+
+- `server/storage.ts` — interface signature gains `reviewedBy?: number`;
+  impl wires it; count uses `reviewedBy` instead of `assignedTo`.
+- `server/routes.ts` — agent filters type gains `reviewedBy?: number`;
+  vrs_agent + completedToday branch sets it.
+
