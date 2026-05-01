@@ -5,7 +5,12 @@ import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
-import { getBusinessElapsedMs } from "@/lib/business-hours";
+import {
+  getBusinessElapsedMs,
+  useBusinessHoursConfig,
+  categoryForApplianceType,
+  type BusinessHoursProfile,
+} from "@/lib/business-hours";
 import { useWebSocket, playNotificationDing, disconnectWs, requestNotificationPermission, showBrowserNotification, loadNotificationSettings, getNotificationPermission } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -139,13 +144,22 @@ const APPLIANCE_LABELS: Record<string, string> = {
 };
 
 // Tyler 2026-04-29 (VRS business-hours timer): both queue-elapsed and
-// urgency-level computations now use business hours (8 AM-8 PM ET) so the
-// queue doesn't show inflated times overnight. After-hours windows pause
-// the accumulation. Format string preserved to avoid column-width churn.
-function getTimeElapsed(createdAt: string | Date | null | undefined): string {
+// urgency-level computations now use business hours so the queue doesn't
+// show inflated times overnight. After-hours windows pause the
+// accumulation. Format string preserved to avoid column-width churn.
+//
+// 2026-05-01: per-category profile threading. Callers pass the profile for
+// the row's applianceType (HVAC vs Standard) so an HVAC ticket queued at
+// 5:35 PM doesn't get penalized as if it were standing in the standard
+// queue past close. `profile` is optional — when omitted the shared
+// helpers fall back to DEFAULT_PROFILE.
+function getTimeElapsed(
+  createdAt: string | Date | null | undefined,
+  profile?: BusinessHoursProfile,
+): string {
   const created = safeDate(createdAt);
   if (!created) return "—";
-  const businessMs = getBusinessElapsedMs(created, new Date());
+  const businessMs = getBusinessElapsedMs(created, new Date(), profile);
   const totalMinutes = Math.floor(businessMs / 60000);
   if (totalMinutes < 60) return `${totalMinutes}m`;
   const diffHours = Math.floor(totalMinutes / 60);
@@ -154,10 +168,13 @@ function getTimeElapsed(createdAt: string | Date | null | undefined): string {
   return `${diffDays}d ${diffHours % 24}h`;
 }
 
-function getUrgencyLevel(createdAt: string | Date | null | undefined): "normal" | "warning" | "urgent" {
+function getUrgencyLevel(
+  createdAt: string | Date | null | undefined,
+  profile?: BusinessHoursProfile,
+): "normal" | "warning" | "urgent" {
   const created = safeDate(createdAt);
   if (!created) return "normal";
-  const diffHours = getBusinessElapsedMs(created, new Date()) / 3600000;
+  const diffHours = getBusinessElapsedMs(created, new Date(), profile) / 3600000;
   if (diffHours >= 4) return "urgent";
   if (diffHours >= 2) return "warning";
   return "normal";
@@ -183,6 +200,13 @@ export default function AgentDashboard() {
   const isQueueView = activeView === "queue" || activeView === "nla_queue";
   const isCompletedView = activeView === "completed" || activeView === "nla_completed";
   const showNotifBanner = notifPermission !== "granted" && notifPermission !== "unsupported" && !notifBannerDismissed;
+
+  // Tyler 2026-05-01: per-category business-hours profiles. Cached centrally
+  // by useBusinessHoursConfig (TanStack Query) and threaded into the
+  // queue-elapsed / urgency helpers so HVAC tickets use the HVAC window.
+  const { config: bhConfig } = useBusinessHoursConfig();
+  const profileForSub = (sub: { applianceType?: string | null }): BusinessHoursProfile =>
+    bhConfig[categoryForApplianceType(sub.applianceType ?? undefined)];
 
   useEffect(() => {
     if (activeView.startsWith("nla_")) {
@@ -507,6 +531,13 @@ export default function AgentDashboard() {
       }
     });
 
+    // Tyler 2026-05-01 (architect fix): admin saved new business hours →
+    // refetch so the queue urgency math + "after hours" indicator
+    // re-render without a manual reload.
+    const unsub8 = subscribe("business_hours_updated", () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/business-hours"] });
+    });
+
     return () => {
       unsub1();
       unsub2();
@@ -515,6 +546,7 @@ export default function AgentDashboard() {
       unsub5();
       unsub6();
       unsub7();
+      unsub8();
     };
   }, [subscribe, toast]);
 
@@ -1631,7 +1663,7 @@ export default function AgentDashboard() {
                 ) : (
                   <div className="p-2 space-y-1">
                     {submissions.map((sub) => {
-                      const urgency = getUrgencyLevel(sub.createdAt);
+                      const urgency = getUrgencyLevel(sub.createdAt, profileForSub(sub));
                       const isSelected = selectedId === sub.id;
                       return (
                         <div
@@ -1666,7 +1698,7 @@ export default function AgentDashboard() {
                               </span>
                               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                 <Clock className="w-3 h-3" />
-                                <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt)}</span>
+                                <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt, profileForSub(sub))}</span>
                               </div>
                             </div>
                             <div className="flex items-center justify-between gap-2 mt-1 flex-wrap">
@@ -1820,10 +1852,10 @@ export default function AgentDashboard() {
                             ? "Parts — NLA"
                             : "Infestation / Non-Accessible"}
                         </Badge>
-                        {getUrgencyLevel(selectedSubmission.createdAt) !== "normal" && (
+                        {getUrgencyLevel(selectedSubmission.createdAt, profileForSub(selectedSubmission)) !== "normal" && (
                           <Badge variant="destructive" data-testid="badge-urgency">
                             <AlertTriangle className="w-3 h-3 mr-1" />
-                            {getUrgencyLevel(selectedSubmission.createdAt) === "urgent" ? "Urgent" : "Aging"}
+                            {getUrgencyLevel(selectedSubmission.createdAt, profileForSub(selectedSubmission)) === "urgent" ? "Urgent" : "Aging"}
                           </Badge>
                         )}
                         {/* Tyler 2026-04-30: button-show-shsai now also renders

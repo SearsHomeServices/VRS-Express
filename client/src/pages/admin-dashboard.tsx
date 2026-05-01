@@ -10,9 +10,12 @@ import {
   getBusinessElapsedMs,
   formatBusinessElapsed,
   isWithinBusinessHours,
-  VRS_OPEN_HOUR_ET,
-  VRS_CLOSE_HOUR_ET,
+  formatHoursLabel,
+  useBusinessHoursConfig,
+  categoryForApplianceType,
+  type BusinessHoursProfile,
 } from "@/lib/business-hours";
+import BusinessHoursSection from "@/components/business-hours-section";
 import { useWebSocket, loadNotificationSettings, playNotificationDing, showBrowserNotification } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
 import type { User, TechnicianUserView } from "@shared/schema";
@@ -168,7 +171,7 @@ function formatDuration(ms: number | null): string {
 
 type SafeUser = Omit<User, "password">;
 
-type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "tickets" | "feedback";
+type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback";
 
 const DIVISION_KEYS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"] as const;
 
@@ -336,11 +339,18 @@ function AgentStatusSection() {
 // 8 AM ET) don't accumulate against ticket TAT. Wall-clock subtraction was
 // previously inflating overnight tickets by 12+ hours. Format string is
 // unchanged so the column widths stay stable.
-function getTimeInStatus(createdAt: string | Date | null | undefined, reviewedAt?: string | Date | null): string {
+// Tyler 2026-05-01 (architect fix): now profile-aware. HVAC rows (Mon–Fri
+// 8a–5:30p) need a tighter window than non-HVAC (Mon–Sat 8a–8p) or the
+// timers double-count after-hours minutes.
+function getTimeInStatus(
+  createdAt: string | Date | null | undefined,
+  reviewedAt?: string | Date | null,
+  profile?: BusinessHoursProfile,
+): string {
   const start = safeDate(createdAt);
   if (!start) return "—";
   const end = safeDate(reviewedAt) || new Date();
-  const businessMs = getBusinessElapsedMs(start, end);
+  const businessMs = getBusinessElapsedMs(start, end, profile);
   return formatBusinessElapsed(businessMs);
 }
 
@@ -947,10 +957,16 @@ function TicketOverviewSection() {
   ];
 
   // Tyler 2026-04-29 (VRS business-hours timer): when we're outside the
-  // 8 AM-8 PM ET window, surface a small inline indicator at the top of the
+  // configured ET window, surface a small inline indicator at the top of the
   // tickets view so admins understand the column timers aren't ticking. The
   // indicator only renders during after-hours.
-  const businessHoursActive = isWithinBusinessHours();
+  // 2026-05-01: now driven by the admin-configured Standard profile (HVAC
+  // tickets render alongside in this view but the indicator uses the default
+  // window since most rows are non-HVAC).
+  const { config: bhConfig } = useBusinessHoursConfig();
+  const defaultProfile = bhConfig.default;
+  const businessHoursActive = isWithinBusinessHours(new Date(), defaultProfile);
+  const defaultHoursLabel = formatHoursLabel(defaultProfile);
 
   return (
     <div className="space-y-4 p-4">
@@ -979,10 +995,10 @@ function TicketOverviewSection() {
           <div
             className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1 text-xs font-medium text-amber-800 dark:text-amber-200"
             data-testid="badge-after-hours"
-            title={`VRS hours are ${VRS_OPEN_HOUR_ET}:00 AM to ${VRS_CLOSE_HOUR_ET - 12}:00 PM Eastern Time. Ticket timers don't accumulate outside that window.`}
+            title={`VRS hours are ${defaultHoursLabel}. Ticket timers don't accumulate outside that window.`}
           >
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
-            After hours — ticket timers paused until 8 AM ET
+            After hours — ticket timers paused (open: {defaultHoursLabel})
           </div>
         )}
       </div>
@@ -1060,7 +1076,14 @@ function TicketOverviewSection() {
                     // says 11 hours have passed. Same source of truth as
                     // the column timers.
                     const created = safeDate(ticket.createdAt);
-                    const ageHours = created ? getBusinessElapsedMs(created, new Date()) / 3600000 : 0;
+                    // Tyler 2026-05-01 (architect fix): per-row HVAC awareness.
+                    // HVAC tickets use the hvac profile (Mon–Fri 8a–5:30p);
+                    // every other row uses default (Mon–Sat 8a–8p). Without
+                    // this, HVAC totals double-counted minutes between 5:30p
+                    // and 8p on weekdays AND every Saturday hour as
+                    // "in business hours".
+                    const rowProfile = bhConfig[categoryForApplianceType(ticket.applianceType)];
+                    const ageHours = created ? getBusinessElapsedMs(created, new Date(), rowProfile) / 3600000 : 0;
                     const isUrgent = ageHours >= 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
                     const isAging = ageHours >= 2 && ageHours < 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
 
@@ -1137,7 +1160,7 @@ function TicketOverviewSection() {
                               return (
                                 <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium">
                                   <CheckCircle2 className="w-4 h-4" />
-                                  <span className="text-xs">{getTimeInStatus(ticket.intakeFormCompletedAt)} ago</span>
+                                  <span className="text-xs">{getTimeInStatus(ticket.intakeFormCompletedAt, undefined, rowProfile)} ago</span>
                                 </span>
                               );
                             }
@@ -1165,24 +1188,24 @@ function TicketOverviewSection() {
                         </TableCell>
                         <TableCell className="text-sm font-medium text-right whitespace-nowrap">
                           {ticket.claimedAt
-                            ? getTimeInStatus(ticket.createdAt, ticket.claimedAt)
+                            ? getTimeInStatus(ticket.createdAt, ticket.claimedAt, rowProfile)
                             : ticket.ticketStatus === "queued"
-                            ? <span className="text-amber-600 dark:text-amber-400">{getTimeInStatus(ticket.createdAt)} ⏳</span>
-                            : getTimeInStatus(ticket.createdAt, ticket.statusChangedAt)
+                            ? <span className="text-amber-600 dark:text-amber-400">{getTimeInStatus(ticket.createdAt, undefined, rowProfile)} ⏳</span>
+                            : getTimeInStatus(ticket.createdAt, ticket.statusChangedAt, rowProfile)
                           }
                         </TableCell>
                         <TableCell className="text-sm text-right whitespace-nowrap" data-testid={`handle-time-${ticket.id}`}>
                           {ticket.claimedAt
                             ? ticket.ticketStatus === "pending"
-                              ? <span className="text-blue-600 dark:text-blue-400">{getTimeInStatus(ticket.claimedAt)} ⏳</span>
-                              : getTimeInStatus(ticket.claimedAt, ticket.statusChangedAt)
+                              ? <span className="text-blue-600 dark:text-blue-400">{getTimeInStatus(ticket.claimedAt, undefined, rowProfile)} ⏳</span>
+                              : getTimeInStatus(ticket.claimedAt, ticket.statusChangedAt, rowProfile)
                             : "—"
                           }
                         </TableCell>
                         <TableCell className="text-sm text-right whitespace-nowrap" data-testid={`total-time-${ticket.id}`}>
                           {["completed", "approved", "rejected", "rejected_closed", "invalid"].includes(ticket.ticketStatus)
-                            ? getTimeInStatus(ticket.createdAt, ticket.statusChangedAt)
-                            : <span className="text-muted-foreground">{getTimeInStatus(ticket.createdAt)}</span>
+                            ? getTimeInStatus(ticket.createdAt, ticket.statusChangedAt, rowProfile)
+                            : <span className="text-muted-foreground">{getTimeInStatus(ticket.createdAt, undefined, rowProfile)}</span>
                           }
                         </TableCell>
                         {(statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
@@ -1783,7 +1806,15 @@ export default function AdminDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
     });
 
-    return () => { unsub(); unsub2(); unsub3(); unsub4(); };
+    // Tyler 2026-05-01 (architect fix): when another admin tab saves
+    // business hours, the server broadcasts `business_hours_updated`.
+    // Refetch so timer columns + the after-hours indicator re-render
+    // without a manual reload.
+    const unsub5 = subscribe("business_hours_updated", () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/business-hours"] });
+    });
+
+    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [subscribe]);
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");
@@ -2293,6 +2324,16 @@ export default function AdminDashboard() {
                       <span>Agent Status</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      onClick={() => setActiveView("business-hours")}
+                      data-active={activeView === "business-hours"}
+                      data-testid="nav-business-hours"
+                    >
+                      <Clock className="w-4 h-4" />
+                      <span>Business Hours</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -2402,6 +2443,7 @@ export default function AdminDashboard() {
                 {activeView === "analytics" && "Analytics"}
                 {activeView === "technicians" && "Technician Sync"}
                 {activeView === "agent-status" && "Agent Status"}
+                {activeView === "business-hours" && "Business Hours"}
                 {activeView === "tickets" && "Ticket Overview"}
                 {activeView === "feedback" && "Technician Feedback"}
               </h1>
@@ -3393,6 +3435,9 @@ export default function AdminDashboard() {
             )}
             {activeView === "agent-status" && (
               <AgentStatusSection />
+            )}
+            {activeView === "business-hours" && (
+              <BusinessHoursSection />
             )}
             {activeView === "tickets" && (
               <TicketOverviewSection />

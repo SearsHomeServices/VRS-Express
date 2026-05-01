@@ -1,5 +1,7 @@
 import twilio from "twilio";
 import { storage } from "./storage";
+import { isWithinBusinessHours, formatHoursLabel } from "@shared/business-hours";
+import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
 
 // 2026-04-30 — Tyler request: business-hours awareness for the
 // `submission_received` SMS. The standard template literally promises
@@ -8,33 +10,23 @@ import { storage } from "./storage";
 // agent would review shortly when no agent was on shift. This helper
 // gates the after-hours wording.
 //
-// 2026-05-01 — GM bug report: tech got the after-hours SMS at 8:50 AM
-// ET (during business hours). Root cause: this helper was using
-// America/Chicago + 8am–6pm. The canonical VRS staffing window per
-// shared/business-hours.ts is 8am–8pm Eastern. Switched timezone +
-// end-hour to match. Function renamed Central → Eastern.
-// 2026-05-01 (followup) — Tyler confirmed Saturday is open. Removed
-// the Sat short-circuit; Sunday still gated as after-hours since
-// Tyler did not state otherwise. If Sunday is also open, drop the
-// remaining weekday check entirely.
-//
-// en-GB locale is used because en-US can return a 12-hour clock for
-// `hour: "2-digit"` with `hour12: false` on some Node ICU builds,
-// while en-GB reliably returns "00"-"23".
-export function isAfterHoursEastern(now: Date = new Date()): boolean {
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour: "2-digit",
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(now);
-  const weekday = parts.find((p) => p.type === "weekday")?.value;
-  const hourStr = parts.find((p) => p.type === "hour")?.value;
-  const hour = Number(hourStr);
-  if (weekday === "Sun") return true;
-  if (Number.isNaN(hour)) return false; // Safety net — never gate when we can't parse
-  return hour < 8 || hour >= 20;
+// History:
+//   2026-04-30 — initial impl, hardcoded America/Chicago + 8am-6pm.
+//   2026-05-01 — GM bug fix: tz/end-hour wrong; switched to ET 8am-8pm.
+//   2026-05-01 (followup) — Tyler confirmed Sat open; weekend gating
+//   reduced to Sun-only.
+//   2026-05-01 (config) — Tyler asked for admin-configurable hours per
+//   category (default + HVAC). All hardcoded values gone; this gate now
+//   reads the cached config from `business-hours-config.ts` and delegates
+//   to `isWithinBusinessHours` from `shared/business-hours.ts` so the SMS
+//   gate, dashboard indicators, and elapsed-time math all use the same
+//   profile (single source of truth).
+export function isAfterHoursEastern(
+  category: "default" | "hvac" = "default",
+  now: Date = new Date(),
+): boolean {
+  const profile = getCachedBusinessHoursProfile(category);
+  return !isWithinBusinessHours(now, profile);
 }
 
 function normalizePhone(phone: string): string {
@@ -345,18 +337,23 @@ export async function buildAuthCodeMessage(
 export async function buildSubmissionReceivedMessage(
   serviceOrder: string,
   warrantyType?: string,
-  requestType?: string
+  requestType?: string,
+  applianceType?: string,
 ): Promise<string> {
   const wt = (warrantyType || "").toLowerCase();
   const isExternal = wt === "american_home_shield" || wt === "first_american";
   const isNla = requestType === "parts_nla";
-  // 2026-04-30 — Tyler request: route to an after-hours variant when the
-  // submission lands outside Mon-Sat 8am-8pm Eastern. Day variants keep
-  // their existing copy; after-hours variants tell the tech to expect a
-  // next-business-day response and explicitly release them from the site.
-  // (2026-05-01: timezone/end-hour corrected per GM bug report — see
-  // isAfterHoursEastern docblock.)
-  const afterHours = isAfterHoursEastern();
+  // 2026-05-01 — category-aware after-hours gating. HVAC tickets use the
+  // narrower HVAC profile (e.g. Mon-Fri 8a-5:30p ET); everything else uses
+  // the default profile (e.g. Mon-Sat 8a-8p ET). Both profiles are
+  // admin-configurable via /api/business-hours. The hours label injected
+  // into the SMS reflects the active category, so an HVAC tech submitting
+  // outside HVAC hours sees the HVAC window in their text, not the
+  // standard window.
+  const category: "default" | "hvac" = applianceType === "hvac" ? "hvac" : "default";
+  const profile = getCachedBusinessHoursProfile(category);
+  const hoursLabel = formatHoursLabel(profile);
+  const afterHours = isAfterHoursEastern(category);
 
   const dayKey = isNla
     ? "submission_received.nla"
@@ -371,10 +368,10 @@ export async function buildSubmissionReceivedMessage(
   // even on environments where the seeded after-hours rows haven't landed
   // yet (e.g. brand-new prod) — flagged by architect review.
   if (afterHours) {
-    const ah = await renderTemplate(`${dayKey}_after_hours`, { serviceOrder });
+    const ah = await renderTemplate(`${dayKey}_after_hours`, { serviceOrder, hoursLabel });
     if (ah !== null) return ah;
   }
-  const dayRendered = await renderTemplate(dayKey, { serviceOrder });
+  const dayRendered = await renderTemplate(dayKey, { serviceOrder, hoursLabel });
   if (dayRendered !== null && !afterHours) return dayRendered;
   // If we're after-hours and only the day template is available, we still
   // fall through to the hardcoded after-hours copy below — better to ship
@@ -388,15 +385,15 @@ export async function buildSubmissionReceivedMessage(
     // a multi-day wait, which combined with the claim-SMS "DO NOT LEAVE
     // THE SITE" wording was making them stand by at the home for hours.
     waitCopy = afterHours
-      ? "NLA submission received outside of VRS parts-team hours (Mon–Sat 8am–8pm EST). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available."
+      ? `NLA submission received outside of VRS parts-team hours (${hoursLabel}). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available.`
       : "NLA submission received by the VRS parts team. Typical turnaround is same-day. Reschedule this call for later today and move on to your next stop — you'll receive a follow-up text with the sourcing decision.";
   } else if (isExternal) {
     waitCopy = afterHours
-      ? "This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (Mon–Sat 8am–8pm EST) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
+      ? `This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (${hoursLabel}) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
       : "This is an external-warranty request (AHS / First American). Approvals require a provider callback and can take longer than standard Sears Protect tickets. Please remain at the site until you receive the approval/rejection text.";
   } else {
     waitCopy = afterHours
-      ? "Your submission was received outside of standard VRS hours (Mon–Sat 8am–8pm EST). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made."
+      ? `Your submission was received outside of standard VRS hours (${hoursLabel}). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
       : "A VRS agent will review your request shortly. Standard turnaround is a few minutes during business hours. Please remain at the site until you receive the approval/rejection text.";
   }
 

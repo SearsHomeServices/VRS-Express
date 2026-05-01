@@ -1,25 +1,26 @@
 // Tyler 2026-04-29: VRS business-hours timer utility.
 //
-// VRS hours are 8:00 AM to 8:00 PM Eastern Time. Tyler asked that ticket
-// timers (queue wait, handle time, total time, agent-queue elapsed, urgency
-// highlights) NOT accumulate during after-hours windows so a ticket
-// submitted at 9 PM doesn't show "11h" in the queue at 8 AM the next
-// morning.
+// VRS hours are configurable per-category (default + HVAC) via the admin
+// panel. This module exposes the elapsed-time math; the actual profile
+// values live in `system_settings.vrs_business_hours` and are loaded by
+// `server/business-hours-config.ts` on the server. Clients fetch the
+// config via `GET /api/business-hours` and pass the profile in.
+//
+// Tyler asked that ticket timers (queue wait, handle time, total time,
+// agent-queue elapsed, urgency highlights) NOT accumulate during
+// after-hours windows so a ticket submitted at 9 PM doesn't show "11h"
+// in the queue at 8 AM the next morning.
+//
+// 2026-05-01 — switched from hardcoded 8-20 ET (7 days) to a profile
+// argument. Default profile (`DEFAULT_PROFILE` below) preserves the
+// pre-refactor behavior so any caller that omits `profile` keeps working.
 //
 // All elapsed timers across the app should route through `getBusinessElapsedMs`
-// (this file) instead of subtracting two timestamps directly. The algorithm
-// walks the ET calendar day by day and sums the overlap of [start, end] with
-// each day's [VRS_OPEN_HOUR_ET, VRS_CLOSE_HOUR_ET] window. DST transitions
-// are handled by computing each day's open/close as a real wall-clock time
-// in `America/New_York`.
-//
-// IMPORTANT ASSUMPTIONS (call out for Tyler):
-//   - 7 days a week. Weekends are NOT excluded. If VRS is closed Sat/Sun,
-//     add a `WEEKEND_DAYS = new Set([0, 6])` short-circuit in the day loop
-//     below — single-line edit.
-//   - Holidays are NOT excluded. If VRS observes federal holidays, the
-//     simplest add is a `HOLIDAYS: Set<string>` of `YYYY-MM-DD` ET strings
-//     and a check in the day loop.
+// instead of subtracting two timestamps directly. The algorithm walks the ET
+// calendar day by day and sums the overlap of [start, end] with each day's
+// [open, close] window. DST transitions are handled by computing each day's
+// open/close as a real wall-clock time in `America/New_York`. Days NOT in
+// `profile.openDays` contribute zero.
 //
 // All `Date` values in the codebase are stored as ISO strings or JS Date
 // objects in UTC. The conversions below are all wall-clock <-> UTC via the
@@ -28,20 +29,70 @@
 // approval per package.json hard rule).
 
 const VRS_TIMEZONE = "America/New_York";
-export const VRS_OPEN_HOUR_ET = 8;   // 08:00 ET (inclusive)
-export const VRS_CLOSE_HOUR_ET = 20; // 20:00 ET (exclusive)
+
+// Day-of-week keys used in profile.openDays. Order matches JS getDay() with
+// Mon=1 ... Sun=0; we index via DAY_KEYS[Date.getUTCDay()] AFTER converting
+// to ET wall clock.
+export type DayKey = "Sun" | "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat";
+export const ALL_DAYS: DayKey[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Display labels (kept here so the admin UI and any future server-rendered
+// surface — email, audit trail — agree on the spelling).
+export const DAY_LABELS: Record<DayKey, string> = {
+  Sun: "Sun",
+  Mon: "Mon",
+  Tue: "Tue",
+  Wed: "Wed",
+  Thu: "Thu",
+  Fri: "Fri",
+  Sat: "Sat",
+};
+
+export interface BusinessHoursProfile {
+  open: string;     // "HH:MM" 24-hour, ET
+  close: string;    // "HH:MM" 24-hour, ET (exclusive)
+  openDays: DayKey[];
+}
+
+export interface BusinessHoursConfig {
+  default: BusinessHoursProfile;
+  hvac: BusinessHoursProfile;
+}
+
+// Compile-time defaults — used when no profile is passed AND when system_settings
+// has no row yet. Mon-Sat 8a-8p (default) / Mon-Fri 8a-5:30p (HVAC) per Tyler.
+export const DEFAULT_PROFILE: BusinessHoursProfile = {
+  open: "08:00",
+  close: "20:00",
+  openDays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+};
+
+export const DEFAULT_HVAC_PROFILE: BusinessHoursProfile = {
+  open: "08:00",
+  close: "17:30",
+  openDays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+};
+
+export const DEFAULT_BUSINESS_HOURS_CONFIG: BusinessHoursConfig = {
+  default: DEFAULT_PROFILE,
+  hvac: DEFAULT_HVAC_PROFILE,
+};
+
+// DEPRECATED — kept for backward compat. New code should pass a profile.
+// Resolves to DEFAULT_PROFILE.open / .close hour part. Half-hour precision
+// is lost when callers read these constants — use the profile API instead.
+export const VRS_OPEN_HOUR_ET = parseInt(DEFAULT_PROFILE.open.split(":")[0], 10);
+export const VRS_CLOSE_HOUR_ET = parseInt(DEFAULT_PROFILE.close.split(":")[0], 10);
 
 // Architect-flagged perf: cache the `Intl.DateTimeFormat` instances at module
 // scope. The admin tickets table can render hundreds of rows × multiple
 // timer columns × per-render — without caching, each render constructed
 // thousands of formatter objects and put real GC pressure on long sessions.
-// The two formatters below are the only ones we ever need (date-only +
-// date+time), and `timeZone` never changes.
 const ET_DATE_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: VRS_TIMEZONE,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
+  weekday: "short",
 });
 const ET_DATETIME_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: VRS_TIMEZONE,
@@ -54,25 +105,22 @@ const ET_DATETIME_FMT = new Intl.DateTimeFormat("en-US", {
   second: "2-digit",
 });
 
-// Returns the ET wall-clock {year, month, day} for the given UTC moment.
-// Month is 1-12 (NOT zero-indexed) for readability — converted to 0-11 when
-// constructing Dates below.
-function getEtCalendarParts(d: Date): { year: number; month: number; day: number } {
+function getEtCalendarParts(d: Date): { year: number; month: number; day: number; weekday: DayKey } {
   const parts = ET_DATE_FMT.formatToParts(d);
   const obj: Record<string, string> = {};
   for (const p of parts) if (p.type !== "literal") obj[p.type] = p.value;
-  return { year: Number(obj.year), month: Number(obj.month), day: Number(obj.day) };
+  return {
+    year: Number(obj.year),
+    month: Number(obj.month),
+    day: Number(obj.day),
+    weekday: (obj.weekday as DayKey),
+  };
 }
 
-// Returns the offset (in ms) that ET applies at the given UTC instant.
-// Positive when ET is behind UTC (ET = UTC - 5h in EST, UTC - 4h in EDT).
-// Computed by formatting the UTC instant as ET wall-clock, treating that
-// wall-clock as if it were UTC, and subtracting.
 function getEtOffsetMs(d: Date): number {
   const parts = ET_DATETIME_FMT.formatToParts(d);
   const obj: Record<string, string> = {};
   for (const p of parts) if (p.type !== "literal") obj[p.type] = p.value;
-  // Intl can report hour as "24" at midnight in some locales/runtimes — clamp.
   const hour = Number(obj.hour) === 24 ? 0 : Number(obj.hour);
   const etAsUtc = Date.UTC(
     Number(obj.year),
@@ -85,63 +133,74 @@ function getEtOffsetMs(d: Date): number {
   return d.getTime() - etAsUtc;
 }
 
-// Build a real UTC Date that represents `hour:00 ET` on the given ET
+// Build a real UTC Date that represents `hour:minute ET` on the given ET
 // calendar date. Handles DST by computing the offset that ET would apply at
 // that instant. `day` may overflow (e.g. day 32 of Apr) — Date.UTC normalizes.
-function etWallTimeToUtc(year: number, month: number, day: number, hour: number): Date {
-  // First-pass UTC for the wall-clock components — wrong by ET's offset.
-  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, 0, 0);
+function etWallTimeToUtc(year: number, month: number, day: number, hour: number, minute: number = 0): Date {
+  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
   const probe = new Date(naiveUtcMs);
-  // What's ET's offset at that probe? Add it back to align the wall clock.
   const offsetMs = getEtOffsetMs(probe);
   return new Date(naiveUtcMs + offsetMs);
 }
 
+// "HH:MM" → { hour, minute }. Returns { hour: 0, minute: 0 } on parse failure
+// (defensive — never throw in render path). Caller should validate input
+// upstream (Zod) so this fallback never fires in practice.
+function parseHHMM(s: string): { hour: number; minute: number } {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (!m) return { hour: 0, minute: 0 };
+  return { hour: Math.min(23, Math.max(0, Number(m[1]))), minute: Math.min(59, Math.max(0, Number(m[2]))) };
+}
+
 // Sum the overlap (in ms) of [start, end] with each ET calendar day's
-// [VRS_OPEN_HOUR_ET, VRS_CLOSE_HOUR_ET] window. Returns 0 if end <= start
-// or the entire range falls outside business hours.
-export function getBusinessElapsedMs(start: Date, end: Date): number {
+// [open, close] window for days listed in profile.openDays. Returns 0 if
+// end <= start, no openDays match, or the entire range falls outside
+// business hours.
+export function getBusinessElapsedMs(
+  start: Date,
+  end: Date,
+  profile: BusinessHoursProfile = DEFAULT_PROFILE,
+): number {
   if (!(end instanceof Date) || !(start instanceof Date)) return 0;
   if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
   if (end.getTime() <= start.getTime()) return 0;
 
+  const open = parseHHMM(profile.open);
+  const close = parseHHMM(profile.close);
+  const openDays = new Set(profile.openDays);
+
   let total = 0;
-  // Walk in ET calendar days. Cap iterations at 366 — ticket TAT shouldn't
-  // exceed a year, and this prevents runaway loops on bad data.
   let cursorMs = start.getTime();
   let safety = 0;
   while (cursorMs < end.getTime() && safety < 366) {
     const cursorDate = new Date(cursorMs);
-    const { year, month, day } = getEtCalendarParts(cursorDate);
-    const dayOpenMs = etWallTimeToUtc(year, month, day, VRS_OPEN_HOUR_ET).getTime();
-    const dayCloseMs = etWallTimeToUtc(year, month, day, VRS_CLOSE_HOUR_ET).getTime();
+    const { year, month, day, weekday } = getEtCalendarParts(cursorDate);
 
-    const overlapStart = Math.max(start.getTime(), cursorMs, dayOpenMs);
-    const overlapEnd = Math.min(end.getTime(), dayCloseMs);
-    if (overlapEnd > overlapStart) {
-      total += overlapEnd - overlapStart;
+    if (openDays.has(weekday)) {
+      const dayOpenMs = etWallTimeToUtc(year, month, day, open.hour, open.minute).getTime();
+      const dayCloseMs = etWallTimeToUtc(year, month, day, close.hour, close.minute).getTime();
+      const overlapStart = Math.max(start.getTime(), cursorMs, dayOpenMs);
+      const overlapEnd = Math.min(end.getTime(), dayCloseMs);
+      if (overlapEnd > overlapStart) {
+        total += overlapEnd - overlapStart;
+      }
     }
 
-    // Advance to next ET midnight. Date.UTC normalizes day overflow.
-    const nextMidnightMs = etWallTimeToUtc(year, month, day + 1, 0).getTime();
-    if (nextMidnightMs <= cursorMs) {
-      // Pathological case (DST edge or bad clock) — bail to avoid infinite loop.
-      break;
-    }
+    const nextMidnightMs = etWallTimeToUtc(year, month, day + 1, 0, 0).getTime();
+    if (nextMidnightMs <= cursorMs) break;
     cursorMs = nextMidnightMs;
     safety++;
   }
   return total;
 }
 
-// Convenience: ms between an event and now, clipped to business hours.
-export function getBusinessElapsedFromNow(start: Date): number {
-  return getBusinessElapsedMs(start, new Date());
+export function getBusinessElapsedFromNow(
+  start: Date,
+  profile: BusinessHoursProfile = DEFAULT_PROFILE,
+): number {
+  return getBusinessElapsedMs(start, new Date(), profile);
 }
 
-// Format a millisecond duration as "Xd Yh", "Xh Ym", "Xm", or "< 1m".
-// Mirrors the formatting the existing `getTimeInStatus` used so column
-// widths in the admin table don't shift.
 export function formatBusinessElapsed(ms: number): string {
   const totalMinutes = Math.floor(ms / 60000);
   if (totalMinutes < 1) return "< 1m";
@@ -153,13 +212,61 @@ export function formatBusinessElapsed(ms: number): string {
   return `${minutes}m`;
 }
 
-// Returns true if the given UTC instant falls inside the VRS business window
-// in ET. Used by callers that want to decorate live timers with a "paused"
-// indicator while we're after hours.
-export function isWithinBusinessHours(d: Date = new Date()): boolean {
-  const { year, month, day } = getEtCalendarParts(d);
-  const openMs = etWallTimeToUtc(year, month, day, VRS_OPEN_HOUR_ET).getTime();
-  const closeMs = etWallTimeToUtc(year, month, day, VRS_CLOSE_HOUR_ET).getTime();
+// Returns true if the given UTC instant falls inside the profile's business
+// window in ET (and the day is open). Used by callers that want to decorate
+// live timers with a "paused" indicator while we're after hours.
+export function isWithinBusinessHours(
+  d: Date = new Date(),
+  profile: BusinessHoursProfile = DEFAULT_PROFILE,
+): boolean {
+  const { year, month, day, weekday } = getEtCalendarParts(d);
+  if (!profile.openDays.includes(weekday)) return false;
+  const open = parseHHMM(profile.open);
+  const close = parseHHMM(profile.close);
+  const openMs = etWallTimeToUtc(year, month, day, open.hour, open.minute).getTime();
+  const closeMs = etWallTimeToUtc(year, month, day, close.hour, close.minute).getTime();
   const t = d.getTime();
   return t >= openMs && t < closeMs;
+}
+
+// Format a profile as a human-readable label for SMS: "Mon–Sat 8am–8pm EST"
+// or "Mon, Wed, Fri 8am–5:30pm EST". Always uses "EST" suffix per Tyler's
+// preferred wording — DST-correct timezone is handled by the underlying
+// Intl calls; "EST" here is the colloquial year-round shorthand techs use.
+export function formatHoursLabel(profile: BusinessHoursProfile): string {
+  return `${formatDayRange(profile.openDays)} ${formatTimeAmPm(profile.open)}–${formatTimeAmPm(profile.close)} EST`;
+}
+
+function formatDayRange(days: DayKey[]): string {
+  if (days.length === 0) return "(no days)";
+  if (days.length === 7) return "Daily";
+  // Detect contiguous range starting from Mon. Most VRS configs are
+  // Mon-Fri / Mon-Sat / Mon-Sun, so prioritize that pattern.
+  const weekOrder: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const set = new Set(days);
+  // Find the longest contiguous run starting from Mon.
+  let runEnd = -1;
+  for (let i = 0; i < weekOrder.length; i++) {
+    if (set.has(weekOrder[i])) runEnd = i; else break;
+  }
+  if (runEnd >= 0 && set.size === runEnd + 1) {
+    if (runEnd === 0) return "Mon";
+    return `Mon–${weekOrder[runEnd]}`;
+  }
+  // Fallback: comma-separated in calendar order.
+  return weekOrder.filter((d) => set.has(d)).join(", ");
+}
+
+function formatTimeAmPm(hhmm: string): string {
+  const { hour, minute } = parseHHMM(hhmm);
+  const period = hour >= 12 ? "pm" : "am";
+  const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return minute === 0 ? `${h12}${period}` : `${h12}:${String(minute).padStart(2, "0")}${period}`;
+}
+
+// Used by the SMS gate (server) to determine which category's hours apply
+// to a given submission. Lives here so client code can reuse the same
+// mapping if needed (currently only the server uses it).
+export function categoryForApplianceType(applianceType: string | null | undefined): "default" | "hvac" {
+  return applianceType === "hvac" ? "hvac" : "default";
 }

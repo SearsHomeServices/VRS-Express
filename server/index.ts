@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupWebSocket } from "./websocket";
+import { loadConfig as loadBusinessHoursConfig } from "./business-hours-config";
 
 const app = express();
 const httpServer = createServer(app);
@@ -61,6 +62,11 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Warm the business-hours config cache before any request can hit the SMS
+  // gate or analytics aggregations. Falls back to compile-time defaults if
+  // the system_settings row is missing, malformed, or the DB read fails.
+  await loadBusinessHoursConfig();
+
   await registerRoutes(httpServer, app);
   setupWebSocket(httpServer);
 

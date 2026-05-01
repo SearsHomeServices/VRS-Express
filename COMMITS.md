@@ -3238,3 +3238,160 @@ package.json, no Smartsheet form changes.
 Sunday is also open, drop the `if (weekday === "Sun") return true;` line
 and change "Mon–Sat" → "Daily" (or remove the day prefix, matching the
 GM's original "8am EST to 8pm EST" wording verbatim).
+
+---
+
+## 2026-05-01 — Admin-configurable VRS business hours (per-category)
+
+**Context:** After-hours SMS gate + `shared/business-hours.ts` (used by every
+elapsed-business-time clock in admin/agent dashboards) had hard-coded windows.
+Tyler wanted them admin-editable, per category, ET-only, with a single source
+of truth so the gate and the clock can never disagree. Q1=(a) inline
+`{hoursLabel}` placeholder in templates; Q2=(i) one source of truth shared
+between server gate + dashboard clocks.
+
+**Decision:**
+- Two profiles: `default` (covers everything that isn't HVAC) and `hvac`.
+  Discriminator: `submission.applianceType === "hvac"` → hvac profile, else
+  default. No subcategory branching beyond that — Tyler explicitly scoped this.
+- Storage: `system_settings` key `vrs_business_hours` (JSON blob). No schema
+  change — honors the "no DB schema changes" hard rule.
+- Defaults preserved verbatim: `default` Mon–Sat 08:00–20:00 ET,
+  `hvac` Mon–Fri 08:00–17:30 ET.
+- Write access on PUT: `admin` + `super_admin` (not super_admin only as the
+  plan said) — matches the existing convention for every other admin-config
+  surface (RGC code, comm templates, user mgmt). sysadmin is `admin`.
+
+**New files:**
+- `server/business-hours-config.ts` — load/cache/invalidate JSON config from
+  `system_settings`. Exports `getCachedConfig` (sync, warm cache or defaults),
+  `loadConfig` (async, refreshes cache), `saveConfig` (validates + writes +
+  invalidates), `getProfileForCategory`. Bootstrapped at server startup.
+- `client/src/components/business-hours-section.tsx` — admin UI: two side-by-
+  side panels (Default, HVAC), `<input type="time">` for open/close, 7 day
+  toggles, single Save button, live preview using `formatHoursLabel`. Toast
+  on success/failure. Invalidates `["/api/business-hours"]` query key.
+
+**Modified — server:**
+- `shared/business-hours.ts` — `BusinessHoursProfile` type + `DAY_KEYS` +
+  `DAY_LABELS` exports. `parseHHMM`, `formatHoursLabel` (renders contiguous
+  spans like "Mon–Sat 8am–8pm EST"), `categoryForApplianceType`.
+  `isWithinBusinessHours`, `getBusinessElapsedMs`, `getBusinessElapsedFromNow`
+  all accept optional `profile` arg, default to `DEFAULT_PROFILE` for
+  back-compat. Day-walking now uses minute-precision open/close + day filter
+  (was integer hours, all-7-days). Old `VRS_OPEN_HOUR_ET` /
+  `VRS_CLOSE_HOUR_ET` kept as deprecated re-exports.
+- `server/sms.ts` — `isAfterHoursEastern` now takes `category` arg, reads
+  active profile via `getCachedConfig`, delegates to `isWithinBusinessHours`.
+  `buildSubmissionReceivedMessage` accepts `applianceType`, derives category,
+  passes `hoursLabel` (formatted from active profile) into template variable
+  map. All static "Mon–Sat 8am–8pm EST" fallback strings replaced with the
+  dynamic label.
+- `server/routes.ts` — `GET /api/business-hours` (any auth user) + `PUT
+  /api/business-hours` (admin + super_admin) with Zod validation
+  (HHMM regex, close > open, openDays non-empty, day enum). On save:
+  invalidates cache, broadcasts `{type:"business_hours_updated"}` over WS so
+  other open admin tabs refetch. Submission-create caller at line ~785 now
+  passes `submission.applianceType` to `buildSubmissionReceivedMessage`.
+- `server/storage.ts` — three call sites (lines 1119, 1122, 1227) that
+  computed business-hours elapsed time now pull the cached default profile
+  via `getProfileForCategory("default")`.
+- `server/index.ts` — calls `loadConfig()` once at startup so the cache is
+  warm before the first SMS or admin row renders.
+- `server/seed.ts` — three `submission_received.*_after_hours` template
+  bodies updated: static "Mon–Sat 8am–8pm EST" → `{hoursLabel}`. Added
+  `hoursLabel` to declared variables array. **Note for ops:** templates
+  edited via the admin UI that don't contain `{hoursLabel}` will keep
+  whatever static text the admin saved — the admin can re-add the
+  placeholder by hand or via the templates editor.
+
+**Modified — client:**
+- `client/src/lib/business-hours.ts` — `useBusinessHoursConfig` (queries
+  `/api/business-hours`) + `useBusinessHoursProfile(category)` hook.
+- `client/src/pages/admin-dashboard.tsx` — sidebar nav item ("Business Hours",
+  Clock icon), header title, `ActiveView` union, render branch wired to
+  `<BusinessHoursSection />`. Inline after-hours indicator + row aging math
+  now read configured default profile.
+- `client/src/pages/agent-dashboard.tsx` — `getTimeElapsed` / `getUrgencyLevel`
+  accept optional profile; new `profileForSub(sub)` helper picks default vs
+  hvac via `categoryForApplianceType(sub.applianceType)`. All 3 call sites
+  updated.
+
+**Verification:**
+- `GET /api/business-hours` → defaults match seeded config.
+- `PUT /api/business-hours` happy path: HVAC close 17:30 → 18:00 saves,
+  reads back, restored.
+- `PUT /api/business-hours` 400s tested: close before open, empty openDays,
+  bad day name, bad time format — all return descriptive errors.
+- Inline `isWithinBusinessHours` test (Tue 17:25/17:35 ET, Sat 10am ET, Sun
+  10am ET) confirms per-category gating: HVAC Tue 17:35 → after-hours,
+  Default Tue 17:35 → in-hours, HVAC Sat → after-hours, Default Sat → in-hours,
+  Default Sun → after-hours.
+- Inline `formatHoursLabel`: HVAC → "Mon–Fri 8am–5:30pm EST",
+  default → "Mon–Sat 8am–8pm EST".
+- E2E (Playwright via testing skill): logged in as sysadmin, opened Business
+  Hours, verified both panels + previews, mutated HVAC close 17:30 → 18:00,
+  saved (toast), restored to 17:30, saved again, toggled Sun on/off in
+  default panel, preview updated live. **Result: success.**
+
+**Hard rules respected:** no schema changes (used `system_settings` key/value),
+no Smartsheet form changes, no `package.json` changes, COMMITS.md
+append-only.
+
+**Files touched:**
+- New: `server/business-hours-config.ts`,
+  `client/src/components/business-hours-section.tsx`.
+- Modified: `shared/business-hours.ts`, `server/sms.ts`, `server/seed.ts`,
+  `server/routes.ts`, `server/storage.ts`, `server/index.ts`,
+  `client/src/lib/business-hours.ts`, `client/src/pages/admin-dashboard.tsx`,
+  `client/src/pages/agent-dashboard.tsx`.
+
+### Architect review — applied fixes (same day)
+
+Architect flagged 4 real issues; all addressed in-place.
+
+**F1 (HIGH) — admin dashboard timer rows used the default profile for HVAC tickets.**
+- `getTimeInStatus` now takes optional `profile` and threads it through
+  `getBusinessElapsedMs`. Each row computes
+  `bhConfig[categoryForApplianceType(ticket.applianceType)]` once and passes it
+  to every timer column (queue wait, handle time, total time) AND the urgency
+  highlighting math + the intake-form "X ago" cell. HVAC rows now use the HVAC
+  window (Mon–Fri 8a–5:30p) instead of double-counting Sat hours and the
+  5:30p–8p weekday window.
+
+**F2 (MED) — broadcast fired but no admin/agent client subscribed.**
+- `client/src/pages/admin-dashboard.tsx` + `client/src/pages/agent-dashboard.tsx`
+  now subscribe to `business_hours_updated` and invalidate the
+  `["/api/business-hours"]` query → other open tabs refetch immediately.
+- `server/routes.ts` PUT now also broadcasts to all agents (not only admins).
+- `BusinessHoursSection` switched from a one-shot `seeded` gate to a `dirty`
+  flag. Server data re-seeds the form whenever it changes AND the user has no
+  unsaved local edits — so cross-tab refresh works, but a user mid-edit isn't
+  blown away. `setDirty(false)` is cleared in `onSuccess` after a save.
+  E2E verified: Tab A saves, Tab B's dirty draft is preserved; remount in
+  Tab B re-seeds from server.
+
+**F3 (MED) — config loader could pin runtime to defaults after a transient
+DB failure.**
+- `loadConfig` no longer sets `loaded = true` in the catch branch. The next
+  read retries the DB. Default config is only used as a placeholder when no
+  cached value has ever loaded.
+
+**F4 (MED) — loader validation was looser than the PUT zod schema.**
+- `validateProfile` in `server/business-hours-config.ts` now enforces the
+  same invariants as the PUT route: HH:MM bounds (h ≤ 23, m ≤ 59), close >
+  open, openDays non-empty. Out-of-band edits to `system_settings` that
+  violate these get rejected → loader falls back to defaults instead of
+  poisoning the cache with an invalid profile.
+
+**Verification of fixes:**
+- API smoke: GET / PUT happy + 400 cases all pass.
+- E2E: two-tab dirty-preservation + cross-tab WS refresh verified.
+- Type check: no new TS errors in any modified file (pre-existing errors
+  unchanged).
+
+**Files touched (review fixes):**
+- `server/business-hours-config.ts`, `server/routes.ts`,
+  `client/src/components/business-hours-section.tsx`,
+  `client/src/pages/admin-dashboard.tsx`,
+  `client/src/pages/agent-dashboard.tsx`.

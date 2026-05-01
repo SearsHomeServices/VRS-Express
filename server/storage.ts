@@ -43,6 +43,7 @@ import {
   CommunicationTemplateVersion,
 } from "@shared/schema";
 import { getBusinessElapsedMs } from "@shared/business-hours";
+import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
 
 // Initialize database connection
 const pool = new Pool({
@@ -1098,9 +1099,14 @@ export class DatabaseStorage implements IStorage {
       .from(submissions);
 
     // Tyler 2026-04-30: averages computed in JS using business-hours math
-    // (8 AM-8 PM ET, weekends/holidays included), so overnight time doesn't
-    // skew the headline numbers. Mirrors the row-timer logic in
-    // admin-dashboard.tsx via the shared `getBusinessElapsedMs` helper.
+    // so overnight time doesn't skew the headline numbers. Mirrors the
+    // row-timer logic in admin-dashboard.tsx via the shared
+    // `getBusinessElapsedMs` helper. 2026-05-01 — uses the admin-configured
+    // default profile (system_settings.vrs_business_hours). HVAC tickets
+    // are aggregated under the same default profile here; if Tyler wants
+    // per-category aggregations, fetch applianceType in the SELECT below
+    // and pick getCachedBusinessHoursProfile(category) per row.
+    const defaultProfile = getCachedBusinessHoursProfile("default");
     const timestampRows = await db
       .select({
         createdAt: submissions.createdAt,
@@ -1116,10 +1122,10 @@ export class DatabaseStorage implements IStorage {
     let authCodeCount = 0;
     for (const r of timestampRows) {
       if (r.createdAt && r.stage1ReviewedAt) {
-        stage1Sum += getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt);
+        stage1Sum += getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt, defaultProfile);
         stage1Count++;
         if (r.stage2ReviewedAt) {
-          authCodeSum += getBusinessElapsedMs(r.stage1ReviewedAt, r.stage2ReviewedAt);
+          authCodeSum += getBusinessElapsedMs(r.stage1ReviewedAt, r.stage2ReviewedAt, defaultProfile);
           authCodeCount++;
         }
       }
@@ -1210,7 +1216,9 @@ export class DatabaseStorage implements IStorage {
 
     // Tyler 2026-04-30: business-hours-aware avg per district. Fetch only
     // the timestamps needed (small payload — two columns + district), group
-    // in JS, average via shared `getBusinessElapsedMs` helper.
+    // in JS, average via shared `getBusinessElapsedMs` helper. 2026-05-01
+    // uses the admin-configured default profile.
+    const districtProfile = getCachedBusinessHoursProfile("default");
     const timestampRows = await db
       .select({
         districtCode: submissions.districtCode,
@@ -1224,7 +1232,7 @@ export class DatabaseStorage implements IStorage {
     for (const r of timestampRows) {
       if (!r.createdAt || !r.stage1ReviewedAt) continue;
       const key = r.districtCode || "Unknown";
-      const ms = getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt);
+      const ms = getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt, districtProfile);
       const cur = sumByDistrict.get(key) ?? { sum: 0, count: 0 };
       cur.sum += ms;
       cur.count += 1;

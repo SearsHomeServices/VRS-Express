@@ -20,6 +20,13 @@ import { pipeline } from "stream/promises";
 import { fetchTechniciansFromSnowflake, fetchProcIdForServiceOrder } from "./services/snowflake";
 import { seedDatabase } from "./seed";
 import {
+  loadConfig as loadBusinessHoursConfig,
+  saveConfig as saveBusinessHoursConfig,
+  getCachedConfig as getCachedBusinessHoursConfig,
+  isLoaded as businessHoursIsLoaded,
+} from "./business-hours-config";
+import { ALL_DAYS as BUSINESS_HOURS_ALL_DAYS } from "@shared/business-hours";
+import {
   sendSms,
   sendSmsMessage,
   buildStage1RejectedMessage,
@@ -49,7 +56,7 @@ import {
 import { enhanceDescription, checkRateLimit } from "./services/openai";
 import { queryServiceOrder, sendFollowup } from "./services/shsai";
 import { ObjectStorageService } from "./replit_integrations/object_storage/objectStorage";
-import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel } from "./websocket";
+import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel } from "./websocket";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +74,33 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   identifier: z.string().min(1),
   password: z.string().min(1),
+});
+
+// Tyler 2026-05-01 — Validation schema for PUT /api/business-hours.
+// Mirrors `BusinessHoursConfig` in shared/business-hours.ts. Times are
+// HH:MM 24h, close > open, openDays must be a non-empty subset of the
+// canonical day set. Same shape applies to both `default` and `hvac`
+// profiles so admins can't accidentally narrow the data shape per category.
+const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+function hhmmToMinutes(s: string): number {
+  const [h, m] = s.split(":").map(Number);
+  return h * 60 + m;
+}
+const businessHoursProfileSchema = z
+  .object({
+    open: z.string().regex(HHMM_RE, "Open time must be HH:MM (24h)"),
+    close: z.string().regex(HHMM_RE, "Close time must be HH:MM (24h)"),
+    openDays: z
+      .array(z.enum(BUSINESS_HOURS_ALL_DAYS as unknown as [string, ...string[]]))
+      .min(1, "Pick at least one open day"),
+  })
+  .refine(
+    (p) => hhmmToMinutes(p.close) > hhmmToMinutes(p.open),
+    { message: "Close time must be after open time", path: ["close"] },
+  );
+const businessHoursConfigSchema = z.object({
+  default: businessHoursProfileSchema,
+  hvac: businessHoursProfileSchema,
 });
 
 function sanitizeUser(user: User): Omit<User, "password"> {
@@ -786,6 +820,7 @@ export async function registerRoutes(
           submission.serviceOrder,
           submission.warrantyType,
           submission.requestType,
+          submission.applianceType,
         );
         sendSms(submission.id, submissionReceivedPhone, "submission_received", body).catch((err) => {
           console.error("[SMS] submission_received failed:", err);
@@ -2921,6 +2956,70 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Admin set specializations error:", error);
       return res.status(500).json({ error: "Failed to set specializations" });
+    }
+  });
+
+  // ==========================================================================
+  // Tyler 2026-05-01 — Admin-configurable VRS business hours
+  // Per-category profiles (default + HVAC). Drives the after-hours SMS gate
+  // AND shared/business-hours.ts (single source of truth). Stored as JSON in
+  // system_settings.vrs_business_hours (no schema change). Reads are open to
+  // any authenticated user (dashboards need it for elapsed-time math); writes
+  // are super_admin only.
+  // ==========================================================================
+  app.get("/api/business-hours", authenticateToken, async (_req, res) => {
+    try {
+      // Cache is warmed at server startup. If something raced and it isn't
+      // loaded yet, hit the DB now so the client never sees stale defaults
+      // when an admin override exists.
+      if (!businessHoursIsLoaded()) {
+        await loadBusinessHoursConfig();
+      }
+      return res.status(200).json(getCachedBusinessHoursConfig());
+    } catch (error) {
+      console.error("Get business hours error:", error);
+      return res.status(500).json({ error: "Failed to load business hours" });
+    }
+  });
+
+  // Tyler 2026-05-01: write-access set to admin+super_admin (not super_admin
+  // only as the original plan said) to match the existing convention for
+  // every other admin-config surface (RGC code, comm templates, user mgmt).
+  // sysadmin is `admin` and needs to edit hours without escalating.
+  app.put("/api/business-hours", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const parsed = businessHoursConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+      // Zod's enum-from-array helper widens openDays to `string[]` even
+       // though the runtime values are guaranteed `DayKey`s by the regex
+       // validation above — cast through unknown to avoid leaking the wide
+       // type into business-hours-config.ts.
+      const saved = await saveBusinessHoursConfig(
+        parsed.data as unknown as Parameters<typeof saveBusinessHoursConfig>[0],
+      );
+      // Notify all admin AND agent clients so any open dashboard re-renders
+      // its elapsed-time / open/closed indicator without a page reload.
+      // Tyler 2026-05-01 (architect fix): originally only broadcast to
+      // admins — but agent dashboards use the same business-hours math
+      // for queue urgency and need the update too.
+      try {
+        broadcastToAdmins({
+          type: "business_hours_updated",
+          payload: saved,
+        });
+        broadcastToAllAgents({
+          type: "business_hours_updated",
+          payload: saved,
+        });
+      } catch (broadcastErr) {
+        console.error("[business-hours] broadcast failed:", broadcastErr);
+      }
+      return res.status(200).json(saved);
+    } catch (error) {
+      console.error("Save business hours error:", error);
+      return res.status(500).json({ error: "Failed to save business hours" });
     }
   });
 

@@ -200,35 +200,50 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
   // ---- Submission received — AFTER HOURS variants --------------------------
   // 2026-04-30 — Tyler request. The day-time templates above promise "an
   // agent will review shortly", which is misleading for submissions that
-  // land outside Mon-Sat 8am-8pm Eastern (no agent is on shift). The SMS
-  // builder routes to these `_after_hours` variants when applicable and
-  // falls back to the day variant if the after-hours row is missing or
-  // its render fails. Wording explicitly releases the tech from the site
-  // since waiting for a next-business-day response on-site is unreasonable.
-  // 2026-05-01 — wording corrected per GM bug report (was Central / 6pm,
-  // now Eastern / 8pm to match the canonical shared/business-hours.ts
-  // window). Existing admin-edited rows are preserved by the seed upsert
-  // (only refreshed when isDefault=true && currentVersion=1).
+  // land outside business hours (no agent is on shift). The SMS builder
+  // routes to these `_after_hours` variants when applicable and falls back
+  // to the day variant if the after-hours row is missing or its render
+  // fails. Wording explicitly releases the tech from the site since
+  // waiting for a next-business-day response on-site is unreasonable.
+  //
+  // 2026-05-01 — wording fix per GM bug report (Central → Eastern, 6p → 8p).
+  // 2026-05-01 (followup) — Saturday added to the open days.
+  // 2026-05-01 (config) — VRS hours are now admin-configurable per
+  // category (default + HVAC). The `{hoursLabel}` placeholder is
+  // substituted at send time with the active category's window
+  // (e.g. "Mon–Sat 8am–8pm EST" for default tickets, "Mon–Fri
+  // 8am–5:30pm EST" for HVAC). Admin-edited templates that don't include
+  // the placeholder will keep their static text — admin can re-add
+  // `{hoursLabel}` to opt back in.
   {
     channel: "sms",
     actionKey: "submission_received.standard_after_hours",
     name: "Submission received — standard ticket (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nYour submission was received outside of standard VRS hours (Mon–Sat 8am–8pm EST). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
-    variables: [{ name: "serviceOrder", required: true, sample: "12345678" }],
+    body: `VRS Submission received for SO#{serviceOrder}\n\nYour submission was received outside of standard VRS hours ({hoursLabel}). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
+    variables: [
+      { name: "serviceOrder", required: true, sample: "12345678" },
+      { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },
+    ],
   },
   {
     channel: "sms",
     actionKey: "submission_received.nla_after_hours",
     name: "Submission received — NLA (parts) (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nNLA submission received outside of VRS parts-team hours (Mon–Sat 8am–8pm EST). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available.`,
-    variables: [{ name: "serviceOrder", required: true, sample: "12345678" }],
+    body: `VRS Submission received for SO#{serviceOrder}\n\nNLA submission received outside of VRS parts-team hours ({hoursLabel}). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available.`,
+    variables: [
+      { name: "serviceOrder", required: true, sample: "12345678" },
+      { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },
+    ],
   },
   {
     channel: "sms",
     actionKey: "submission_received.external_warranty_after_hours",
     name: "Submission received — AHS / First American (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nThis is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (Mon–Sat 8am–8pm EST) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
-    variables: [{ name: "serviceOrder", required: true, sample: "12345678" }],
+    body: `VRS Submission received for SO#{serviceOrder}\n\nThis is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours ({hoursLabel}) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
+    variables: [
+      { name: "serviceOrder", required: true, sample: "12345678" },
+      { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },
+    ],
   },
 
   // ---- Ticket claimed (sent when a VRS agent picks up the ticket) ----------
