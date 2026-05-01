@@ -97,6 +97,16 @@ export interface IStorage {
     id: number,
     data: Partial<InsertSubmission>
   ): Promise<Submission | undefined>;
+  // Tyler 2026-05-01: optimistic-lock variant for the agent process routes.
+  // Updates the row only when its current ticketStatus matches one of the
+  // expected values. Returns undefined when no row was updated (i.e. the
+  // ticket was already moved by another agent or process). Callers MUST
+  // treat undefined as a 409 Conflict, not a 404.
+  updateSubmissionIfStatus(
+    id: number,
+    expectedStatuses: string[],
+    data: Partial<InsertSubmission>
+  ): Promise<Submission | undefined>;
   deleteSubmission(id: number): Promise<boolean>;
   getAllSubmissions(startDate?: Date | null, endDate?: Date | null, techLdap?: string | null): Promise<Submission[]>;
   getAgentQueueCount(agentId?: number): Promise<number>;
@@ -496,6 +506,37 @@ export class DatabaseStorage implements IStorage {
       .update(submissions)
       .set(data)
       .where(eq(submissions.id, id))
+      .returning();
+    return result[0];
+  }
+
+  // Tyler 2026-05-01: optimistic-lock variant. The /process and
+  // /process-nla routes previously read the row, validated its status,
+  // then issued an unconditional UPDATE BY ID — leaving a window where
+  // two near-simultaneous actions could both pass validation and
+  // overwrite each other (duplicate SMS, last-writer-wins state). This
+  // variant pushes the status check INTO the UPDATE predicate so a
+  // losing concurrent writer gets back undefined and the route can
+  // return 409 Conflict cleanly.
+  async updateSubmissionIfStatus(
+    id: number,
+    expectedStatuses: string[],
+    data: Partial<InsertSubmission>
+  ): Promise<Submission | undefined> {
+    if (!expectedStatuses || expectedStatuses.length === 0) {
+      // Defensive: caller must supply at least one expected status. We
+      // refuse to silently degrade to an unconditional update.
+      throw new Error("updateSubmissionIfStatus requires at least one expectedStatus");
+    }
+    const result = await db
+      .update(submissions)
+      .set(data)
+      .where(
+        and(
+          eq(submissions.id, id),
+          inArray(submissions.ticketStatus, expectedStatuses)
+        )
+      )
       .returning();
     return result[0];
   }

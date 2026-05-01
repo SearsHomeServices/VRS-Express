@@ -79,6 +79,12 @@ export default function TechResubmitPage() {
   const [videoError, setVideoError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [partNumbers, setPartNumbers] = useState<string[]>([""]);
+  // Tyler 2026-05-01: NLA parts come in two lists on initial submit —
+  // `nla` (the parts that are no longer available) and `available` (parts
+  // that ARE in TechHub but must stay on the order). Resubmit was only
+  // hydrating/serializing an array, so the `available` list was silently
+  // dropped on every resubmission. Mirror submit's two-list shape now.
+  const [availableParts, setAvailableParts] = useState<string[]>([]);
   const issuePhotoInputRef = useRef<HTMLInputElement>(null);
   const estimatePhotoInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -146,13 +152,48 @@ export default function TechResubmitPage() {
     if (sub.videoUrl && !isVideoRejected) {
       setVideoUrls(parseVideoUrls(sub.videoUrl).slice(0, MAX_VIDEOS_PER_TICKET));
     }
+    // Tyler 2026-05-01: hydrate every partNumbers shape we have ever
+    // written into production. Architect F3 follow-up — explicitly
+    // normalize each shape rather than silently dropping anything that
+    // isn't `Array<string>` or `{nla, available}`. Order:
+    //   1. Array<string>                     → legacy single-list NLA
+    //   2. {nla: string[], available: string[]} → current submit shape
+    //   3. Array<unknown>                    → coerce to strings, NLA list
+    //   4. Single non-empty string           → one-element NLA list
+    //      (covers a row written before JSON-encoding existed)
+    //   5. Anything else / parse error       → leave defaults; the user
+    //      will see an empty NLA input rather than corrupted state.
+    // The normalizer NEVER throws; on any failure the catch falls
+    // through and the form renders empty so the tech can re-enter.
     if ((sub as any).partNumbers) {
+      const raw = (sub as any).partNumbers;
       try {
-        const parsed = JSON.parse((sub as any).partNumbers);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setPartNumbers(parsed);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          // Not JSON — treat the literal string as a single part number.
+          parsed = typeof raw === "string" && raw.trim() ? [raw.trim()] : null;
         }
-      } catch {}
+        const toStrings = (xs: unknown): string[] =>
+          Array.isArray(xs)
+            ? xs.map((x) => (typeof x === "string" ? x : String(x ?? ""))).filter((s) => s.trim() !== "")
+            : [];
+        if (Array.isArray(parsed)) {
+          const arr = toStrings(parsed);
+          if (arr.length > 0) setPartNumbers(arr);
+        } else if (parsed && typeof parsed === "object") {
+          const obj = parsed as Record<string, unknown>;
+          const nla = toStrings(obj.nla);
+          const available = toStrings(obj.available);
+          if (nla.length > 0) setPartNumbers(nla);
+          if (available.length > 0) setAvailableParts(available);
+        } else if (typeof parsed === "string" && parsed.trim() !== "") {
+          setPartNumbers([parsed.trim()]);
+        }
+      } catch {
+        // Defensive — keep defaults rather than crashing the page.
+      }
     }
     setInitialized(true);
   }
@@ -327,10 +368,14 @@ export default function TechResubmitPage() {
     if (formData.appealNotes && formData.appealNotes.trim()) {
       payload.appealNotes = formData.appealNotes.trim();
     }
-    if (formData.requestType === "parts_nla" && partNumbers.length > 0) {
-      const filteredParts = partNumbers.filter(p => p.trim() !== "");
-      if (filteredParts.length > 0) {
-        payload.partNumbers = JSON.stringify(filteredParts);
+    // Tyler 2026-05-01: serialize NLA parts in the same object shape that
+    // tech-submit produces — `{ nla, available }`. Was sending an array
+    // and silently dropping `available` parts on resubmission.
+    if (formData.requestType === "parts_nla") {
+      const nlaParts = partNumbers.filter(p => p.trim() !== "");
+      const otherParts = availableParts.filter(p => p.trim() !== "");
+      if (nlaParts.length > 0 || otherParts.length > 0) {
+        payload.partNumbers = JSON.stringify({ nla: nlaParts, available: otherParts });
       }
     }
     payload.resubmissionOf = originalId;
@@ -600,59 +645,121 @@ export default function TechResubmitPage() {
               </Card>
 
               {form.watch("requestType") === "parts_nla" && (
-                <Card>
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        Part Number(s) <span className="text-destructive">*</span>
-                      </p>
-                      <HelpTooltip content="Enter each unavailable part number from TechHub. Add additional parts using the + button." />
-                    </div>
-                    <div className="space-y-2">
-                      {partNumbers.map((pn, idx) => (
-                        <div key={idx} className="flex items-center gap-2">
-                          <Input
-                            placeholder="Enter part number (e.g., WPW10321304)"
-                            value={pn}
-                            onChange={(e) => {
-                              const updated = [...partNumbers];
-                              updated[idx] = e.target.value.toUpperCase();
-                              setPartNumbers(updated);
-                            }}
-                            data-testid={`input-part-number-resubmit-${idx}`}
-                          />
-                          {partNumbers.length > 1 && (
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="h-8 w-8 text-destructive hover:text-destructive shrink-0"
-                              onClick={() => setPartNumbers(partNumbers.filter((_, i) => i !== idx))}
-                              data-testid={`button-remove-part-resubmit-${idx}`}
-                            >
-                              <X className="w-4 h-4" />
-                            </Button>
-                          )}
+                <>
+                  <Card>
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                          NLA Part Number(s) <span className="text-destructive">*</span>
+                        </p>
+                        <HelpTooltip content="Enter part numbers that are No Longer Available in TechHub. These are the parts VRS will research." />
+                      </div>
+                      <p className="text-sm text-muted-foreground">Parts showing unavailable / discontinued in TechHub</p>
+                      <div className="space-y-2">
+                        {partNumbers.map((pn, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <Input
+                              placeholder="Enter NLA part number (e.g., WPW10321304)"
+                              value={pn}
+                              onChange={(e) => {
+                                const updated = [...partNumbers];
+                                updated[idx] = e.target.value.toUpperCase();
+                                setPartNumbers(updated);
+                              }}
+                              data-testid={`input-part-number-resubmit-${idx}`}
+                            />
+                            {partNumbers.length > 1 && (
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-destructive hover:text-destructive shrink-0"
+                                onClick={() => setPartNumbers(partNumbers.filter((_, i) => i !== idx))}
+                                data-testid={`button-remove-part-resubmit-${idx}`}
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        {partNumbers.length < 10 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPartNumbers([...partNumbers, ""])}
+                            data-testid="button-add-part-number-resubmit"
+                          >
+                            <Plus className="w-3.5 h-3.5 mr-1.5" />
+                            Add NLA Part
+                          </Button>
+                        )}
+                        <p className="text-xs text-muted-foreground ml-auto">{partNumbers.filter(p => p.trim() !== "").length}/10 parts</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Tyler 2026-05-01: Available parts card mirrors tech-submit
+                      so resubmission preserves the `available` part list. */}
+                  <Card>
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                          Other Required Parts (Available)
+                        </p>
+                        <HelpTooltip content="Enter part numbers that ARE available in TechHub but are also needed for this repair. These parts stay on the order if the NLA part is not found." />
+                      </div>
+                      <p className="text-sm text-muted-foreground">Parts showing available in TechHub that must remain on the order</p>
+                      {availableParts.length > 0 && (
+                        <div className="space-y-2">
+                          {availableParts.map((pn, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <Input
+                                placeholder="Enter available part number"
+                                value={pn}
+                                onChange={(e) => {
+                                  const updated = [...availableParts];
+                                  updated[idx] = e.target.value.toUpperCase();
+                                  setAvailableParts(updated);
+                                }}
+                                data-testid={`input-available-part-resubmit-${idx}`}
+                              />
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-destructive hover:text-destructive shrink-0"
+                                onClick={() => setAvailableParts(availableParts.filter((_, i) => i !== idx))}
+                                data-testid={`button-remove-available-part-resubmit-${idx}`}
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      {partNumbers.length < 10 && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setPartNumbers([...partNumbers, ""])}
-                          data-testid="button-add-part-number-resubmit"
-                        >
-                          <Plus className="w-3.5 h-3.5 mr-1.5" />
-                          Add Another Part
-                        </Button>
                       )}
-                      <p className="text-xs text-muted-foreground ml-auto">{partNumbers.filter(p => p.trim() !== "").length}/10 parts</p>
-                    </div>
-                  </CardContent>
-                </Card>
+                      <div className="flex items-center justify-between">
+                        {availableParts.length < 10 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAvailableParts([...availableParts, ""])}
+                            data-testid="button-add-available-part-resubmit"
+                          >
+                            <Plus className="w-3.5 h-3.5 mr-1.5" />
+                            Add Available Part
+                          </Button>
+                        )}
+                        {availableParts.length > 0 && (
+                          <p className="text-xs text-muted-foreground ml-auto">{availableParts.filter(p => p.trim() !== "").length}/10 parts</p>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </>
               )}
 
               <Card>

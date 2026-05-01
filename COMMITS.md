@@ -2884,3 +2884,110 @@ At insert, we prefer `videoUrls` (JSON-encode if non-empty) and fall back to leg
 ### Deferred (not applied this round)
 - Per-video rejection in agent dashboard. Would require expanding `rejectedMedia.video` from a singleton to a per-index array, server changes for response handling, and Smartsheet-side considerations. Out of scope for this task. Filed as a follow-up.
 - Duration-probe timeout. Rare metadata hang risk. Browsers usually fail-fast within a few hundred ms; observed hangs would be a user-visible issue but not a data risk. Defer.
+
+---
+
+## 2026-05-01 — Architect comprehensive review fixes (F1–F4)
+
+After multi-video shipped, an architect review of tech submission, agent processing, and intake-form flow surfaced four issues. Tyler said "yes all" — fix all four. No DB schema, no Smartsheet form schema, no `package.json` change.
+
+### F1 (HIGH) — Stale-write race in `/process` and `/process-nla`
+
+**Bug.** Both routes did a check-then-write: `getSubmission(id)` → validate `ticketStatus === "pending"` → `updateSubmission(id, ...)`. Two concurrent agent clicks (or a tab + a websocket-triggered second click) could both pass the `pending` check, both fall through to the update, both fire SMS, and both write a status transition. Last writer wins on the row but BOTH SMS messages went out and the audit trail lied about who acted.
+
+**Fix.** New storage method, server/storage.ts:
+```ts
+updateSubmissionIfStatus(id, expectedStatuses[], data) → Submission | undefined
+```
+Implementation uses Drizzle `and(eq(id), inArray(ticketStatus, expected))`. Returns `undefined` when zero rows match — the update did not happen because the row already moved off `pending`. Throws if `expectedStatuses` is empty (defense against an accidental no-op `WHERE`).
+
+`/process` (server/routes.ts ~1479 approve_submission early path AND ~1624 main path) and `/process-nla` (~2001) now call `updateSubmissionIfStatus(id, ["pending"], …)`. On `undefined`, they short-circuit with HTTP 409 and `code: "STALE_STATUS"` plus a clear message ("This ticket was already processed by another agent. Refresh to see the latest state."). The second concurrent agent now gets a clean 409 instead of silently double-acting.
+
+Other `updateSubmission` call sites in routes.ts (NLA P-Card flow, escalation, edit, etc.) were intentionally NOT touched — those routes have different state-machine assumptions and were not flagged by the review. Out of scope for this task.
+
+### F2 (MED) — `sendSms` after commit could 500 the route with the DB committed
+
+**Bug.** In both `/process` and `/process-nla`, `await sendSms(…)` ran AFTER the DB write. If Twilio threw (network blip, rate limit, bad number on the row), the route returned 500 — but the ticket was already updated, the websocket broadcast had already gone out, and the agent saw "something failed" with no idea what. Worse, on retry the F1 race would bite (now fixed) — but even pre-F1 the SMS would not retry idempotently.
+
+**Fix.** Wrap `sendSms` in try/catch in both routes. On failure, `console.error` with the submission id and error message. The route still returns 200 with the updated submission. SMS is now best-effort — the user-facing primary action (status transition + audit trail) is the source of truth, and the notification is a nice-to-have that does not get to break the request.
+
+### F3 (MED) — Resubmit silently dropped NLA `available` parts
+
+**Bug.** `tech-submit.tsx` writes `partNumbers` as `JSON.stringify({ nla: string[], available: string[] })` — two distinct lists. The server stores the JSON blob in the existing `part_numbers` varchar(500) (no schema change). `tech-resubmit.tsx`, however, only ever read `Array.isArray(parsed)` on hydrate and only ever serialized an array on payload send. Result: a tech who initially submitted with both an NLA part AND an "Other Required Parts (Available)" entry would, on resubmission, lose the entire `available` list — silently. The agent then saw a different parts manifest than the original submission.
+
+**Fix (client/src/pages/tech-resubmit.tsx).**
+1. New state: `const [availableParts, setAvailableParts] = useState<string[]>([])`.
+2. Hydrate (line ~158) handles BOTH shapes:
+   - legacy array → `setPartNumbers(parsed)` (preserves grandfathered tickets)
+   - new object → `setPartNumbers(parsed.nla); setAvailableParts(parsed.available)`
+3. Payload (line ~350) now serializes the same object shape submit uses:
+   `JSON.stringify({ nla: nlaParts, available: otherParts })`.
+4. UI: split the existing single "Part Number(s)" card into two cards mirroring tech-submit — "NLA Part Number(s) *" (the existing inputs, relabeled) plus a new "Other Required Parts (Available)" card with its own add/remove and 10-cap. New `data-testid`s use the `-resubmit-` infix to stay unique vs submit.
+
+### F4 (MED) — `deriveIntakeFormStatus` drift for NLA tickets
+
+**Bug.** `shared/intake-form-config.ts` short-circuited on `requestType === "parts_nla"` and returned `"not_applicable"`. But the server's intake-status endpoint (routes.ts:3857–3866) and confirm gate (routes.ts:4044–4058) BOTH require an intake form on every terminal NLA outcome (`completed | rejected | rejected_closed | invalid`). The admin dashboard column was therefore lying: every NLA ticket — including terminal ones with no intake form on file — rendered as "N/A", so agents had zero signal that an intake form was outstanding for an NLA ticket they had just rejected/completed/invalidated.
+
+**Fix.** Reordered checks and added an NLA branch that mirrors the server gate exactly:
+1. `intakeFormCompletedAt` → `completed` (wins over everything)
+2. pre-cutoff (`createdAt < INTAKE_FORM_GO_LIVE_UTC`) → `not_applicable` (grandfathered, unchanged)
+3. NLA branch:
+   - terminal status → `awaiting`
+   - non-terminal → `not_ready`
+4. AUTH/Infestation branch (unchanged):
+   - `approved | completed` → `awaiting`
+   - else → `not_ready`
+
+The AUTH branch intentionally still does NOT check `authCode` even though the server's status endpoint does — the dashboard column surfaces "do we still owe an intake form?", and missing-authCode is a separate data-quality flag handled in another column. Keeping `authCode` out of scope here mirrors the pre-existing client behavior and avoids cross-column coupling. Comment block in the helper now spells out the order, the rationale, and the file:line cross-references back to `routes.ts`.
+
+### Files touched
+- `server/storage.ts` (F1: new `updateSubmissionIfStatus`)
+- `server/routes.ts` (F1+F2: /process @ ~1479 + ~1624; /process-nla @ ~2001)
+- `client/src/pages/tech-resubmit.tsx` (F3: state + hydrate + payload + UI)
+- `shared/intake-form-config.ts` (F4: reordered + NLA branch)
+
+### Not touched (deliberate)
+- DB schema, Smartsheet form schema, `package.json` (Tyler's hard rules).
+- Other `updateSubmission` callers in routes.ts (different state machines, not flagged by the review).
+- Per-video rejection in agent dashboard (deferred from prior round, not in F1–F4).
+
+---
+
+## 2026-05-01 (addendum) — Architect follow-up: F2 + F3 hardening
+
+Architect review of the F1–F4 diff returned PASS on F1 + F4, but flagged F2 and F3 as **partial**. Both items were the same class of bug we had just fixed; addressed in the same session.
+
+### F2 follow-up — other post-commit awaits in /process and /process-nla
+
+The original F2 wrapped only `sendSms`. But `await storage.updateUser(agentStatus="online")` and `await broadcastVrsAvailability()` were still bare-awaited after the DB write. A throw from either would 500 the route while the ticket was already updated — same inconsistency as the SMS case.
+
+**Fix.** Wrap each post-commit block in its own try/catch with a tagged `console.error`:
+- `/process`:
+  - agent-status update + status broadcasts (~1646–1662)
+  - reject-path division re-queue broadcast (~1664–1692)
+  - final `broadcastVrsAvailability` (~1694–1698)
+- `/process-nla`:
+  - agent-status update + status broadcasts (~2041–2056)
+  - `ticket_updated` admin broadcast + `broadcastVrsAvailability` (~2058–2066)
+
+Each catch logs `[process:<action>]` or `[process-nla:<action>]` plus the submission id and the error, so a grep of the workflow log isolates which post-commit step failed without changing the user-facing 200.
+
+### F3 follow-up — partNumbers shape normalizer in tech-resubmit
+
+The original F3 hydrate handled `Array<string>` and `{nla, available}` — but silently dropped anything else (scalar string, mixed-type array, malformed JSON). On resubmit that data would be overwritten with empty defaults. Architect flagged this as silent data loss for any pre-existing oddly-shaped row.
+
+**Fix (client/src/pages/tech-resubmit.tsx hydrate ~158–200).** Explicit shape normalizer with five cases:
+1. `Array<string>` → legacy single-list NLA
+2. `{nla: string[], available: string[]}` → current submit shape
+3. `Array<unknown>` → coerce via `String(x)` then drop empties → NLA list
+4. Single non-empty string → one-element NLA list (covers pre-JSON rows)
+5. Anything else / parse error → leave defaults (empty NLA input, never crash)
+
+Inner `JSON.parse` is wrapped in its own try so non-JSON literals fall through to case 4 instead of dying. Outer try/catch is defensive — guarantees the page renders even on a totally pathological row.
+
+### Files touched (addendum)
+- `server/routes.ts` (F2: bracket post-commit awaits in /process + /process-nla)
+- `client/src/pages/tech-resubmit.tsx` (F3: shape normalizer)
+
+### Not touched (deliberate)
+- Targeted vitest harness for "concurrent /process → 1×200 + 1×409", "SMS throw still 200", and "hydration matrix" — architect flagged as a useful next step but it's a NEW test file, not a fix; out of scope for this round and does not need to ship before the user re-validates the four findings.

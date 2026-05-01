@@ -1467,9 +1467,25 @@ export async function registerRoutes(
         smsMessage = await buildSubmissionApprovedMessage(submission.serviceOrder, technicianMessage);
         smsType = "submission_approved";
 
-        const updated = await storage.updateSubmission(id, updateData as any);
+        // Tyler 2026-05-01: optimistic-lock + best-effort SMS.
+        // Was: updateSubmission(id, ...) + awaited sendSms inside same
+        // try block, so an SMS throw returned 500 *after* the DB row had
+        // already moved. Now: status-conditional UPDATE returns 409 on
+        // concurrent loss, and SMS is best-effort so a downstream SMS
+        // outage cannot retroactively poison a successful approval.
+        const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+        if (!updated) {
+          return res.status(409).json({
+            error: "This ticket was already moved by another agent. Please refresh and try again.",
+            code: "STALE_STATUS",
+          });
+        }
         const approveSmsPhone = submission.phoneOverride || submission.phone;
-        await sendSms(submission.id, approveSmsPhone, smsType, smsMessage);
+        try {
+          await sendSms(submission.id, approveSmsPhone, smsType, smsMessage);
+        } catch (smsErr) {
+          console.error(`[process:approve_submission] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
+        }
 
         return res.status(200).json({ submission: updated });
       }
@@ -1596,52 +1612,87 @@ export async function registerRoutes(
         smsType = "ticket_invalid";
       }
 
-      const updated = await storage.updateSubmission(id, updateData as any);
-
-      const reviewSmsPhone = submission.phoneOverride || submission.phone;
-      await sendSms(submission.id, reviewSmsPhone, smsType, smsMessage);
-
-      if (authReq.user!.role === "vrs_agent") {
-        await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
-        updateClientStatus(authReq.user!.id, "online");
-        broadcastToAdmins({
-          type: "agent_status_changed",
-          payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
+      // Tyler 2026-05-01: optimistic-lock — was an unconditional UPDATE
+      // BY ID after a read-time status check (race window let two
+      // simultaneous agent actions both pass and overwrite each other,
+      // sending duplicate SMS). The route already validates
+      // `ticketStatus === "pending"` at the top so we encode the same
+      // expectation here. Losing concurrent writer gets 409.
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This ticket was already moved by another agent. Please refresh and try again.",
+          code: "STALE_STATUS",
         });
-        broadcastToAgent(authReq.user!.id, {
-          type: "own_status_changed",
-          payload: { status: "online" },
-        });
-        await broadcastVrsAvailability();
       }
 
-      if (action === "reject") {
-        if (submission.requestType === "parts_nla") {
-          broadcastToNlaDivisionAgents(submission.applianceType, {
-            type: "ticket_queued",
-            payload: {
-              submissionId: id,
-              serviceOrder: submission.serviceOrder,
-              applianceType: submission.applianceType,
-              applianceLabel: getDivisionLabel(submission.applianceType),
-              warrantyLabel: getWarrantyLabel(submission.warrantyType),
-            },
+      // Tyler 2026-05-01: best-effort SMS. Was awaited and would 500 the
+      // route on failure even though the DB row had already committed,
+      // causing agent retries on an already-moved ticket.
+      const reviewSmsPhone = submission.phoneOverride || submission.phone;
+      try {
+        await sendSms(submission.id, reviewSmsPhone, smsType, smsMessage);
+      } catch (smsErr) {
+        console.error(`[process:${action}] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
+      }
+
+      // Tyler 2026-05-01 (architect F2 follow-up): every post-commit side
+      // effect below is best-effort — the DB transition + SMS attempt are
+      // the contract; agent status/broadcast failures must NOT 500 a
+      // route that already succeeded.
+      if (authReq.user!.role === "vrs_agent") {
+        try {
+          await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          updateClientStatus(authReq.user!.id, "online");
+          broadcastToAdmins({
+            type: "agent_status_changed",
+            payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
           });
-        } else {
-          broadcastToDivisionAgents(submission.applianceType, {
-            type: "ticket_queued",
-            payload: {
-              submissionId: id,
-              serviceOrder: submission.serviceOrder,
-              applianceType: submission.applianceType,
-              applianceLabel: getDivisionLabel(submission.applianceType),
-              warrantyLabel: getWarrantyLabel(submission.warrantyType),
-            },
+          broadcastToAgent(authReq.user!.id, {
+            type: "own_status_changed",
+            payload: { status: "online" },
           });
+          await broadcastVrsAvailability();
+        } catch (postErr) {
+          console.error(`[process:${action}] post-commit agent-status update failed for submission ${submission.id}:`, postErr);
         }
       }
 
-      await broadcastVrsAvailability();
+      if (action === "reject") {
+        try {
+          if (submission.requestType === "parts_nla") {
+            broadcastToNlaDivisionAgents(submission.applianceType, {
+              type: "ticket_queued",
+              payload: {
+                submissionId: id,
+                serviceOrder: submission.serviceOrder,
+                applianceType: submission.applianceType,
+                applianceLabel: getDivisionLabel(submission.applianceType),
+                warrantyLabel: getWarrantyLabel(submission.warrantyType),
+              },
+            });
+          } else {
+            broadcastToDivisionAgents(submission.applianceType, {
+              type: "ticket_queued",
+              payload: {
+                submissionId: id,
+                serviceOrder: submission.serviceOrder,
+                applianceType: submission.applianceType,
+                applianceLabel: getDivisionLabel(submission.applianceType),
+                warrantyLabel: getWarrantyLabel(submission.warrantyType),
+              },
+            });
+          }
+        } catch (broadcastErr) {
+          console.error(`[process:${action}] reject re-queue broadcast failed for submission ${submission.id}:`, broadcastErr);
+        }
+      }
+
+      try {
+        await broadcastVrsAvailability();
+      } catch (broadcastErr) {
+        console.error(`[process:${action}] final VRS availability broadcast failed for submission ${submission.id}:`, broadcastErr);
+      }
 
       return res.status(200).json({ submission: updated });
     } catch (error) {
@@ -1956,31 +2007,60 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid action" });
       }
 
-      const updated = await storage.updateSubmission(id, updateData as any);
+      // Tyler 2026-05-01: optimistic-lock for NLA processing — same race
+      // pattern fixed on /process. Route validates `pending` at the top;
+      // we re-encode that as the UPDATE predicate. Losing concurrent
+      // writer gets 409 instead of silently overwriting.
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This NLA ticket was already moved by another agent. Please refresh and try again.",
+          code: "STALE_STATUS",
+        });
+      }
 
+      // Tyler 2026-05-01: best-effort SMS — DB row is committed; an SMS
+      // outage shouldn't roll back the agent's success indication.
       if (shouldSendSms && smsMessage) {
         const smsPhone = submission.phoneOverride || submission.phone;
-        await sendSms(submission.id, smsPhone, smsType, smsMessage);
+        try {
+          await sendSms(submission.id, smsPhone, smsType, smsMessage);
+        } catch (smsErr) {
+          console.error(`[process-nla:${action}] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
+        }
       }
 
+      // Tyler 2026-05-01 (architect F2 follow-up): same hardening as
+      // /process — every post-commit side effect is best-effort. The DB
+      // transition + SMS attempt are the contract; an agent-status DB
+      // hiccup or websocket broadcast failure must not 500 a route that
+      // already moved the ticket.
       if (authReq.user!.role === "vrs_agent") {
-        await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
-        updateClientStatus(authReq.user!.id, "online");
-        broadcastToAdmins({
-          type: "agent_status_changed",
-          payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
-        });
-        broadcastToAgent(authReq.user!.id, {
-          type: "own_status_changed",
-          payload: { status: "online" },
-        });
+        try {
+          await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          updateClientStatus(authReq.user!.id, "online");
+          broadcastToAdmins({
+            type: "agent_status_changed",
+            payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
+          });
+          broadcastToAgent(authReq.user!.id, {
+            type: "own_status_changed",
+            payload: { status: "online" },
+          });
+        } catch (postErr) {
+          console.error(`[process-nla:${action}] post-commit agent-status update failed for submission ${submission.id}:`, postErr);
+        }
       }
 
-      broadcastToAdmins({
-        type: "ticket_updated",
-        payload: { submissionId: id, ticketStatus: updated?.ticketStatus },
-      });
-      await broadcastVrsAvailability();
+      try {
+        broadcastToAdmins({
+          type: "ticket_updated",
+          payload: { submissionId: id, ticketStatus: updated?.ticketStatus },
+        });
+        await broadcastVrsAvailability();
+      } catch (broadcastErr) {
+        console.error(`[process-nla:${action}] post-commit broadcast failed for submission ${submission.id}:`, broadcastErr);
+      }
 
       return res.status(200).json({ submission: updated });
     } catch (error) {
