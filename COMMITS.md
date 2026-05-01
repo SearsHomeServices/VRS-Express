@@ -3207,3 +3207,34 @@ update via admin UI required in that case.
 - Smartsheet form schema — untouched.
 - `shared/business-hours.ts` — left alone pending Tyler's call on the
   weekend question above.
+
+---
+
+## 2026-05-01 (followup) — Saturday confirmed open
+
+**Trigger:** Tyler confirmed "saturday VRS is open" in response to the
+weekend-inconsistency flag from the prior commit.
+
+**Fix:**
+- `server/sms.ts` — `isAfterHoursEastern`: removed the Sat short-circuit.
+  Now reads `if (weekday === "Sun") return true;`. Sunday status not stated
+  by Tyler so left gated as after-hours; comment notes the one-line change
+  required if Sunday is also open.
+- `server/sms.ts` + `server/seed.ts` — wording in three fallback strings
+  and three template seed bodies updated: "Mon–Fri 8am–8pm EST" →
+  "Mon–Sat 8am–8pm EST". Routing-comment day labels also updated.
+
+**Verification:**
+- Sat 10 AM ET → afterHours=false (was true). Sat 7:59 AM ET → true.
+  Sat 8:00 PM ET → true. Sun noon → true (still gated). Fri 8:50 AM ET
+  (original GM bug) → false (still passes).
+- All 3 `submission_received.*_after_hours` DB rows now contain "Mon–Sat",
+  none contain "Mon–Fri" — confirmed via SELECT against communication_templates.
+
+**Files touched:** `server/sms.ts`, `server/seed.ts`. No schema, no
+package.json, no Smartsheet form changes.
+
+**Still open for Tyler:** Sunday — assumed closed (gate preserved). If
+Sunday is also open, drop the `if (weekday === "Sun") return true;` line
+and change "Mon–Sat" → "Daily" (or remove the day prefix, matching the
+GM's original "8am EST to 8pm EST" wording verbatim).
