@@ -624,16 +624,35 @@ export default function AgentDashboard() {
 
   const submissionsUrl = queryParams ? `/api/submissions?${queryParams}` : "/api/submissions";
 
+  // Tyler 2026-05-05 (perf): users were reporting the app feeling
+  // "extremely slow." The admin /api/submissions response is ~500KB-1MB
+  // (every JSON column for every ticket — photos, agentNotes, etc.) and
+  // was taking 1.3-1.5s in prod. With a 15s poll + 10s staleTime per
+  // tab, every active dashboard was choking on a full re-fetch + JSON
+  // parse + table re-render four times a minute.
+  //
+  // The WebSocket already invalidates both /api/submissions and
+  // /api/agent/stats on every meaningful event (new_ticket,
+  // ticket_claimed, ticket_queued, pending_tickets,
+  // resubmission_received, ticket_assigned — see the subscribe() block
+  // in the same file, ~L468-540). User's own mutations also
+  // invalidate. So polling is a missed-WS-event safety net, not the
+  // primary refresh mechanism. Stretching to 60s keeps the safety net
+  // and cuts server + client load ~4x. refetchOnWindowFocus disabled
+  // for the same reason — WS keeps the cache fresh, no need to re-pull
+  // a megabyte every time the user switches tabs.
   const { data: submissionsData, isLoading } = useQuery<{ submissions: SubmissionWithTech[] }>({
     queryKey: [submissionsUrl],
-    refetchInterval: 15000,
-    staleTime: 10000,
+    refetchInterval: 60000,
+    staleTime: 45000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: statsData } = useQuery<{ queueCount: number; pendingCount: number; completedToday: number; nlaQueueCount?: number; nlaPendingCount?: number; nlaCompletedToday?: number }>({
     queryKey: ["/api/agent/stats"],
-    refetchInterval: 15000,
-    staleTime: 10000,
+    refetchInterval: 60000,
+    staleTime: 45000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: rgcStatus } = useQuery<{

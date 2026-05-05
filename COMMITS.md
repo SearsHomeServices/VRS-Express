@@ -3614,3 +3614,119 @@ varchar column — unaffected.
 
 **Files touched:**
 - `client/src/pages/admin-dashboard.tsx` (import + video render block).
+
+---
+
+## 2026-05-05 — PERF: cut dashboard polling 4x ("app extremely slow" reports)
+
+**Symptom (multiple admins + agents):**
+"The app is running extremely slow."
+
+**Diagnosis (from prod deployment logs):**
+- `/api/submissions` was being polled every 15s by both admin and agent
+  dashboards, with a 10s staleTime — i.e. four full re-fetches per
+  minute per active tab.
+- Admin call has no filter — returns the entire submissions table (506
+  rows in prod) with every JSON column included (`photos`,
+  `partNumbers`, `agentNotes`, `issueDescription`, `rejectedMedia`,
+  `videoUrl`, etc.). Wire payload ~500KB-1MB, response time 1.3-1.5s in
+  prod logs (e.g. `GET /api/submissions 304 in 1380ms`,
+  `1484ms`, `1509ms`, `1295ms`).
+- `/api/agent/stats` was on the same 15s cadence, also responding in
+  1.2-1.7s.
+- Net effect on the user: every 15s the UI hitched as React parsed ~1MB
+  of JSON and re-rendered the giant ticket overview table. With several
+  admins/agents online simultaneously, the server was also doing the
+  same expensive read repeatedly.
+- Critically: the WebSocket already invalidates these queries on EVERY
+  meaningful event (`new_ticket`, `ticket_claimed`, `ticket_queued`,
+  `pending_tickets`, `resubmission_received`, `ticket_assigned`,
+  `agent_status_changed` — wired in both dashboards' `subscribe()`
+  blocks). User mutations also invalidate. So the 15s polling was a
+  redundant safety net, not the primary refresh mechanism.
+
+**Fix (`client/src/pages/agent-dashboard.tsx` + `admin-dashboard.tsx`):**
+- `refetchInterval`: 15000 → 60000 (4x reduction).
+- `staleTime`: 10000 → 45000 (matches new poll cadence).
+- `refetchOnWindowFocus: false` on the heavy queries — WS keeps cache
+  fresh, so re-pulling a megabyte every time the user switches tabs is
+  pure waste.
+- Applied to: admin `/api/submissions`, admin `/api/admin/agent-status`,
+  agent `/api/submissions?<filters>`, agent `/api/agent/stats`.
+- Feedback panel (30s, infrequent) and other low-cost queries left as-is.
+
+**Why this is safe:**
+- Polling is now a missed-WS-event safety net rather than the primary
+  refresh. WS push remains instant — new tickets, claims, queue
+  changes etc. still appear in the UI within ~1s.
+- Only the worst-case "WS dropped a frame and user is staring at a
+  stale tab without doing anything" window grows from 15s to 60s.
+- No DB schema, no Smartsheet, no `package.json`, no API contract
+  changes. Frontend constants only.
+
+**Expected impact:**
+- ~75% reduction in `/api/submissions` and `/api/agent/stats` server
+  load from active dashboards.
+- ~75% reduction in client-side JSON parse + table re-render churn —
+  perceived UI smoothness should improve immediately for admins
+  watching the ticket overview.
+- Same multiplier on per-user bandwidth, which matters for agents on
+  weaker field connections.
+
+**Verification:**
+- `npm run build` clean.
+
+**Files touched:**
+- `client/src/pages/agent-dashboard.tsx`
+- `client/src/pages/admin-dashboard.tsx`
+
+**Follow-up worth considering (not in this commit):**
+- Slim down `/api/submissions` payload for the admin Ticket Overview
+  table — strip JSON columns the table doesn't render (photos,
+  agentNotes, rejectedMedia, etc.) and let the detail panel pull them
+  via the existing GET `/api/submissions/:id` route. Would cut wire
+  payload another ~5-10x but is higher-touch (detail panel currently
+  reuses the list cache).
+
+### Addendum (architect-flagged WS coverage gap):
+
+Architect review of the polling change caught that admin's WebSocket
+subscription was missing `ticket_claimed`, `ticket_assigned`, and
+`resubmission_received` — server already broadcasts all three, and
+admins are valid recipients (`broadcastToDivisionAgents` includes
+admin/super_admin per `server/websocket.ts`). With the 15s poll those
+gaps were masked at most one cycle; with the new 60s poll an admin
+could have stared at a "queued" ticket for up to a minute after an
+agent claimed it.
+
+Added silent invalidation handlers for all three on the admin
+dashboard (no toast/sound — admins don't need to be paged on every
+claim, just kept in sync). `resubmission_received` also bumps
+`/api/admin/analytics` since the resubmission rate card depends on it.
+
+Architect's other note — `refetchOnWindowFocus: false` is already the
+global default in `client/src/lib/queryClient.ts` so the explicit
+setting is a no-op redundancy. Left it in for clarity at the call
+sites; no behavior change.
+
+### Addendum 2 (server-side broadcast fix):
+
+Architect's follow-up review caught that adding admin subscriptions
+alone wasn't sufficient — `ticket_assigned` and `resubmission_received`
+were being emitted via `broadcastToAgent(...)` (single recipient), so
+the new admin handlers would never fire. Only `ticket_claimed` was
+truly broadcast to admins (via `broadcastToDivisionAgents`).
+
+Fixed in `server/routes.ts` by mirroring both events to admins:
+- `/api/submissions` POST resubmission path (~L833): added
+  `broadcastToAdmins(resubmissionEvent)` alongside the existing
+  `broadcastToAgent(originalAgent, ...)`.
+- `/api/submissions/:id/reassign` (~L2341): added
+  `broadcastToAdmins(assignedEvent)` alongside the assignee broadcast.
+
+Both extracted the event object first to keep the payload identical
+across recipients.
+
+Net result: admin ticket overview now stays current via WS push for
+all three state-change events (claim, assign, resubmission) — 60s
+polling is genuinely a safety net, not the primary refresh path.

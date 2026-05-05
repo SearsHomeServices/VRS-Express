@@ -213,10 +213,15 @@ type AgentStatusInfo = {
 function AgentStatusSection() {
   const { toast } = useToast();
 
+  // Tyler 2026-05-05 (perf): see paired comment on the /api/submissions
+  // useQuery below. The `agent_status_changed` WS event already
+  // invalidates this query on every status flip, so polling is a
+  // safety net — bumped 15s → 60s to cut tab/server churn.
   const { data, isLoading } = useQuery<{ agents: AgentStatusInfo[] }>({
     queryKey: ["/api/admin/agent-status"],
-    refetchInterval: 15000,
-    staleTime: 10000,
+    refetchInterval: 60000,
+    staleTime: 45000,
+    refetchOnWindowFocus: false,
   });
 
   const toggleAgentStatusMutation = useMutation({
@@ -897,10 +902,26 @@ function TicketOverviewSection() {
   const [reassignTarget, setReassignTarget] = useState<string>("");
   const [reassignNotes, setReassignNotes] = useState("");
 
+  // Tyler 2026-05-05 (perf): users were reporting the app feeling
+  // "extremely slow." This is the worst offender — admin loads ALL
+  // submissions with no filter, every JSON column included
+  // (photos, partNumbers, agentNotes, issueDescription, rejectedMedia,
+  // etc.). At 506 prod rows the response is ~500KB-1MB and prod logs
+  // showed it taking 1.3-1.5s. With a 15s poll + 10s staleTime the
+  // admin tab was choking on a full re-fetch + JSON parse + ticket
+  // overview table re-render four times every minute.
+  //
+  // The WebSocket already invalidates this query on every meaningful
+  // event (new_ticket, ticket_queued, pending_tickets — see the
+  // subscribe() block in this file ~L1810-1840). Mutations also
+  // invalidate. So polling is a missed-WS-event safety net, not the
+  // primary refresh. Stretching to 60s + disabling refocus refetch
+  // cuts server + client load ~4x. WS push remains instant.
   const { data: allData, isLoading: allLoading } = useQuery<{ submissions: any[] }>({
     queryKey: ["/api/submissions"],
-    refetchInterval: 15000,
-    staleTime: 10000,
+    refetchInterval: 60000,
+    staleTime: 45000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: usersData } = useQuery<{ users: any[] }>({
@@ -1845,7 +1866,29 @@ export default function AdminDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/business-hours"] });
     });
 
-    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); };
+    // Tyler 2026-05-05 (perf-fix paired): when we stretched the admin
+    // /api/submissions poll from 15s → 60s (see comment on the
+    // useQuery), we relied on the WS to keep the ticket overview
+    // current. But admin was never subscribed to `ticket_claimed`,
+    // `ticket_assigned`, or `resubmission_received` — server already
+    // emits all three, and admin/super_admin are valid recipients via
+    // broadcastToDivisionAgents (server/websocket.ts). Without these
+    // handlers, an admin watching the overview could see a queued
+    // ticket as still-queued for up to 60s after an agent claimed it.
+    // No toast/sound — admins don't need to be paged on every claim,
+    // just kept in sync silently.
+    const unsub6 = subscribe("ticket_claimed", () => {
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+    });
+    const unsub7 = subscribe("ticket_assigned", () => {
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+    });
+    const unsub8 = subscribe("resubmission_received", () => {
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+    });
+
+    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); };
   }, [subscribe]);
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");

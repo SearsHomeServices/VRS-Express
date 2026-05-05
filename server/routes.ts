@@ -831,8 +831,8 @@ export async function registerRoutes(
       }
 
       if (originalAgent) {
-        broadcastToAgent(originalAgent, {
-          type: "resubmission_received",
+        const resubmissionEvent = {
+          type: "resubmission_received" as const,
           payload: {
             submissionId: submission.id,
             serviceOrder: submission.serviceOrder,
@@ -841,7 +841,14 @@ export async function registerRoutes(
             warrantyLabel: getWarrantyLabel(parsed.data.warrantyType),
             message: "A technician has resubmitted a ticket you previously reviewed.",
           },
-        });
+        };
+        broadcastToAgent(originalAgent, resubmissionEvent);
+        // Tyler 2026-05-05 (perf-fix paired): admins now subscribe to
+        // resubmission_received to keep the ticket overview + analytics
+        // current under the new 60s safety-net polling. Mirror the
+        // payload to admins so they invalidate alongside the original
+        // reviewing agent.
+        broadcastToAdmins(resubmissionEvent);
 
         const resubmitClaimMsg = await buildResubmissionClaimMessage(submission.serviceOrder);
         const resubmitSmsPhone = submission.phoneOverride || submission.phone;
@@ -2338,14 +2345,20 @@ export async function registerRoutes(
           updatedAt: new Date(),
         } as any);
 
-        broadcastToAgent(parsed.data.agentId, {
-          type: "ticket_assigned",
+        const assignedEvent = {
+          type: "ticket_assigned" as const,
           payload: {
             submissionId: updated.id,
             serviceOrder: updated.serviceOrder,
             message: `A ticket has been assigned to you by an admin.`,
           },
-        });
+        };
+        broadcastToAgent(parsed.data.agentId, assignedEvent);
+        // Tyler 2026-05-05 (perf-fix paired): admins now subscribe to
+        // ticket_assigned silently so a second admin tab sees the
+        // assignment-state change immediately under the new 60s
+        // safety-net polling.
+        broadcastToAdmins(assignedEvent);
 
         return res.status(200).json({ submission: updated });
       }
