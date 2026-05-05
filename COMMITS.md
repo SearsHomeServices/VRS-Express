@@ -3567,3 +3567,50 @@ that turned this into a P1 instead of just a confused-UX bug:
 - `shared/intake-form-config.ts` (new export + helper, derive helper updated)
 - `server/routes.ts` (import, GET status branches collapsed, POST confirm gate)
 - `server/storage.ts` (import, in-tx re-check)
+
+---
+
+## 2026-05-01 — P1 FIX: admin dashboard couldn't play any videos
+
+**Symptom (multiple admins + agents reporting):**
+"Videos cannot be watched from the admin panel."
+
+**Root cause:**
+On 2026-04-30 we shipped multi-video support (up to 3 per ticket) without
+changing the DB schema — `submissions.video_url varchar(500)` now holds a
+JSON-encoded array (`["/objects/...","/objects/..."]`) instead of a raw
+URL. `client/src/lib/videoUrls.ts::parseVideoUrls()` is the shared
+single-URL-or-JSON-array reader, and every other consumer was migrated to
+it (agent-dashboard, tech-resubmit, tech-submit, submission-detail).
+Admin dashboard was missed — it kept binding `sub.videoUrl` straight into
+`<video src>`, so the browser tried to fetch the literal string
+`["/objects/..."]` and 404'd.
+
+Confirmed scope: 100% of recent prod tickets store JSON_ARRAY format
+(spot-checked submissions 674–720). Voice notes still use the single
+varchar column — unaffected.
+
+**Fix (`client/src/pages/admin-dashboard.tsx`):**
+- Imported `parseVideoUrls` from `@/lib/videoUrls`.
+- Replaced the single `<video>` element with a per-video tile loop that
+  mirrors the agent-dashboard pattern (lines 2208-2227 there). Up to 3
+  `<video controls preload="metadata">` players, stacked.
+- Section heading now reads "Videos (N)" when more than one video is
+  attached, "Video" otherwise.
+- Empty state ("No video attached") preserved byte-identical.
+- `data-testid` follows the same convention the agent dashboard uses:
+  `admin-media-video` / `admin-video-player` for the single-video case
+  (so existing tests keep passing) and `admin-media-video-${i}` /
+  `admin-video-player-${i}` for the multi-video case.
+
+**No changes to:**
+- DB schema, `parseVideoUrls`, server routes, object-storage ACL.
+- The `/objects/...` GET path (already public-served — agents can play
+  via the same URLs, only the admin client was misreading the column).
+
+**Verification:**
+- `npm run build` clean.
+- Type-check: no new errors in `admin-dashboard.tsx`.
+
+**Files touched:**
+- `client/src/pages/admin-dashboard.tsx` (import + video render block).

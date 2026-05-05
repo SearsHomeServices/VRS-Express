@@ -131,6 +131,7 @@ import {
 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
+import { parseVideoUrls } from "@/lib/videoUrls";
 
 interface AnalyticsData {
   submissionsToday: number;
@@ -732,20 +733,50 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium mb-3 flex items-center gap-1.5">
                     <Video className="w-3.5 h-3.5" />
-                    Video
+                    {(() => {
+                      const n = parseVideoUrls(sub.videoUrl).length;
+                      return n > 1 ? `Videos (${n})` : "Video";
+                    })()}
                   </p>
-                  {sub.videoUrl ? (
-                    <div className="rounded-md overflow-hidden bg-muted" data-testid="admin-media-video">
-                      <video
-                        src={sub.videoUrl}
-                        controls
-                        className="w-full max-h-[300px]"
-                        data-testid="admin-video-player"
-                      />
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground" data-testid="text-admin-no-video">No video attached</p>
-                  )}
+                  {(() => {
+                    // Tyler 2026-05-01 (P1 fix): video_url stores a JSON
+                    // array of object-storage paths since the multi-video
+                    // ship on 2026-04-30 (see client/src/lib/videoUrls.ts
+                    // for the format and the legacy single-URL fallback).
+                    // The admin page was still binding the raw column to
+                    // <video src> which made the browser try to load the
+                    // literal string `["..."]` and fail. Mirror the agent
+                    // dashboard's parseVideoUrls + per-video <video> tile
+                    // approach so admins/agents can play any of the up-to-
+                    // 3 attached videos.
+                    const videoList = parseVideoUrls(sub.videoUrl);
+                    if (videoList.length === 0) {
+                      return (
+                        <p className="text-sm text-muted-foreground" data-testid="text-admin-no-video">
+                          No video attached
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2">
+                        {videoList.map((vurl, vi) => (
+                          <div
+                            key={vi}
+                            className="rounded-md overflow-hidden bg-muted"
+                            data-testid={videoList.length === 1 ? "admin-media-video" : `admin-media-video-${vi}`}
+                          >
+                            <video
+                              src={vurl}
+                              controls
+                              preload="metadata"
+                              className="w-full max-h-[300px]"
+                              data-testid={videoList.length === 1 ? "admin-video-player" : `admin-video-player-${vi}`}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <Separator />
