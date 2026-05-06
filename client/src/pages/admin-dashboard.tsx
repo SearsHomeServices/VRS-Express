@@ -19,7 +19,7 @@ import {
 import BusinessHoursSection from "@/components/business-hours-section";
 import { useWebSocket, loadNotificationSettings, playNotificationDing, showBrowserNotification } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
-import type { User, TechnicianUserView } from "@shared/schema";
+import type { User, TechnicianUserView, SubmissionListItemWithTech } from "@shared/schema";
 import { deriveIntakeFormStatus } from "@shared/intake-form-config";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
@@ -941,7 +941,10 @@ function TicketOverviewSection() {
   const adminSubmissionsUrl = createdAfterIso
     ? `/api/submissions?createdAfter=${encodeURIComponent(createdAfterIso)}`
     : "/api/submissions";
-  const { data: allData, isLoading: allLoading } = useQuery<{ submissions: any[] }>({
+  // Tyler 2026-05-06 (Task #4): typed against the slim list shape from
+  // shared/schema.ts. The list table only reads slim columns; the detail
+  // dialog drills into /api/submissions/:id for heavy fields.
+  const { data: allData, isLoading: allLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [adminSubmissionsUrl],
     refetchInterval: 60000,
     staleTime: 45000,
