@@ -30,7 +30,7 @@ export default function LandingPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <img src={searsLogo} alt="Sears Home Services" className="h-12 mx-auto mb-4" data-testid="img-logo" />
-          <h1 className="text-2xl font-bold" data-testid="text-landing-title">VRS Digital Authorization</h1>
+          <h1 className="text-2xl font-bold" data-testid="text-landing-title">VRS Express</h1>
           <p className="text-sm text-muted-foreground mt-1">Sears Home Services</p>
         </div>
 

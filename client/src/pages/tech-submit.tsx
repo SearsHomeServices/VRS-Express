@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth, getToken } from "@/lib/auth";
+import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Camera, Send, Lock, Video, X, Sparkles, Loader2, AlertTriangle, Square, Mic, MicOff, Trash2, Info, Plus, CheckCircle2 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
+import {
+  parseAndValidateDraft,
+  stampDraftIdentity,
+  type DraftEnvelope,
+} from "@/lib/draft-identity";
 
 const APPLIANCE_TYPES = [
   { value: "refrigeration", label: "Refrigerator" },
@@ -56,6 +62,24 @@ const WARRANTY_PROVIDERS = [
   { value: "american_home_shield", label: "American Home Shield", available: true },
   { value: "first_american", label: "First American", available: true },
 ];
+
+// Tyler 2026-04-29 (warranty × request-type matrix): which warranty providers
+// are routable through VRS for each request type. Authorization is open to
+// all three; Infestation / No Model Tag / Non-Accessible is AHS + First
+// American only (Sears Protect family is handled through TechHub directly
+// for those scenarios); Parts NLA is the inverse — only the Sears Protect
+// family routes through VRS, AHS + FA NLA cases go through TechHub. Drives
+// the gray-out behavior on the warranty cards plus the onSubmit gate. UI
+// enforcement only — server-side validation deliberately omitted to match
+// the existing parts_nla precedent (additive 5-line z.refine in routes.ts
+// if Tyler later wants hard server enforcement).
+type WarrantyValue = "sears_protect" | "american_home_shield" | "first_american";
+type RequestTypeValue = "authorization" | "infestation_non_accessible" | "parts_nla";
+const REQUEST_TYPE_WARRANTY_MATRIX: Record<RequestTypeValue, WarrantyValue[]> = {
+  authorization: ["sears_protect", "american_home_shield", "first_american"],
+  infestation_non_accessible: ["american_home_shield", "first_american"],
+  parts_nla: ["sears_protect"],
+};
 
 const submissionFormSchema = z.object({
   serviceOrder: z.string().regex(/^\d{4}-\d{8}$/, "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)"),
@@ -76,7 +100,12 @@ export default function TechSubmitPage() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // Tyler 2026-04-30: multi-video. Up to 3 videos per ticket, each 30 sec
+  // and 50 MB max. Uploads are sequential — only one is in-flight at a
+  // time, so the existing scalar progress/uploading/converting state still
+  // works (just gates the next "Add video" tap until the current one
+  // completes). The committed URLs accumulate in `videoUrls`.
+  const [videoUrls, setVideoUrls] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -314,6 +343,15 @@ export default function TechSubmitPage() {
     if (!file) return;
     setVideoError(null);
 
+    // Tyler 2026-04-30: cap at MAX_VIDEOS_PER_TICKET (3). The "Add video"
+    // CTA is also hidden once the cap is reached, but we double-check here
+    // because the file input element can still be triggered programmatically.
+    if (videoUrls.length >= MAX_VIDEOS_PER_TICKET) {
+      setVideoError(`Maximum ${MAX_VIDEOS_PER_TICKET} videos allowed per ticket`);
+      if (videoInputRef.current) videoInputRef.current.value = "";
+      return;
+    }
+
     if (!isVideoFile(file)) {
       setVideoError("Please select a video file");
       if (videoInputRef.current) videoInputRef.current.value = "";
@@ -407,11 +445,14 @@ export default function TechSubmitPage() {
           if (needsConversion(file)) {
             setIsUploading(false);
             const convertedPath = await convertVideo(objectPath);
-            setVideoUrl(convertedPath);
+            // Tyler 2026-04-30: append, don't replace. Each upload adds
+            // to the array; the per-slot remove button handles deletion.
+            setVideoUrls((prev) => [...prev, convertedPath]);
           } else {
             setIsUploading(false);
-            setVideoUrl(objectPath);
+            setVideoUrls((prev) => [...prev, objectPath]);
           }
+          if (videoInputRef.current) videoInputRef.current.value = "";
         } else {
           setIsUploading(false);
           toast({ title: "Upload Failed", description: "Failed to upload video to storage", variant: "destructive" });
@@ -432,8 +473,8 @@ export default function TechSubmitPage() {
     }
   }
 
-  function removeVideo() {
-    setVideoUrl(null);
+  function removeVideo(index: number) {
+    setVideoUrls((prev) => prev.filter((_, i) => i !== index));
     setUploadProgress(0);
     setVideoError(null);
     if (videoInputRef.current) videoInputRef.current.value = "";
@@ -594,6 +635,29 @@ export default function TechSubmitPage() {
     }
   }, [derivedWarranty?.warrantyType, derivedWarranty?.warrantyProvider]);
 
+  // Tyler 2026-04-29 (warranty × request-type matrix): when the tech changes
+  // request type, snap the warranty selection to the first allowed value if
+  // the current selection becomes incompatible — but ONLY when the warranty
+  // isn't locked by SO auto-detection. If it IS locked and the locked value
+  // is incompatible, the conflict is surfaced as an inline error under the
+  // warranty section and onSubmit blocks. This avoids stomping the
+  // server-derived truth.
+  const watchedRequestTypeForMatrix = form.watch("requestType");
+  const watchedWarrantyForMatrix = form.watch("warrantyType");
+  useEffect(() => {
+    if (derivedWarranty) return;
+    const allowed = REQUEST_TYPE_WARRANTY_MATRIX[watchedRequestTypeForMatrix as RequestTypeValue] ?? [];
+    if (allowed.length === 0) return;
+    if (!allowed.includes(watchedWarrantyForMatrix as WarrantyValue)) {
+      const firstAllowed = allowed[0];
+      const provider = WARRANTY_PROVIDERS.find(p => p.value === firstAllowed);
+      form.setValue("warrantyType", firstAllowed as any, { shouldDirty: false });
+      if (provider) {
+        form.setValue("warrantyProvider", provider.label, { shouldDirty: false });
+      }
+    }
+  }, [watchedRequestTypeForMatrix, derivedWarranty?.warrantyType]);
+
   const mutation = useMutation({
     mutationFn: async (data: SubmissionFormData & { originalDescription?: string; aiEnhanced?: boolean }) => {
       const res = await apiRequest("POST", "/api/submissions", data);
@@ -629,6 +693,21 @@ export default function TechSubmitPage() {
   const [pendingData, setPendingData] = useState<SubmissionFormData | null>(null);
 
   function onSubmit(data: SubmissionFormData) {
+    // Tyler 2026-04-29 (warranty × request-type matrix): hard gate. The UI
+    // grays out incompatible warranty cards, but if the SO auto-detected a
+    // warranty that doesn't match the chosen request type — or any state
+    // change slipped through — block submission with a clear toast pointing
+    // the tech at the fix.
+    const allowedWarranties = REQUEST_TYPE_WARRANTY_MATRIX[data.requestType as RequestTypeValue] ?? [];
+    if (allowedWarranties.length > 0 && !allowedWarranties.includes(data.warrantyType as WarrantyValue)) {
+      const requestLabel = formatRequestTypeLabel(data.requestType);
+      toast({
+        title: "Warranty / Request Type Mismatch",
+        description: `${requestLabel} is not available for the current warranty provider. Switch the request type or handle this case through TechHub directly.`,
+        variant: "destructive",
+      });
+      return;
+    }
     if (data.requestType === "parts_nla") {
       const nlaParts = partNumbers.filter(p => p.trim() !== "");
       const otherParts = availableParts.filter(p => p.trim() !== "");
@@ -643,7 +722,9 @@ export default function TechSubmitPage() {
       payload.originalDescription = originalBeforeAi;
       payload.aiEnhanced = true;
     }
-    if (videoUrl) payload.videoUrl = videoUrl;
+    // Tyler 2026-04-30: send the array under `videoUrls` (server prefers
+    // it over the legacy single-string `videoUrl` field).
+    if (videoUrls.length > 0) payload.videoUrls = videoUrls;
     if (voiceNoteUrl) payload.voiceNoteUrl = voiceNoteUrl;
     const phoneOverride = localStorage.getItem("vrs_phone_override");
     if (phoneOverride) payload.phoneOverride = phoneOverride;
@@ -714,37 +795,106 @@ export default function TechSubmitPage() {
   const DRAFT_KEY = `vrs_tech_submit_draft_v1_${user?.id ?? "anon"}`;
   const [draftRestored, setDraftRestored] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  // Tier 1 hotfix (2026-04-28): a draft that passes identity validation
+  // is held here pending the user's explicit Resume / Start-fresh choice
+  // in the AlertDialog below. We no longer auto-hydrate.
+  const [pendingDraft, setPendingDraft] = useState<DraftEnvelope | null>(null);
   const draftHydratedRef = useRef(false);
+  // Gates the autosave effect: must remain false until either the load
+  // path determined "no draft / discarded / mismatched" OR the user has
+  // explicitly resolved a pending draft via the dialog. This prevents an
+  // accidental in-flight form change from persisting before the user has
+  // decided what to do with the prior draft.
+  const draftDecisionMadeRef = useRef(false);
+
+  function applyDraftToForm(draft: DraftEnvelope) {
+    if (draft.formValues && typeof draft.formValues === "object") {
+      form.reset({ ...form.getValues(), ...(draft.formValues as Record<string, unknown>) });
+    }
+    if (Array.isArray(draft.estimatePhotoUrls)) setEstimatePhotoUrls(draft.estimatePhotoUrls as string[]);
+    if (Array.isArray(draft.issuePhotoUrls)) setIssuePhotoUrls(draft.issuePhotoUrls as string[]);
+    // Tyler 2026-04-30: hydrate multi-video. Prefer the new `videoUrls`
+    // array; fall back to legacy `videoUrl` string for drafts saved before
+    // this change rolled out (auto-promotes single → [single]).
+    if (Array.isArray((draft as any).videoUrls)) {
+      const arr = ((draft as any).videoUrls as unknown[]).filter(
+        (v): v is string => typeof v === "string" && v.length > 0,
+      );
+      setVideoUrls(arr.slice(0, MAX_VIDEOS_PER_TICKET));
+    } else if (typeof draft.videoUrl === "string" && draft.videoUrl) {
+      setVideoUrls([draft.videoUrl]);
+    }
+    if (typeof draft.voiceNoteUrl === "string") setVoiceNoteUrl(draft.voiceNoteUrl);
+    if (Array.isArray(draft.partNumbers) && (draft.partNumbers as unknown[]).length) {
+      setPartNumbers(draft.partNumbers as string[]);
+    }
+    if (Array.isArray(draft.availableParts) && (draft.availableParts as unknown[]).length) {
+      setAvailableParts(draft.availableParts as string[]);
+    }
+    if (typeof draft.aiUsed === "boolean") setAiUsed(draft.aiUsed);
+    if (typeof draft.originalBeforeAi === "string") setOriginalBeforeAi(draft.originalBeforeAi);
+    if (typeof draft.aiEdited === "boolean") setAiEdited(draft.aiEdited);
+    setDraftRestored(true);
+    setDraftSavedAt((draft.savedAt as string) || null);
+  }
+
+  function resumePendingDraft() {
+    if (!pendingDraft) return;
+    applyDraftToForm(pendingDraft);
+    setPendingDraft(null);
+    draftDecisionMadeRef.current = true;
+    toast({
+      title: "Draft restored",
+      description: "We brought back your in-progress submission so you don't have to start over.",
+    });
+  }
+
+  function startFreshFromPrompt() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    setPendingDraft(null);
+    draftDecisionMadeRef.current = true;
+    toast({
+      title: "Starting fresh",
+      description: "Your previous draft was discarded.",
+    });
+  }
 
   useEffect(() => {
     if (!user?.id || draftHydratedRef.current) return;
     draftHydratedRef.current = true;
+    const currentLdap = (user as any).ldapId ?? user.racId ?? null;
+    let raw: string | null = null;
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
-      const draft = JSON.parse(raw);
-      if (draft.formValues) form.reset({ ...form.getValues(), ...draft.formValues });
-      if (Array.isArray(draft.estimatePhotoUrls)) setEstimatePhotoUrls(draft.estimatePhotoUrls);
-      if (Array.isArray(draft.issuePhotoUrls)) setIssuePhotoUrls(draft.issuePhotoUrls);
-      if (typeof draft.videoUrl === "string") setVideoUrl(draft.videoUrl);
-      if (typeof draft.voiceNoteUrl === "string") setVoiceNoteUrl(draft.voiceNoteUrl);
-      if (Array.isArray(draft.partNumbers) && draft.partNumbers.length) setPartNumbers(draft.partNumbers);
-      if (Array.isArray(draft.availableParts) && draft.availableParts.length) setAvailableParts(draft.availableParts);
-      if (typeof draft.aiUsed === "boolean") setAiUsed(draft.aiUsed);
-      if (typeof draft.originalBeforeAi === "string") setOriginalBeforeAi(draft.originalBeforeAi);
-      if (typeof draft.aiEdited === "boolean") setAiEdited(draft.aiEdited);
-      setDraftRestored(true);
-      setDraftSavedAt(draft.savedAt || null);
-      toast({
-        title: "Draft restored",
-        description: "We brought back your in-progress submission so you don't have to start over.",
-      });
-    } catch {}
+      raw = localStorage.getItem(DRAFT_KEY);
+    } catch {
+      draftDecisionMadeRef.current = true;
+      return;
+    }
+    const result = parseAndValidateDraft(raw, { id: user.id, ldapId: currentLdap });
+    if (!result.ok) {
+      // Anything other than a clean identity match is treated as not-mine:
+      // missing identity (legacy draft from before this hotfix), id mismatch
+      // (cross-user inheritance), ldap mismatch, parse error, or simply no
+      // draft. In every non-`no_draft` case we evict the localStorage key so
+      // it can never contaminate a future session.
+      if (result.reason !== "no_draft") {
+        // eslint-disable-next-line no-console
+        console.warn(`[draft] discarded — ${result.reason}`, {
+          currentUserId: user.id,
+          currentLdap,
+        });
+        try { localStorage.removeItem(DRAFT_KEY); } catch {}
+      }
+      draftDecisionMadeRef.current = true;
+      return;
+    }
+    // Valid match — gate hydration behind the user's explicit choice.
+    setPendingDraft(result.draft);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user?.id || !draftHydratedRef.current) return;
+    if (!user?.id || !draftHydratedRef.current || !draftDecisionMadeRef.current) return;
     const handle = setTimeout(() => {
       const formValues = form.getValues();
       const hasContent = Boolean(
@@ -753,7 +903,7 @@ export default function TechSubmitPage() {
         (formValues.issueDescription && formValues.issueDescription.trim().length > 0) ||
         estimatePhotoUrls.length ||
         issuePhotoUrls.length ||
-        videoUrl ||
+        videoUrls.length > 0 ||
         voiceNoteUrl ||
         partNumbers.some(p => p.trim()) ||
         availableParts.some(p => p.trim())
@@ -762,11 +912,16 @@ export default function TechSubmitPage() {
         try { localStorage.removeItem(DRAFT_KEY); } catch {}
         return;
       }
-      const draft = {
+      const currentLdap = (user as any).ldapId ?? user.racId ?? null;
+      const draft = stampDraftIdentity({
         formValues,
         estimatePhotoUrls,
         issuePhotoUrls,
-        videoUrl,
+        // Tyler 2026-04-30: drafts now persist the full array. The legacy
+        // `videoUrl` field stays out of the saved envelope (parser tolerates
+        // its absence). Old drafts already on disk still hydrate correctly
+        // via the `videoUrl` fallback in `applyDraftToForm`.
+        videoUrls,
         voiceNoteUrl,
         partNumbers,
         availableParts,
@@ -774,7 +929,7 @@ export default function TechSubmitPage() {
         originalBeforeAi,
         aiEdited,
         savedAt: new Date().toISOString(),
-      };
+      } as any, { id: user.id, ldapId: currentLdap });
       try {
         localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
         setDraftSavedAt(draft.savedAt);
@@ -786,7 +941,7 @@ export default function TechSubmitPage() {
     watchedValues,
     estimatePhotoUrls,
     issuePhotoUrls,
-    videoUrl,
+    videoUrls,
     voiceNoteUrl,
     partNumbers,
     availableParts,
@@ -811,7 +966,7 @@ export default function TechSubmitPage() {
     setIssuePhotoUrls([]);
     setEstimatePhotoLocalPreviews({});
     setIssuePhotoLocalPreviews({});
-    setVideoUrl(null);
+    setVideoUrls([]);
     setVoiceNoteUrl(null);
     setPartNumbers([""]);
     setAvailableParts([]);
@@ -835,6 +990,40 @@ export default function TechSubmitPage() {
 
   return (
     <div className="min-h-screen pb-20">
+      {/* Tier 1 hotfix (2026-04-28): blocking Resume / Start-fresh dialog
+          replaces the prior auto-hydrate-then-show-banner pattern. Tech
+          must affirmatively choose so a stale or unexpected draft cannot
+          silently pre-populate the form. */}
+      <AlertDialog open={!!pendingDraft}>
+        <AlertDialogContent data-testid="dialog-draft-resume">
+          <AlertDialogHeader>
+            <AlertDialogTitle data-testid="text-draft-prompt-title">
+              Resume your in-progress draft?
+            </AlertDialogTitle>
+            <AlertDialogDescription data-testid="text-draft-prompt-detail">
+              We saved your last submission as a draft
+              {pendingDraft?.savedAt
+                ? ` on ${formatDraftSavedAt(pendingDraft.savedAt as string)}`
+                : ""}.
+              Continue where you left off, or start a fresh ticket?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={startFreshFromPrompt}
+              data-testid="button-draft-prompt-fresh"
+            >
+              Start fresh
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={resumePendingDraft}
+              data-testid="button-draft-prompt-resume"
+            >
+              Resume draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="bg-primary text-primary-foreground p-4">
         <div className="max-w-lg mx-auto">
           <h1 className="text-lg font-bold" data-testid="text-submit-title">VRS Submission</h1>
@@ -887,7 +1076,15 @@ export default function TechSubmitPage() {
                   <div className="space-y-2">
                     {[
                       { value: "authorization", label: "Authorization", desc: "Request approval for repairs or non-repairable determination" },
-                      { value: "infestation_non_accessible", label: "Infestation / Non-Accessible", desc: "Unable to service due to infestation or access limitations" },
+                      // Tyler 2026-04-29: renamed from "Infestation / Non-Accessible" to
+                      // include the "no model tag" case, with explicit "(FA & AHS Only)"
+                      // suffix so techs see at-a-glance that this option does not apply
+                      // to Sears Protect / Sears PA / Sears Home Warranty (Cinch) calls.
+                      // The wrong-warranty enforcement is the destructive banner below
+                      // (mirrors the parts_nla pattern at line ~1028 — UI-side gate;
+                      // request-type enum value `infestation_non_accessible` unchanged
+                      // so historical rows + downstream Smartsheet routing still match).
+                      { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible (FA & AHS Only)", desc: "Unable to service due to infestation, missing model tag, or access limitations. American Home Shield and First American calls only." },
                       { value: "parts_nla", label: "Parts — No Longer Available (NLA)", desc: "Part is unavailable in TechHub. Submit for VRS parts team research. Sears Protect, Sears PA, and Sears Home Warranty (Cinch) calls only." },
                     ].map((opt) => (
                       <button
@@ -910,9 +1107,7 @@ export default function TechSubmitPage() {
               )}
             />
 
-            {watchedRequestType === "parts_nla" &&
-              watchedValues.warrantyType !== "american_home_shield" &&
-              watchedValues.warrantyType !== "first_american" && (
+            {watchedRequestType === "parts_nla" && (
               <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 p-3" data-testid="nla-info-banner">
                 <div className="flex items-start gap-2">
                   <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
@@ -926,24 +1121,14 @@ export default function TechSubmitPage() {
               </div>
             )}
 
-            {watchedRequestType === "parts_nla" &&
-              (watchedValues.warrantyType === "american_home_shield" ||
-                watchedValues.warrantyType === "first_american") && (
-              <div
-                className="rounded-md border border-destructive bg-destructive/10 p-3"
-                data-testid="banner-nla-wrong-warranty"
-              >
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
-                  <div className="text-sm">
-                    <p className="font-medium text-destructive">Use TechHub for AHS / First American NLA</p>
-                    <p className="text-destructive/90 mt-0.5">
-                      Handle AHS or First American NLA situations through TechHub — VRS does not route these to agents. Switch the request type to "Authorization" if this is a coverage approval question instead.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Tyler 2026-04-29 (warranty × request-type matrix): the previous
+                pair of destructive wrong-warranty banners (banner-nla-wrong-
+                warranty + banner-infestation-wrong-warranty) was removed in
+                favor of graying out the incompatible warranty cards directly
+                in the warranty section below. Visual consistency: the tech
+                sees the disallowed providers grayed with a "Handled in
+                TechHub" badge, instead of choosing them and getting a red
+                banner after. */}
 
             <Card>
               <CardContent className="p-4 space-y-4">
@@ -1054,79 +1239,115 @@ export default function TechSubmitPage() {
                   )}
                 />
 
-                {watchedRequestType !== "parts_nla" && (
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <label className="text-sm font-medium">Warranty Provider</label>
-                      <HelpTooltip content="The warranty provider is auto-detected from the service order's customer record. When auto-detected, the selection is locked. If detection cannot identify the provider, you can select it manually." />
-                    </div>
-                    {derivedWarranty ? (
-                      <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-warranty-locked-note">
-                        <Lock className="w-3 h-3" />
-                        Auto-detected from service order — locked.
-                      </p>
-                    ) : warrantyLookup.isFetching ? (
-                      <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-lookup-loading">
-                        Looking up warranty provider from service order…
-                      </p>
-                    ) : isValidSo ? (
-                      <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-autodetect-note">
-                        Could not auto-detect — please select the warranty provider.
-                      </p>
-                    ) : (
-                      <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-autodetect-note">
-                        Will be auto-detected from the service order once entered.
-                      </p>
-                    )}
-                    <div className="mt-2 space-y-2">
-                      {WARRANTY_PROVIDERS.map((provider) => {
-                        const isSelected = form.watch("warrantyType") === provider.value;
-                        const isLocked = !!derivedWarranty;
-                        const isClickable = provider.available && !isLocked;
-                        return (
-                          <div
-                            key={provider.value}
-                            className={`flex items-center justify-between gap-2 p-3 rounded-md border ${
-                              isClickable
-                                ? "cursor-pointer hover-elevate"
-                                : "cursor-not-allowed"
-                            } ${
-                              isLocked && !isSelected ? "opacity-50" : ""
-                            } ${
-                              !provider.available ? "opacity-60" : ""
-                            } ${
-                              isSelected ? "border-primary bg-primary/5" : ""
-                            }`}
-                            onClick={() => {
-                              if (isClickable) {
-                                form.setValue("warrantyType", provider.value as any);
-                                form.setValue("warrantyProvider", provider.label);
-                              }
-                            }}
-                            data-testid={`provider-${provider.value}`}
-                            aria-disabled={!isClickable}
-                          >
-                            <span className="text-sm">{provider.label}</span>
-                            <div className="flex items-center gap-1">
-                              {isLocked && isSelected && (
-                                <Badge variant="secondary" className="text-xs" data-testid={`badge-locked-${provider.value}`}>
-                                  <Lock className="w-3 h-3 mr-1" />
-                                  Auto-detected
-                                </Badge>
-                              )}
-                              {!provider.available && (
-                                <Badge variant="secondary" className="text-xs" data-testid={`badge-coming-soon-${provider.value}`}>
-                                  <Lock className="w-3 h-3 mr-1" />
-                                  Coming Soon
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                {/* Tyler 2026-04-29 (warranty × request-type matrix): the
+                    `watchedRequestType !== "parts_nla"` gate that previously
+                    hid this whole section for NLA submissions has been
+                    removed. The warranty section now ALWAYS renders — for
+                    Parts NLA the AHS + First American cards gray out
+                    (handled-in-TechHub) and Sears Protect is the only
+                    selectable option. Same gray-out logic also restricts
+                    Sears Protect under Infestation / No Model Tag /
+                    Non-Accessible. */}
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Warranty Provider</label>
+                    <HelpTooltip content="The warranty provider is auto-detected from the service order's customer record. When auto-detected, the selection is locked. If detection cannot identify the provider, you can select it manually. Some providers may be unavailable depending on the request type." />
                   </div>
-                )}
+                  {derivedWarranty ? (
+                    <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-warranty-locked-note">
+                      <Lock className="w-3 h-3" />
+                      Auto-detected from service order — locked.
+                    </p>
+                  ) : warrantyLookup.isFetching ? (
+                    <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-lookup-loading">
+                      Looking up warranty provider from service order…
+                    </p>
+                  ) : isValidSo ? (
+                    <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-autodetect-note">
+                      Could not auto-detect — please select the warranty provider.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-autodetect-note">
+                      Will be auto-detected from the service order once entered.
+                    </p>
+                  )}
+                  {/* Tyler 2026-04-29: surface a conflict when the SO-derived
+                      warranty isn't valid for the selected request type.
+                      onSubmit blocks the same way; this is the inline
+                      explanation of why submission is blocked. */}
+                  {derivedWarranty && (() => {
+                    const allowed = REQUEST_TYPE_WARRANTY_MATRIX[watchedRequestType as RequestTypeValue] ?? [];
+                    return allowed.length > 0 && !allowed.includes(derivedWarranty.warrantyType as WarrantyValue);
+                  })() && (
+                    <div
+                      className="mt-2 rounded-md border border-destructive bg-destructive/10 p-2.5"
+                      data-testid="text-warranty-request-conflict"
+                    >
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+                        <p className="text-xs text-destructive">
+                          This service order's warranty doesn't match the selected request type. Switch the request type, or handle this case through TechHub directly.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-2 space-y-2">
+                    {WARRANTY_PROVIDERS.map((provider) => {
+                      const allowedForRequest = (REQUEST_TYPE_WARRANTY_MATRIX[watchedRequestType as RequestTypeValue] ?? []).includes(provider.value as WarrantyValue);
+                      const isSelected = form.watch("warrantyType") === provider.value;
+                      const isLocked = !!derivedWarranty;
+                      const isClickable = provider.available && allowedForRequest && !isLocked;
+                      return (
+                        <div
+                          key={provider.value}
+                          className={`flex items-center justify-between gap-2 p-3 rounded-md border ${
+                            isClickable
+                              ? "cursor-pointer hover-elevate"
+                              : "cursor-not-allowed"
+                          } ${
+                            isLocked && !isSelected ? "opacity-50" : ""
+                          } ${
+                            !allowedForRequest ? "opacity-50" : ""
+                          } ${
+                            !provider.available ? "opacity-60" : ""
+                          } ${
+                            isSelected ? "border-primary bg-primary/5" : ""
+                          }`}
+                          onClick={() => {
+                            if (isClickable) {
+                              form.setValue("warrantyType", provider.value as any);
+                              form.setValue("warrantyProvider", provider.label);
+                            }
+                          }}
+                          data-testid={`provider-${provider.value}`}
+                          aria-disabled={!isClickable}
+                          title={!allowedForRequest ? "Not available for this request type — handled through TechHub directly" : undefined}
+                        >
+                          <span className="text-sm">{provider.label}</span>
+                          <div className="flex items-center gap-1">
+                            {isLocked && isSelected && (
+                              <Badge variant="secondary" className="text-xs" data-testid={`badge-locked-${provider.value}`}>
+                                <Lock className="w-3 h-3 mr-1" />
+                                Auto-detected
+                              </Badge>
+                            )}
+                            {!allowedForRequest && (
+                              <Badge variant="secondary" className="text-xs" data-testid={`badge-techhub-${provider.value}`}>
+                                Handled in TechHub
+                              </Badge>
+                            )}
+                            {!provider.available && (
+                              <Badge variant="secondary" className="text-xs" data-testid={`badge-coming-soon-${provider.value}`}>
+                                <Lock className="w-3 h-3 mr-1" />
+                                Coming Soon
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
@@ -1573,7 +1794,12 @@ export default function TechSubmitPage() {
 
             <Card>
               <CardContent className="p-4 space-y-3">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Video Upload</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Video Upload</p>
+                  <span className="text-xs text-muted-foreground" data-testid="text-video-count">
+                    {videoUrls.length}/{MAX_VIDEOS_PER_TICKET} videos
+                  </span>
+                </div>
                 <input
                   ref={videoInputRef}
                   type="file"
@@ -1582,15 +1808,41 @@ export default function TechSubmitPage() {
                   onChange={handleVideoSelect}
                   data-testid="input-video-file"
                 />
-                {!videoUrl && !isUploading && !isConverting && (
+                {videoUrls.length > 0 && (
+                  <div className="space-y-3">
+                    {videoUrls.map((url, idx) => (
+                      <div className="relative" key={`${url}-${idx}`} data-testid={`video-slot-${idx}`}>
+                        <video
+                          src={url}
+                          controls
+                          className="w-full rounded-md"
+                          data-testid={`video-preview-${idx}`}
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="destructive"
+                          className="absolute top-2 right-2"
+                          onClick={() => removeVideo(idx)}
+                          data-testid={`button-remove-video-${idx}`}
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {videoUrls.length < MAX_VIDEOS_PER_TICKET && !isUploading && !isConverting && (
                   <label
                     className="border-2 border-dashed rounded-md p-6 text-center block cursor-pointer"
                     data-testid="button-add-video"
                     onClick={() => videoInputRef.current?.click()}
                   >
                     <Video className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">Tap to add video</p>
-                    <p className="text-xs text-muted-foreground mt-1">Max 50MB file size</p>
+                    <p className="text-sm text-muted-foreground">
+                      {videoUrls.length === 0 ? "Tap to add video" : "Tap to add another video"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">Max 50MB, 30 sec each. Up to {MAX_VIDEOS_PER_TICKET} videos.</p>
                   </label>
                 )}
                 {videoError && (
@@ -1611,26 +1863,6 @@ export default function TechSubmitPage() {
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span className="text-sm text-muted-foreground">Converting video for playback...</span>
                     </div>
-                  </div>
-                )}
-                {videoUrl && !isUploading && (
-                  <div className="relative">
-                    <video
-                      src={videoUrl}
-                      controls
-                      className="w-full rounded-md"
-                      data-testid="video-preview"
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="destructive"
-                      className="absolute top-2 right-2"
-                      onClick={removeVideo}
-                      data-testid="button-remove-video"
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
                   </div>
                 )}
               </CardContent>
@@ -1795,7 +2027,7 @@ export default function TechSubmitPage() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Video</span>
-                    <span className="font-medium" data-testid="review-video">{videoUrl ? "Attached" : "None"}</span>
+                    <span className="font-medium" data-testid="review-video">{videoUrls.length > 0 ? `${videoUrls.length} attached` : "None"}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Voice note</span>

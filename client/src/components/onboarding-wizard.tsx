@@ -34,7 +34,7 @@ interface Slide {
 const technicianSlides: Slide[] = [
   {
     icon: Send,
-    title: "Welcome to VRS Submit",
+    title: "Welcome to VRS Express",
     description:
       "Submit authorization requests digitally from anywhere. No more paper forms or waiting in line. Your requests go straight to the review queue for fast processing.",
   },

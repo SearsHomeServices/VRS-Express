@@ -36,7 +36,13 @@ import {
   agentExternalCredentials,
   InsertAgentExternalCredential,
   AgentExternalCredential,
+  communicationTemplates,
+  InsertCommunicationTemplate,
+  CommunicationTemplate,
+  communicationTemplateVersions,
+  CommunicationTemplateVersion,
 } from "@shared/schema";
+import { getBusinessElapsedMs } from "@shared/business-hours";
 
 // Initialize database connection
 const pool = new Pool({
@@ -86,7 +92,7 @@ export interface IStorage {
     requestType?: string;
     excludeRequestType?: string;
     divisionFilter?: string[];
-  }, completedToday?: boolean): Promise<(Submission & { technicianName: string; technicianPhone: string | null; assignedAgentName: string | null })[]>;
+  }, completedToday?: boolean): Promise<(Submission & { technicianName: string; technicianPhone: string | null; assignedAgentName: string | null; intakeFormCompletedAt: Date | null })[]>;
   updateSubmission(
     id: number,
     data: Partial<InsertSubmission>
@@ -113,6 +119,17 @@ export interface IStorage {
   getSubmissionHistory(serviceOrder: string): Promise<Submission[]>;
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
   hasActiveSubmissionForServiceOrder(serviceOrder: string, technicianId: number): Promise<{ exists: boolean; status?: string }>;
+  // Idempotency guard for double-submit / network-retry scenarios.
+  // Returns the most recent submission by this tech for this SO# created
+  // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
+  // The route handler treats a hit as "the original request already won —
+  // return that row instead of creating a phantom duplicate."
+  findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number): Promise<Submission | undefined>;
+  // Atomic insert-with-idempotency: serializes on advisory lock keyed by
+  // (technicianId, hash(serviceOrder)), re-checks for a recent duplicate
+  // inside the lock, and inserts only if no sibling request beat us to it.
+  // See implementation comment for the rationale.
+  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number): Promise<{ submission: Submission; wasDuplicate: boolean }>;
 
   // SMS methods
   createSmsNotification(
@@ -127,6 +144,12 @@ export interface IStorage {
 
   // Technician methods
   getOrCreateTechUser(ldapId: string, name: string, phone: string): Promise<User>;
+  /**
+   * Lookup-only counterpart to getOrCreateTechUser — returns the users row
+   * whose racId matches the given ldap, or undefined. Used by the Tier 2
+   * identity-mismatch logger in POST /api/submissions (2026-04-28 hotfix).
+   */
+  getTechUserByLdapId(ldapId: string): Promise<User | undefined>;
 
   getTechnicianByLdapId(ldapId: string): Promise<Technician | undefined>;
   getTechnicians(activeOnly?: boolean): Promise<Technician[]>;
@@ -180,6 +203,18 @@ export interface IStorage {
   // Smartsheet "VRS Unrep Intake Form 2.0" audit rows
   createIntakeForm(data: InsertIntakeForm): Promise<IntakeForm>;
   getIntakeFormBySubmission(submissionId: number): Promise<IntakeForm | undefined>;
+  // Tyler 2026-04-29 (architect-review fix): atomic create that holds a
+  // SELECT ... FOR UPDATE lock on the parent submissions row across the
+  // existing-check + ticket_status check + INSERT. Closes the race where
+  // two concurrent /intake-form/confirm requests could both pass a naive
+  // duplicate-check and both insert. Returns a discriminated result the
+  // route handler maps to HTTP statuses (200/404/409).
+  atomicCreateIntakeForm(data: InsertIntakeForm): Promise<
+    | { ok: true; intakeForm: IntakeForm }
+    | { ok: false; reason: "not_found" }
+    | { ok: false; reason: "not_approved"; ticketStatus: string }
+    | { ok: false; reason: "duplicate"; existing: IntakeForm }
+  >;
   // NOTE: getMissingIntakeForAgent removed 2026-04-26 (Tyler D2). The
   // intake_forms table is still written as audit trail, but agents are
   // no longer gated on completing it before claiming the next ticket.
@@ -334,6 +369,58 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  // 2026-04-30 — Architect-flagged race-window close. The pre-handler call
+  // to `findRecentDuplicateSubmission` catches the common sequential-retry
+  // case (network drop → client retry seconds later — first row already in
+  // DB). It does NOT close the concurrent-tap race where two requests both
+  // pass the check before either inserts. This method does:
+  //   1. Acquire a transaction-scoped advisory lock keyed on
+  //      (technicianId, hash(serviceOrder)) so concurrent requests for the
+  //      same (tech, SO#) pair serialize on the lock instead of racing.
+  //   2. Re-check for a recent duplicate INSIDE the lock — if a sibling
+  //      request inserted while we were waiting, return that row and skip
+  //      our insert + downstream SMS / broadcast work.
+  //   3. Otherwise insert and return the new row.
+  // The transaction is short (lock + select + insert), so it does NOT hold
+  // a connection across the external procId fetch — that runs before this
+  // call. Auto-releases the lock at COMMIT/ROLLBACK.
+  async createSubmissionWithIdempotency(
+    submission: InsertSubmission,
+    withinSeconds: number
+  ): Promise<{ submission: Submission; wasDuplicate: boolean }> {
+    return await db.transaction(async (tx) => {
+      // pg_advisory_xact_lock has a two-int4 overload; combine technicianId
+      // (small int4) with a hash of the SO# string (also int4). djb2-ish
+      // hash, signed-int32-truncated via `| 0` so the result fits int4.
+      let soHash = 0;
+      const so = submission.serviceOrder;
+      for (let i = 0; i < so.length; i++) {
+        soHash = ((soHash << 5) - soHash + so.charCodeAt(i)) | 0;
+      }
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${submission.technicianId}, ${soHash})`);
+
+      const cutoff = new Date(Date.now() - withinSeconds * 1000);
+      const dup = await tx
+        .select()
+        .from(submissions)
+        .where(
+          and(
+            eq(submissions.serviceOrder, so),
+            eq(submissions.technicianId, submission.technicianId),
+            gte(submissions.createdAt, cutoff)
+          )
+        )
+        .orderBy(desc(submissions.createdAt))
+        .limit(1);
+      if (dup[0]) {
+        return { submission: dup[0], wasDuplicate: true };
+      }
+
+      const [created] = await tx.insert(submissions).values(submission).returning();
+      return { submission: created, wasDuplicate: false };
+    });
+  }
+
   async getSubmission(id: number): Promise<Submission | undefined> {
     const result = await db
       .select()
@@ -441,7 +528,7 @@ export class DatabaseStorage implements IStorage {
     requestType?: string;
     excludeRequestType?: string;
     divisionFilter?: string[];
-  }, completedToday?: boolean): Promise<(Submission & { technicianName: string; technicianPhone: string | null; assignedAgentName: string | null })[]> {
+  }, completedToday?: boolean): Promise<(Submission & { technicianName: string; technicianPhone: string | null; assignedAgentName: string | null; intakeFormCompletedAt: Date | null })[]> {
     const conditions: ReturnType<typeof eq>[] = [];
 
     if (filters?.technicianId !== undefined) {
@@ -507,6 +594,19 @@ export class DatabaseStorage implements IStorage {
         ldapTechName: technicians.name,
         ldapTechPhone: technicians.phone,
         assignedAgentName: assignedAgent.name,
+        // Tyler 2026-04-29 (architect-review fix): surface intake-form
+        // completion onto the row so the admin Ticket Overview table can
+        // show the "Intake Form Complete" column without an N+1 round trip
+        // per ticket. Use a correlated subquery (MAX over agent_confirmed_at)
+        // instead of LEFT JOIN intake_forms so we cannot inflate the
+        // submission row count if multiple intake_forms rows ever exist for
+        // a single submission (the current schema has no UNIQUE on
+        // submission_id). One row per submission, guaranteed.
+        intakeFormCompletedAt: sql<Date | null>`(
+          SELECT MAX(${intakeForms.agentConfirmedAt})
+          FROM ${intakeForms}
+          WHERE ${intakeForms.submissionId} = ${submissions.id}
+        )`,
       })
       .from(submissions)
       .innerJoin(users, eq(submissions.technicianId, users.id))
@@ -521,6 +621,7 @@ export class DatabaseStorage implements IStorage {
       technicianPhone: r.submission.phoneOverride || r.ldapTechPhone || r.technicianPhone,
       assignedAgentName: r.assignedAgentName,
       racId: r.submission.technicianLdapId || "",
+      intakeFormCompletedAt: r.intakeFormCompletedAt,
     }));
   }
 
@@ -724,6 +825,31 @@ export class DatabaseStorage implements IStorage {
     return { exists: false };
   }
 
+  // 2026-04-30 — Tyler request: server-side idempotency for double-submit /
+  // retry-after-flaky-cell scenarios. The submit button disables while in
+  // flight, and `hasActiveSubmissionForServiceOrder` blocks duplicates against
+  // queued/pending/completed rows for non-resubmissions. Neither protects
+  // against (a) two requests racing past that check before either commits,
+  // or (b) a resubmission flow accidentally being submitted twice. A 60s
+  // window safely brackets both — legitimate resubmissions happen minutes or
+  // hours apart, never within a minute.
+  async findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number): Promise<Submission | undefined> {
+    const cutoff = new Date(Date.now() - withinSeconds * 1000);
+    const results = await db
+      .select()
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.serviceOrder, serviceOrder),
+          eq(submissions.technicianId, technicianId),
+          gte(submissions.createdAt, cutoff)
+        )
+      )
+      .orderBy(desc(submissions.createdAt))
+      .limit(1);
+    return results[0];
+  }
+
   // SMS methods
   async createSmsNotification(
     notification: InsertSmsNotification
@@ -783,6 +909,11 @@ export class DatabaseStorage implements IStorage {
       racId: ldapId,
       isActive: true,
     }).returning();
+    return result[0];
+  }
+
+  async getTechUserByLdapId(ldapId: string): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.racId, ldapId));
     return result[0];
   }
 
@@ -896,7 +1027,8 @@ export class DatabaseStorage implements IStorage {
     const thirtyDaysAgo = new Date(now);
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const result = await db
+    // Counts stay in SQL (cheap, no business-hours logic needed).
+    const countsResult = await db
       .select({
         submissionsToday: sql<number>`count(*) filter (where ${submissions.createdAt} >= ${startOfToday})`,
         submissionsThisWeek: sql<number>`count(*) filter (where ${submissions.createdAt} >= ${sevenDaysAgo})`,
@@ -905,12 +1037,38 @@ export class DatabaseStorage implements IStorage {
         approvedCount: sql<number>`count(*) filter (where ${submissions.stage1Status} = 'approved')`,
         rejectedCount: sql<number>`count(*) filter (where ${submissions.stage1Status} = 'rejected')`,
         pendingCount: sql<number>`count(*) filter (where ${submissions.stage1Status} = 'pending')`,
-        avgTimeToStage1Ms: sql<number | null>`avg(extract(epoch from (${submissions.stage1ReviewedAt} - ${submissions.createdAt})) * 1000) filter (where ${submissions.stage1ReviewedAt} is not null)`,
-        avgTimeToAuthCodeMs: sql<number | null>`avg(extract(epoch from (${submissions.stage2ReviewedAt} - ${submissions.stage1ReviewedAt})) * 1000) filter (where ${submissions.stage1ReviewedAt} is not null and ${submissions.stage2ReviewedAt} is not null)`,
       })
       .from(submissions);
 
-    const row = result[0];
+    // Tyler 2026-04-30: averages computed in JS using business-hours math
+    // (8 AM-8 PM ET, weekends/holidays included), so overnight time doesn't
+    // skew the headline numbers. Mirrors the row-timer logic in
+    // admin-dashboard.tsx via the shared `getBusinessElapsedMs` helper.
+    const timestampRows = await db
+      .select({
+        createdAt: submissions.createdAt,
+        stage1ReviewedAt: submissions.stage1ReviewedAt,
+        stage2ReviewedAt: submissions.stage2ReviewedAt,
+      })
+      .from(submissions)
+      .where(sql`${submissions.stage1ReviewedAt} is not null`);
+
+    let stage1Sum = 0;
+    let stage1Count = 0;
+    let authCodeSum = 0;
+    let authCodeCount = 0;
+    for (const r of timestampRows) {
+      if (r.createdAt && r.stage1ReviewedAt) {
+        stage1Sum += getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt);
+        stage1Count++;
+        if (r.stage2ReviewedAt) {
+          authCodeSum += getBusinessElapsedMs(r.stage1ReviewedAt, r.stage2ReviewedAt);
+          authCodeCount++;
+        }
+      }
+    }
+
+    const row = countsResult[0];
     return {
       submissionsToday: Number(row.submissionsToday) || 0,
       submissionsThisWeek: Number(row.submissionsThisWeek) || 0,
@@ -919,8 +1077,8 @@ export class DatabaseStorage implements IStorage {
       approvedCount: Number(row.approvedCount) || 0,
       rejectedCount: Number(row.rejectedCount) || 0,
       pendingCount: Number(row.pendingCount) || 0,
-      avgTimeToStage1Ms: row.avgTimeToStage1Ms !== null ? Number(row.avgTimeToStage1Ms) : null,
-      avgTimeToAuthCodeMs: row.avgTimeToAuthCodeMs !== null ? Number(row.avgTimeToAuthCodeMs) : null,
+      avgTimeToStage1Ms: stage1Count > 0 ? stage1Sum / stage1Count : null,
+      avgTimeToAuthCodeMs: authCodeCount > 0 ? authCodeSum / authCodeCount : null,
     };
   }
 
@@ -979,29 +1137,56 @@ export class DatabaseStorage implements IStorage {
     completed: number;
     avgTimeToStage1Ms: number | null;
   }[]> {
-    const rows = await db.execute(sql`
+    // Counts stay in SQL.
+    const countRows = await db.execute(sql`
       select
         coalesce(district_code, 'Unknown') as "district",
         count(*) as "totalTickets",
         count(*) filter (where stage1_status = 'approved') as "approved",
         count(*) filter (where stage1_status = 'rejected') as "rejected",
         count(*) filter (where stage1_status = 'pending') as "pending",
-        count(*) filter (where ticket_status in ('completed', 'approved')) as "completed",
-        avg(extract(epoch from (stage1_reviewed_at - created_at)) * 1000) filter (where stage1_reviewed_at is not null) as "avgTimeToStage1Ms"
+        count(*) filter (where ticket_status in ('completed', 'approved')) as "completed"
       from submissions
       group by district_code
       order by count(*) desc
     `);
 
-    return (rows.rows as any[]).map(r => ({
-      district: r.district || "Unknown",
-      totalTickets: Number(r.totalTickets) || 0,
-      approved: Number(r.approved) || 0,
-      rejected: Number(r.rejected) || 0,
-      pending: Number(r.pending) || 0,
-      completed: Number(r.completed) || 0,
-      avgTimeToStage1Ms: r.avgTimeToStage1Ms !== null ? Number(r.avgTimeToStage1Ms) : null,
-    }));
+    // Tyler 2026-04-30: business-hours-aware avg per district. Fetch only
+    // the timestamps needed (small payload — two columns + district), group
+    // in JS, average via shared `getBusinessElapsedMs` helper.
+    const timestampRows = await db
+      .select({
+        districtCode: submissions.districtCode,
+        createdAt: submissions.createdAt,
+        stage1ReviewedAt: submissions.stage1ReviewedAt,
+      })
+      .from(submissions)
+      .where(sql`${submissions.stage1ReviewedAt} is not null`);
+
+    const sumByDistrict = new Map<string, { sum: number; count: number }>();
+    for (const r of timestampRows) {
+      if (!r.createdAt || !r.stage1ReviewedAt) continue;
+      const key = r.districtCode || "Unknown";
+      const ms = getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt);
+      const cur = sumByDistrict.get(key) ?? { sum: 0, count: 0 };
+      cur.sum += ms;
+      cur.count += 1;
+      sumByDistrict.set(key, cur);
+    }
+
+    return (countRows.rows as any[]).map(r => {
+      const districtKey = r.district || "Unknown";
+      const agg = sumByDistrict.get(districtKey);
+      return {
+        district: districtKey,
+        totalTickets: Number(r.totalTickets) || 0,
+        approved: Number(r.approved) || 0,
+        rejected: Number(r.rejected) || 0,
+        pending: Number(r.pending) || 0,
+        completed: Number(r.completed) || 0,
+        avgTimeToStage1Ms: agg && agg.count > 0 ? agg.sum / agg.count : null,
+      };
+    });
   }
 
   async createFeedback(data: InsertFeedback): Promise<Feedback> {
@@ -1202,6 +1387,71 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  // Tyler 2026-04-29 (architect-review fix): atomic create that holds a
+  // SELECT ... FOR UPDATE row-lock on submissions across the existing-check
+  // + ticket_status check + INSERT. Without a UNIQUE on
+  // intake_forms.submission_id (no schema change today), this transaction
+  // is the *only* thing keeping two simultaneous /intake-form/confirm
+  // requests from inserting two rows for the same submission. The lock is
+  // released when the tx commits/rolls back.
+  async atomicCreateIntakeForm(data: InsertIntakeForm): Promise<
+    | { ok: true; intakeForm: IntakeForm }
+    | { ok: false; reason: "not_found" }
+    | { ok: false; reason: "not_approved"; ticketStatus: string }
+    | { ok: false; reason: "duplicate"; existing: IntakeForm }
+  > {
+    return await db.transaction(async (tx) => {
+      // 1. Lock the parent submissions row. Any concurrent confirm against
+      //    the same submission blocks here until this tx commits.
+      // Tyler 2026-04-30 (NLA parity): also pull request_type so the
+      // status predicate inside the transaction can branch the same way
+      // the route's pre-flight check does (NLA accepts completed |
+      // rejected | rejected_closed | invalid; AUTH accepts approved |
+      // completed). Without this, NLA reject/invalid confirms would
+      // pre-flight-pass at the route then 409 inside the transaction.
+      const lockedRows = await tx.execute(
+        sql`SELECT id, ticket_status, request_type FROM submissions WHERE id = ${data.submissionId} FOR UPDATE`
+      );
+      const locked = (lockedRows as any).rows?.[0] ?? (lockedRows as any[])[0];
+      if (!locked) {
+        return { ok: false as const, reason: "not_found" as const };
+      }
+      const lockedRow = locked as { ticket_status: string; request_type: string };
+      const lockedStatus = lockedRow.ticket_status;
+      const lockedIsNla = lockedRow.request_type === "parts_nla";
+      const statusOk = lockedIsNla
+        ? lockedStatus === "completed" ||
+          lockedStatus === "rejected" ||
+          lockedStatus === "rejected_closed" ||
+          lockedStatus === "invalid"
+        : lockedStatus === "approved" || lockedStatus === "completed";
+      if (!statusOk) {
+        return {
+          ok: false as const,
+          reason: "not_approved" as const,
+          ticketStatus: lockedStatus,
+        };
+      }
+      // 2. Authoritative duplicate-check INSIDE the lock. The pre-flight
+      //    check in the route is just for fast 409s; this is the one that
+      //    actually closes the race window.
+      const existingRows = await tx
+        .select()
+        .from(intakeForms)
+        .where(eq(intakeForms.submissionId, data.submissionId));
+      if (existingRows.length > 0) {
+        return {
+          ok: false as const,
+          reason: "duplicate" as const,
+          existing: existingRows[0],
+        };
+      }
+      // 3. Insert.
+      const [row] = await tx.insert(intakeForms).values(data).returning();
+      return { ok: true as const, intakeForm: row };
+    });
+  }
+
   // getMissingIntakeForAgent removed 2026-04-26 (Tyler D2). See ADR-013 — the
   // 24h "intake missing" gate has been retired in favor of an auto-opened
   // intake modal post-Authorize. The intake_forms audit row is still written
@@ -1291,6 +1541,154 @@ export class DatabaseStorage implements IStorage {
       )
       .returning();
     return result.length > 0;
+  }
+
+  // ==========================================================================
+  // Communication templates (Tyler 2026-04-29 — admin-editable SMS templates).
+  // The schema (communication_templates / _versions / _send_audit) was added
+  // in a prior session; this is the storage layer that wires it up.
+  // ==========================================================================
+
+  async getCommunicationTemplate(
+    channel: "sms" | "email" | "push",
+    actionKey: string
+  ): Promise<CommunicationTemplate | undefined> {
+    const result = await db
+      .select()
+      .from(communicationTemplates)
+      .where(
+        and(
+          eq(communicationTemplates.channel, channel),
+          eq(communicationTemplates.actionKey, actionKey),
+          eq(communicationTemplates.isActive, true)
+        )
+      );
+    return result[0];
+  }
+
+  async listCommunicationTemplates(
+    channel?: "sms" | "email" | "push"
+  ): Promise<CommunicationTemplate[]> {
+    if (channel) {
+      return await db
+        .select()
+        .from(communicationTemplates)
+        .where(eq(communicationTemplates.channel, channel))
+        .orderBy(asc(communicationTemplates.actionKey));
+    }
+    return await db
+      .select()
+      .from(communicationTemplates)
+      .orderBy(asc(communicationTemplates.channel), asc(communicationTemplates.actionKey));
+  }
+
+  // Used by `seedDefaultCommunicationTemplates` to populate templates on boot:
+  //   - If no row exists for (channel, action_key): insert.
+  //   - If a row exists but is still in pristine default state (isDefault=true
+  //     AND currentVersion=1, i.e. never edited by an admin): overwrite the
+  //     body / variables / title to match the latest seed. This lets us repair
+  //     stale rows from earlier prototyping that used a different placeholder
+  //     syntax or variable names without breaking the live SMS pipeline.
+  //   - Otherwise: leave the row untouched. The moment an admin saves an edit,
+  //     `updateCommunicationTemplate` flips isDefault=false and bumps the
+  //     version, so subsequent seeds will never overwrite their work.
+  async upsertDefaultCommunicationTemplate(
+    input: InsertCommunicationTemplate
+  ): Promise<CommunicationTemplate> {
+    const [existing] = await db
+      .select()
+      .from(communicationTemplates)
+      .where(
+        and(
+          eq(communicationTemplates.channel, input.channel),
+          eq(communicationTemplates.actionKey, input.actionKey)
+        )
+      );
+    if (!existing) {
+      const [row] = await db.insert(communicationTemplates).values(input).returning();
+      return row;
+    }
+    if (existing.isDefault && existing.currentVersion === 1) {
+      // Stale orphan version rows from prior prototyping can collide with the
+      // version snapshot the next admin edit will write. Clear them when we
+      // refresh the body so the first real edit produces a clean v1→v2 jump.
+      return await db.transaction(async (tx) => {
+        await tx.delete(communicationTemplateVersions).where(eq(communicationTemplateVersions.templateId, existing.id));
+        const [row] = await tx
+          .update(communicationTemplates)
+          .set({
+            body: input.body,
+            variables: input.variables ?? existing.variables,
+            title: input.title ?? existing.title,
+            subject: input.subject ?? existing.subject,
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(communicationTemplates.id, existing.id))
+          .returning();
+        return row;
+      });
+    }
+    return existing;
+  }
+
+  // Save a new body for a template. Atomically: snapshot the current row to
+  // the versions table, bump currentVersion, mark isDefault=false, set
+  // updatedBy/updatedAt. The version snapshot lets admins answer "who
+  // changed what when, and why?" via the optional editReason field.
+  async updateCommunicationTemplate(
+    id: number,
+    body: string,
+    editedBy: number,
+    editReason?: string | null
+  ): Promise<CommunicationTemplate | undefined> {
+    return await db.transaction(async (tx) => {
+      // SELECT ... FOR UPDATE: take a row-level lock so two concurrent admin
+      // edits serialize on the row instead of racing on the (template_id,
+      // version) unique constraint and 500'ing one editor.
+      const [current] = await tx
+        .select()
+        .from(communicationTemplates)
+        .where(eq(communicationTemplates.id, id))
+        .for("update");
+      if (!current) return undefined;
+
+      // Snapshot the OUTGOING row into the versions table at the version it
+      // was when saved (so the new version number = current.currentVersion + 1).
+      await tx.insert(communicationTemplateVersions).values({
+        templateId: id,
+        version: current.currentVersion,
+        subject: current.subject,
+        title: current.title,
+        body: current.body,
+        variables: current.variables,
+        editedBy,
+        editReason: editReason ?? null,
+      });
+
+      const [updated] = await tx
+        .update(communicationTemplates)
+        .set({
+          body,
+          isDefault: false,
+          currentVersion: current.currentVersion + 1,
+          updatedBy: editedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(communicationTemplates.id, id))
+        .returning();
+      return updated;
+    });
+  }
+
+  async getCommunicationTemplateVersions(
+    templateId: number
+  ): Promise<CommunicationTemplateVersion[]> {
+    return await db
+      .select()
+      .from(communicationTemplateVersions)
+      .where(eq(communicationTemplateVersions.templateId, templateId))
+      .orderBy(desc(communicationTemplateVersions.version));
   }
 }
 

@@ -104,6 +104,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { disconnectWs } = await import("./websocket");
       disconnectWs();
     } catch {}
+    // Tier 1 hotfix (2026-04-28): clear ALL tech-submit drafts on logout.
+    // The draft key is scoped per user.id, but if a session is somehow
+    // inherited across techs on the same client, leaving a prior tech's
+    // draft behind means the next person logging in could load it.
+    // See client/src/lib/draft-identity.ts for the load-time defense.
+    try {
+      const { clearAllTechSubmitDrafts } = await import("./draft-identity");
+      clearAllTechSubmitDrafts(localStorage);
+    } catch {}
     localStorage.removeItem("vrs_token");
     setToken(null);
     setUser(null);

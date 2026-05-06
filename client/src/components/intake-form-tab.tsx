@@ -3,11 +3,22 @@
 // right-side panel of the agent ticket resolution page (third tab, alongside
 // Service Order History and Calculator).
 // =============================================================================
-// History: this component supersedes the prior IntakeFormReviewModal. The modal
-// popup model was retired 2026-04-27 (Tyler) — the form now lives as a tab so
-// it sits next to SHSAI / Calculator instead of stealing focus. The Option B
-// onLoad probe / auto-close work that lived in the modal is also cancelled —
-// see COMMITS.md and docs/superpowers/plans/2026-04-25-calculator-and-intake-form.md.
+// History:
+//   * 2026-04-27 (Tyler) — retired the IntakeFormReviewModal popup; intake
+//     form now lives as a tab so it sits next to SHSAI / Calculator instead
+//     of stealing focus. The Option B onLoad probe / auto-close work was
+//     also cancelled here.
+//   * 2026-04-29 (Tyler) — REMOVED the "Branch fields" Collapsible panel
+//     (IntakeFormFieldset). It was a duplicate data-entry surface for the
+//     same fields the agent fills inside the Smartsheet iframe below; the
+//     iframe IS the agent's interaction point. The server still derives
+//     defaults (proc_id, IH unit number, agent racId, etc.) and bakes them
+//     into the prefill URL via the same /preview endpoint — those derived
+//     defaults flow through `payload` -> iframe URL automatically without
+//     any agent-facing fieldset. Agent-typed values now live exclusively
+//     in Smartsheet. Our `intake_forms.payload` audit row therefore stores
+//     ONLY server-derived defaults from now on, not agent edits — Tyler
+//     accepted the trade-off ("Smartsheet is the source of truth").
 //
 // Server endpoints used (UNCHANGED from the modal era):
 //   POST /api/submissions/:id/intake-form/preview  -> { url, params, branch, warnings, derivedDefaults? }
@@ -29,7 +40,6 @@ import {
   ExternalLink,
   AlertTriangle,
   CheckCircle2,
-  ClipboardList,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -53,9 +63,20 @@ export interface IntakeFormTabProps {
    *  row is created. Used by parent to clear local working state and
    *  invalidate the per-submission status query. */
   onConfirmed: () => void;
-  /** Emits server-side derived defaults so the parent can seed the Stage 3
-   *  fallback fieldset state (preserves the same plumbing the modal had). */
+  /** Emits server-side derived defaults so the parent can seed the working
+   *  payload. After the 2026-04-29 fieldset removal these flow straight back
+   *  into `payload` -> /preview re-fire -> updated iframe URL, with no
+   *  agent-facing UI in between. */
   onPreviewLoaded?: (derivedDefaults: Record<string, string>) => void;
+  /** Submission's PROC ID. Forwarded to the SERVER /preview endpoint via
+   *  `payload`-driven re-renders so it can detect the SHW/SPHW/AHS/SRW
+   *  branch and bake the right fields into the prefill URL. No client-side
+   *  consumer remains since the IntakeFormFieldset was removed. */
+  procId?: string | null;
+  /** Receives server-derived defaults (via `onPreviewLoaded`) so the parent
+   *  can hold them in `intakeValues` and re-feed them as `payload`. There
+   *  is no agent-facing UI that calls this directly anymore. */
+  onPayloadChange?: (next: Record<string, string>) => void;
 }
 
 interface PreviewResponse {
@@ -82,6 +103,8 @@ export function IntakeFormTab({
   intakeStatus,
   onConfirmed,
   onPreviewLoaded,
+  procId,
+  onPayloadChange,
 }: IntakeFormTabProps) {
   const { toast } = useToast();
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -102,15 +125,19 @@ export function IntakeFormTab({
     setError(null);
   }, [submissionId]);
 
-  // Load the pre-fill URL whenever intake is applicable and the payload
-  // changes. Identical semantics to the prior modal's preview useEffect —
-  // see modal commit history for the rationale on the dependency list. We
-  // gate on `(required || recorded)` so the recorded state can still show
-  // the iframe (read-only confirmation view) without reloading on payload
-  // edits the agent makes elsewhere.
+  // Tyler 2026-04-28 (requirement change, OVERRIDES the prior 2026-04-27
+  // Q1 = CONDITIONAL + PRE-AUTH GHOST design): the iframe must load
+  // immediately when the agent opens a ticket — not after Authorize, not
+  // after auth code is issued. Pre-auth fields (auth code, etc.) are
+  // simply absent from the prefill payload; everything else (proc id,
+  // tech ids, phone, etc.) is filled in. The earlier
+  // `if (!required && !recorded) return;` early-exit gate has been
+  // removed so the preview POST always fires for every ticket.
+  // Tyler 2026-04-30: this includes parts_nla tickets — the server-side
+  // builder picks the NLA-specific Smartsheet form URL based on
+  // requestType, so the iframe loads the correct intake form per branch.
   useEffect(() => {
     if (!submissionId) return;
-    if (!required && !recorded) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -188,28 +215,13 @@ export function IntakeFormTab({
   );
 
   // -------------------------------------------------------------------------
-  // Pre-auth ghost state — Tyler Q1 pick: tab renders on every non-parts_nla
-  // ticket but is "ghosted" (informational placeholder) until intake becomes
-  // applicable. The TabsTrigger itself is also `disabled` upstream, so most
-  // agents won't reach this branch by clicking — it exists for the case
-  // where the active tab is `intake` and the user navigates to a ticket
-  // where intake doesn't apply yet.
+  // Tyler 2026-04-28 (requirement change, OVERRIDES the prior pre-auth
+  // ghost design): the empty-state placeholder has been REMOVED. The
+  // iframe must always render for any ticket that reaches this tab, even
+  // pre-Authorize. Pre-auth fields (auth code, etc.) are simply absent
+  // from the prefill payload — the form still loads and is usable for
+  // everything else. The recorded-state banner above is unchanged.
   // -------------------------------------------------------------------------
-  if (!required && !recorded) {
-    return (
-      <div
-        className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-6 text-center gap-2"
-        data-testid="intake-tab-empty-state"
-      >
-        <ClipboardList className="w-8 h-8 opacity-30" />
-        <p className="text-sm">Intake form not yet available</p>
-        <p className="text-xs max-w-xs">
-          Authorize the ticket first. Once an auth code is issued, the Smartsheet intake form will load here.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col min-h-0" data-testid="panel-intake-tab">
       {/* Tyler 2026-04-27 (Q3 = PERSIST FROM SERVER): green success banner
@@ -241,6 +253,16 @@ export function IntakeFormTab({
           ))}
         </div>
       )}
+
+      {/* Tyler 2026-04-29 — IntakeFormFieldset (the "Branch fields" Collapsible
+          panel) was REMOVED here. It duplicated the data-entry surface that
+          the agent already interacts with inside the Smartsheet iframe below,
+          and offered no value beyond what the iframe itself provides. The
+          server's `derivedDefaults` (proc_id, IH unit number, agent racId,
+          etc.) still flow into the iframe URL via the /preview endpoint —
+          they just no longer have an editable UI surface above the iframe.
+          See the file-header HISTORY comment + COMMITS.md for the full
+          rationale (audit-payload trade-off accepted). */}
 
       <div className="flex-1 min-h-0 flex flex-col">
         {loading && !preview && (

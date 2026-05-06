@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, integer, timestamp, date, unique, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, varchar, integer, timestamp, date, unique, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -324,6 +324,149 @@ export const insertIntakeFormSchema = createInsertSchema(intakeForms).omit({
 
 export type InsertIntakeForm = z.infer<typeof insertIntakeFormSchema>;
 export type IntakeForm = typeof intakeForms.$inferSelect;
+
+// ============================================================================
+// COMMUNICATION TEMPLATES (Task B Phase B — admin-editable SMS/Email/Push copy)
+// ============================================================================
+// Source-of-truth tables for the Communication Settings module. Replaces the
+// hard-coded SMS strings currently scattered across server/sms.ts and the
+// inline string literals in server/routes.ts (~25 distinct copy variants
+// across 18 sendSms call sites).
+//
+// Phase B = SMS only at the call sites. Email and Push are pre-staged in the
+// schema (channel enum + nullable subject/title columns) so the admin UI can
+// render section structure for all three channels from day one without a
+// future migration. Actual Email/Push wiring is Phase D scope.
+//
+// Branchy templates (e.g. warranty cash-call vs no-cash-call wording in
+// ticket_rejected_closed) are split into multiple action_keys with a dotted
+// sub-key (e.g. "ticket_rejected_closed.cash_call",
+// "ticket_rejected_closed.no_cash_call") rather than embedding {{#if}}
+// conditionals in the template body. Branch-selection logic stays in code
+// per Tyler's design decision; admins edit each branch's text independently.
+//
+// Excluded from these tables: password-reset SMS (security-critical, lives
+// in code with a NOT-IN-TEMPLATES marker comment).
+
+// Channel discriminator for templates and audit rows. Email and Push are
+// declared in the enum from the start so adding rows for those channels in
+// Phase D is a pure data-migration, not a schema change.
+export const communicationChannelEnum = pgEnum("communication_channel", ["sms", "email", "push"]);
+
+// One row per (channel, action_key) combination. The "current" template the
+// render layer reads at send time. UNIQUE(channel, action_key) prevents
+// duplicate active templates for the same call site.
+export const communicationTemplates = pgTable("communication_templates", {
+  id: serial("id").primaryKey(),
+  channel: communicationChannelEnum("channel").notNull(),
+  actionKey: text("action_key").notNull(), // e.g. "submission_received.parts_nla"
+  // SMS uses body only. Email uses subject+body. Push uses title+body.
+  // All three nullable for cross-channel uniformity; render layer asserts
+  // the right combination per channel.
+  subject: text("subject"),
+  title: text("title"),
+  body: text("body").notNull(),
+  // Variable contract: array of { name, required, sample } objects so the
+  // admin UI can render the "available variables" panel and the preview
+  // form can validate that all required vars are supplied.
+  variables: jsonb("variables").notNull().default(sql`'[]'::jsonb`),
+  // Provenance markers
+  isDefault: boolean("is_default").notNull().default(true), // false once an admin has overridden
+  isActive: boolean("is_active").notNull().default(true),    // soft-disable a template without deleting
+  currentVersion: integer("current_version").notNull().default(1),
+  updatedBy: integer("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at").default(sql`now()`).notNull(),
+}, (table) => ({
+  channelActionUnique: unique("communication_templates_channel_action_unique").on(table.channel, table.actionKey),
+}));
+
+export const insertCommunicationTemplateSchema = createInsertSchema(communicationTemplates).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertCommunicationTemplate = z.infer<typeof insertCommunicationTemplateSchema>;
+export type CommunicationTemplate = typeof communicationTemplates.$inferSelect;
+
+// Full version history. Insert-only — every save snapshots the prior current
+// row here so admins can answer "who changed what when, and why?" with the
+// optional editReason field.
+export const communicationTemplateVersions = pgTable("communication_template_versions", {
+  id: serial("id").primaryKey(),
+  // FK is declared in the table-extras callback below with an EXPLICIT name
+  // because drizzle's auto-generated name
+  // (`..._template_id_communication_templates_id_fk`) is 67 chars and exceeds
+  // PostgreSQL's 63-char identifier limit. PG silently truncates, leaving the
+  // dev DB constraint named `..._communication_templ` while drizzle-kit thinks
+  // the name should be the full version — that drift generates a DROP+ADD on
+  // every deploy, which the deploy validator (correctly) refuses to ship.
+  // Pinning the name here aligns drizzle-kit's view with PG reality. The DB
+  // structure (column type, FK relationship, ON DELETE CASCADE) is unchanged.
+  templateId: integer("template_id").notNull(),
+  version: integer("version").notNull(),
+  subject: text("subject"),
+  title: text("title"),
+  body: text("body").notNull(),
+  variables: jsonb("variables").notNull(),
+  editedBy: integer("edited_by").references(() => users.id),
+  editedAt: timestamp("edited_at").default(sql`now()`).notNull(),
+  editReason: text("edit_reason"),
+}, (table) => ({
+  templateVersionUnique: unique("communication_template_versions_template_version_unique").on(table.templateId, table.version),
+  templateIdFk: foreignKey({
+    columns: [table.templateId],
+    foreignColumns: [communicationTemplates.id],
+    name: "communication_template_versions_template_id_communication_templ",
+  }).onDelete("cascade"),
+}));
+
+export const insertCommunicationTemplateVersionSchema = createInsertSchema(communicationTemplateVersions).omit({
+  id: true,
+  editedAt: true,
+});
+export type InsertCommunicationTemplateVersion = z.infer<typeof insertCommunicationTemplateVersionSchema>;
+export type CommunicationTemplateVersion = typeof communicationTemplateVersions.$inferSelect;
+
+// Per-send audit. Every render call (preview OR live send) writes a row
+// recording exactly which template_version produced the rendered copy. Lets
+// us answer "what message went out on SO X at time Y?" forever.
+//
+// Existing sms_notifications table stays unchanged for backward compatibility
+// — during the cutover, every templated send writes both rows (legacy +
+// audit). Once the cutover is complete and verified, sms_notifications can
+// be deprecated as a future cleanup; not in scope for Phase B/C.
+export const communicationSendAudit = pgTable("communication_send_audit", {
+  id: serial("id").primaryKey(),
+  submissionId: integer("submission_id").references(() => submissions.id),
+  channel: communicationChannelEnum("channel").notNull(),
+  actionKey: text("action_key").notNull(),
+  // Same situation as communication_template_versions — drizzle's intended
+  // FK name (`..._template_id_communication_templates_id_fk`) is 66 chars,
+  // PG truncated to `..._communication_templates_id`. Pinning the name here
+  // to match the dev DB reality so drizzle-kit stops issuing a DROP+ADD on
+  // every deploy. Default ON DELETE NO ACTION is unchanged (no .onDelete()).
+  templateId: integer("template_id"),
+  templateVersion: integer("template_version").notNull(),
+  renderedBody: text("rendered_body").notNull(),
+  renderedSubject: text("rendered_subject"),
+  renderedTitle: text("rendered_title"),
+  recipient: text("recipient").notNull(),
+  sendStatus: text("send_status").notNull(), // 'preview' | 'sent' | 'failed'
+  providerId: text("provider_id"),            // twilio_sid / sendgrid_msg_id / fcm_id
+  sentAt: timestamp("sent_at").default(sql`now()`).notNull(),
+}, (table) => ({
+  templateIdFk: foreignKey({
+    columns: [table.templateId],
+    foreignColumns: [communicationTemplates.id],
+    name: "communication_send_audit_template_id_communication_templates_id",
+  }),
+}));
+
+export const insertCommunicationSendAuditSchema = createInsertSchema(communicationSendAudit).omit({
+  id: true,
+  sentAt: true,
+});
+export type InsertCommunicationSendAudit = z.infer<typeof insertCommunicationSendAuditSchema>;
+export type CommunicationSendAudit = typeof communicationSendAudit.$inferSelect;
 
 // ============================================================================
 // AGENT EXTERNAL CREDENTIALS TABLE (encrypted creds for third-party tools)

@@ -3,11 +3,12 @@ import { createServer, type Server } from "http";
 import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { storage } from "./storage";
+import { storage, db } from "./storage";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { INTAKE_FORM_GO_LIVE_UTC } from "@shared/intake-form-config";
 import * as fs from "fs";
 import * as path from "path";
 import { createWriteStream, createReadStream } from "fs";
@@ -18,7 +19,33 @@ import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { fetchTechniciansFromSnowflake, fetchProcIdForServiceOrder } from "./services/snowflake";
 import { seedDatabase } from "./seed";
-import { sendSms, sendSmsMessage, buildStage1RejectedMessage, buildStage1InvalidMessage, buildAuthCodeMessage, buildNlaApprovalMessage, buildRejectAndCloseMessage, buildSubmissionReceivedMessage } from "./sms";
+import {
+  sendSms,
+  sendSmsMessage,
+  buildStage1RejectedMessage,
+  buildStage1InvalidMessage,
+  buildAuthCodeMessage,
+  buildNlaApprovalMessage,
+  buildRejectAndCloseMessage,
+  buildSubmissionReceivedMessage,
+  // Tyler 2026-04-29 (Communication Templates): inline SMS strings extracted
+  // into named builders so admins can edit them through the new admin page.
+  buildResubmissionClaimMessage,
+  buildStandardClaimMessage,
+  buildTwoStageClaimMessage,
+  buildSubmissionApprovedMessage,
+  buildNlaInvalidMessage,
+  // Tyler 2026-04-29 (NLA second-stage): inline NLA-resolution SMS strings
+  // extracted into named builders so admins can edit them through the
+  // Communication Templates page like every other tech-facing message.
+  buildNlaReplacementSubmittedMessage,
+  buildNlaReplacementTechInitiatesMessage,
+  buildNlaPartFoundVrsOrderedMessage,
+  buildNlaPartFoundTechOrdersMessage,
+  buildNlaRfrEligibleMessage,
+  buildNlaPcardConfirmedGenericMessage,
+  buildNlaRejectedMessage,
+} from "./sms";
 import { enhanceDescription, checkRateLimit } from "./services/openai";
 import { queryServiceOrder, sendFollowup } from "./services/shsai";
 import { ObjectStorageService } from "./replit_integrations/object_storage/objectStorage";
@@ -482,6 +509,15 @@ export async function registerRoutes(
     estimateAmount: z.string().optional(),
     partNumbers: z.string().optional(),
     photos: z.string().optional(),
+    // Tyler 2026-04-30: multi-video. Clients send `videoUrls` (array of
+    // up to 3 object-storage paths). The legacy `videoUrl` single-string
+    // field is kept for backward compatibility with any in-flight client
+    // build that hasn't picked up the new payload shape yet. Storage
+    // serializes whichever is provided into the existing `video_url`
+    // varchar(500) column as a JSON string (or single string for legacy).
+    // No DB schema change needed — same JSON-in-text pattern the `photos`
+    // field already uses.
+    videoUrls: z.array(z.string()).max(3).optional(),
     videoUrl: z.string().optional(),
     voiceNoteUrl: z.string().optional(),
     phone: z.string().min(1, "Phone number is required"),
@@ -500,6 +536,57 @@ export async function registerRoutes(
       const user = await storage.getUser(authReq.user!.id);
       if (!user) {
         return res.status(404).json({ error: "User not found" });
+      }
+
+      // 2026-04-30 — Tyler request: server-side idempotency guard.
+      // A tech reported receiving the "submission received" SMS twice. The
+      // most likely root cause is a flaky-cell retry: client tap → POST in
+      // flight → connection drops → client retries → second row created →
+      // second SMS fired. The submit button disables while pending, but a
+      // dropped response defeats that gate. Resolve idempotently rather
+      // than 4xx: if this exact (tech, SO#) pair was just submitted within
+      // 60s, return the existing row so the client sees "submitted" and
+      // we don't fire a duplicate SMS or burn a resubmission slot.
+      const recentDup = await storage.findRecentDuplicateSubmission(parsed.data.serviceOrder, user.id, 60);
+      if (recentDup) {
+        // createdAt is `Date | null` in the schema (defaulted server-side),
+        // so guard for the null case before doing time math.
+        const createdMs = recentDup.createdAt ? new Date(recentDup.createdAt).getTime() : Date.now();
+        const ageSec = Math.round((Date.now() - createdMs) / 1000);
+        console.warn(
+          `[idempotency] POST /api/submissions: returning existing submission ${recentDup.id} ` +
+          `for tech=${user.id} SO=${parsed.data.serviceOrder} (age=${ageSec}s). Suppressed duplicate insert + SMS.`
+        );
+        // Architect-flagged: the success path below returns `{ submission }`,
+        // not the raw row, and the tech-submit / tech-resubmit clients
+        // dereference `data.submission.id` / `.serviceOrder`. Match that
+        // shape exactly so the idempotent-hit path doesn't crash the client.
+        return res.status(200).json({ submission: recentDup });
+      }
+
+      // Tier 2 (2026-04-28 hotfix): identity-mismatch detection.
+      // Logs only — no behavior change. If the JWT-bound user.id disagrees
+      // with the users row resolved by JWT-bound ldapId, the request is
+      // being made under a session that has been inherited across two
+      // different techs somehow (mechanism still under investigation;
+      // district-pool theory was ruled out by Tyler 2026-04-28). Tier 1
+      // client-side defenses block the actual cross-user submission; this
+      // log surfaces the underlying mechanism in prod logs.
+      if (authReq.user?.ldapId) {
+        try {
+          const userByLdap = await storage.getTechUserByLdapId(authReq.user.ldapId);
+          if (userByLdap && userByLdap.id !== authReq.user.id) {
+            console.warn(
+              `[identity-mismatch] POST /api/submissions: JWT id=${authReq.user.id} != users.id=${userByLdap.id} ` +
+              `for ldapId=${authReq.user.ldapId}. Submission body SO=${parsed.data.serviceOrder}`,
+            );
+          }
+        } catch (e) {
+          console.warn(
+            "[identity-mismatch] check failed:",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
       }
 
       if (parsed.data.requestType === "parts_nla") {
@@ -608,7 +695,17 @@ export async function registerRoutes(
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
       }
 
-      const submission = await storage.createSubmission({
+      // Architect-flagged race-window close. The pre-handler call to
+      // `findRecentDuplicateSubmission` (above, line ~543) catches the common
+      // sequential-retry case fast and avoids the procId fetch for known
+      // dupes. This atomic insert serializes concurrent (tech, SO#) requests
+      // on a transaction-scoped advisory lock and re-checks for a recent
+      // duplicate inside the lock — closing the small remaining window where
+      // two near-simultaneous requests both pass the pre-check before either
+      // commits. On race-hit, returns the existing row; we then short-circuit
+      // SMS / broadcast / Smartsheet so the duplicate-text incident cannot
+      // recur from concurrency either.
+      const idempResult = await storage.createSubmissionWithIdempotency({
         technicianId: user.id,
         racId: user.racId || "",
         technicianLdapId: authReq.user?.ldapId || null,
@@ -626,7 +723,35 @@ export async function registerRoutes(
         estimateAmount: parsed.data.estimateAmount || null,
         partNumbers: parsed.data.partNumbers || null,
         photos: parsed.data.photos || null,
-        videoUrl: parsed.data.videoUrl || null,
+        // Tyler 2026-04-30: multi-video serialization. If the client sent
+        // `videoUrls` AT ALL (even empty), it is authoritative — empty
+        // array → null (not "[]") so existing "no video" reads stay
+        // byte-identical to historical rows. Only when `videoUrls` is
+        // truly absent (legacy clients) do we fall back to the single
+        // `videoUrl` string. This avoids a footgun where a client
+        // explicitly clears videos via `videoUrls: []` but still has a
+        // stale `videoUrl` field set in the same payload.
+        videoUrl: (() => {
+          const arr = parsed.data.videoUrls;
+          if (Array.isArray(arr)) {
+            const cleaned = arr.filter((u) => typeof u === "string" && u.trim().length > 0);
+            if (cleaned.length === 0) return null;
+            const encoded = JSON.stringify(cleaned);
+            // varchar(500) defensive guard. Under current object-storage
+            // path format (~80 chars each) 3 URLs land near ~260 chars
+            // including JSON overhead, but if the storage layer ever
+            // returns full signed URLs this protects us from a DB error.
+            if (encoded.length > 500) {
+              throw new Error("Combined video URLs exceed storage limit (500 chars).");
+            }
+            return encoded;
+          }
+          const legacy = parsed.data.videoUrl || null;
+          if (legacy && legacy.length > 500) {
+            throw new Error("Video URL exceeds storage limit (500 chars).");
+          }
+          return legacy;
+        })(),
         voiceNoteUrl: parsed.data.voiceNoteUrl || null,
         assignedTo: originalAgent,
         claimedAt: originalAgent ? new Date() : null,
@@ -645,11 +770,19 @@ export async function registerRoutes(
         resubmissionOf: parsed.data.resubmissionOf || null,
         procId: procIdResult.procId,
         clientNm: procIdResult.clientNm,
-      });
+      }, 60);
+      const submission = idempResult.submission;
+      if (idempResult.wasDuplicate) {
+        console.warn(
+          `[idempotency-tx] Race detected — returning existing submission ${submission.id} ` +
+          `for tech=${user.id} SO=${parsed.data.serviceOrder}. Skipping SMS / broadcast / Smartsheet.`
+        );
+        return res.status(200).json({ submission });
+      }
 
       const submissionReceivedPhone = submission.phoneOverride || submission.phone;
       if (submissionReceivedPhone) {
-        const body = buildSubmissionReceivedMessage(
+        const body = await buildSubmissionReceivedMessage(
           submission.serviceOrder,
           submission.warrantyType,
           submission.requestType,
@@ -672,7 +805,7 @@ export async function registerRoutes(
           },
         });
 
-        const resubmitClaimMsg = `VRS Update for SO#${submission.serviceOrder}: An agent is actively working on your resubmitted ticket. Stand by for confirmation of your submission, which will let you know when you can leave.\n\nDO NOT LEAVE THE SITE until you receive that confirmation text.`;
+        const resubmitClaimMsg = await buildResubmissionClaimMessage(submission.serviceOrder);
         const resubmitSmsPhone = submission.phoneOverride || submission.phone;
         sendSms(submission.id, resubmitSmsPhone, "ticket_claimed", resubmitClaimMsg).catch(err => {
           console.error("Failed to send resubmission claim SMS:", err);
@@ -1227,18 +1360,28 @@ export async function registerRoutes(
 
       const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
       const isTwoStage = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
+      const isNla = submission.requestType === "parts_nla";
 
-      let claimSmsMessage: string;
-      if (isTwoStage) {
-        claimSmsMessage = `VRS Update for SO#${submission.serviceOrder}: An agent is actively working on your ticket. Stand by for confirmation of your submission, which will let you know when you can leave.\n\nDO NOT LEAVE THE SITE until you receive that confirmation text.\n\n1. Your photos and details will be reviewed. If anything is missing, you'll receive a text with details so you can quickly resubmit.\n2. If approved, VRS will obtain your authorization code and send it to you.`;
-      } else {
-        claimSmsMessage = `VRS Update for SO#${submission.serviceOrder}: An agent is actively working on your ticket. Stand by for confirmation of your submission, which will let you know when you can leave.\n\nDO NOT LEAVE THE SITE until you receive that confirmation text.`;
+      // 2026-04-28 (Tyler pilot-feedback Task A, stopgap):
+      // Suppress the "stand by / DO NOT LEAVE THE SITE" claim SMS for NLA
+      // tickets entirely. The new submission-received SMS already tells
+      // the NLA tech to reschedule the call and move on; sending a second
+      // SMS minutes later that says "stand by, do not leave" actively
+      // contradicts that guidance and was a source of the pilot
+      // confusion. NLA techs receive the sourcing-decision SMS later
+      // (buildNlaApprovalMessage) when the parts team has an answer; no
+      // intermediate claim notification adds value for the NLA flow.
+      // Two-stage and standard claim SMS unchanged.
+      if (!isNla) {
+        const claimSmsMessage = isTwoStage
+          ? await buildTwoStageClaimMessage(submission.serviceOrder)
+          : await buildStandardClaimMessage(submission.serviceOrder);
+
+        const claimSmsPhone = submission.phoneOverride || submission.phone;
+        sendSms(submission.id, claimSmsPhone, "ticket_claimed", claimSmsMessage).catch(err => {
+          console.error("Failed to send claim SMS:", err);
+        });
       }
-
-      const claimSmsPhone = submission.phoneOverride || submission.phone;
-      sendSms(submission.id, claimSmsPhone, "ticket_claimed", claimSmsMessage).catch(err => {
-        console.error("Failed to send claim SMS:", err);
-      });
 
       return res.status(200).json({ submission: updated });
     } catch (error) {
@@ -1321,8 +1464,7 @@ export async function registerRoutes(
         updateData.stage1ReviewedAt = new Date();
         updateData.technicianMessage = technicianMessage || null;
 
-        const baseMsg = `VRS Update for SO#${submission.serviceOrder}: Your submission has been reviewed and APPROVED. You are cleared to leave the site and head to your next call.\n\nIMPORTANT: Reschedule this call for the same day so you can reopen it later and enter the authorization code to finalize the part order.\n\nVRS is now working on obtaining your authorization code and will text it to you as soon as it is available.`;
-        smsMessage = technicianMessage ? `${baseMsg}\n\n${technicianMessage}` : baseMsg;
+        smsMessage = await buildSubmissionApprovedMessage(submission.serviceOrder, technicianMessage);
         smsType = "submission_approved";
 
         const updated = await storage.updateSubmission(id, updateData as any);
@@ -1376,10 +1518,10 @@ export async function registerRoutes(
         updateData.technicianMessage = approvalNotes;
 
         if (submission.requestType === "parts_nla") {
-          smsMessage = buildNlaApprovalMessage(submission.serviceOrder, rgcCode, approvalNotes);
+          smsMessage = await buildNlaApprovalMessage(submission.serviceOrder, rgcCode, approvalNotes ?? undefined);
         } else {
           const authDisplay = authCode || rgcCode || "";
-          smsMessage = buildAuthCodeMessage(submission.serviceOrder, authDisplay, rgcCode, approvalNotes);
+          smsMessage = await buildAuthCodeMessage(submission.serviceOrder, authDisplay, rgcCode, approvalNotes ?? undefined);
         }
         smsType = "ticket_approved";
 
@@ -1418,7 +1560,7 @@ export async function registerRoutes(
         }
         const reasonText = rejectionParts.length > 0 ? rejectionParts.join(". ") : "More information needed";
         const fullMessage = technicianMessage ? `${reasonText}\n\nFeedback from VRS — Action required: ${technicianMessage}` : reasonText;
-        smsMessage = buildStage1RejectedMessage(submission.serviceOrder, fullMessage, resubmitLink);
+        smsMessage = await buildStage1RejectedMessage(submission.serviceOrder, fullMessage, resubmitLink);
         smsType = "ticket_rejected";
 
       } else if (action === "reject_and_close") {
@@ -1437,7 +1579,7 @@ export async function registerRoutes(
           ? rejectionReasons.join(", ")
           : "Not covered under warranty";
         const fullMsg = technicianMessage ? `${reasonText}\n\nFeedback from VRS: ${technicianMessage}` : reasonText;
-        smsMessage = buildRejectAndCloseMessage(submission.serviceOrder, fullMsg, submission.warrantyType);
+        smsMessage = await buildRejectAndCloseMessage(submission.serviceOrder, fullMsg, submission.warrantyType);
         smsType = "ticket_rejected_closed";
 
       } else {
@@ -1450,7 +1592,7 @@ export async function registerRoutes(
         updateData.invalidReason = invalidReason;
         updateData.invalidInstructions = invalidInstructions || null;
 
-        smsMessage = buildStage1InvalidMessage(submission.serviceOrder, invalidReason || "", invalidInstructions);
+        smsMessage = await buildStage1InvalidMessage(submission.serviceOrder, invalidReason || "", invalidInstructions);
         smsType = "ticket_invalid";
       }
 
@@ -1598,8 +1740,15 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.rgcCode = rgcCode;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: REPLACEMENT SUBMITTED\nAuth Code: ${rgcCode}\nThe part(s) you requested could not be sourced. A replacement request has been submitted to the warranty company.\n\nAction Required: Close the call using the NLA labor code.`;
-        if (technicianMessage) smsMessage += `\n\nInstructions: ${technicianMessage}`;
+        // Tyler 2026-04-29: was inline string; now flows through the
+        // editable Communication Templates table (actionKey:
+        // nla_replacement_submitted). Builder falls back to the
+        // byte-identical hardcoded copy if the template is missing.
+        smsMessage = await buildNlaReplacementSubmittedMessage(
+          submission.serviceOrder,
+          rgcCode!,
+          technicianMessage,
+        );
         smsType = "nla_replacement_submitted";
 
       } else if (action === "nla_replacement_tech_initiates") {
@@ -1611,8 +1760,12 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.rgcCode = rgcCode;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: NLA REPLACEMENT APPROVED\nAuth Code: ${rgcCode}\nThe part(s) you requested could not be sourced. VRS has approved a replacement.\n\nAction Required: You must initiate the replacement in TechHub. Follow standard replacement procedures in TechHub to process this replacement.`;
-        if (technicianMessage) smsMessage += `\n\nInstructions: ${technicianMessage}`;
+        // Tyler 2026-04-29: actionKey nla_replacement_tech_initiates.
+        smsMessage = await buildNlaReplacementTechInitiatesMessage(
+          submission.serviceOrder,
+          rgcCode!,
+          technicianMessage,
+        );
         smsType = "nla_replacement_tech_initiates";
 
       } else if (action === "nla_part_found_vrs_ordered") {
@@ -1627,8 +1780,16 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.rgcCode = rgcCode;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: PART FOUND — ORDERED BY VRS\nAuth Code: ${rgcCode}\nThe VRS parts team has located and ordered the part(s) for this service order.`;
-        if (technicianMessage) smsMessage += `\n\nInstructions: ${technicianMessage}`;
+        // Tyler 2026-04-29: actionKey nla_part_found_vrs_ordered.
+        // fromPcardConfirm=false → builder uses "Instructions:" prefix on
+        // the technician message block (matches the historical inline
+        // string for this branch).
+        smsMessage = await buildNlaPartFoundVrsOrderedMessage(
+          submission.serviceOrder,
+          rgcCode!,
+          technicianMessage,
+          false,
+        );
         smsType = "nla_part_ordered_vrs";
 
       } else if (action === "nla_part_found_tech_orders") {
@@ -1644,8 +1805,17 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.rgcCode = rgcCode;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: PART FOUND — YOU NEED TO ORDER\nAuth Code: ${rgcCode}\nPart Number: ${nlaFoundPartNumber.trim().toUpperCase()}\n\nThis part is available in TechHub. Order it and reschedule the call.`;
-        if (technicianMessage) smsMessage += `\n\nFeedback from VRS — Action required: ${technicianMessage}`;
+        // Tyler 2026-04-29: actionKey nla_part_found_tech_orders.
+        // fromPcardConfirm=false → builder uses
+        // "Feedback from VRS — Action required:" prefix (matches the
+        // historical inline string for this branch).
+        smsMessage = await buildNlaPartFoundTechOrdersMessage(
+          submission.serviceOrder,
+          rgcCode!,
+          nlaFoundPartNumber.trim().toUpperCase(),
+          technicianMessage,
+          false,
+        );
         smsType = "nla_part_tech_orders";
 
       } else if (action === "nla_rfr_eligible") {
@@ -1657,8 +1827,12 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.rgcCode = rgcCode;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: RFR ELIGIBLE\nAuth Code: ${rgcCode}\n\nThis part is RFR eligible. Remove the failed part and return it for repair, then reschedule the call in TechHub.`;
-        if (technicianMessage) smsMessage += `\n\nInstructions: ${technicianMessage}`;
+        // Tyler 2026-04-29: actionKey nla_rfr_eligible.
+        smsMessage = await buildNlaRfrEligibleMessage(
+          submission.serviceOrder,
+          rgcCode!,
+          technicianMessage,
+        );
         smsType = "nla_rfr_eligible";
 
       } else if (action === "nla_escalate_to_pcard") {
@@ -1705,16 +1879,36 @@ export async function registerRoutes(
         updateData.rgcCode = rgcCode;
         if (technicianMessage) updateData.technicianMessage = technicianMessage;
 
+        // Tyler 2026-04-29: nla_pcard_confirm reuses the same template
+        // bodies as the direct-fulfillment branches above, but with
+        // fromPcardConfirm=true so the tech-message prefix becomes
+        // "Feedback from VRS:" (matches the prior inline string).
+        // The agent-message precedence is `technicianMessage ?? submission.technicianMessage`
+        // — original (just-submitted) value wins, but if absent we fall
+        // back to whatever the researcher noted during escalation.
+        const effectiveTechMsg = technicianMessage || submission.technicianMessage || null;
         if (resolution === "part_found_vrs_ordered") {
-          smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: PART FOUND — ORDERED BY VRS\nAuth Code: ${rgcCode}\nThe VRS parts team has located and ordered the part(s) for this service order.`;
+          smsMessage = await buildNlaPartFoundVrsOrderedMessage(
+            submission.serviceOrder,
+            rgcCode!,
+            effectiveTechMsg,
+            true,
+          );
         } else if (resolution === "part_found_tech_orders") {
           const partNum = submission.nlaFoundPartNumber || nlaFoundPartNumber || "";
-          smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: PART FOUND — YOU NEED TO ORDER\nAuth Code: ${rgcCode}\nPart Number: ${partNum}\n\nThis part is available in TechHub. Order it and reschedule the call.`;
+          smsMessage = await buildNlaPartFoundTechOrdersMessage(
+            submission.serviceOrder,
+            rgcCode!,
+            partNum,
+            effectiveTechMsg,
+            true,
+          );
         } else {
-          smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nAuth Code: ${rgcCode}\nYour NLA parts request has been processed by the VRS team.`;
-        }
-        if (technicianMessage || submission.technicianMessage) {
-          smsMessage += `\n\nFeedback from VRS: ${technicianMessage || submission.technicianMessage}`;
+          smsMessage = await buildNlaPcardConfirmedGenericMessage(
+            submission.serviceOrder,
+            rgcCode!,
+            effectiveTechMsg,
+          );
         }
         smsType = "nla_pcard_confirmed";
 
@@ -1732,8 +1926,13 @@ export async function registerRoutes(
         const resubmitLink = `${protocol}://${host}/tech/resubmit/${submission.id}`;
         const reasonText = rejectionReasons?.join(", ") || "More information needed";
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: MORE INFO NEEDED\nReason: ${reasonText}\n\nTap to resubmit:\n${resubmitLink}`;
-        if (technicianMessage) smsMessage += `\n\nFeedback from VRS — Action required: ${technicianMessage}`;
+        // Tyler 2026-04-29: actionKey nla_rejected.
+        smsMessage = await buildNlaRejectedMessage(
+          submission.serviceOrder,
+          reasonText,
+          resubmitLink,
+          technicianMessage,
+        );
         smsType = "nla_rejected";
 
         broadcastToNlaDivisionAgents(submission.applianceType, {
@@ -1750,8 +1949,7 @@ export async function registerRoutes(
         updateData.invalidReason = invalidReason;
         updateData.invalidInstructions = invalidInstructions || null;
 
-        smsMessage = `VRS NLA Update for SO#${submission.serviceOrder}\n\nStatus: INVALID NLA REQUEST\nReason: ${invalidReason}`;
-        if (invalidInstructions) smsMessage += `\n\nInstructions: ${invalidInstructions}`;
+        smsMessage = await buildNlaInvalidMessage(submission.serviceOrder, invalidReason, invalidInstructions);
         smsType = "nla_invalid";
 
       } else {
@@ -2637,6 +2835,62 @@ export async function registerRoutes(
     }
   });
 
+  // ==========================================================================
+  // Tyler 2026-04-29 — Admin Communication Templates
+  // Read + edit + version-history routes that back the new admin page. The
+  // SMS render layer (server/sms.ts) reads these rows at send time, falling
+  // back to the hardcoded copy if the row is missing or render errors out.
+  // ==========================================================================
+  app.get("/api/admin/communication-templates", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const channelParam = typeof req.query.channel === "string" ? req.query.channel : undefined;
+      const channel = channelParam === "sms" || channelParam === "email" || channelParam === "push" ? channelParam : undefined;
+      const rows = await storage.listCommunicationTemplates(channel);
+      return res.status(200).json(rows);
+    } catch (error) {
+      console.error("List communication templates error:", error);
+      return res.status(500).json({ error: "Failed to list communication templates" });
+    }
+  });
+
+  app.get("/api/admin/communication-templates/:id/versions", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+      const versions = await storage.getCommunicationTemplateVersions(id);
+      return res.status(200).json(versions);
+    } catch (error) {
+      console.error("Communication template versions error:", error);
+      return res.status(500).json({ error: "Failed to get template versions" });
+    }
+  });
+
+  app.patch("/api/admin/communication-templates/:id", authenticateToken, requireRole("admin", "super_admin"), async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+
+      const { body, editReason } = req.body ?? {};
+      if (typeof body !== "string" || body.trim().length === 0) {
+        return res.status(400).json({ error: "body is required" });
+      }
+      if (body.length > 4000) {
+        return res.status(400).json({ error: "body is too long (max 4000 chars)" });
+      }
+      const reason = typeof editReason === "string" && editReason.trim().length > 0
+        ? editReason.trim().slice(0, 500)
+        : null;
+
+      const editorId = req.user!.id;
+      const updated = await storage.updateCommunicationTemplate(id, body, editorId, reason);
+      if (!updated) return res.status(404).json({ error: "Template not found" });
+      return res.status(200).json(updated);
+    } catch (error) {
+      console.error("Update communication template error:", error);
+      return res.status(500).json({ error: "Failed to update communication template" });
+    }
+  });
+
   app.get("/api/admin/analytics", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
       const analytics = await storage.getAnalytics();
@@ -3506,15 +3760,18 @@ export async function registerRoutes(
         if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
 
         const sub = owned.submission;
-        if (sub.requestType === "parts_nla") {
-          return res.status(200).json({ required: false, recorded: false, reason: "nla" });
-        }
-        if (sub.ticketStatus !== "approved") {
-          return res.status(200).json({ required: false, recorded: false, reason: "not_approved" });
-        }
-        if (!sub.authCode) {
-          return res.status(200).json({ required: false, recorded: false, reason: "no_auth_code" });
-        }
+        const isNla = sub.requestType === "parts_nla";
+
+        // Tyler 2026-04-30 (architect-flagged ordering fix during NLA parity
+        // work): existing-row check now runs FIRST. Previously a downstream
+        // gate (no_auth_code or not_approved) could short-circuit before
+        // this check, which meant a confirmed intake row would still
+        // report `recorded:false` and the green banner would never render.
+        // The bug was masked on AUTH because AUTH always has both
+        // ticketStatus=completed AND authCode by the time confirm is
+        // possible — but NLA has no authCode, so the no_auth_code branch
+        // would have hidden recorded:true forever. Moving this up is a
+        // strict improvement for both branches.
         const existing = await storage.getIntakeFormBySubmission(id);
         if (existing) {
           return res.status(200).json({
@@ -3523,6 +3780,46 @@ export async function registerRoutes(
             reason: "already_recorded",
             intakeForm: existing,
           });
+        }
+
+        // Tyler 2026-04-30: NLA parts tickets must fill out the
+        // (NLA-specific) Smartsheet intake form just like AUTH tickets.
+        // Branch the "is intake required" rules by requestType:
+        //
+        //   NLA: required when ticketStatus is any post-processing terminal
+        //        state set by /process-nla — completed (most success
+        //        actions), rejected (nla_reject), invalid (nla_invalid).
+        //        NLA tickets do NOT have authCode, so the authCode gate
+        //        does not apply. queued (nla_escalate_to_pcard) hands
+        //        the ticket off to a P-Card agent and stays not_approved
+        //        from the original agent's perspective; the receiving
+        //        P-Card agent will see required:true after their own
+        //        nla_pcard_confirm sets ticketStatus=completed.
+        //
+        //   AUTH/Infestation: unchanged behavior — requires both
+        //        ticketStatus in {approved, completed} AND a non-empty
+        //        authCode. Tyler 2026-04-28 (intake-tab disappearance
+        //        bug): the Authorize handler writes ticketStatus
+        //        ="completed" — NOT "approved" (schema enum has both;
+        //        no code path actually writes "approved"). The "approved"
+        //        branch is kept for forward-compat.
+        if (isNla) {
+          const nlaTerminal =
+            sub.ticketStatus === "completed" ||
+            sub.ticketStatus === "rejected" ||
+            sub.ticketStatus === "rejected_closed" ||
+            sub.ticketStatus === "invalid";
+          if (!nlaTerminal) {
+            return res.status(200).json({ required: false, recorded: false, reason: "not_approved" });
+          }
+          return res.status(200).json({ required: true, recorded: false });
+        }
+
+        if (sub.ticketStatus !== "approved" && sub.ticketStatus !== "completed") {
+          return res.status(200).json({ required: false, recorded: false, reason: "not_approved" });
+        }
+        if (!sub.authCode) {
+          return res.status(200).json({ required: false, recorded: false, reason: "no_auth_code" });
         }
         return res.status(200).json({ required: true, recorded: false });
       } catch (error) {
@@ -3548,15 +3845,14 @@ export async function registerRoutes(
         const owned = await loadOwnedSubmission(authReq, id);
         if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
 
-        // Tyler 2026-04-26 (D4 max-derivation): IH Unit Number lives on the
-        // technicians table, not on submissions. Resolve it via the LDAP id
-        // join so the pre-fill builder can default the field. Best-effort —
-        // missing technician row is non-fatal (field stays blank).
-        let ihUnitNumber: string | null = null;
-        if (owned.submission.technicianLdapId) {
-          const tech = await storage.getTechnicianByLdapId(owned.submission.technicianLdapId);
-          ihUnitNumber = (tech as any)?.techUnNo ?? null;
-        }
+        // Tyler 2026-04-29 (data-mapping correction): "IH Unit Number" on the
+        // Smartsheet form maps to the District on the ticket itself
+        // (`submissions.district_code`), NOT the technician's `tech_un_no`.
+        // The previous LDAP-join lookup was sourcing the wrong value. The
+        // district code is already on the submission row — no extra DB call,
+        // no fallback path needed (a ticket without a district code is a
+        // data-quality issue upstream, not something we paper over here).
+        const ihUnitNumber: string | null = owned.submission.districtCode ?? null;
 
         // Tyler 2026-04-26 (post-audit): "VRS Tech ID" Smartsheet column is
         // now sourced from the authenticated agent's racId (LDAP-shaped),
@@ -3591,34 +3887,131 @@ export async function registerRoutes(
     authenticateToken,
     requireRole("vrs_agent", "admin"),
     async (req, res) => {
+      // Tyler 2026-04-28 (Tyler reproduced "Could not record intake / Failed
+      // to record intake form" red toast in production after the always-on
+      // tab change shipped). The original handler only had a single
+      // catch-all that emitted "Intake form confirm error: <stack>" with no
+      // breadcrumb of WHICH step (parse, ownership, existing-check, ih-unit
+      // lookup, racId lookup, smartsheet builder, DB insert) blew up. The
+      // 500 response body says "Failed to record intake form" verbatim so
+      // we never knew what to fix.
+      //
+      // Below we tag every step with `op=...` so a grep of the workflow
+      // log instantly tells us where the failure landed. The log lines are
+      // also intentionally consumable by the vitest+supertest harness in
+      // tests/intake-confirm.test.ts so a regression at any step shows up
+      // as a precise assertion failure rather than a generic 500.
+      const authReq = req as AuthenticatedRequest;
+      const reqId = `intake-confirm:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const tag = (op: string) => `[intake-confirm reqId=${reqId} userId=${authReq.user?.id ?? "?"} subId=${req.params.id} op=${op}]`;
+      // Tyler 2026-04-28 (Part B — fixture broadening): dump the FULL
+      // request body on EVERY confirm attempt (not just failures) so any
+      // future production failure can be reproduced byte-for-byte by the
+      // vitest+supertest harness. Auth tokens are in the Authorization
+      // header (not the body) so this does NOT leak credentials. The
+      // intake_forms.payload column already stores this same data as the
+      // permanent audit trail — logging it adds no new sensitive surface.
       try {
-        const authReq = req as AuthenticatedRequest;
+        console.log(
+          `${tag("entry")} body=${JSON.stringify(req.body).slice(0, 4000)} ua=${(req.headers["user-agent"] ?? "").toString().slice(0, 80)}`
+        );
+      } catch (logErr) {
+        console.warn(`${tag("entry")} body=<unserializable> err=${(logErr as Error)?.message}`);
+      }
+      try {
         const id = parseInt(req.params.id as string);
-        if (isNaN(id)) return res.status(400).json({ error: "Invalid submission ID" });
+        if (isNaN(id)) {
+          console.warn(`${tag("parse-id")} status=fail reason=NaN raw=${JSON.stringify(req.params.id)}`);
+          return res.status(400).json({ error: "Invalid submission ID" });
+        }
 
         const parsed = intakeFormPayloadSchema.safeParse(req.body);
-        if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+        if (!parsed.success) {
+          console.warn(`${tag("zod-parse")} status=fail err=${parsed.error.errors[0].message} bodyKeys=${JSON.stringify(Object.keys(req.body ?? {}))}`);
+          return res.status(400).json({ error: parsed.error.errors[0].message });
+        }
 
         const owned = await loadOwnedSubmission(authReq, id);
-        if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
+        if (!owned.ok) {
+          console.warn(`${tag("ownership")} status=fail httpStatus=${owned.status} err=${owned.error}`);
+          return res.status(owned.status).json({ error: owned.error });
+        }
 
-        const existing = await storage.getIntakeFormBySubmission(id);
-        if (existing) {
+        // Tyler 2026-04-29 (defense-in-depth gate + race-window fix per
+        // architect review): the UI's IntakeFormTab already hides the "I
+        // submitted Smartsheet" button until the status endpoint reports
+        // required=true (which itself requires ticket_status in
+        // {approved, completed}). But a buggy or scripted client could POST
+        // here directly. We also have to defend against TWO concurrent
+        // confirm requests both passing the duplicate-check before either
+        // INSERT lands — without a UNIQUE constraint on
+        // intake_forms.submission_id (no schema change allowed today), a
+        // naive check-then-insert would race.
+        //
+        // The pre-flight check below stays outside the transaction so the
+        // 409 fast-path doesn't wait on a row lock — but the AUTHORITATIVE
+        // existing-check happens inside the transaction below, after a
+        // SELECT ... FOR UPDATE on the submissions row serializes any
+        // concurrent confirms.
+        const preExisting = await storage.getIntakeFormBySubmission(id);
+        if (preExisting) {
+          console.warn(`${tag("existing-check")} status=duplicate existingId=${preExisting.id} agentId=${preExisting.agentId}`);
           return res.status(409).json({
             error: "Intake form already recorded for this submission",
             code: "ALREADY_RECORDED",
-            intakeForm: existing,
+            intakeForm: preExisting,
           });
         }
 
-        // Tyler 2026-04-26 (D4 max-derivation): mirror the preview route so
-        // the URL we record matches what the agent saw — IH Unit Number is
-        // resolved from the technicians table via LDAP id.
-        let ihUnitNumber: string | null = null;
-        if (owned.submission.technicianLdapId) {
-          const tech = await storage.getTechnicianByLdapId(owned.submission.technicianLdapId);
-          ihUnitNumber = (tech as any)?.techUnNo ?? null;
+        // Tyler 2026-04-30: Intake form workflow goes live at 8:00 AM
+        // Eastern on May 1, 2026 (when the first technician of the day
+        // logs in). Tickets created before this cutoff pre-date the
+        // workflow and were handled through a separate prior intake
+        // form process. They must NOT accept new intake form submissions
+        // here. Cutoff lives in shared/intake-form-config.ts so the
+        // admin dashboard column and this gate stay in lockstep.
+        const createdAtMs = owned.submission.createdAt
+          ? new Date(owned.submission.createdAt as unknown as string).getTime()
+          : 0;
+        if (createdAtMs < INTAKE_FORM_GO_LIVE_UTC.getTime()) {
+          console.warn(`${tag("pre-go-live")} status=fail createdAt=${owned.submission.createdAt} cutoff=${INTAKE_FORM_GO_LIVE_UTC.toISOString()}`);
+          return res.status(409).json({
+            error: "This ticket pre-dates the intake form workflow — it was handled through the prior process and does not require a new intake form here.",
+            code: "PRE_GO_LIVE",
+          });
         }
+
+        // Tyler 2026-04-30 (NLA parity): the original AUTH-only check
+        // accepted only `approved|completed`. NLA actions can resolve to
+        // `completed` (most success actions), `rejected` (nla_reject), or
+        // `invalid` (nla_invalid) — and Tyler's design (see
+        // processMutation.onSuccess comment) is "agent fills out intake
+        // form for every terminal outcome". Branch by requestType so AUTH
+        // behavior is unchanged but NLA can confirm intake on any
+        // terminal status. `pending` (pre-action) and `queued`
+        // (escalated to P-Card — handed off) remain blocked.
+        const status = owned.submission.ticketStatus;
+        const isNla = owned.submission.requestType === "parts_nla";
+        const statusOkForConfirm = isNla
+          ? status === "completed" ||
+            status === "rejected" ||
+            status === "rejected_closed" ||
+            status === "invalid"
+          : status === "approved" || status === "completed";
+        if (!statusOkForConfirm) {
+          console.warn(`${tag("not-approved")} status=fail ticketStatus=${status} isNla=${isNla}`);
+          return res.status(409).json({
+            error: "This ticket has not been processed yet — finish reviewing it before recording the intake form.",
+            code: "NOT_APPROVED",
+          });
+        }
+
+        // Tyler 2026-04-29 (data-mapping correction — see preview route): IH
+        // Unit Number is the District on the ticket, not the technician's
+        // tech_un_no. Read straight from the submission row — no DB call,
+        // so the previous `op=ih-unit-lookup` breadcrumb is no longer
+        // reachable (one fewer step that can fail silently).
+        const ihUnitNumber: string | null = owned.submission.districtCode ?? null;
 
         // Tyler 2026-04-26 (post-audit): mirror the preview route so the
         // recorded URL's "VRS Tech ID" comes from the same agent racId
@@ -3629,15 +4022,21 @@ export async function registerRoutes(
           const agent = await storage.getUser(authReq.user!.id);
           authUserRacId = agent?.racId ?? null;
         } catch (lookupErr) {
-          console.warn("Intake confirm agent racId lookup failed; falling back to technicianLdapId:", lookupErr);
+          console.warn(`${tag("racid-lookup")} status=warn err=${(lookupErr as Error)?.message}`);
         }
 
-        const { buildIntakeFormUrl } = await import("./services/smartsheet");
-        const built = buildIntakeFormUrl({
-          submission: { ...owned.submission, ihUnitNumber },
-          payload: parsed.data.payload,
-          authUserRacId,
-        });
+        let built;
+        try {
+          const { buildIntakeFormUrl } = await import("./services/smartsheet");
+          built = buildIntakeFormUrl({
+            submission: { ...owned.submission, ihUnitNumber },
+            payload: parsed.data.payload,
+            authUserRacId,
+          });
+        } catch (buildErr) {
+          console.error(`${tag("build-url")} status=fail err=${(buildErr as Error)?.message} stack=${(buildErr as Error)?.stack}`);
+          return res.status(500).json({ error: "Failed to record intake form", code: "BUILD_URL_ERROR" });
+        }
 
         // Branch is informational only — folded into the payload blob so we
         // can audit which branch the agent saw without adding a column.
@@ -3646,17 +4045,64 @@ export async function registerRoutes(
           __branch: built.branch,
         };
 
-        const created = await storage.createIntakeForm({
-          submissionId: id,
-          agentId: authReq.user!.id,
-          payload: payloadWithBranch as Record<string, string | number>,
-          smartsheetUrlSubmitted: parsed.data.smartsheetUrlSubmitted ?? built.url,
-        } as any);
+        // Tyler 2026-04-29 (architect-review fix): use the atomic storage
+        // method that holds a SELECT ... FOR UPDATE row lock on submissions
+        // across the existing-check + status re-check + INSERT. Closes the
+        // race window where two simultaneous confirms could both pass the
+        // pre-flight check and both insert. The pre-flight checks above
+        // (preExisting, status) stay so the common case still gets fast
+        // 409s without contending on the row lock.
+        let txResult;
+        try {
+          txResult = await storage.atomicCreateIntakeForm({
+            submissionId: id,
+            agentId: authReq.user!.id,
+            payload: payloadWithBranch as Record<string, string | number>,
+            smartsheetUrlSubmitted: parsed.data.smartsheetUrlSubmitted ?? built.url,
+          } as any);
+        } catch (insertErr) {
+          // Tyler 2026-04-28: most likely candidate for the production
+          // failure. Emit the full pg error code/detail so we can tell FK
+          // violation (23503) from check (23514) from anything else.
+          const e = insertErr as any;
+          console.error(`${tag("db-insert")} status=fail code=${e?.code} detail=${e?.detail} constraint=${e?.constraint} msg=${e?.message}`);
+          return res.status(500).json({ error: "Failed to record intake form", code: "DB_INSERT_ERROR" });
+        }
 
+        if (!txResult.ok) {
+          if (txResult.reason === "not_found") {
+            console.warn(`${tag("tx-not-found")} status=fail`);
+            return res.status(404).json({ error: "Submission not found", code: "NOT_FOUND" });
+          }
+          if (txResult.reason === "not_approved") {
+            // Status changed between pre-flight and lock acquisition (e.g.
+            // an admin un-approved the ticket). Same 409 the pre-flight
+            // returns, just from inside the tx.
+            console.warn(`${tag("tx-not-approved")} status=fail ticketStatus=${txResult.ticketStatus}`);
+            return res.status(409).json({
+              error: "This ticket has not been processed yet — finish reviewing it before recording the intake form.",
+              code: "NOT_APPROVED",
+            });
+          }
+          // duplicate — racing confirm beat us inside the lock
+          console.warn(`${tag("tx-duplicate")} status=duplicate existingId=${txResult.existing.id}`);
+          return res.status(409).json({
+            error: "Intake form already recorded for this submission",
+            code: "ALREADY_RECORDED",
+            intakeForm: txResult.existing,
+          });
+        }
+
+        const created = txResult.intakeForm;
+        console.log(`${tag("ok")} status=success intakeFormId=${created.id} branch=${built.branch}`);
         return res.status(200).json({ intakeForm: created });
       } catch (error) {
-        console.error("Intake form confirm error:", error);
-        return res.status(500).json({ error: "Failed to record intake form" });
+        // Last-resort catch — any branch above that throws despite its own
+        // try/catch (or a bug we missed) lands here. Log enough context to
+        // diagnose without leaking sensitive payload data.
+        const e = error as any;
+        console.error(`${tag("unhandled")} status=fail name=${e?.name} msg=${e?.message} code=${e?.code} stack=${e?.stack}`);
+        return res.status(500).json({ error: "Failed to record intake form", code: "UNHANDLED" });
       }
     }
   );

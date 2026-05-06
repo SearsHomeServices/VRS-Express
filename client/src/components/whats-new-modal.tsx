@@ -8,47 +8,72 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
+// Tyler 2026-04-30: Audience tagging matches help-center.tsx — techs see
+// only tech/all items; agents/admins see everything. Default is "tech"
+// when omitted (the original content origin was tech-perspective).
+type Audience = "tech" | "agent_admin" | "all";
+
+interface Feature {
+  title: string;
+  description: string;
+  audience?: Audience;
+}
+
 interface WhatsNewModalProps {
   open: boolean;
   onDismiss: () => void;
   version: string;
+  role?: string;
 }
 
-const FEATURES = {
+const FEATURES: Record<string, Feature[]> = {
   "1.0.0": [
     {
       title: "Digital Authorization Submissions",
       description:
         "Submit requests with photo/video evidence from your phone",
+      audience: "tech",
     },
     {
       title: "Two-Stage Review Workflow",
       description:
         "Streamlined approval process with real-time SMS notifications",
+      audience: "agent_admin",
     },
     {
       title: "Admin Analytics Dashboard",
       description:
         "Track submission volumes, approval rates, and processing times",
+      audience: "agent_admin",
     },
     {
       title: "PWA Support",
-      description: "Install VRS Submit on your phone for quick access",
+      description: "Install VRS Express on your phone for quick access",
+      audience: "tech",
     },
     {
       title: "Interactive Help System",
       description:
         "Onboarding wizard, contextual help, and comprehensive help center",
+      audience: "all",
     },
   ],
-} as const;
+};
+
+function isVisibleToRole(feature: Feature, role: string | undefined): boolean {
+  if (role && role !== "technician") return true;
+  const audience = feature.audience ?? "tech";
+  return audience === "tech" || audience === "all";
+}
 
 export default function WhatsNewModal({
   open,
   onDismiss,
   version,
+  role,
 }: WhatsNewModalProps) {
-  const features = FEATURES[version as keyof typeof FEATURES] || [];
+  const allFeatures = FEATURES[version] || [];
+  const features = allFeatures.filter((f) => isVisibleToRole(f, role));
 
   return (
     <Dialog open={open} onOpenChange={onDismiss}>

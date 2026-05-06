@@ -7,6 +7,7 @@ import { useRoute, useLocation, Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
 import { useAuth, getToken } from "@/lib/auth";
+import { parseVideoUrls, MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -69,8 +70,13 @@ export default function TechResubmitPage() {
   const [estimatePhotoUrls, setEstimatePhotoUrls] = useState<string[]>([]);
   const [issuePhotoUploading, setIssuePhotoUploading] = useState(false);
   const [estimatePhotoUploading, setEstimatePhotoUploading] = useState(false);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // Tyler 2026-04-30: multi-video resubmit. Up to 3 videos per ticket,
+  // matching the limits on initial submission. Sequential uploads — only
+  // one at a time — so the existing scalar `videoUploading` flag still
+  // gates the UI while the next slot is being uploaded.
+  const [videoUrls, setVideoUrls] = useState<string[]>([]);
   const [videoUploading, setVideoUploading] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [partNumbers, setPartNumbers] = useState<string[]>([""]);
   const issuePhotoInputRef = useRef<HTMLInputElement>(null);
@@ -133,7 +139,13 @@ export default function TechResubmitPage() {
         setIssuePhotoUrls(parsed.filter((url: string) => !rejectedPhotoUrls.has(url)));
       }
     } catch {}
-    if (sub.videoUrl && !isVideoRejected) setVideoUrl(sub.videoUrl);
+    // Tyler 2026-04-30: parse multi-video JSON or legacy single-URL.
+    // `parseVideoUrls` returns [] for empty, [single] for legacy, or the
+    // array for new multi-video rows. When the agent rejected the video
+    // category, drop everything (existing behavior preserved).
+    if (sub.videoUrl && !isVideoRejected) {
+      setVideoUrls(parseVideoUrls(sub.videoUrl).slice(0, MAX_VIDEOS_PER_TICKET));
+    }
     if ((sub as any).partNumbers) {
       try {
         const parsed = JSON.parse((sub as any).partNumbers);
@@ -201,40 +213,89 @@ export default function TechResubmitPage() {
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  // Tyler 2026-04-30: aligned with initial submission limits — was 100MB
+  // with no duration check, now 50MB and 30 sec each, max 3 videos. The
+  // duration check uses a hidden <video> element to read metadata before
+  // any upload begins, identical to the pattern in tech-submit.tsx.
   async function handleVideoUpload(files: FileList | null) {
     if (!files || files.length === 0) return;
     const file = files[0];
-    if (file.size > 100 * 1024 * 1024) {
-      toast({ title: "File Too Large", description: "Video must be under 100MB.", variant: "destructive" });
+    setVideoError(null);
+
+    if (videoUrls.length >= MAX_VIDEOS_PER_TICKET) {
+      setVideoError(`Maximum ${MAX_VIDEOS_PER_TICKET} videos allowed per ticket`);
+      toast({ title: "Video Limit", description: `Maximum ${MAX_VIDEOS_PER_TICKET} videos allowed.`, variant: "destructive" });
       if (videoInputRef.current) videoInputRef.current.value = "";
       return;
     }
-    if (!file.type.startsWith("video/")) {
+    // Tyler 2026-04-30: align with tech-submit — accept MIME-detected
+    // video files OR known video extensions, since some mobile captures
+    // (certain Samsung browsers, third-party file pickers) ship empty
+    // file.type values for valid clips.
+    const lname = file.name.toLowerCase();
+    const isVideo =
+      file.type.startsWith("video/") ||
+      /\.(mp4|mov|m4v|webm|mkv|avi|3gp|3gpp|wmv|flv|ts|mts)$/.test(lname);
+    if (!isVideo) {
+      setVideoError("Please select a video file");
       toast({ title: "Invalid File", description: "Please select a video file.", variant: "destructive" });
       if (videoInputRef.current) videoInputRef.current.value = "";
       return;
     }
+    if (file.size > 50 * 1024 * 1024) {
+      setVideoError("Video file exceeds 50MB limit");
+      toast({ title: "File Too Large", description: "Video must be 50MB or less.", variant: "destructive" });
+      if (videoInputRef.current) videoInputRef.current.value = "";
+      return;
+    }
+
+    // Duration probe — same pattern as tech-submit.tsx. We let it through
+    // if metadata fails to load (some browsers can't decode certain codecs
+    // client-side even though the upload+convert path will handle them).
+    const objectUrl = URL.createObjectURL(file);
+    const duration = await new Promise<number | null>((resolve) => {
+      const probe = document.createElement("video");
+      probe.preload = "metadata";
+      probe.onloadedmetadata = () => resolve(probe.duration);
+      probe.onerror = () => resolve(null);
+      probe.src = objectUrl;
+    });
+    URL.revokeObjectURL(objectUrl);
+    if (duration !== null && duration > 30) {
+      setVideoError("Video must be 30 seconds or less");
+      toast({ title: "Video Too Long", description: "Video must be 30 seconds or less.", variant: "destructive" });
+      if (videoInputRef.current) videoInputRef.current.value = "";
+      return;
+    }
+
     setVideoUploading(true);
     const url = await uploadSingleFile(file);
     if (url) {
       const name = file.name.toLowerCase();
       const isMP4 = file.type === "video/mp4" || name.endsWith(".mp4");
+      let finalUrl = url;
       if (!isMP4) {
         try {
           const res = await apiRequest("POST", "/api/uploads/convert-video", { objectPath: url });
           const data = await res.json();
-          setVideoUrl(data.objectPath);
+          finalUrl = data.objectPath;
         } catch {
-          setVideoUrl(url);
+          // fall through with original url
         }
-      } else {
-        setVideoUrl(url);
       }
-      toast({ title: "Video Uploaded", description: "New video uploaded successfully." });
+      // Tyler 2026-04-30: append, don't replace.
+      setVideoUrls((prev) => [...prev, finalUrl]);
+      toast({ title: "Video Uploaded", description: "Video uploaded successfully." });
     } else {
       toast({ title: "Upload Failed", description: "Failed to upload video.", variant: "destructive" });
     }
     setVideoUploading(false);
+    if (videoInputRef.current) videoInputRef.current.value = "";
+  }
+
+  function removeVideoAtIndex(index: number) {
+    setVideoUrls((prev) => prev.filter((_, i) => i !== index));
+    setVideoError(null);
     if (videoInputRef.current) videoInputRef.current.value = "";
   }
 
@@ -262,7 +323,7 @@ export default function TechResubmitPage() {
     if (estimatePhotoUrls.length > 0) photosObj.estimate = estimatePhotoUrls;
     if (issuePhotoUrls.length > 0) photosObj.issue = issuePhotoUrls;
     if (Object.keys(photosObj).length > 0) payload.photos = JSON.stringify(photosObj);
-    if (videoUrl) payload.videoUrl = videoUrl;
+    if (videoUrls.length > 0) payload.videoUrls = videoUrls;
     if (formData.appealNotes && formData.appealNotes.trim()) {
       payload.appealNotes = formData.appealNotes.trim();
     }
@@ -682,39 +743,58 @@ export default function TechResubmitPage() {
 
               <Card>
                 <CardContent className="p-4 space-y-4">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                    <Video className="w-3.5 h-3.5" />
-                    Video
-                  </p>
-                  {videoUrl && (
-                    <div className="relative rounded-md overflow-hidden bg-muted">
-                      <video
-                        src={videoUrl}
-                        controls
-                        className="w-full max-h-[200px]"
-                        data-testid="video-player-resubmit"
-                      />
-                      <button
-                        type="button"
-                        className="absolute top-2 right-2 w-6 h-6 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
-                        onClick={() => setVideoUrl(null)}
-                        data-testid="button-remove-video"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                      <Video className="w-3.5 h-3.5" />
+                      Video
+                    </p>
+                    <span className="text-xs text-muted-foreground" data-testid="text-video-count-resubmit">
+                      {videoUrls.length}/{MAX_VIDEOS_PER_TICKET} videos
+                    </span>
+                  </div>
+                  {videoUrls.length > 0 && (
+                    <div className="space-y-3">
+                      {videoUrls.map((url, idx) => (
+                        <div className="relative rounded-md overflow-hidden bg-muted" key={`${url}-${idx}`} data-testid={`video-slot-resubmit-${idx}`}>
+                          <video
+                            src={url}
+                            controls
+                            className="w-full max-h-[200px]"
+                            data-testid={`video-player-resubmit-${idx}`}
+                          />
+                          <button
+                            type="button"
+                            className="absolute top-2 right-2 w-6 h-6 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
+                            onClick={() => removeVideoAtIndex(idx)}
+                            data-testid={`button-remove-video-resubmit-${idx}`}
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => videoInputRef.current?.click()}
-                    disabled={videoUploading}
-                    data-testid="button-upload-video-resubmit"
-                  >
-                    <Upload className="w-4 h-4 mr-2" />
-                    {videoUploading ? "Uploading..." : videoUrl ? "Replace Video" : "Upload Video"}
-                  </Button>
+                  {videoError && (
+                    <p className="text-sm text-destructive" data-testid="text-video-error-resubmit">{videoError}</p>
+                  )}
+                  {videoUrls.length < MAX_VIDEOS_PER_TICKET && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => videoInputRef.current?.click()}
+                      disabled={videoUploading}
+                      data-testid="button-upload-video-resubmit"
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      {videoUploading
+                        ? "Uploading..."
+                        : videoUrls.length === 0
+                          ? "Upload Video"
+                          : "Add Another Video"}
+                    </Button>
+                  )}
+                  <p className="text-xs text-muted-foreground">Max 50MB, 30 sec each. Up to {MAX_VIDEOS_PER_TICKET} videos.</p>
                   <input
                     ref={videoInputRef}
                     type="file"

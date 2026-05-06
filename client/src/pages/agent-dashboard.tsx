@@ -5,14 +5,18 @@ import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
+import { getBusinessElapsedMs } from "@/lib/business-hours";
 import { useWebSocket, playNotificationDing, disconnectWs, requestNotificationPermission, showBrowserNotification, loadNotificationSettings, getNotificationPermission } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { IntakeFormFieldset } from "@/components/intake-form-fieldset";
+// Tyler 2026-04-29 — IntakeFormFieldset + intake-form-config imports removed
+// here. The "Branch fields" Collapsible panel inside IntakeFormTab was
+// retired (duplicated the Smartsheet iframe's own data-entry surface). The
+// server-side `detectBranch` in `server/services/smartsheet.ts` still drives
+// the prefill URL — only the client-side fieldset/gating helpers are gone.
 import { IntakeFormTab } from "@/components/intake-form-tab";
 import { CalculatorIframe } from "@/components/calculator-iframe";
 import { CalculatorSettingsDialog } from "@/components/calculator-settings-dialog";
-import { detectBranch as detectIntakeBranch, findMissingRequired as findIntakeMissingRequired } from "@/lib/intake-form-config";
 import type { Submission } from "@shared/schema";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
@@ -105,6 +109,7 @@ import { useTheme } from "@/components/theme-provider";
 import PhotoLightbox from "@/components/photo-lightbox";
 import { SmsPreview } from "@/components/sms-preview";
 import { buildSmsPreview } from "@/lib/smsPreview";
+import { parseVideoUrls } from "@/lib/videoUrls";
 
 type SubmissionWithTech = Submission & {
   technicianName: string;
@@ -133,15 +138,18 @@ const APPLIANCE_LABELS: Record<string, string> = {
   all_other: "All Other",
 };
 
+// Tyler 2026-04-29 (VRS business-hours timer): both queue-elapsed and
+// urgency-level computations now use business hours (8 AM-8 PM ET) so the
+// queue doesn't show inflated times overnight. After-hours windows pause
+// the accumulation. Format string preserved to avoid column-width churn.
 function getTimeElapsed(createdAt: string | Date | null | undefined): string {
   const created = safeDate(createdAt);
   if (!created) return "—";
-  const now = new Date();
-  const diffMs = now.getTime() - created.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 60) return `${diffMins}m`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ${diffMins % 60}m`;
+  const businessMs = getBusinessElapsedMs(created, new Date());
+  const totalMinutes = Math.floor(businessMs / 60000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const diffHours = Math.floor(totalMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ${totalMinutes % 60}m`;
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays}d ${diffHours % 24}h`;
 }
@@ -149,8 +157,7 @@ function getTimeElapsed(createdAt: string | Date | null | undefined): string {
 function getUrgencyLevel(createdAt: string | Date | null | undefined): "normal" | "warning" | "urgent" {
   const created = safeDate(createdAt);
   if (!created) return "normal";
-  const now = new Date();
-  const diffHours = (now.getTime() - created.getTime()) / 3600000;
+  const diffHours = getBusinessElapsedMs(created, new Date()) / 3600000;
   if (diffHours >= 4) return "urgent";
   if (diffHours >= 2) return "warning";
   return "normal";
@@ -276,6 +283,79 @@ export default function AgentDashboard() {
     if (pendingIntakeAutoFireRef.current) pendingIntakeAutoFireRef.current = false;
     setRightPanelView(v);
   };
+  // ----------------------------------------------------------------------
+  // Tyler 2026-04-30 (resizable right panel):
+  // Agents asked to be able to drag the boundary between the left ticket
+  // pane and the right SHSAI/Calculator/Intake-Form tabs panel — the
+  // hard-coded md:w-1/2 split was too narrow for the intake form on
+  // larger monitors. We track the right panel's width as a percentage of
+  // the parent flex row (clamped 25%-75%) and persist per-user. Below
+  // the md breakpoint the layout still stacks (right panel keeps its
+  // `hidden md:flex`), so the percentage is only consulted on md+.
+  // The splitter handle and drag overlay live further down in the JSX.
+  // ----------------------------------------------------------------------
+  const RIGHT_PANEL_WIDTH_MIN = 25;
+  const RIGHT_PANEL_WIDTH_MAX = 75;
+  const RIGHT_PANEL_WIDTH_DEFAULT = 50;
+  const [rightPanelWidthPct, setRightPanelWidthPct] = useState<number>(RIGHT_PANEL_WIDTH_DEFAULT);
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const saved = localStorage.getItem(`agent:${user.id}:rightPanelWidthPct`);
+      if (saved) {
+        const n = Number(saved);
+        if (Number.isFinite(n) && n >= RIGHT_PANEL_WIDTH_MIN && n <= RIGHT_PANEL_WIDTH_MAX) {
+          setRightPanelWidthPct(n);
+        }
+      }
+    } catch {}
+  }, [user?.id]);
+  const [isResizingRightPanel, setIsResizingRightPanel] = useState(false);
+  const splitterContainerRef = useRef<HTMLDivElement | null>(null);
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const container = splitterContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const containerWidth = rect.width;
+    // The splitter sits between the left ScrollArea and the right panel.
+    // We compute the right panel width directly from cursor X relative to
+    // the container's right edge — this keeps the splitter visually glued
+    // to the cursor even after clamping at the min/max bounds.
+    let lastPct = rightPanelWidthPct;
+    const onMove = (moveEvent: MouseEvent) => {
+      if (containerWidth <= 0) return;
+      const pctFromCursor = ((rect.right - moveEvent.clientX) / containerWidth) * 100;
+      const clamped = Math.max(RIGHT_PANEL_WIDTH_MIN, Math.min(RIGHT_PANEL_WIDTH_MAX, pctFromCursor));
+      lastPct = clamped;
+      setRightPanelWidthPct(clamped);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setIsResizingRightPanel(false);
+      if (user?.id) {
+        try {
+          localStorage.setItem(`agent:${user.id}:rightPanelWidthPct`, String(lastPct));
+        } catch {}
+      }
+    };
+    setIsResizingRightPanel(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [rightPanelWidthPct, user?.id]);
+  const handleSplitterDoubleClick = useCallback(() => {
+    setRightPanelWidthPct(RIGHT_PANEL_WIDTH_DEFAULT);
+    if (user?.id) {
+      try {
+        localStorage.setItem(`agent:${user.id}:rightPanelWidthPct`, String(RIGHT_PANEL_WIDTH_DEFAULT));
+      } catch {}
+    }
+  }, [user?.id]);
   const [calcSettingsOpen, setCalcSettingsOpen] = useState(false);
   // ----------------------------------------------------------------------
   // Intake form (T3/T4/T5; modal->tab migrated 2026-04-27):
@@ -589,16 +669,83 @@ export default function AgentDashboard() {
     return submissionsData?.submissions || [];
   }, [submissionsData]);
 
-  const selectedSubmission = submissions.find((s) => s.id === selectedId) || null;
+  const selectedSubmissionFromQuery = submissions.find((s) => s.id === selectedId) || null;
+
+  // Tyler 2026-04-28 (intake-tab disappearance bug, Fix B — extended for
+  // requirement A "ticket review screen must NOT clear after Approve/Reject"):
+  // Post-action transition guard. The My Tickets list is filtered server-
+  // side to ticketStatus="pending" (queryParams line 486). Once Approve
+  // flips the row to "completed" (or Reject flips it to "rejected" + nulls
+  // assignedTo), the next list refetch (triggered by the processMutation
+  // onSuccess invalidation) drops the ticket from the submissions array.
+  // selectedSubmissionFromQuery becomes null even though selectedId is
+  // still set (we deliberately keepSelected per requirement A so the agent
+  // can finish the Smartsheet intake form). That null would collapse BOTH
+  // the left-side detail pane (gate at ~line 1578) AND the right-side 3-
+  // tab panel — leaving an empty review screen and violating Tyler's
+  // explicit "stay on the same ticket" requirement.
+  //
+  // The snapshot keeps a copy of the last-known query row alive. The
+  // PUBLIC `selectedSubmission` const below is the snapshot-falling-back
+  // value: every `selectedSubmission.foo` read in the JSX (127+ sites)
+  // automatically picks up the snapshot when the My Tickets refetch
+  // evicts the row, so the entire review screen survives the eviction.
+  // (List-level UI iterates the `submissions` array directly, not
+  // `selectedSubmission`, so the row still correctly disappears from the
+  // My Tickets list and reappears in Completed.)
+  //
+  // The snapshot is cleared only when selectedId becomes null (genuine
+  // deselection — fired by the IntakeFormTab.onConfirmed callback when
+  // the agent clicks "I submitted Smartsheet"). That keeps a re-selection
+  // of a different ticket from briefly nulling the gate while submissions
+  // hasn't refetched yet.
+  //
+  // The snapshot is ALSO refreshed inside processMutation.onSuccess from
+  // the fresh `{ submission: updated }` server response so action buttons
+  // and status badges reflect the post-action state instead of the pre-
+  // action snapshot (otherwise an Approved ticket would still show the
+  // Approve/Reject button stripe in the detail pane).
+  const selectedSubmissionSnapshotRef = useRef<typeof selectedSubmissionFromQuery>(null);
+  useEffect(() => {
+    if (selectedSubmissionFromQuery) {
+      selectedSubmissionSnapshotRef.current = selectedSubmissionFromQuery;
+    }
+  }, [selectedSubmissionFromQuery]);
+  const selectedSubmission =
+    selectedSubmissionFromQuery ?? selectedSubmissionSnapshotRef.current;
+  // Backward-compatible alias retained so any callsite still using the old
+  // name continues to work; both reference the same snapshot-fallback value.
+  const effectiveSelectedSubmission = selectedSubmission;
 
   // Reset intake form working values when switching submissions so we don't
   // leak data between tickets. Also clears the pending auto-fire flag so a
   // fresh ticket arms cleanly for the post-Authorize tab-switch trigger
   // (Tyler Q2 = re-selecting re-arms the auto-select).
+  //
+  // IMPORTANT: do NOT clear selectedSubmissionSnapshotRef here. This effect
+  // and the snapshot-population effect above both run on the same commit
+  // when selectedId AND selectedSubmission both change (e.g. selecting a
+  // ticket from the queue). React fires effects in declaration order, so
+  // clearing the snapshot here would always wipe the value the previous
+  // effect just wrote, defeating Fix B entirely. Instead, the snapshot is
+  // cleared only on explicit deselection below.
   useEffect(() => {
     setIntakeValues({});
     pendingIntakeAutoFireRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  // Clear the snapshot only when the agent fully deselects (selectedId
+  // becomes null). This path is hit by the post-action `setSelectedId(null)`
+  // in processMutation onSuccess (for non-keepSelected actions like reject /
+  // approve_submission on stage 1) and by manual back-to-queue navigation.
+  // For keepSelected paths (justAuthorized, approve_submission), selectedId
+  // stays set and the snapshot continues to fall back during the brief
+  // selectedSubmission=null window from the My Tickets list refetch.
+  useEffect(() => {
+    if (!selectedId) {
+      selectedSubmissionSnapshotRef.current = null;
+    }
   }, [selectedId]);
 
   const submissionHistoryQuery = useQuery<{
@@ -709,34 +856,68 @@ export default function AgentDashboard() {
       const res = await apiRequest("PATCH", `/api/submissions/${submissionId}/process`, body);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      // Tyler 2026-04-28 (Part A — keep-ticket-open): refresh the snapshot
+      // ref from the fresh server response. Without this, the post-action
+      // detail pane (which now persists past the My Tickets refetch
+      // eviction via the snapshot fallback) would still show the pre-
+      // action `ticketStatus="pending"`, causing the action button stripe
+      // to remain visible on a just-approved/rejected ticket. The /process
+      // endpoint returns `{ submission: updated }` — capturing it here
+      // makes the snapshot reflect ticketStatus="completed" / "rejected"
+      // immediately so action buttons and stage badges flip correctly
+      // while the agent is still mid-intake-form on the right panel.
+      if (data?.submission) {
+        selectedSubmissionSnapshotRef.current = data.submission;
+      }
+
       const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? "Approved" : selectedAction === "reject" ? "Rejected" : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
       const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : "Technician has been notified.";
       toast({ title: actionLabel, description: actionDesc });
 
-      // Stage 3 hand-off: a successful "approve" on a non-NLA ticket means
-      // Stage 3 (Smartsheet Intake) is now required. Tyler 2026-04-26 (D3):
-      // auto-open the intake modal directly so the agent doesn't have to
-      // hunt for the Stage 3 card. The Stage 3 fieldset card still renders
-      // underneath as a fallback re-open path if the agent dismisses the
-      // modal (D2). Stage 1 mid-flow ("approve_submission" on 2-stage
-      // warranties) keeps the ticket selected as before. Everything else
-      // clears selection.
-      const justAuthorized = selectedAction === "approve" && selectedSubmission?.requestType !== "parts_nla";
-      const keepSelected = selectedAction === "approve_submission" || justAuthorized;
+      // Tyler 2026-04-28 (REQUIREMENT CHANGE — overrides prior post-Authorize-
+      // only behavior): WHATEVER the outcome, the agent stays on the same
+      // ticket with all ticket details visible, the Intake Form tab auto-
+      // selected, and the Smartsheet iframe loaded. The intake form is
+      // filled out next to the resolved ticket info. Close-out happens
+      // ONLY when the agent clicks "I submitted Smartsheet" (handled in
+      // IntakeFormTab.onConfirmed below — that callback fires
+      // setSelectedId(null) + flips status back to online).
+      //
+      // Scope (Tyler 2026-04-28 follow-up): UNIFORM close-out across
+      // every terminal outcome. All three reject-shaped actions —
+      // "reject", "reject_and_close" (permanent closure), and "invalid"
+      // (bogus ticket marker) — keep the ticket open + auto-switch to
+      // the Intake Form tab, exactly like "approve". No special-case
+      // branching by reject variant. The agent fills out the intake
+      // form for every outcome.
+      //
+      // The only exception is "approve_submission" (Stage 1 mid-flow on
+      // 2-stage warranties): the agent is still mid-flow and hasn't
+      // issued the auth code yet, so they need to stay on the ticket
+      // (keepSelected) but the Intake Form tab is NOT yet relevant —
+      // it becomes relevant only after the final Approve / Reject /
+      // Close / Invalid decision lands.
+      const justResolved =
+        (selectedAction === "approve" ||
+          selectedAction === "reject" ||
+          selectedAction === "reject_and_close" ||
+          selectedAction === "invalid") &&
+        selectedSubmission?.requestType !== "parts_nla";
+      const keepSelected = selectedAction === "approve_submission" || justResolved;
       if (!keepSelected) {
         setSelectedId(null);
         setLocalAgentStatus("online");
-      } else if (justAuthorized) {
+      } else if (justResolved) {
         setLocalAgentStatus("online");
         // Tyler 2026-04-27 (modal -> tab migration): auto-select the new
         // Intake Form tab in the right panel instead of opening the
-        // retired modal popup. The 350ms delay is preserved so the
-        // per-submission intake-form-status query has time to flip
-        // required=true (otherwise the tab would render its pre-auth
-        // ghost empty state). We also force-show the right panel in
-        // case the agent had it hidden — without that, the tab switch
-        // would be silently invisible.
+        // retired modal popup. The 350ms delay lets the per-submission
+        // intake-form-status query refetch (the iframe itself loads
+        // immediately because the tab is always-on per the 2026-04-28
+        // change). We also force-show the right panel in case the
+        // agent had it hidden — without that, the tab switch would be
+        // silently invisible.
         // Q2 (AUTO-SELECT ONCE THEN RESPECT USER) is enforced via
         // `pendingIntakeAutoFireRef`: the flag is set true here and
         // cleared either when the timer fires or when the agent picks
@@ -764,15 +945,49 @@ export default function AgentDashboard() {
       const res = await apiRequest("PATCH", `/api/submissions/${selectedId}/process-nla`, data);
       return await res.json();
     },
-    onSuccess: () => {
+    // Tyler 2026-04-30 (NLA intake-form parity with AUTH): mirrors the
+    // post-resolve UX from processMutation.onSuccess (line ~900). For any
+    // terminal NLA action (resolution sent / rejected / invalid) we now
+    // KEEP the ticket selected, force-show the right panel, and auto-
+    // switch to the Intake Form tab so the agent fills out the NLA
+    // Smartsheet form before the ticket detail closes. The actual close-
+    // out (setSelectedId(null) + setLocalAgentStatus("online")) moves to
+    // IntakeFormTab.onConfirmed below — same handoff AUTH uses.
+    //
+    // Exception: nla_escalate_to_pcard hands the ticket off to a P-Card
+    // agent (server sets ticketStatus = "queued"), so the ORIGINAL agent
+    // should NOT see/fill the intake form — the receiving P-Card agent
+    // will when they process via nla_pcard_confirm. Keep the immediate
+    // close-out for that one case.
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
-      setSelectedId(null);
       setNlaAction(null);
       setNlaFoundPartNumber("");
       setNlaConfirmOpen(false);
+
+      const action = (variables as { action?: string } | undefined)?.action ?? "";
+      const isEscalate = action === "nla_escalate_to_pcard";
+      if (isEscalate) {
+        setSelectedId(null);
+        setLocalAgentStatus("online");
+        toast({ title: "NLA Ticket Escalated", description: "Sent to P-Card agent." });
+        return;
+      }
+
+      // Terminal NLA action — keep ticket open, auto-fire Intake tab.
+      // The 350ms delay matches the AUTH side so the per-submission
+      // intake-form-status query has time to refetch (now returning
+      // required:true since the server hard-return for NLA was removed).
       setLocalAgentStatus("online");
-      toast({ title: "NLA Ticket Processed", description: "Resolution sent." });
+      pendingIntakeAutoFireRef.current = true;
+      window.setTimeout(() => {
+        if (!pendingIntakeAutoFireRef.current) return;
+        pendingIntakeAutoFireRef.current = false;
+        setShsaiVisible(true);
+        setRightPanelView("intake");
+      }, 350);
+      toast({ title: "NLA Ticket Processed", description: "Resolution sent. Now log the Smartsheet intake form on the right." });
     },
     onError: (error: Error) => {
       toast({ title: "Processing Failed", description: error.message, variant: "destructive" });
@@ -1525,13 +1740,35 @@ export default function AgentDashboard() {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-1 min-h-0">
+                <div
+                  ref={splitterContainerRef}
+                  className="flex flex-1 min-h-0"
+                  style={
+                    // Tyler 2026-04-30: the right panel + splitter now also
+                    // render for parts_nla tickets (the NLA intake form is
+                    // routed to its own Smartsheet form server-side via
+                    // VRS_INTAKE_FORM_NLA_BASE). Previously NLA was excluded
+                    // entirely; agents now get the same SHSAI + Calculator +
+                    // Intake-Form tab triplet for every request type.
+                    isMyTicketsView && shsaiVisible && effectiveSelectedSubmission
+                      ? ({ ["--right-panel-w" as any]: `${rightPanelWidthPct}%` } as React.CSSProperties)
+                      : undefined
+                  }
+                >
                 {/* Tyler 2026-04-27: column split widened from 60/40 to 50/50
                     so the Sears Repair/Replace Calculator (right panel) has
                     breathing room. Below md the panel still goes w-full and
                     the right panel is `hidden`, so mobile/tablet stack is
-                    preserved. Internal ScrollArea retained on both sides. */}
-                <ScrollArea className={isMyTicketsView && shsaiVisible ? "w-full md:w-1/2 border-r" : "flex-1"}>
+                    preserved. Internal ScrollArea retained on both sides.
+
+                    Tyler 2026-04-30: split is now drag-resizable on md+. The
+                    parent <div> exposes `--right-panel-w` (a percentage from
+                    rightPanelWidthPct state). On md+ the left ScrollArea
+                    consumes the remaining space via flex-1 and the right
+                    panel below gets `md:w-[var(--right-panel-w)]`. The
+                    splitter handle in between drives the percentage; min/max
+                    clamps live in the drag handler (25%-75%). */}
+                <ScrollArea className={isMyTicketsView && shsaiVisible ? "w-full md:flex-1 md:w-auto border-r min-w-0" : "flex-1"}>
                   <div className="p-4 md:p-6 max-w-3xl space-y-4 md:space-y-6">
                     <Button
                       variant="ghost"
@@ -1589,7 +1826,11 @@ export default function AgentDashboard() {
                             {getUrgencyLevel(selectedSubmission.createdAt) === "urgent" ? "Urgent" : "Aging"}
                           </Badge>
                         )}
-                        {isMyTicketsView && !shsaiVisible && selectedSubmission?.requestType !== "parts_nla" && (
+                        {/* Tyler 2026-04-30: button-show-shsai now also renders
+                            for parts_nla tickets so the agent can re-open the
+                            right panel (which now hosts the NLA-specific
+                            intake form via VRS_INTAKE_FORM_NLA_BASE). */}
+                        {isMyTicketsView && !shsaiVisible && selectedSubmission && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -1931,16 +2172,28 @@ export default function AgentDashboard() {
                             <Video className="w-3.5 h-3.5" />
                             Video
                           </p>
-                          {selectedSubmission.videoUrl ? (
+                          {(() => {
+                            // Tyler 2026-04-30: render up to 3 video tiles. Rejection
+                            // remains category-wide (rejectedMedia.video.rejected is a
+                            // singleton on the wire), so the toggle below applies to all
+                            // tiles together.
+                            const videoList = parseVideoUrls(selectedSubmission.videoUrl);
+                            return videoList.length > 0 ? (
                             <div className="space-y-2">
-                              <div className={`rounded-md overflow-hidden bg-muted ${rejectedVideo.rejected ? "ring-2 ring-red-500" : ""}`} data-testid="media-video">
-                                <video
-                                  src={selectedSubmission.videoUrl}
-                                  controls
-                                  className={`w-full max-h-[300px] ${rejectedVideo.rejected ? "opacity-40" : ""}`}
-                                  data-testid="video-player"
-                                />
-                              </div>
+                              {videoList.map((vurl, vi) => (
+                                <div
+                                  key={`${vurl}-${vi}`}
+                                  className={`rounded-md overflow-hidden bg-muted ${rejectedVideo.rejected ? "ring-2 ring-red-500" : ""}`}
+                                  data-testid={videoList.length === 1 ? "media-video" : `media-video-${vi}`}
+                                >
+                                  <video
+                                    src={vurl}
+                                    controls
+                                    className={`w-full max-h-[300px] ${rejectedVideo.rejected ? "opacity-40" : ""}`}
+                                    data-testid={videoList.length === 1 ? "video-player" : `video-player-${vi}`}
+                                  />
+                                </div>
+                              ))}
                               {selectedAction === "reject" && (
                                 <div className="flex items-center gap-2">
                                   <button
@@ -1981,7 +2234,8 @@ export default function AgentDashboard() {
                             </div>
                           ) : (
                             <p className="text-sm text-muted-foreground" data-testid="text-no-video">No video attached</p>
-                          )}
+                          );
+                          })()}
                         </div>
                         <Separator />
                         <div>
@@ -2440,12 +2694,16 @@ export default function AgentDashboard() {
                         resolution-panel slot AFTER Authorize & Send completes.
                         Server is the single source of truth (see
                         /api/submissions/:id/intake-form-status). The card
-                        shows when the ticket is approved + has an auth code +
-                        is non-NLA + has no intake_forms row yet. Once the
-                        agent confirms the Smartsheet submission, the same
-                        endpoint flips `recorded: true` and we render the
-                        success banner instead. */}
-                    {isMyTicketsView && stage3Required && selectedSubmission.requestType !== "parts_nla" && (
+                        shows when the ticket is approved + has no intake_forms
+                        row yet. Once the agent confirms the Smartsheet
+                        submission, the same endpoint flips `recorded: true`
+                        and we render the success banner instead.
+                        Tyler 2026-04-30: applies to NLA parts tickets too —
+                        per Tyler "NLA parts tickets have to fill out the NLA
+                        intake form just like the AUTH tickets". The previous
+                        `requestType !== "parts_nla"` exclusion is removed;
+                        the iframe + status query are now branch-agnostic. */}
+                    {isMyTicketsView && stage3Required && (
                       <Card ref={stage3CardRef} data-testid="card-stage3-intake">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
@@ -2465,36 +2723,31 @@ export default function AgentDashboard() {
                               <CheckCircle2 className="w-3 h-3" /> Authorization Sent
                             </p>
                             <p className="text-xs text-green-600 dark:text-green-400 mt-1" data-testid="text-stage3-context">
-                              Technician received the auth code. Last step: log this ticket in Smartsheet so the next claim isn't blocked.
+                              Technician received the auth code. Last step: open the <strong>Intake Form</strong> tab on the right and log this ticket in Smartsheet so the next claim isn't blocked.
                             </p>
                           </div>
                         </CardHeader>
-                        <CardContent className="space-y-4">
-                          <IntakeFormFieldset
-                            procId={(selectedSubmission as any).procId ?? null}
-                            values={intakeValues}
-                            onChange={setIntakeValues}
-                          />
-                          {/* Tyler 2026-04-27 (modal -> tab migration):
-                              the "Re-open intake form" button (formerly
-                              data-testid="button-open-intake-review") was
-                              removed because the form now lives as the
-                              third tab in the right panel — there is no
-                              modal to re-open. The fieldset above stays
-                              the working-payload editor; values flow
-                              into the tab's iframe pre-fill in real
-                              time via `intakeValues` prop. Agents who
-                              switched away from the Intake tab can
-                              click it back from the right-panel TabsList
-                              (data-testid="tab-intake"). */}
-                        </CardContent>
+                        {/* Tyler 2026-04-29 (intake-form layout fix → simplified
+                            2026-04-29 batch B): the IntakeFormFieldset that
+                            briefly lived inside the right-side IntakeFormTab
+                            has been REMOVED entirely. Rationale: it duplicated
+                            the data-entry surface that the agent already
+                            interacts with inside the Smartsheet iframe — there
+                            is no value in two places to type the same thing.
+                            This Stage 3 card now functions purely as a status
+                            indicator on the left: agent reads the ticket on the
+                            left, works the Smartsheet iframe on the right.
+                            CardContent intentionally omitted (header banner
+                            above already carries the message). */}
                       </Card>
                     )}
 
                     {/* Stage 3 success banner — shown once the agent has
                         recorded the intake row. Confirms to the agent that
-                        the gate is released. */}
-                    {isMyTicketsView && stage3Recorded && selectedSubmission.requestType !== "parts_nla" && (
+                        the gate is released. Tyler 2026-04-30: also
+                        renders for NLA parts tickets (see Stage 3 card
+                        above for rationale). */}
+                    {isMyTicketsView && stage3Recorded && (
                       <Card data-testid="card-stage3-recorded">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2 text-green-700 dark:text-green-300">
@@ -3249,8 +3502,46 @@ export default function AgentDashboard() {
                     )}
                   </div>
                 </ScrollArea>
-                {isMyTicketsView && shsaiVisible && selectedSubmission && selectedSubmission.requestType !== "parts_nla" && (
-                  <div className="hidden md:flex md:w-1/2 flex-col min-h-0" data-testid="panel-shsai">
+                {/* Tyler 2026-04-30: drag-to-resize splitter. Only renders
+                    on md+ AND when the right panel is visible. The shared
+                    --right-panel-w CSS variable on the parent flex row
+                    drives the right panel's width below; this handle
+                    updates that variable via rightPanelWidthPct state.
+                    Double-click resets to the 50/50 default. */}
+                {/* Tyler 2026-04-30: splitter renders for ALL request types now,
+                    including parts_nla (NLA intake form is routed server-side
+                    via VRS_INTAKE_FORM_NLA_BASE). Predicate kept in sync with
+                    the right panel gate immediately below. */}
+                {isMyTicketsView && shsaiVisible && effectiveSelectedSubmission && (
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize right panel"
+                    aria-valuemin={RIGHT_PANEL_WIDTH_MIN}
+                    aria-valuemax={RIGHT_PANEL_WIDTH_MAX}
+                    aria-valuenow={Math.round(rightPanelWidthPct)}
+                    onMouseDown={handleSplitterMouseDown}
+                    onDoubleClick={handleSplitterDoubleClick}
+                    title="Drag to resize · double-click to reset"
+                    data-testid="splitter-right-panel"
+                    className="hidden md:flex shrink-0 w-1.5 cursor-col-resize bg-border hover-elevate active-elevate-2 group items-center justify-center select-none"
+                  >
+                    <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
+                  </div>
+                )}
+                {/* Tyler 2026-04-28 (intake-tab disappearance bug, Fix B):
+                    Use effectiveSelectedSubmission (snapshot fallback) so the
+                    right panel stays mounted across the post-Authorize list
+                    refetch, when the My Tickets pending filter briefly drops
+                    the ticket and selectedSubmission goes null. Without this,
+                    the entire 3-tab right panel unmounts and the auto-fire
+                    timer's setRightPanelView("intake") lands on a destroyed
+                    Tabs container. */}
+                {isMyTicketsView && shsaiVisible && effectiveSelectedSubmission && (
+                  <div
+                    className="hidden md:flex md:w-[var(--right-panel-w)] shrink-0 flex-col min-h-0 min-w-0"
+                    data-testid="panel-shsai"
+                  >
                     {/* T2: Tabbed right panel — Service Order History (default) /
                         Calculator. The hide button (button-hide-shsai) and
                         refresh button (button-shsai-refresh) are preserved as
@@ -3286,17 +3577,19 @@ export default function AgentDashboard() {
                           <TabsTrigger value="calculator" data-testid="tab-calculator">
                             Calculator
                           </TabsTrigger>
-                          {/* Tyler 2026-04-27 Q1 = CONDITIONAL + PRE-AUTH GHOST:
-                              the Intake Form tab always renders for predictable
-                              order, but is `disabled` until the per-submission
-                              intake-form-status query reports either required
-                              (post-Authorize, no row yet) or recorded (audit
-                              row exists). Disabled state keeps the tab visible
-                              as a clear visual cue that the step is coming. */}
+                          {/* Tyler 2026-04-28 (requirement change, OVERRIDES
+                              the prior 2026-04-27 Q1 = CONDITIONAL + PRE-AUTH
+                              GHOST design): the Intake Form tab is now ALWAYS
+                              enabled and clickable from the moment a ticket
+                              opens — same enabled state as Service Order
+                              History and Calculator. Pre-auth fields (auth
+                              code, etc.) are simply left blank in the iframe;
+                              everything else is prefilled and usable
+                              immediately. The earlier `disabled` gate on
+                              stage3Required/stage3Recorded has been removed. */}
                           <TabsTrigger
                             value="intake"
                             data-testid="tab-intake"
-                            disabled={!stage3Required && !stage3Recorded}
                           >
                             <ClipboardList className="w-4 h-4 mr-1" />
                             Intake Form
@@ -3466,7 +3759,25 @@ export default function AgentDashboard() {
                       >
                         <IntakeFormTab
                           submissionId={selectedId}
-                          serviceOrder={selectedSubmission?.serviceOrder ?? null}
+                          // Tyler 2026-04-28 (intake-tab disappearance bug,
+                          // Fix B): prefer the snapshot fallback so the
+                          // service order persists across the post-Authorize
+                          // moment when selectedSubmission is briefly null.
+                          // Without this the iframe would re-render with
+                          // serviceOrder=null mid-Authorize and fail to
+                          // build the prefill URL.
+                          serviceOrder={effectiveSelectedSubmission?.serviceOrder ?? null}
+                          // Tyler 2026-04-29 (batch B): the IntakeFormFieldset
+                          // that briefly used these props is now removed.
+                          // procId + payload + onPayloadChange remain because
+                          // they still drive the SERVER /preview endpoint —
+                          // the server uses procId for branch detection and
+                          // bakes payload (server-derived defaults from
+                          // /preview's `derivedDefaults` response) into the
+                          // Smartsheet prefill URL. There is no longer any
+                          // agent-facing UI that mutates payload directly.
+                          procId={(effectiveSelectedSubmission as any)?.procId ?? null}
+                          onPayloadChange={setIntakeValues}
                           payload={intakeValues}
                           intakeStatus={intakeFormStatusQuery.data}
                           onPreviewLoaded={(derivedDefaults) => {
@@ -3503,6 +3814,14 @@ export default function AgentDashboard() {
                               predicate: (q) =>
                                 (q.queryKey[0] as string).startsWith("/api/submissions"),
                             });
+                            // Tyler 2026-04-28 (post-Approve/Reject keep-
+                            // ticket-open requirement): the close-out moved
+                            // here from processMutation.onSuccess. Now the
+                            // ticket review screen ONLY clears when the
+                            // agent confirms the Smartsheet submission —
+                            // returning them to the queue / next ticket.
+                            setSelectedId(null);
+                            setLocalAgentStatus("online");
                           }}
                         />
                       </TabsContent>
@@ -3520,6 +3839,19 @@ export default function AgentDashboard() {
           the <IntakeFormTab> rendered inside the right-panel <Tabs> above.
           The onPreviewLoaded / onConfirmed callbacks moved with it
           unchanged. See COMMITS.md for the full migration note. */}
+
+      {/* Tyler 2026-04-30: drag overlay — fixed full-viewport layer that
+          intercepts pointer events while the agent is dragging the right-
+          panel splitter. Without this, the cursor passing over the
+          Smartsheet / Calculator / SHSAI iframes would let the iframe
+          capture the mousemove and stall the resize. Only mounted during
+          an active drag so it never affects normal interaction. */}
+      {isResizingRightPanel && (
+        <div
+          className="fixed inset-0 z-50 cursor-col-resize"
+          data-testid="overlay-resizing-right-panel"
+        />
+      )}
 
       <CalculatorSettingsDialog
         open={calcSettingsOpen}

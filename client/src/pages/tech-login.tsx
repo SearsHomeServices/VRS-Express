@@ -168,7 +168,7 @@ export default function TechLoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-6">
           <img src={searsLogo} alt="Sears Home Services" className="h-10 mx-auto mb-3" data-testid="img-logo" />
-          <h1 className="text-2xl font-bold" data-testid="text-login-title">VRS Digital Authorization</h1>
+          <h1 className="text-2xl font-bold" data-testid="text-login-title">VRS Express</h1>
           <p className="text-sm text-muted-foreground mt-1">Field Technician</p>
         </div>
 

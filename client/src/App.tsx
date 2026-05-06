@@ -22,6 +22,7 @@ const TechHistoryPage = lazy(() => import("@/pages/tech-history"));
 const SubmissionDetailPage = lazy(() => import("@/pages/submission-detail"));
 const AgentDashboard = lazy(() => import("@/pages/agent-dashboard"));
 const AdminDashboard = lazy(() => import("@/pages/admin-dashboard"));
+const AdminCommunicationsPage = lazy(() => import("@/pages/admin-communications"));
 const HelpCenterPage = lazy(() => import("@/pages/help-center"));
 const TechResubmitPage = lazy(() => import("@/pages/tech-resubmit"));
 const TechFeedbackPage = lazy(() => import("@/pages/tech-feedback"));
@@ -67,6 +68,50 @@ function AdminRoute() {
   if (user.role === "technician") return <Redirect to="/tech" />;
   if (user.role === "vrs_agent") return <Redirect to="/agent/dashboard" />;
   return <Suspense fallback={<LoadingScreen />}><AdminDashboard /></Suspense>;
+}
+
+function AdminCommunicationsRoute() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <LoadingScreen />;
+  if (!user) return <Redirect to="/admin/login" />;
+  if (user.mustChangePassword) return <Redirect to="/admin/login" />;
+  if (user.role === "technician") return <Redirect to="/tech" />;
+  if (user.role === "vrs_agent") return <Redirect to="/agent/dashboard" />;
+  return <Suspense fallback={<LoadingScreen />}><AdminCommunicationsPage /></Suspense>;
+}
+
+// Tyler 2026-04-30: Help center role gating.
+// Each role lands on its own help route so the help-center page can read
+// the role via useAuth and filter content appropriately. /help becomes a
+// smart redirect rather than a hardcoded jump to /tech/help — the prior
+// behavior was bouncing agents/admins off the page entirely when they
+// clicked the "Help Center" button in their sidebar footer.
+function HelpRedirect() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <LoadingScreen />;
+  if (!user) return <Redirect to="/" />;
+  if (user.role === "vrs_agent") return <Redirect to="/agent/help" />;
+  if (user.role === "admin" || user.role === "super_admin") return <Redirect to="/admin/help" />;
+  return <Redirect to="/tech/help" />;
+}
+
+function AgentHelpRoute() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <LoadingScreen />;
+  if (!user) return <Redirect to="/agent/login" />;
+  if (user.mustChangePassword) return <Redirect to="/agent/login" />;
+  if (user.role === "technician") return <Redirect to="/tech/help" />;
+  return <Suspense fallback={<LoadingScreen />}><HelpCenterPage /></Suspense>;
+}
+
+function AdminHelpRoute() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <LoadingScreen />;
+  if (!user) return <Redirect to="/admin/login" />;
+  if (user.mustChangePassword) return <Redirect to="/admin/login" />;
+  if (user.role === "technician") return <Redirect to="/tech/help" />;
+  if (user.role === "vrs_agent") return <Redirect to="/agent/help" />;
+  return <Suspense fallback={<LoadingScreen />}><HelpCenterPage /></Suspense>;
 }
 
 function LandingRoute() {
@@ -130,6 +175,7 @@ function OnboardingManager() {
         open={showWhatsNew}
         onDismiss={handleWhatsNewDismiss}
         version={appVersion}
+        role={user.role}
       />
     </div>
   );
@@ -162,16 +208,19 @@ function Router() {
       </Route>
       <Route path="/agent/dashboard" component={AgentRoute} />
       <Route path="/admin/dashboard" component={AdminRoute} />
+      <Route path="/admin/communications" component={AdminCommunicationsRoute} />
       <Route path="/tech/help">
         {() => <TechRoute component={HelpCenterPage} />}
       </Route>
+      <Route path="/agent/help" component={AgentHelpRoute} />
+      <Route path="/admin/help" component={AdminHelpRoute} />
       <Route path="/login">{() => <Redirect to="/" />}</Route>
       <Route path="/submit">{() => <Redirect to="/tech/submit" />}</Route>
       <Route path="/history">{() => <Redirect to="/tech/history" />}</Route>
       <Route path="/submissions/:id">
         {(params: { id: string }) => <Redirect to={`/tech/submissions/${params.id}`} />}
       </Route>
-      <Route path="/help">{() => <Redirect to="/tech/help" />}</Route>
+      <Route path="/help" component={HelpRedirect} />
       <Route path="/agent">{() => <Redirect to="/agent/dashboard" />}</Route>
       <Route path="/admin">{() => <Redirect to="/admin/dashboard" />}</Route>
       <Route component={NotFound} />

@@ -65,7 +65,7 @@ export default function InstallPrompt() {
       className="fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl max-w-sm animate-in slide-in-from-top-2 fade-in duration-300"
       style={{ backgroundColor: "#003366" }}
     >
-      <span className="text-white text-sm font-medium">Install VRS Submit</span>
+      <span className="text-white text-sm font-medium">Install VRS Express</span>
       <div className="flex items-center gap-2">
         <Button
           data-testid="button-install"
