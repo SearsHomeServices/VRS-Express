@@ -475,15 +475,56 @@ export default function TechResubmitPage() {
           <CardContent className="p-4">
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-destructive mt-0.5 flex-shrink-0" />
-              <div>
+              <div className="flex-1 space-y-2">
                 <p className="text-sm font-semibold text-destructive" data-testid="text-rejection-banner">This submission was rejected</p>
-                {originalSub.stage1RejectionReason && (
-                  <p className="text-sm text-muted-foreground mt-1" data-testid="text-rejection-reason">
-                    Reason: {originalSub.stage1RejectionReason}
-                  </p>
+                {(() => {
+                  const raw = (originalSub as any).rejectionReasons;
+                  let reasons: string[] = [];
+                  if (Array.isArray(raw)) {
+                    reasons = raw.filter((r: unknown) => typeof r === "string");
+                  } else if (typeof raw === "string" && raw.length > 0) {
+                    try {
+                      const parsed = JSON.parse(raw);
+                      if (Array.isArray(parsed)) reasons = parsed.filter((r: unknown) => typeof r === "string");
+                      else reasons = [raw];
+                    } catch {
+                      reasons = [raw];
+                    }
+                  }
+                  if (reasons.length > 0) {
+                    return (
+                      <div data-testid="text-rejection-reason">
+                        <p className="text-xs uppercase tracking-wider text-destructive/70">Reasons</p>
+                        <ul className="text-sm text-muted-foreground list-disc list-inside space-y-0.5">
+                          {reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  }
+                  if (originalSub.stage1RejectionReason) {
+                    return (
+                      <p className="text-sm text-muted-foreground" data-testid="text-rejection-reason">
+                        Reason: {originalSub.stage1RejectionReason}
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
+                {(originalSub as any).technicianMessage && (
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-destructive/70">Message from VRS</p>
+                    <p
+                      className="text-sm text-muted-foreground whitespace-pre-wrap"
+                      data-testid="text-rejection-technician-message"
+                    >
+                      {(originalSub as any).technicianMessage}
+                    </p>
+                  </div>
                 )}
                 {resubCount > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-muted-foreground">
                     Resubmission {resubCount + 1} of {maxResubs}
                   </p>
                 )}

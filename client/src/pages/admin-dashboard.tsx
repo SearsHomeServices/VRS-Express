@@ -10,6 +10,7 @@ import {
   getBusinessElapsedMs,
   formatBusinessElapsed,
   isWithinBusinessHours,
+  getEtDateString,
   formatHoursLabel,
   useBusinessHoursConfig,
   categoryForApplianceType,
@@ -1811,7 +1812,7 @@ export default function AdminDashboard() {
   const [deactivateConfirm, setDeactivateConfirm] = useState<{ id: number; name: string; isActive: boolean } | null>(null);
   const [resetPwConfirm, setResetPwConfirm] = useState<{ id: number; name: string } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; name: string } | null>(null);
-  const [rgcDate, setRgcDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rgcDate, setRgcDate] = useState(() => getEtDateString());
   const [rgcDigits, setRgcDigits] = useState("");
   const [adminStatus, setAdminStatus] = useState<string>((user as any)?.agentStatus || "offline");
 
@@ -1942,20 +1943,24 @@ export default function AdminDashboard() {
 
   const setExportPreset = (preset: string) => {
     const now = new Date();
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    // ET-canonical export ranges so "Today" is today in ET — not tomorrow's
+    // UTC date after 8 PM EDT. Week/month spans use browser-local Date math
+    // (correct for VRS users in ET) and only the day-key formatting routes
+    // through getEtDateString.
+    const today = getEtDateString(now);
     if (preset === "today") {
-      setExportStartDate(fmt(now));
-      setExportEndDate(fmt(now));
+      setExportStartDate(today);
+      setExportEndDate(today);
     } else if (preset === "week") {
       const day = now.getDay();
       const start = new Date(now);
       start.setDate(now.getDate() - day);
-      setExportStartDate(fmt(start));
-      setExportEndDate(fmt(now));
+      setExportStartDate(getEtDateString(start));
+      setExportEndDate(today);
     } else if (preset === "month") {
       const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      setExportStartDate(fmt(start));
-      setExportEndDate(fmt(now));
+      setExportStartDate(getEtDateString(start));
+      setExportEndDate(today);
     } else {
       setExportStartDate("");
       setExportEndDate("");

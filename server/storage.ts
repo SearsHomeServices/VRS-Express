@@ -866,7 +866,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async hasActiveSubmissionForServiceOrder(serviceOrder: string, technicianId: number): Promise<{ exists: boolean; status?: string }> {
-    const activeStatuses = ["queued", "pending", "completed"];
+    // Tyler 2026-05-06 (regression report): `"completed"` was previously in
+    // this list, which blocked a tech from submitting a fresh ticket on the
+    // same SO# any time after the prior one was approved — even days later.
+    // Real-world failure mode: tech finishes a job Monday (completed), needs
+    // a follow-up auth on Friday for the same SO# (parts came in, second
+    // visit, related issue), gets a 409 "already approved." Approved tickets
+    // are closed business — they should not gate future submissions on the
+    // same SO#. Only truly in-flight work (queued waiting for an agent, or
+    // pending under active review) needs to block to prevent dupe-text.
+    const activeStatuses = ["queued", "pending"];
     const results = await db
       .select({ id: submissions.id, ticketStatus: submissions.ticketStatus })
       .from(submissions)
@@ -887,7 +896,8 @@ export class DatabaseStorage implements IStorage {
   // 2026-04-30 — Tyler request: server-side idempotency for double-submit /
   // retry-after-flaky-cell scenarios. The submit button disables while in
   // flight, and `hasActiveSubmissionForServiceOrder` blocks duplicates against
-  // queued/pending/completed rows for non-resubmissions. Neither protects
+  // queued/pending rows for non-resubmissions (completed status was removed
+  // 2026-05-06 — see that method for the regression context). Neither protects
   // against (a) two requests racing past that check before either commits,
   // or (b) a resubmission flow accidentally being submitted twice. A 60s
   // window safely brackets both — legitimate resubmissions happen minutes or

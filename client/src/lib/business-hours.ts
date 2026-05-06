@@ -26,6 +26,7 @@ export {
   getBusinessElapsedFromNow,
   formatBusinessElapsed,
   isWithinBusinessHours,
+  getEtDateString,
   formatHoursLabel,
   categoryForApplianceType,
   DEFAULT_BUSINESS_HOURS_CONFIG,
