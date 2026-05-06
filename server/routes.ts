@@ -915,6 +915,11 @@ export async function registerRoutes(
         requestType?: string;
         excludeRequestType?: string;
         divisionFilter?: string[];
+        // Tyler 2026-05-06 (perf — Task #4): Completed-tab last-N-days
+        // window (reviewedAt cutoff). createdAfter is the createdAt cutoff
+        // used by the admin Ticket Overview's last-N-days default.
+        completedSince?: Date;
+        createdAfter?: Date;
       } = {};
 
       if (user.role === "technician") {
@@ -965,11 +970,28 @@ export async function registerRoutes(
       if (req.query.excludeRequestType) {
         filters.excludeRequestType = req.query.excludeRequestType as string;
       }
+      // Tyler 2026-05-06 (Task #4): completedSince + createdAfter date
+      // windows. Both expect ISO 8601 strings; invalid values are silently
+      // ignored so a bad query param can never 500 the dashboard.
+      if (req.query.completedSince) {
+        const d = new Date(req.query.completedSince as string);
+        if (!isNaN(d.getTime())) filters.completedSince = d;
+      }
+      if (req.query.createdAfter) {
+        const d = new Date(req.query.createdAfter as string);
+        if (!isNaN(d.getTime())) filters.createdAfter = d;
+      }
 
       const completedToday = req.query.completedToday === "true";
 
       if (user.role === "vrs_agent" || user.role === "admin" || user.role === "super_admin") {
-        let result = await storage.getSubmissionsWithTechnician(filters, completedToday);
+        // Tyler 2026-05-06 (Task #4 perf): switched from
+        // getSubmissionsWithTechnician to getSubmissionsListView. The slim
+        // method drops every heavy text/JSON column the list table never
+        // reads (~5-10x payload reduction) and adds support for the
+        // completedSince + createdAfter windows. The detail panel still
+        // drills via GET /api/submissions/:id for full-row data.
+        let result = await storage.getSubmissionsListView(filters, completedToday);
 
         const search = req.query.search as string | undefined;
         if (search && result.length > 0) {

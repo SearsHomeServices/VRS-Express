@@ -158,6 +158,45 @@ export const insertSubmissionSchema = createInsertSchema(submissions).omit({
 export type InsertSubmission = z.infer<typeof insertSubmissionSchema>;
 export type Submission = typeof submissions.$inferSelect;
 
+// Slim row shape returned by GET /api/submissions for agent/admin/super_admin
+// list views (Tyler 2026-05-06, perf — Task #4 dashboard payload slim-down).
+//
+// Heavy text/JSON columns are deliberately omitted because the list table
+// never reads them — they only matter inside the detail panel, which already
+// drills via GET /api/submissions/:id for a full row. Excluded here:
+//   photos, agentNotes, partNumbers, technicianMessage,
+//   issueDescription, originalDescription,
+//   rejectionReasons, rejectedMedia, reassignmentNotes, appealNotes,
+//   invalidInstructions, declineInstructions, stage1RejectionReason,
+//   nlaResolution, nlaFoundPartNumber,
+//   videoUrl, voiceNoteUrl.
+//
+// At ~500-1500 visible rows per agent in production this cuts the payload
+// roughly 5-10x without changing schema or removing data.
+export type SubmissionListItem = Pick<Submission,
+  | "id" | "technicianId" | "racId" | "serviceOrder" | "districtCode" | "phone"
+  | "applianceType" | "requestType" | "warrantyType" | "warrantyProvider"
+  | "aiEnhanced" | "estimateAmount"
+  | "ticketStatus" | "stage1Status" | "stage2Status"
+  | "stage1ReviewedAt" | "stage1ReviewedBy"
+  | "stage2ReviewedAt" | "stage2ReviewedBy" | "stage2Outcome"
+  | "submissionApproved" | "submissionApprovedAt"
+  | "assignedTo" | "claimedAt" | "reviewedBy" | "reviewedAt"
+  | "statusChangedAt" | "createdAt" | "updatedAt"
+  | "authCode" | "rgcCode"
+  | "phoneOverride" | "technicianLdapId"
+  | "resubmissionOf" | "nlaEscalatedBy"
+  | "procId" | "clientNm"
+  | "invalidReason" | "declineReason"
+>;
+
+export type SubmissionListItemWithTech = SubmissionListItem & {
+  technicianName: string;
+  technicianPhone: string | null;
+  assignedAgentName: string | null;
+  intakeFormCompletedAt: Date | null;
+};
+
 // ============================================================================
 // SUBMISSION NOTES TABLE (technician follow-up notes after submission)
 // ============================================================================

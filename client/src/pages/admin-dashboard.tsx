@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -898,6 +898,22 @@ function TicketOverviewSection() {
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  // Tyler 2026-05-06 (Task #4 perf): default the admin Ticket Overview to
+  // the last 30 days of created tickets. Pre-change this view pulled every
+  // submission in the database (~500+ rows in prod, soon many more) on a
+  // 60s poll, with every heavy JSON column inlined. The slim list method
+  // already cuts payload ~5-10x; this window cuts row count too. Widen via
+  // the selector beside the request-type filter. The CSV/XLSX export
+  // endpoints are unaffected (different endpoints with their own scopes).
+  const [createdAfterWindow, setCreatedAfterWindow] = useState<"30d" | "60d" | "90d" | "all">("30d");
+  const createdAfterIso = useMemo(() => {
+    if (createdAfterWindow === "all") return null;
+    const days = createdAfterWindow === "60d" ? 60 : createdAfterWindow === "90d" ? 90 : 30;
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }, [createdAfterWindow]);
   const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
   const [reassignTicket, setReassignTicket] = useState<any | null>(null);
   const [reassignTarget, setReassignTarget] = useState<string>("");
@@ -918,8 +934,15 @@ function TicketOverviewSection() {
   // invalidate. So polling is a missed-WS-event safety net, not the
   // primary refresh. Stretching to 60s + disabling refocus refetch
   // cuts server + client load ~4x. WS push remains instant.
+  // Tyler 2026-05-06 (Task #4): scope by createdAfter window. The query key
+  // includes the param so widening the window cleanly triggers a refetch
+  // and the WS-driven invalidation predicate (matches anything starting
+  // with "/api/submissions") still hits this entry.
+  const adminSubmissionsUrl = createdAfterIso
+    ? `/api/submissions?createdAfter=${encodeURIComponent(createdAfterIso)}`
+    : "/api/submissions";
   const { data: allData, isLoading: allLoading } = useQuery<{ submissions: any[] }>({
-    queryKey: ["/api/submissions"],
+    queryKey: [adminSubmissionsUrl],
     refetchInterval: 60000,
     staleTime: 45000,
     refetchOnWindowFocus: false,
@@ -1043,6 +1066,22 @@ function TicketOverviewSection() {
               {opt.label}
             </button>
           ))}
+        </div>
+        {/* Tyler 2026-05-06 (Task #4): created-window selector for the
+            Ticket Overview. Defaults to last 30 days; widen as needed. */}
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">Created</Label>
+          <Select value={createdAfterWindow} onValueChange={(v) => setCreatedAfterWindow(v as typeof createdAfterWindow)}>
+            <SelectTrigger className="h-8 w-[140px] text-xs" data-testid="select-created-window">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="30d" data-testid="option-created-window-30d">Last 30 days</SelectItem>
+              <SelectItem value="60d" data-testid="option-created-window-60d">Last 60 days</SelectItem>
+              <SelectItem value="90d" data-testid="option-created-window-90d">Last 90 days</SelectItem>
+              <SelectItem value="all" data-testid="option-created-window-all">All time</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         {!businessHoursActive && (
           <div

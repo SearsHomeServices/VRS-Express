@@ -33,6 +33,7 @@ import {
   intakeForms,
   InsertIntakeForm,
   IntakeForm,
+  SubmissionListItemWithTech,
   agentExternalCredentials,
   InsertAgentExternalCredential,
   AgentExternalCredential,
@@ -96,6 +97,40 @@ export interface IStorage {
     excludeRequestType?: string;
     divisionFilter?: string[];
   }, completedToday?: boolean): Promise<(Submission & { technicianName: string; technicianPhone: string | null; assignedAgentName: string | null; intakeFormCompletedAt: Date | null })[]>;
+  // Tyler 2026-05-06 (perf — Task #4 dashboard payload slim-down):
+  // Slim sibling of getSubmissionsWithTechnician. Selects only the columns
+  // the dashboard list table actually renders (see SubmissionListItem in
+  // shared/schema.ts for the explicit kept-column list). Heavy text/JSON
+  // columns (photos, agentNotes, partNumbers, technicianMessage,
+  // issueDescription, originalDescription, rejectionReasons, rejectedMedia,
+  // reassignmentNotes, appealNotes, invalidInstructions,
+  // declineInstructions, stage1RejectionReason, nlaResolution,
+  // nlaFoundPartNumber, videoUrl, voiceNoteUrl) are deliberately omitted
+  // because the list never reads them — the detail panel drills via
+  // GET /api/submissions/:id for a full row.
+  //
+  // Honors the same filter shape as getSubmissionsWithTechnician PLUS:
+  //  - completedSince: when set, applies (reviewedAt >= since AND
+  //    ticketStatus IN ('completed','approved','rejected','invalid')).
+  //    Used by the agent Completed tab's last-30-days default + selector.
+  //  - createdAfter: when set, applies (createdAt >= createdAfter).
+  //    Used by the admin Ticket Overview last-30-days default + selector.
+  // The legacy completedToday flag remains supported and is internally
+  // equivalent to completedSince=todayMidnight.
+  getSubmissionsListView(filters?: {
+    technicianId?: number;
+    ticketStatus?: string;
+    stage1Status?: string;
+    stage2Status?: string;
+    applianceType?: string;
+    assignedTo?: number;
+    reviewedBy?: number;
+    requestType?: string;
+    excludeRequestType?: string;
+    divisionFilter?: string[];
+    completedSince?: Date;
+    createdAfter?: Date;
+  }, completedToday?: boolean): Promise<SubmissionListItemWithTech[]>;
   updateSubmission(
     id: number,
     data: Partial<InsertSubmission>
@@ -674,6 +709,170 @@ export class DatabaseStorage implements IStorage {
       technicianPhone: r.submission.phoneOverride || r.ldapTechPhone || r.technicianPhone,
       assignedAgentName: r.assignedAgentName,
       racId: r.submission.technicianLdapId || "",
+      intakeFormCompletedAt: r.intakeFormCompletedAt,
+    }));
+  }
+
+  // Tyler 2026-05-06 (perf — Task #4 dashboard payload slim-down):
+  // See the IStorage interface comment above the matching signature for
+  // the design rationale and the explicit kept-vs-dropped column list.
+  // This method mirrors getSubmissionsWithTechnician's filter handling
+  // exactly except that it (a) explicit-selects only slim columns from
+  // the submissions table, and (b) supports two new date params:
+  // completedSince (reviewedAt window for the agent Completed tab) and
+  // createdAfter (createdAt window for the admin Ticket Overview).
+  async getSubmissionsListView(filters?: {
+    technicianId?: number;
+    ticketStatus?: string;
+    stage1Status?: string;
+    stage2Status?: string;
+    applianceType?: string;
+    assignedTo?: number;
+    reviewedBy?: number;
+    requestType?: string;
+    excludeRequestType?: string;
+    divisionFilter?: string[];
+    completedSince?: Date;
+    createdAfter?: Date;
+  }, completedToday?: boolean): Promise<SubmissionListItemWithTech[]> {
+    const conditions: any[] = [];
+
+    if (filters?.technicianId !== undefined) {
+      conditions.push(eq(submissions.technicianId, filters.technicianId));
+    }
+    if (filters?.ticketStatus !== undefined) {
+      conditions.push(eq(submissions.ticketStatus, filters.ticketStatus));
+    }
+    if (filters?.stage1Status !== undefined) {
+      conditions.push(eq(submissions.stage1Status, filters.stage1Status));
+    }
+    if (filters?.stage2Status !== undefined) {
+      conditions.push(eq(submissions.stage2Status, filters.stage2Status));
+    }
+    if (filters?.applianceType !== undefined) {
+      conditions.push(eq(submissions.applianceType, filters.applianceType));
+    }
+    if (filters?.assignedTo !== undefined) {
+      conditions.push(eq(submissions.assignedTo, filters.assignedTo));
+    }
+    if (filters?.reviewedBy !== undefined) {
+      conditions.push(eq(submissions.reviewedBy, filters.reviewedBy));
+    }
+    if (filters?.requestType !== undefined) {
+      conditions.push(eq(submissions.requestType, filters.requestType));
+    }
+    if (filters?.excludeRequestType !== undefined) {
+      conditions.push(sql`${submissions.requestType} != ${filters.excludeRequestType}`);
+    }
+    if (filters?.divisionFilter !== undefined && filters.divisionFilter.length > 0) {
+      const hasNla = filters.divisionFilter.includes("nla");
+      const applianceDivisions = filters.divisionFilter.filter(d => d !== "nla" && d !== "generalist");
+      const isNlaSpecificQuery = filters.requestType === "parts_nla";
+      if (isNlaSpecificQuery && applianceDivisions.length > 0) {
+        conditions.push(inArray(submissions.applianceType, applianceDivisions));
+      } else if (hasNla && applianceDivisions.length > 0 && !isNlaSpecificQuery) {
+        conditions.push(or(
+          inArray(submissions.applianceType, applianceDivisions),
+          eq(submissions.requestType, "parts_nla")
+        ));
+      } else if (hasNla) {
+        // generalist over all divisions including NLA — no extra filter
+      } else if (applianceDivisions.length > 0) {
+        conditions.push(inArray(submissions.applianceType, applianceDivisions));
+      }
+    }
+
+    // Completed-window filtering: legacy completedToday flag is internally
+    // equivalent to completedSince=todayMidnight. completedSince takes
+    // precedence if both are passed (route layer never sets both).
+    if (completedToday) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      conditions.push(sql`${submissions.reviewedAt} >= ${today}`);
+      conditions.push(sql`${submissions.ticketStatus} IN ('completed', 'approved', 'rejected', 'invalid')`);
+    } else if (filters?.completedSince) {
+      conditions.push(sql`${submissions.reviewedAt} >= ${filters.completedSince}`);
+      conditions.push(sql`${submissions.ticketStatus} IN ('completed', 'approved', 'rejected', 'invalid')`);
+    }
+
+    if (filters?.createdAfter) {
+      conditions.push(gte(submissions.createdAt, filters.createdAfter));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const assignedAgent = alias(users, "assignedAgent");
+
+    const result = await db
+      .select({
+        // Slim submissions columns — explicit, no spread of submissions.*.
+        // See the IStorage interface comment above for the complete dropped-
+        // column list and rationale.
+        s: {
+          id: submissions.id,
+          technicianId: submissions.technicianId,
+          racId: submissions.racId,
+          serviceOrder: submissions.serviceOrder,
+          districtCode: submissions.districtCode,
+          phone: submissions.phone,
+          applianceType: submissions.applianceType,
+          requestType: submissions.requestType,
+          warrantyType: submissions.warrantyType,
+          warrantyProvider: submissions.warrantyProvider,
+          aiEnhanced: submissions.aiEnhanced,
+          estimateAmount: submissions.estimateAmount,
+          ticketStatus: submissions.ticketStatus,
+          stage1Status: submissions.stage1Status,
+          stage1ReviewedBy: submissions.stage1ReviewedBy,
+          stage1ReviewedAt: submissions.stage1ReviewedAt,
+          stage2Status: submissions.stage2Status,
+          stage2ReviewedBy: submissions.stage2ReviewedBy,
+          stage2ReviewedAt: submissions.stage2ReviewedAt,
+          stage2Outcome: submissions.stage2Outcome,
+          submissionApproved: submissions.submissionApproved,
+          submissionApprovedAt: submissions.submissionApprovedAt,
+          assignedTo: submissions.assignedTo,
+          claimedAt: submissions.claimedAt,
+          reviewedBy: submissions.reviewedBy,
+          reviewedAt: submissions.reviewedAt,
+          statusChangedAt: submissions.statusChangedAt,
+          createdAt: submissions.createdAt,
+          updatedAt: submissions.updatedAt,
+          authCode: submissions.authCode,
+          rgcCode: submissions.rgcCode,
+          phoneOverride: submissions.phoneOverride,
+          technicianLdapId: submissions.technicianLdapId,
+          resubmissionOf: submissions.resubmissionOf,
+          nlaEscalatedBy: submissions.nlaEscalatedBy,
+          procId: submissions.procId,
+          clientNm: submissions.clientNm,
+          invalidReason: submissions.invalidReason,
+          declineReason: submissions.declineReason,
+        },
+        technicianName: users.name,
+        technicianPhone: users.phone,
+        ldapTechName: technicians.name,
+        ldapTechPhone: technicians.phone,
+        assignedAgentName: assignedAgent.name,
+        intakeFormCompletedAt: sql<Date | null>`(
+          SELECT MAX(${intakeForms.agentConfirmedAt})
+          FROM ${intakeForms}
+          WHERE ${intakeForms.submissionId} = ${submissions.id}
+        )`,
+      })
+      .from(submissions)
+      .innerJoin(users, eq(submissions.technicianId, users.id))
+      .leftJoin(technicians, eq(submissions.technicianLdapId, technicians.ldapId))
+      .leftJoin(assignedAgent, eq(submissions.assignedTo, assignedAgent.id))
+      .where(whereClause)
+      .orderBy(filters?.ticketStatus === "queued" ? asc(submissions.createdAt) : desc(submissions.createdAt));
+
+    return result.map((r) => ({
+      ...r.s,
+      technicianName: r.ldapTechName || r.technicianName,
+      technicianPhone: r.s.phoneOverride || r.ldapTechPhone || r.technicianPhone,
+      assignedAgentName: r.assignedAgentName,
+      racId: r.s.technicianLdapId || "",
       intakeFormCompletedAt: r.intakeFormCompletedAt,
     }));
   }

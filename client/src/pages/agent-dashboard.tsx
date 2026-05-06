@@ -22,7 +22,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { IntakeFormTab } from "@/components/intake-form-tab";
 import { CalculatorIframe } from "@/components/calculator-iframe";
 import { CalculatorSettingsDialog } from "@/components/calculator-settings-dialog";
-import type { Submission } from "@shared/schema";
+import type { Submission, SubmissionListItemWithTech } from "@shared/schema";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
   SidebarProvider,
@@ -117,10 +117,18 @@ import { SmsPreview } from "@/components/sms-preview";
 import { buildSmsPreview } from "@/lib/smsPreview";
 import { parseVideoUrls } from "@/lib/videoUrls";
 
+// Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
+// SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
+// shared/schema.ts). The DETAIL panel reads from a separate full-row fetch
+// (selectedFullSubmissionQuery below) merged with the list row's joined
+// fields — that merged value is typed as SubmissionWithTech so the existing
+// 127+ JSX read sites for selectedSubmission.{photos,agentNotes,...} keep
+// compiling and rendering correctly.
 type SubmissionWithTech = Submission & {
   technicianName: string;
   technicianPhone: string | null;
   assignedAgentName: string | null;
+  intakeFormCompletedAt?: Date | null;
 };
 
 const DIVISION_LABELS: Record<string, string> = {
@@ -181,7 +189,7 @@ function getUrgencyLevel(
   return "normal";
 }
 
-function getWarrantyLabel(sub: SubmissionWithTech): string {
+function getWarrantyLabel(sub: SubmissionWithTech | SubmissionListItemWithTech): string {
   if (sub.warrantyProvider) return sub.warrantyProvider;
   return sub.warrantyType === "sears_protect" ? "Sears Protect / Sears PA / Sears Home Warranty (Cinch)" : sub.warrantyType;
 }
@@ -588,6 +596,21 @@ export default function AgentDashboard() {
     resetActionState();
   }, [selectedId]);
 
+  // Tyler 2026-05-06 (Task #4 perf): Completed-tab last-N-days window.
+  // Defaults to 30 days so an agent isn't pulling 6+ months of completed
+  // tickets every minute; widen via the selector above the list. "all"
+  // passes a 1970 sentinel so the slim method's status-filter path still
+  // engages without a real date cap.
+  const [completedWindow, setCompletedWindow] = useState<"30d" | "60d" | "90d" | "all">("30d");
+  const completedSinceIso = useMemo(() => {
+    if (completedWindow === "all") return new Date(0).toISOString();
+    const days = completedWindow === "60d" ? 60 : completedWindow === "90d" ? 90 : 30;
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }, [completedWindow]);
+
   const queryParams = useMemo(() => {
     const params = new URLSearchParams();
     const isNlaView = activeView.startsWith("nla_");
@@ -599,7 +622,10 @@ export default function AgentDashboard() {
       params.set("ticketStatus", "pending");
       params.set("excludeRequestType", "parts_nla");
     } else if (activeView === "completed") {
-      params.set("completedToday", "true");
+      // Tyler 2026-05-06 (Task #4): replaced completedToday=true with the
+      // last-N-days completedSince window. The server-side stat card on
+      // /api/agent/stats still uses today-only semantics for the count.
+      params.set("completedSince", completedSinceIso);
       params.set("excludeRequestType", "parts_nla");
     } else if (activeView === "nla_queue") {
       params.set("ticketStatus", "queued");
@@ -608,7 +634,7 @@ export default function AgentDashboard() {
       params.set("ticketStatus", "pending");
       params.set("requestType", "parts_nla");
     } else if (activeView === "nla_completed") {
-      params.set("completedToday", "true");
+      params.set("completedSince", completedSinceIso);
       params.set("requestType", "parts_nla");
     }
     if (divisionFilter) {
@@ -621,7 +647,7 @@ export default function AgentDashboard() {
       params.set("search", searchQuery.trim());
     }
     return params.toString();
-  }, [activeView, divisionFilter, requestTypeFilter, searchQuery]);
+  }, [activeView, divisionFilter, requestTypeFilter, searchQuery, completedSinceIso]);
 
   const submissionsUrl = queryParams ? `/api/submissions?${queryParams}` : "/api/submissions";
 
@@ -642,11 +668,22 @@ export default function AgentDashboard() {
   // and cuts server + client load ~4x. refetchOnWindowFocus disabled
   // for the same reason — WS keeps the cache fresh, no need to re-pull
   // a megabyte every time the user switches tabs.
-  const { data: submissionsData, isLoading } = useQuery<{ submissions: SubmissionWithTech[] }>({
+  const { data: submissionsData, isLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [submissionsUrl],
     refetchInterval: 60000,
     staleTime: 45000,
     refetchOnWindowFocus: false,
+  });
+
+  // Tyler 2026-05-06 (Task #4 perf): full-row fetch for the selected ticket.
+  // The list-view payload is now slim (no photos/agentNotes/etc.) so the
+  // detail panel reads here for the heavy columns. Default fetcher joins the
+  // queryKey with "/" → "/api/submissions/<id>". Cache scoped per id; reasonable
+  // staleTime so flipping back to the same ticket doesn't refetch.
+  const { data: selectedFullData } = useQuery<{ submission: Submission }>({
+    queryKey: ["/api/submissions", selectedId],
+    enabled: !!selectedId,
+    staleTime: 30000,
   });
 
   const { data: statsData } = useQuery<{ queueCount: number; pendingCount: number; completedToday: number; nlaQueueCount?: number; nlaPendingCount?: number; nlaCompletedToday?: number }>({
@@ -721,7 +758,31 @@ export default function AgentDashboard() {
     return submissionsData?.submissions || [];
   }, [submissionsData]);
 
-  const selectedSubmissionFromQuery = submissions.find((s) => s.id === selectedId) || null;
+  // Tyler 2026-05-06 (Task #4 perf): merge the full-row detail fetch with
+  // the slim list row's joined fields (technicianName, phone, assigned
+  // agent name, intake-form timestamp). The full row carries every heavy
+  // column the JSX reads (photos, agentNotes, partNumbers, etc.); the
+  // joined fields aren't on /api/submissions/:id so we layer them in from
+  // the list row. Falls back to the slim list row alone during the brief
+  // window before the full fetch resolves — heavy fields will be undefined
+  // momentarily, which the JSX already handles defensively.
+  const selectedSubmissionFromQuery: SubmissionWithTech | null = useMemo(() => {
+    const listRow = submissions.find((s) => s.id === selectedId) || null;
+    const full = selectedFullData?.submission || null;
+    if (full) {
+      return {
+        ...(full as Submission),
+        technicianName: listRow?.technicianName ?? "",
+        technicianPhone: listRow?.technicianPhone ?? null,
+        assignedAgentName: listRow?.assignedAgentName ?? null,
+        intakeFormCompletedAt: listRow?.intakeFormCompletedAt ?? null,
+      };
+    }
+    if (listRow) {
+      return listRow as unknown as SubmissionWithTech;
+    }
+    return null;
+  }, [submissions, selectedId, selectedFullData]);
 
   // Tyler 2026-04-28 (intake-tab disappearance bug, Fix B — extended for
   // requirement A "ticket review screen must NOT clear after Approve/Reject"):
@@ -1727,7 +1788,7 @@ export default function AgentDashboard() {
                   {submissions.length} ticket{submissions.length !== 1 ? "s" : ""}
                 </span>
               </div>
-              <div className="px-3 pb-2">
+              <div className="px-3 pb-2 space-y-2">
                 <Input
                   placeholder="Search by service order..."
                   value={searchQuery}
@@ -1735,6 +1796,26 @@ export default function AgentDashboard() {
                   className="text-sm"
                   data-testid="input-search-submissions"
                 />
+                {/* Tyler 2026-05-06 (Task #4): completed-window selector.
+                    Only shown on the Completed and NLA Completed tabs —
+                    other tabs are inherently scoped (queued / pending /
+                    assigned-to-me). */}
+                {(activeView === "completed" || activeView === "nla_completed") && (
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground whitespace-nowrap">Show</Label>
+                    <Select value={completedWindow} onValueChange={(v) => setCompletedWindow(v as typeof completedWindow)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-completed-window">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="30d" data-testid="option-completed-window-30d">Last 30 days</SelectItem>
+                        <SelectItem value="60d" data-testid="option-completed-window-60d">Last 60 days</SelectItem>
+                        <SelectItem value="90d" data-testid="option-completed-window-90d">Last 90 days</SelectItem>
+                        <SelectItem value="all" data-testid="option-completed-window-all">All time</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
               <ScrollArea className="flex-1">
                 {isLoading ? (
