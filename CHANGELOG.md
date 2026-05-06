@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Documentation
+- Added a technician-side instructional video fast-ship plan covering the current VRS submission flow and the three technician request types: Authorization, Infestation / Non-Accessible, and Parts — No Longer Available (NLA).
+
 ### Deployment Notes
 - This release adds a new `submission_notes` table. Before deploying, run `npm run db:push` in the Replit environment (production-bound `DATABASE_URL`) or the `POST|GET /api/submissions/:id/notes` endpoints will 500 on first write.
 - This release **also adds two more tables**: `intake_forms` (Smartsheet "VRS Unrep Intake Form 2.0" submission audit) and `agent_external_credentials` (encrypted per-agent calculator credentials). Run `npm run db:push` once before deploy or the new endpoints (`POST /api/submissions/:id/intake-form/{preview,confirm}`, `GET /api/submissions/:id/intake-form-status`, `GET|POST|DELETE /api/agent/credentials/calculator`, `POST .../reveal`, `GET /api/agent/intake-status`) and the new claim-gate (`PATCH /api/submissions/:id/claim`) will 500 on first call. The new claim-gate query (`getMissingIntakeForAgent`) only runs for `vrs_agent` role users — admins bypass it — so super_admin / admin sessions will continue to work even before db:push, but agents will see "Failed to claim" until the migration is applied.
