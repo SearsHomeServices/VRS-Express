@@ -13,6 +13,30 @@ Use this format for new entries:
 
 ---
 
+### ADR-013: ET-canonical day boundary for daily-keyed records (RGC codes)
+**Date**: 2026-05-06
+**Status**: Active
+**Context**: Hamed reported on 2026-05-05 that after 8 PM EDT the agent dashboard rejected approval attempts with "No RGC code has been set for today" even though the day's code had been set normally that morning. Root cause: every daily-keyed RGC lookup keyed on `new Date().toISOString().slice(0, 10)` (UTC date). EDT is UTC−4, so 8 PM EDT = midnight UTC, which flips the date to "tomorrow" — `getDailyRgcCode("2026-05-06")` returns nothing because the code was filed under "2026-05-05". VRS staffing is east-coast-anchored and the daily RGC code is a single shared code, so the day boundary should follow ET, not UTC.
+**Decision**: Add `getEtDateString(d?: Date)` to `shared/business-hours.ts` (re-exported from `client/src/lib/business-hours.ts`). It returns the ET wall-clock date as `YYYY-MM-DD` using the same `getEtCalendarParts()` helper already used by the business-hours timer. Replace all six existing UTC slices with calls to it: 5 in `server/routes.ts` (auth approval line 1482, NLA approval line 1717, admin GET line 2496, admin verify line 2528, agent rgc-status line 2549) and 1 in `client/src/pages/admin-dashboard.tsx` (rgcDate state initializer line 1739).
+**Consequences**:
+- (+) Day boundary now flips at ET midnight, matching when admins actually set the next day's code.
+- (+) DST-correct — `getEtCalendarParts` formats with `timeZone: "America/New_York"` so EST/EDT transitions handle themselves.
+- (+) No schema change — the `valid_date` column is already a `YYYY-MM-DD` string with no embedded timezone.
+- (+) Agents still working past 8 PM ET keep being able to approve normally; technicians submitting at any hour are unaffected (no time check on submission); business-hours-aware analytics timers (`getBusinessElapsedMs`) still pause overnight as before — this change only affects the day key, not the work window.
+- (−) None known. Any consumer that genuinely wanted UTC date (none in this codebase) would need to call `toISOString().slice(0,10)` explicitly.
+
+### ADR-014: Inline previous-rejection panel on the agent review cards
+**Date**: 2026-05-06
+**Status**: Active
+**Context**: Hamed reported on 2026-05-05 that agents reviewing a resubmission see only a one-line "This is a resubmission" badge in the resolution slot, with the prior rejection reasons + Message-Sent-to-Technician buried in a separate Submission History card lower on the page. Several agents were re-rejecting tickets without realizing what the prior agent had asked the tech to fix. The data was already returned by `GET /api/submissions/:id/history` (full chain of submission rows including `rejectionReasons`, `stage1RejectionReason`, `technicianMessage`, `stage1ReviewedBy`); only the rendering was missing.
+**Decision**: Add a `priorRejection` `useMemo` near the existing `submissionHistoryQuery` in `client/src/pages/agent-dashboard.tsx` that filters the history chain for submissions strictly older than the current selection with a rejected status (`ticketStatus IN ('rejected','rejected_closed')` OR `stage1Status === 'rejected'`), takes the most recent one, and exposes `{ reasons, stage1Reason, technicianMessage, reviewerName, reviewedAt }`. Render a red-bordered "Previous Rejection" panel using that memo at the top of both the Stage 1 review card (line ~2820, where the resubmission badge already lives) and the NLA review card (line ~2360). Show categorical reasons as a bulleted list, with `stage1RejectionReason` as a free-text fallback when no JSON reasons exist; show `technicianMessage` under a "Message Sent to Technician" sub-heading because that's the narrative agents need to evaluate the resubmission against. Reviewer name + timestamp render as a single de-emphasized footer line. The panel only appears when `priorRejection` is non-null — original-submission tickets and resubmissions with no prior rejection (e.g. resubmission after Invalid) keep the existing minimal behavior.
+**Consequences**:
+- (+) Zero API or schema work — the `/history` endpoint already returns whole submission rows, so all fields (including `technicianMessage`) were already on the wire.
+- (+) Agents see the full prior-rejection context without scrolling, reducing redundant rejections of resubmissions that did address the prior feedback.
+- (+) The existing Submission History card (rendered when `history.length > 1`) is unchanged — still serves as the full chain audit log.
+- (−) Some duplication: the chain-summary line at line 2327 also surfaces `rejectionReasons` of past entries. Acceptable — the chain card is small and shows ALL prior entries; the new panel highlights only the most recent rejection at the top of the review card where decisions happen.
+- (−) The panel can't show photos or the prior submission's full description; that's by design — when the agent needs the full prior submission they can click into the chain entry. Adding photo deltas would require a new API and was deferred.
+
 ### ADR-010: AES-256-GCM + scrypt(SESSION_SECRET, perRowSalt) for agent credential storage
 **Date**: 2026-04-26
 **Status**: Active

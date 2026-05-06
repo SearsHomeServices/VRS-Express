@@ -12,6 +12,7 @@ import {
   isWithinBusinessHours,
   VRS_OPEN_HOUR_ET,
   VRS_CLOSE_HOUR_ET,
+  getEtDateString,
 } from "@/lib/business-hours";
 import { useWebSocket, loadNotificationSettings, playNotificationDing, showBrowserNotification } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
@@ -1736,7 +1737,7 @@ export default function AdminDashboard() {
   const [deactivateConfirm, setDeactivateConfirm] = useState<{ id: number; name: string; isActive: boolean } | null>(null);
   const [resetPwConfirm, setResetPwConfirm] = useState<{ id: number; name: string } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; name: string } | null>(null);
-  const [rgcDate, setRgcDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rgcDate, setRgcDate] = useState(() => getEtDateString());
   const [rgcDigits, setRgcDigits] = useState("");
   const [adminStatus, setAdminStatus] = useState<string>((user as any)?.agentStatus || "offline");
 

@@ -71,6 +71,7 @@ import {
   FileText,
   Wrench,
   AlertTriangle,
+  AlertCircle,
   Filter,
   Image as ImageIcon,
   ShieldX,
@@ -758,6 +759,54 @@ export default function AgentDashboard() {
     queryKey: ["/api/submissions", selectedId, "history"],
     enabled: !!selectedId,
   });
+
+  // Hamed feedback 2026-05-06: when a resubmission lands in queue, the agent
+  // reviewing it needs to see WHAT was rejected previously and WHAT the prior
+  // agent told the tech to fix — otherwise they re-evaluate blind. The history
+  // card a few rows below this one shows the chain headline ("Rejected: X")
+  // but the tech-facing narrative (`technicianMessage`) was never inlined into
+  // the Stage 1 review card. We surface the most recent prior rejection here
+  // so the data is in the same eye-line as the Approve / Reject / Invalid
+  // buttons.
+  const priorRejection = useMemo(() => {
+    if (!selectedSubmission || !(selectedSubmission as any).resubmissionOf) return null;
+    const data = submissionHistoryQuery.data;
+    if (!data) return null;
+    const currentCreatedMs = (selectedSubmission as any).createdAt
+      ? new Date((selectedSubmission as any).createdAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const priors = data.history.filter((h: any) => {
+      const t = h.createdAt ? new Date(h.createdAt).getTime() : 0;
+      const wasRejected =
+        h.ticketStatus === "rejected" ||
+        h.ticketStatus === "rejected_closed" ||
+        h.stage1Status === "rejected";
+      return t < currentCreatedMs && wasRejected;
+    });
+    if (priors.length === 0) return null;
+    const last = priors[priors.length - 1]; // history is sorted oldest-first
+    let reasons: string[] = [];
+    const raw = last.rejectionReasons;
+    if (Array.isArray(raw)) {
+      reasons = raw.filter((r: unknown) => typeof r === "string");
+    } else if (typeof raw === "string" && raw.length > 0) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) reasons = parsed.filter((r: unknown) => typeof r === "string");
+        else reasons = [raw];
+      } catch {
+        reasons = [raw];
+      }
+    }
+    return {
+      submissionId: last.id as number,
+      reasons,
+      stage1Reason: (last.stage1RejectionReason as string | null) || null,
+      technicianMessage: (last.technicianMessage as string | null) || null,
+      reviewerName: last.stage1ReviewedBy ? data.reviewerNames[last.stage1ReviewedBy] || null : null,
+      reviewedAt: (last.stage1ReviewedAt || last.reviewedAt || last.updatedAt || null) as string | null,
+    };
+  }, [selectedSubmission, submissionHistoryQuery.data]);
 
   // Stage 3 visibility — server is the single source of truth (matches the
   // 24h claim-gate predicate on the storage side). `required: true` means the
@@ -2357,6 +2406,54 @@ export default function AgentDashboard() {
                               This is a resubmission
                             </p>
                           )}
+                          {priorRejection && (
+                            <div
+                              className="mt-2 p-3 bg-red-50 dark:bg-red-950/40 rounded-md border border-red-200 dark:border-red-900 space-y-2"
+                              data-testid="panel-nla-prior-rejection"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 text-red-700 dark:text-red-400" />
+                                <p className="text-xs font-medium text-red-700 dark:text-red-300 uppercase tracking-wider">
+                                  Previous Rejection
+                                </p>
+                              </div>
+                              {priorRejection.reasons.length > 0 ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Reasons
+                                  </p>
+                                  <ul className="text-xs text-red-900 dark:text-red-100 list-disc list-inside space-y-0.5">
+                                    {priorRejection.reasons.map((r, i) => (
+                                      <li key={i}>{r}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : priorRejection.stage1Reason ? (
+                                <p className="text-xs text-red-900 dark:text-red-100">{priorRejection.stage1Reason}</p>
+                              ) : null}
+                              {priorRejection.technicianMessage && (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Message Sent to Technician
+                                  </p>
+                                  <p
+                                    className="text-xs whitespace-pre-wrap text-red-900 dark:text-red-100"
+                                    data-testid="text-nla-prior-rejection-message"
+                                  >
+                                    {priorRejection.technicianMessage}
+                                  </p>
+                                </div>
+                              )}
+                              {(priorRejection.reviewerName || priorRejection.reviewedAt) && (
+                                <p className="text-[10px] text-red-700/60 dark:text-red-400/60">
+                                  {priorRejection.reviewerName ? `Reviewed by ${priorRejection.reviewerName}` : "Reviewed"}
+                                  {priorRejection.reviewedAt
+                                    ? ` on ${formatDate(priorRejection.reviewedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                                    : ""}
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </CardHeader>
                         <CardContent className="space-y-5">
                           {selectedSubmission.nlaEscalatedBy ? (
@@ -2816,6 +2913,54 @@ export default function AgentDashboard() {
                             <p className="text-xs text-blue-600" data-testid="text-resubmission-indicator">
                               This is a resubmission
                             </p>
+                          )}
+                          {priorRejection && (
+                            <div
+                              className="mt-2 p-3 bg-red-50 dark:bg-red-950/40 rounded-md border border-red-200 dark:border-red-900 space-y-2"
+                              data-testid="panel-prior-rejection"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 text-red-700 dark:text-red-400" />
+                                <p className="text-xs font-medium text-red-700 dark:text-red-300 uppercase tracking-wider">
+                                  Previous Rejection
+                                </p>
+                              </div>
+                              {priorRejection.reasons.length > 0 ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Reasons
+                                  </p>
+                                  <ul className="text-xs text-red-900 dark:text-red-100 list-disc list-inside space-y-0.5">
+                                    {priorRejection.reasons.map((r, i) => (
+                                      <li key={i}>{r}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : priorRejection.stage1Reason ? (
+                                <p className="text-xs text-red-900 dark:text-red-100">{priorRejection.stage1Reason}</p>
+                              ) : null}
+                              {priorRejection.technicianMessage && (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Message Sent to Technician
+                                  </p>
+                                  <p
+                                    className="text-xs whitespace-pre-wrap text-red-900 dark:text-red-100"
+                                    data-testid="text-prior-rejection-message"
+                                  >
+                                    {priorRejection.technicianMessage}
+                                  </p>
+                                </div>
+                              )}
+                              {(priorRejection.reviewerName || priorRejection.reviewedAt) && (
+                                <p className="text-[10px] text-red-700/60 dark:text-red-400/60">
+                                  {priorRejection.reviewerName ? `Reviewed by ${priorRejection.reviewerName}` : "Reviewed"}
+                                  {priorRejection.reviewedAt
+                                    ? ` on ${formatDate(priorRejection.reviewedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                                    : ""}
+                                </p>
+                              )}
+                            </div>
                           )}
                           {(selectedSubmission as any).appealNotes && (
                             <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-950 rounded-md border border-blue-200 dark:border-blue-800">

@@ -163,3 +163,15 @@ export function isWithinBusinessHours(d: Date = new Date()): boolean {
   const t = d.getTime();
   return t >= openMs && t < closeMs;
 }
+
+// Today's date as `YYYY-MM-DD` in America/New_York. Use this — not
+// `toISOString().slice(0,10)` — anywhere we key a daily record by date
+// (RGC codes, etc.). The UTC slice rolls over at 8 PM EDT / 7 PM EST,
+// which made the daily RGC lookup miss after that point and surfaced as
+// "No RGC code has been set for today" while agents were still working.
+// VRS day boundary is ET midnight, the same anchor used by the business-
+// hours timers above.
+export function getEtDateString(d: Date = new Date()): string {
+  const { year, month, day } = getEtCalendarParts(d);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
