@@ -926,9 +926,14 @@ export async function registerRoutes(
         filters.technicianId = user.id;
       } else if (user.role === "vrs_agent") {
         const isCompletedToday = req.query.completedToday === "true";
+        // Tyler 2026-05-06 (Task #4): the agent Completed tabs now pass
+        // completedSince=<iso> (last-N-days window) instead of completedToday.
+        // Both signals mean "this is the Completed view" and must take the
+        // reviewedBy branch — see comment below for why assignedTo is wrong.
+        const isCompletedView = isCompletedToday || !!req.query.completedSince;
         const ticketStatusFilter = req.query.ticketStatus as string | undefined;
 
-        if (ticketStatusFilter === "queued" && !isCompletedToday) {
+        if (ticketStatusFilter === "queued" && !isCompletedView) {
           const specs = await storage.getSpecializations(user.id);
           const divisions = specs.map(s => s.division);
           if (divisions.length === 0) {
@@ -940,12 +945,16 @@ export async function registerRoutes(
           }
         } else if (ticketStatusFilter === "pending") {
           filters.assignedTo = user.id;
-        } else if (isCompletedToday) {
+        } else if (isCompletedView) {
           // Tyler 2026-05-02: was `assignedTo = user.id`, but reject paths
           // null `assignedTo` (routes.ts /process: ~1547, ~1585; /process-nla:
           // ~1971), so every rejected ticket disappeared from the agent's
           // Completed tab. `reviewedBy` is the auditable column and is set on
           // every action via the base updateData (~1450) and every NLA branch.
+          // Tyler 2026-05-06 (Task #4): same reasoning applies to the new
+          // completedSince window — the user wants every ticket THEY processed
+          // in the window, including rejected/invalid ones whose assignedTo
+          // was nulled.
           filters.reviewedBy = user.id;
         } else {
           filters.assignedTo = user.id;
