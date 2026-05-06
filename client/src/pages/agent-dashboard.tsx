@@ -805,6 +805,25 @@ export default function AgentDashboard() {
       technicianMessage: (last.technicianMessage as string | null) || null,
       reviewerName: last.stage1ReviewedBy ? data.reviewerNames[last.stage1ReviewedBy] || null : null,
       reviewedAt: (last.stage1ReviewedAt || last.reviewedAt || last.updatedAt || null) as string | null,
+      // 2026-05-06 (Hamed clarification): agent reviewing a resubmission also
+      // needs the prior submission's `issueDescription` to compare against the
+      // text in front of them, e.g. to verify the tech actually expanded on
+      // the issue or rewrote a vague description after rejection. The /history
+      // endpoint already returns full rows so no API change.
+      issueDescription: (last.issueDescription as string | null) || null,
+      aiEnhanced: !!last.aiEnhanced,
+      originalDescription: (last.originalDescription as string | null) || null,
+      createdAt: (last.createdAt as string | null) || null,
+      // 2026-05-06 (Tyler follow-up): agent reviewing a resubmission should
+      // be able to compare the original photos / video / voice note against
+      // the new ones the tech just uploaded — was the blurry estimate
+      // actually replaced with a clear one? did the issue photo change angle?
+      // Same data source — full submission row from /history. `videoUrl`
+      // holds either a single URL or a JSON-encoded array (multi-video
+      // support without schema change — see parseVideoUrls).
+      photos: (last.photos as string | null) || null,
+      videoUrl: (last.videoUrl as string | null) || null,
+      voiceNoteUrl: (last.voiceNoteUrl as string | null) || null,
     };
   }, [selectedSubmission, submissionHistoryQuery.data]);
 
@@ -2084,6 +2103,40 @@ export default function AgentDashboard() {
                               )}
                             </div>
                           )}
+                          {priorRejection?.issueDescription && (
+                            <div className="mt-3 p-2.5 rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/30">
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <RotateCcw className="w-3 h-3 text-blue-700 dark:text-blue-400" />
+                                <p className="text-xs font-medium uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                                  Description on Previous Submission
+                                </p>
+                                {priorRejection.createdAt && (
+                                  <span className="text-[10px] text-blue-700/60 dark:text-blue-400/60 ml-auto">
+                                    {formatDate(priorRejection.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </span>
+                                )}
+                              </div>
+                              <p
+                                className="text-sm whitespace-pre-wrap text-blue-900 dark:text-blue-100"
+                                data-testid="text-prior-description"
+                              >
+                                {priorRejection.issueDescription}
+                              </p>
+                              {priorRejection.aiEnhanced && priorRejection.originalDescription && (
+                                <details className="mt-2">
+                                  <summary className="text-[10px] uppercase tracking-wider text-blue-700/70 dark:text-blue-400/70 cursor-pointer hover:underline">
+                                    View tech's original (pre-AI) text
+                                  </summary>
+                                  <p
+                                    className="mt-1 p-2 rounded bg-white/60 dark:bg-blue-950/60 text-xs whitespace-pre-wrap text-blue-900 dark:text-blue-100"
+                                    data-testid="text-prior-original-description"
+                                  >
+                                    {priorRejection.originalDescription}
+                                  </p>
+                                </details>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
@@ -2339,6 +2392,111 @@ export default function AgentDashboard() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    {priorRejection && (() => {
+                      // Parse the prior submission's photos with the same
+                      // logic the current-submission render uses (object form
+                      // {issue,estimate} or legacy array). Build a flat list
+                      // for the lightbox so prior photos open in a separate
+                      // gallery from the current ones.
+                      let parsedPrior: any = null;
+                      try {
+                        parsedPrior = priorRejection.photos ? JSON.parse(priorRejection.photos) : null;
+                      } catch {
+                        parsedPrior = null;
+                      }
+                      const isObj = parsedPrior && typeof parsedPrior === "object" && !Array.isArray(parsedPrior);
+                      const priorIssue: string[] = isObj ? (parsedPrior.issue || []) : [];
+                      const priorEstimate: string[] = isObj ? (parsedPrior.estimate || []) : [];
+                      const priorLegacy: string[] = Array.isArray(parsedPrior) ? parsedPrior : [];
+                      const priorAll = [...priorIssue, ...priorEstimate, ...priorLegacy];
+                      const priorVideos = parseVideoUrls(priorRejection.videoUrl);
+                      const hasAnyMedia = priorAll.length > 0 || priorVideos.length > 0 || !!priorRejection.voiceNoteUrl;
+                      if (!hasAnyMedia) return null;
+                      const renderPriorGrid = (photos: string[], label: string, testIdPrefix: string, baseOffset: number) => {
+                        if (photos.length === 0) return null;
+                        return (
+                          <div>
+                            <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              {label} ({photos.length})
+                            </p>
+                            <div className="grid grid-cols-3 gap-2" data-testid={`media-prior-${testIdPrefix}`}>
+                              {photos.map((url, i) => (
+                                <div
+                                  key={i}
+                                  className="relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group ring-1 ring-blue-200 dark:ring-blue-900"
+                                  onClick={() => openLightbox(priorAll, baseOffset + i)}
+                                  data-testid={`prior-${testIdPrefix}-photo-${i}`}
+                                >
+                                  <img src={url} alt={`${label} ${i + 1}`} className="w-full h-full object-cover pointer-events-none" />
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <ZoomIn className="w-6 h-6 text-white" />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      };
+                      return (
+                        <Card className="border-blue-200 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20">
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-base flex items-center gap-2 text-blue-900 dark:text-blue-100">
+                              <RotateCcw className="w-4 h-4" />
+                              Media on Previous Submission
+                            </CardTitle>
+                            <p className="text-xs text-blue-700/70 dark:text-blue-300/70">
+                              Read-only — compare against the new media above to verify the tech addressed the prior rejection.
+                              {priorRejection.createdAt && (
+                                <> Submitted {formatDate(priorRejection.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</>
+                              )}
+                            </p>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            {renderPriorGrid(priorIssue, "Issue Photos", "issue", 0)}
+                            {renderPriorGrid(priorEstimate, "Estimate Photos", "estimate", priorIssue.length)}
+                            {renderPriorGrid(priorLegacy, "Photos", "legacy", priorIssue.length + priorEstimate.length)}
+                            {priorAll.length === 0 && (
+                              <p className="text-sm text-blue-700/60 dark:text-blue-300/60" data-testid="text-prior-no-photos">No photos were attached to the prior submission.</p>
+                            )}
+                            {priorVideos.length > 0 && (
+                              <div>
+                                <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                                  <Video className="w-3.5 h-3.5" />
+                                  Video ({priorVideos.length})
+                                </p>
+                                <div className="space-y-2">
+                                  {priorVideos.map((url, i) => (
+                                    <video
+                                      key={i}
+                                      src={url}
+                                      controls
+                                      className="w-full rounded-md ring-1 ring-blue-200 dark:ring-blue-900"
+                                      data-testid={`prior-video-${i}`}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {priorRejection.voiceNoteUrl && (
+                              <div>
+                                <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                                  <Mic className="w-3.5 h-3.5" />
+                                  Voice Note
+                                </p>
+                                <audio
+                                  src={priorRejection.voiceNoteUrl}
+                                  controls
+                                  className="w-full"
+                                  data-testid="prior-audio-player"
+                                />
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })()}
 
                     {submissionHistoryQuery.data && submissionHistoryQuery.data.history.length > 1 && (
                       <Card>
