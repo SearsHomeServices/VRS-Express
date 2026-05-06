@@ -12,6 +12,7 @@
 - Phase 3 direct Smartsheet API row-write — original proposal path; needs API token from Todd Pennington.
 
 ## Done
+- [x] **Round 2 audit catches** (2026-05-06) — tech-resubmit page now shows categorical reasons + technicianMessage (not just stage1RejectionReason); admin export "Today" preset ET-anchored; CSV/XLSX export filename uses ET date.
 - [x] **Hamed pilot feedback fixes** (2026-05-06) — RGC daily-code lookup now keys on ET (`getEtDateString` in `shared/business-hours.ts`) instead of UTC, so agents working past 8 PM EDT no longer hit "No RGC code has been set for today." Six call sites swapped (5 in `server/routes.ts`, 1 in `client/src/pages/admin-dashboard.tsx`). Agent's Stage 1 + NLA review cards now show an inline "Previous Rejection" panel (rejection reasons + Message-Sent-to-Technician + reviewer + timestamp) for resubmissions, sourced from existing `/api/submissions/:id/history` data via a new `priorRejection` `useMemo`. No schema, no API, no db:push needed. ADR-013 + ADR-014 capture rationale.
 - [x] **Executed Calculator + Intake Form plan** (2026-04-26) — all 7 tasks (T0–T6) plus T7 docs. D1=a, D2=a, D3=b, D4=GO. See `CHANGELOG.md [Unreleased] → Added — Calculator + Smartsheet Intake Form (2026-04-26)` and `COMMITS.md` for the per-task commit messages and file lists.
 - [x] Drafted Calculator + Intake Form plan (2026-04-25). Verified Smartsheet pre-fill + iframe behavior live via Playwright. Plan covers Phase 1 (this PR), Phase 2 (deferred auto-login + redirect URL), Phase 3 (proposal's API path).

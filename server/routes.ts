@@ -3025,7 +3025,7 @@ export async function registerRoutes(
       const csv = rows.join("\n");
       let rangeLabel = customStart ? `${customStart}${customEnd ? '_to_' + customEnd : ''}` : range === "today" ? "today" : range === "week" ? "this-week" : range === "month" ? "this-month" : "all-time";
       if (techLdap) rangeLabel += `-tech-${techLdap}`;
-      const filename = `vrs-tickets-${rangeLabel}-${now.toISOString().slice(0, 10)}.csv`;
+      const filename = `vrs-tickets-${rangeLabel}-${getEtDateString(now)}.csv`;
 
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -3241,7 +3241,7 @@ export async function registerRoutes(
 
       let rangeLabel = customStart ? `${customStart}${customEnd ? '_to_' + customEnd : ''}` : range === "today" ? "today" : range === "week" ? "this-week" : range === "month" ? "this-month" : "all-time";
       if (techLdap) rangeLabel += `-tech-${techLdap}`;
-      const filename = `vrs-tickets-${rangeLabel}-${now.toISOString().slice(0, 10)}.xlsx`;
+      const filename = `vrs-tickets-${rangeLabel}-${getEtDateString(now)}.xlsx`;
 
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
