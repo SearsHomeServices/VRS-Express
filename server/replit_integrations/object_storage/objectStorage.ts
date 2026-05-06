@@ -95,29 +95,125 @@ export class ObjectStorageService {
   }
 
   // Downloads an object to the response.
-  async downloadObject(file: File, res: Response, cacheTtlSec: number = 3600) {
+  //
+  // 2026-05-06 (video playback fix): VRS agents reported videos would not
+  // play. Root cause: <video controls> sends `Range: bytes=0-` on first load
+  // and expects 206 Partial Content with Accept-Ranges/Content-Range
+  // headers. Without that, many browsers (Safari especially, but also
+  // recent Chrome under certain MIME types) refuse to start playback or
+  // hang waiting for the full file. Audio scrub/seek requires the same.
+  //
+  // This implementation:
+  //   - always advertises `Accept-Ranges: bytes`
+  //   - on a Range request, returns 206 with a sliced stream and
+  //     Content-Range / Content-Length set to the slice
+  //   - on a non-range request, returns 200 with full Content-Length
+  //     (unchanged behavior for images/PDFs)
+  //   - returns 416 on an unsatisfiable range
+  //   - bails out cleanly if the client disconnects mid-stream (video
+  //     scrubbing aborts the previous request — without this, the GCS
+  //     stream throws an unhandled "premature close" and spams logs)
+  async downloadObject(
+    file: File,
+    res: Response,
+    cacheTtlSec: number = 3600,
+    rangeHeader?: string,
+  ) {
     try {
-      // Get file metadata
       const [metadata] = await file.getMetadata();
-      // Get the ACL policy for the object.
       const aclPolicy = await getObjectAclPolicy(file);
       const isPublic = aclPolicy?.visibility === "public";
-      // Set appropriate headers
-      res.set({
-        "Content-Type": metadata.contentType || "application/octet-stream",
-        "Content-Length": metadata.size,
-        "Cache-Control": `${
-          isPublic ? "public" : "private"
-        }, max-age=${cacheTtlSec}`,
-      });
+      const totalSize = Number(metadata.size) || 0;
+      const contentType = metadata.contentType || "application/octet-stream";
+      const cacheControl = `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`;
 
-      // Stream the file to the response
-      const stream = file.createReadStream();
+      // Parse Range header if present. Only single-range `bytes=start-end`
+      // is supported (which is what every browser <video>/<audio> sends).
+      let start = 0;
+      let end = totalSize > 0 ? totalSize - 1 : 0;
+      let isRange = false;
+      if (rangeHeader && totalSize > 0) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+        if (m) {
+          const sStr = m[1];
+          const eStr = m[2];
+          if (sStr === "" && eStr !== "") {
+            // suffix range: last N bytes
+            const suffix = parseInt(eStr, 10);
+            if (!Number.isNaN(suffix) && suffix > 0) {
+              start = Math.max(0, totalSize - suffix);
+              end = totalSize - 1;
+              isRange = true;
+            }
+          } else if (sStr !== "") {
+            const sNum = parseInt(sStr, 10);
+            const eNum = eStr === "" ? totalSize - 1 : parseInt(eStr, 10);
+            if (!Number.isNaN(sNum) && !Number.isNaN(eNum) && sNum <= eNum && sNum < totalSize) {
+              start = sNum;
+              end = Math.min(eNum, totalSize - 1);
+              isRange = true;
+            } else {
+              // Unsatisfiable range → 416
+              res.status(416).set({
+                "Content-Range": `bytes */${totalSize}`,
+                "Accept-Ranges": "bytes",
+              });
+              return res.end();
+            }
+          }
+        }
+      }
 
-      stream.on("error", (err) => {
-        console.error("Stream error:", err);
+      const chunkSize = end - start + 1;
+
+      if (isRange) {
+        res.status(206).set({
+          "Content-Type": contentType,
+          "Content-Length": String(chunkSize),
+          "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+          "Accept-Ranges": "bytes",
+          "Cache-Control": cacheControl,
+        });
+      } else {
+        res.status(200).set({
+          "Content-Type": contentType,
+          "Content-Length": String(totalSize),
+          "Accept-Ranges": "bytes",
+          "Cache-Control": cacheControl,
+        });
+      }
+
+      // HEAD requests get headers only (browsers occasionally probe).
+      if (res.req.method === "HEAD") {
+        return res.end();
+      }
+
+      const stream = isRange
+        ? file.createReadStream({ start, end })
+        : file.createReadStream();
+
+      // Client-disconnect cleanup: if the agent scrubs the video, the
+      // browser cancels the in-flight request. Destroy the GCS stream so
+      // we don't keep pulling bytes from object storage and so the
+      // "premature close" error doesn't spam the server logs.
+      const onClose = () => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+      };
+      res.once("close", onClose);
+
+      stream.on("error", (err: any) => {
+        // ECONNRESET / premature close after client abort is normal —
+        // don't log as an error.
+        const code = err && (err.code || err.name);
+        if (code !== "ECONNRESET" && code !== "ERR_STREAM_PREMATURE_CLOSE") {
+          console.error("Stream error:", err);
+        }
         if (!res.headersSent) {
           res.status(500).json({ error: "Error streaming file" });
+        } else {
+          res.end();
         }
       });
 
