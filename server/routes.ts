@@ -1054,7 +1054,16 @@ export async function registerRoutes(
       if (user.role === "vrs_agent") {
         const isAssignedToAgent = submission.assignedTo === user.id;
         const isQueued = submission.ticketStatus === "queued";
-        if (!isAssignedToAgent && !isQueued) {
+        // Tyler 2026-05-06 (Task #4): also allow access when the agent
+        // is the reviewer of record (reviewedBy). The agent Completed
+        // tab lists every ticket THIS agent processed, including those
+        // whose assignedTo was nulled by reject/invalid paths (see the
+        // reviewedBy filter logic in the list route ~L961). Without this
+        // grant, the new full-row fetch from the detail panel would 403
+        // on every Completed-tab ticket and the panel would render with
+        // undefined heavy fields (since the slim list omits them).
+        const isReviewer = submission.reviewedBy === user.id;
+        if (!isAssignedToAgent && !isQueued && !isReviewer) {
           return res.status(403).json({ error: "Access denied" });
         }
         if (isQueued) {
