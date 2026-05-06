@@ -41,7 +41,8 @@ import {
   buildSubmissionReceivedMessage,
   // Tyler 2026-04-29 (Communication Templates): inline SMS strings extracted
   // into named builders so admins can edit them through the new admin page.
-  buildResubmissionClaimMessage,
+  // (buildResubmissionClaimMessage no longer used — resubmissions enter the
+  // queue and the claim SMS fires from the standard claim route.)
   buildStandardClaimMessage,
   buildTwoStageClaimMessage,
   buildSubmissionApprovedMessage,
@@ -706,20 +707,23 @@ export async function registerRoutes(
         }
       }
 
-      let originalAgent: number | null = null;
+      // 2026-05-06 (VRS team request): resubmissions ALWAYS go to the queue.
+      // Previously, a resubmission auto-assigned back to the original
+      // reviewing agent if their `agentStatus` was anything other than
+      // "offline" (i.e. "online" or "working"). VRS reported this caused
+      // resubmissions to land on busy agents already mid-ticket — example:
+      // ticket #13670462 was reassigned to Brandon while he was working a
+      // different ticket, slowing it down. The queue model lets ANY available
+      // agent pick up a resubmission, which routes it to whoever is free
+      // first instead of pinning to the prior reviewer. We still notify the
+      // original reviewing agent informationally below (so they see "your
+      // tech resubmitted" in their UI) but the ticket itself is unassigned.
+      let originalAgent: number | null = null; // assignment intentionally disabled
+      let priorReviewer: number | null = null; // for informational notification only
       if (parsed.data.resubmissionOf) {
         const origSub = await storage.getSubmission(parsed.data.resubmissionOf);
         if (origSub) {
-          originalAgent = origSub.reviewedBy || origSub.stage1ReviewedBy || null;
-          if (originalAgent) {
-            const agentUser = await storage.getUser(originalAgent);
-            if (!agentUser || agentUser.role === "technician" || !agentUser.isActive) {
-              originalAgent = null;
-            } else if (agentUser.agentStatus === "offline") {
-              console.log(`[resubmission] Original agent ${agentUser.ldapId} (id=${originalAgent}) is offline — routing to queue instead`);
-              originalAgent = null;
-            }
-          }
+          priorReviewer = origSub.reviewedBy || origSub.stage1ReviewedBy || null;
         }
       }
 
@@ -831,7 +835,16 @@ export async function registerRoutes(
         });
       }
 
-      if (originalAgent) {
+      // 2026-05-06: resubmissions now always land in the queue (see
+      // originalAgent comment above). Send the informational notification
+      // to the prior reviewer so they still see the resubmission appear in
+      // their UI, mirror to admins for analytics/overview invalidation, and
+      // ALSO broadcast as a new queued ticket to the division (or NLA
+      // division) agents so the queue gets picked up promptly. No
+      // resubmission-claim SMS — the tech gets one when an agent actually
+      // claims the ticket from the queue (same as a fresh submission), not
+      // at submit-time.
+      if (priorReviewer) {
         const resubmissionEvent = {
           type: "resubmission_received" as const,
           payload: {
@@ -840,23 +853,13 @@ export async function registerRoutes(
             applianceType: parsed.data.applianceType,
             applianceLabel: getDivisionLabel(parsed.data.applianceType),
             warrantyLabel: getWarrantyLabel(parsed.data.warrantyType),
-            message: "A technician has resubmitted a ticket you previously reviewed.",
+            message: "A technician has resubmitted a ticket you previously reviewed. It is in the queue for any agent to claim.",
           },
         };
-        broadcastToAgent(originalAgent, resubmissionEvent);
-        // Tyler 2026-05-05 (perf-fix paired): admins now subscribe to
-        // resubmission_received to keep the ticket overview + analytics
-        // current under the new 60s safety-net polling. Mirror the
-        // payload to admins so they invalidate alongside the original
-        // reviewing agent.
+        broadcastToAgent(priorReviewer, resubmissionEvent);
         broadcastToAdmins(resubmissionEvent);
-
-        const resubmitClaimMsg = await buildResubmissionClaimMessage(submission.serviceOrder);
-        const resubmitSmsPhone = submission.phoneOverride || submission.phone;
-        sendSms(submission.id, resubmitSmsPhone, "ticket_claimed", resubmitClaimMsg).catch(err => {
-          console.error("Failed to send resubmission claim SMS:", err);
-        });
-      } else {
+      }
+      {
         if (parsed.data.requestType === "parts_nla") {
           broadcastToNlaDivisionAgents(parsed.data.applianceType, {
             type: "new_ticket",
