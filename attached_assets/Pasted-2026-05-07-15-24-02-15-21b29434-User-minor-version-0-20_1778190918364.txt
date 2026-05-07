@@ -1,0 +1,212 @@
+2026-05-07 15:24:02.15
+21b29434
+User
+minor_version : 0
+2026-05-07 15:24:02.15
+21b29434
+User
+Metadata:
+2026-05-07 15:24:02.15
+21b29434
+User
+major_brand : qt
+2026-05-07 15:24:02.15
+21b29434
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-31408bc7-38f0-40b1-898d-01c4ec2c9b20 -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-d5a47d3b-9b46-46c8-b4a0-49ff0f5fc6da.mp4
+2026-05-07 15:24:02.15
+21b29434
+User
+libswscale 7. 5.100 / 7. 5.100
+2026-05-07 15:24:02.15
+21b29434
+User
+creation_time : 2026-05-07T19:21:36.000000Z
+2026-05-07 15:24:02.15
+21b29434
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-07 15:24:02.15
+21b29434
+User
+libavutil 58. 29.100 / 58. 29.100
+2026-05-07 15:24:02.15
+21b29434
+User
+libavfilter 9. 12.100 / 9. 12.100
+2026-05-07 15:24:02.15
+21b29434
+User
+libpostproc 57. 3.100 / 57. 3.100
+2026-05-07 15:24:02.15
+21b29434
+User
+compatible_brands: qt
+2026-05-07 15:24:02.15
+21b29434
+User
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/video-input-31408bc7-38f0-40b1-898d-01c4ec2c9b20':
+2026-05-07 15:24:02.15
+21b29434
+User
+libavcodec 60. 31.102 / 60. 31.102
+2026-05-07 15:24:02.15
+21b29434
+User
+com.apple.quicktime.location.accuracy.horizontal: 18.674316
+2026-05-07 15:24:02.15
+21b29434
+User
+libavdevice 60. 3.100 / 60. 3.100
+2026-05-07 15:51:14.63
+21b29434
+User
+[suspicious-rejection] submission=867 so=8220-13589947 agent=17(Benjamin Blackmon) photosInDb=5 reasons="Incomplete submission" tech=rnoggle warranty="Sears Protect / Sears PA / Sears Home Warranty (Cinch)"
+2026-05-07 15:58:39.90
+21b29434
+User
+[intake-confirm reqId=intake-confirm:1778183919858:37labc userId=34 subId=864 op=not-approved] status=fail ticketStatus=pending isNla=false
+2026-05-07 16:05:15.03
+21b29434
+User
+[suspicious-rejection] submission=868 so=4766-13697020 agent=74(Rosendo Madero) photosInDb=5 reasons="Estimate screenshot missing or incomplete" tech=cpopp1 warranty="Sears Protect / Sears PA / Sears Home Warranty (Cinch)"
+2026-05-07 17:20:47.91
+21b29434
+User
+libswresample 4. 12.100 / 4. 12.100
+2026-05-07 17:20:47.91
+21b29434
+User
+libavformat 60. 16.100 / 60. 16.100
+2026-05-07 17:20:47.91
+21b29434
+User
+libavdevice 60. 3.100 / 60. 3.100
+2026-05-07 17:20:47.91
+21b29434
+User
+compatible_brands: qt
+2026-05-07 17:20:47.91
+21b29434
+User
+Metadata:
+2026-05-07 17:20:47.91
+21b29434
+User
+major_brand : qt
+2026-05-07 17:20:47.91
+21b29434
+User
+libpostproc 57. 3.100 / 57. 3.100
+2026-05-07 17:20:47.91
+21b29434
+User
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/video-input-2f7a74dc-dfca-43b6-99fd-78b2dd480d2c':
+2026-05-07 17:20:47.91
+21b29434
+User
+libavcodec 60. 31.102 / 60. 31.102
+2026-05-07 17:20:47.91
+21b29434
+User
+libavfilter 9. 12.100 / 9. 12.100
+2026-05-07 17:20:47.91
+21b29434
+User
+configuration: --disable-static --prefix=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1 --target_os=linux --arch=x86_64 --pkg-config=pkg-config --enable-gpl --enable-version3 --disable-nonfree --disable-static --enable-shared --enable-pic --disable-thumb --disable-small --enable-runtime-cpudetect --disable-gray --enable-swscale-alpha --enable-hardcoded-tables --enable-safe-bitstream-reader --enable-pthreads --disable-w32threads --disable-os2threads --enable-network --enable-pixelutils --datadir=/nix/store/71hcrwn1g6ncki859v14jq18i8fx84sk-ffmpeg-6.1.1-data/share/ffmpeg --enable-ffmpeg --enable-ffplay --enable-ffprobe --bindir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-bin/bin --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-avutil --enable-postproc --enable-swresample --enable-swscale --libdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-lib/lib --incdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-dev/include --enable-doc --enable-htmlpages --enable-manpages --mandir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-man/share/man --enable-podpages --enable-txtpages --docdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-doc/share/doc/ffmpeg --enable-alsa --disable-libaom --disable-appkit --disable-libaribcaption --enable-libass --disable-audiotoolbox --disable-avfoundation --disable-avisynth --disable-libbluray --disable-libbs2b --enable-bzlib --disable-libcaca --disable-libcelt --disable-chromaprint --disable-libcodec2 --disable-coreimage --disable-cuda --disable-cuda-llvm --enable-cuvid --enable-libdav1d --disable-libdc1394 --enable-libdrm --disable-libfdk-aac --enable-ffnvcodec --disable-libflite --enable-fontconfig --enable-libfontconfig --enable-libfreetype --disable-frei0r --disable-libfribidi --disable-libgme --enable-gnutls --disable-libgsm --enable-libharfbuzz --enable-iconv --disable-libjack --disable-libjxl --disable-ladspa --enable-lzma --disable-libmfx --disable-libmodplug --enable-libmp3lame --disable-libmysofa --enable-nvdec --enable-nvenc --disable-openal --disable-opencl --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-opengl --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --enable-libopus --disable-libplacebo --enable-libpulse --disable-librav1e --disable-librtmp --disable-libsmbclient --enable-sdl2 --disable-libshaderc --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-librsvg --enable-libsvtav1 --disable-libtensorflow --enable-libtheora --enable-libv4l2 --enable-v4l2-m2m --enable-vaapi --enable-vdpau --disable-libvpl --disable-videotoolbox --disable-libvidstab --disable-libvmaf --disable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-vulkan --disable-libwebp --enable-libx264 --enable-libx265 --disable-libxavs --disable-libxcb --disable-libxcb-shape --disable-libxcb-shm --disable-libxcb-xfixes --disable-xlib --disable-libxml2 --enable-libxvid --enable-libzimg --enable-zlib --disable-libzmq --disable-debug --enable-optimizations --disable-extra-warnings --disable-stripping
+2026-05-07 17:20:47.91
+21b29434
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-2f7a74dc-dfca-43b6-99fd-78b2dd480d2c -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-8fd6f42c-cff9-48cb-924e-5587d62f217f.mp4
+2026-05-07 17:20:47.91
+21b29434
+User
+minor_version : 0
+2026-05-07 17:20:47.91
+21b29434
+User
+libavutil 58. 29.100 / 58. 29.100
+2026-05-07 17:20:47.91
+21b29434
+User
+creation_time : 2026-05-07T21:18:03.000000Z
+2026-05-07 17:20:47.91
+21b29434
+User
+libswscale 7. 5.100 / 7. 5.100
+2026-05-07 17:20:47.91
+21b29434
+User
+com.apple.quicktime.full-frame-rate-playback-intent: 0
+2026-05-07 17:20:47.91
+21b29434
+User
+built with gcc 13.2.0 (GCC)
+2026-05-07 17:20:47.91
+21b29434
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-07 17:23:01.61
+21b29434
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-0c4d8343-d8b4-4ed6-a14f-91626cbf0976 -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-6ec7e335-2f6b-4728-83ba-aab7003e9c47.mp4
+2026-05-07 17:23:01.61
+21b29434
+User
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x2e8b07c0] Could not find codec parameters for stream 1 (Audio: none (apac / 0x63617061), 48000 Hz, 4 channels, 383 kb/s): unknown codec
+2026-05-07 17:23:01.61
+21b29434
+User
+Metadata:
+2026-05-07 17:23:01.61
+21b29434
+User
+libswresample 4. 12.100 / 4. 12.100
+2026-05-07 17:23:01.61
+21b29434
+User
+Consider increasing the value for the 'analyzeduration' (0) and 'probesize' (5000000) options
+2026-05-07 17:23:01.61
+21b29434
+User
+libavformat 60. 16.100 / 60. 16.100
+2026-05-07 17:23:01.61
+21b29434
+User
+built with gcc 13.2.0 (GCC)
+2026-05-07 17:23:01.61
+21b29434
+User
+libswscale 7. 5.100 / 7. 5.100
+2026-05-07 17:23:01.61
+21b29434
+User
+libavfilter 9. 12.100 / 9. 12.100
+2026-05-07 17:23:01.61
+21b29434
+User
+libavcodec 60. 31.102 / 60. 31.102
+2026-05-07 17:23:01.61
+21b29434
+User
+configuration: --disable-static --prefix=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1 --target_os=linux --arch=x86_64 --pkg-config=pkg-config --enable-gpl --enable-version3 --disable-nonfree --disable-static --enable-shared --enable-pic --disable-thumb --disable-small --enable-runtime-cpudetect --disable-gray --enable-swscale-alpha --enable-hardcoded-tables --enable-safe-bitstream-reader --enable-pthreads --disable-w32threads --disable-os2threads --enable-network --enable-pixelutils --datadir=/nix/store/71hcrwn1g6ncki859v14jq18i8fx84sk-ffmpeg-6.1.1-data/share/ffmpeg --enable-ffmpeg --enable-ffplay --enable-ffprobe --bindir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-bin/bin --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-avutil --enable-postproc --enable-swresample --enable-swscale --libdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-lib/lib --incdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-dev/include --enable-doc --enable-htmlpages --enable-manpages --mandir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-man/share/man --enable-podpages --enable-txtpages --docdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-doc/share/doc/ffmpeg --enable-alsa --disable-libaom --disable-appkit --disable-libaribcaption --enable-libass --disable-audiotoolbox --disable-avfoundation --disable-avisynth --disable-libbluray --disable-libbs2b --enable-bzlib --disable-libcaca --disable-libcelt --disable-chromaprint --disable-libcodec2 --disable-coreimage --disable-cuda --disable-cuda-llvm --enable-cuvid --enable-libdav1d --disable-libdc1394 --enable-libdrm --disable-libfdk-aac --enable-ffnvcodec --disable-libflite --enable-fontconfig --enable-libfontconfig --enable-libfreetype --disable-frei0r --disable-libfribidi --disable-libgme --enable-gnutls --disable-libgsm --enable-libharfbuzz --enable-iconv --disable-libjack --disable-libjxl --disable-ladspa --enable-lzma --disable-libmfx --disable-libmodplug --enable-libmp3lame --disable-libmysofa --enable-nvdec --enable-nvenc --disable-openal --disable-opencl --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-opengl --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --enable-libopus --disable-libplacebo --enable-libpulse --disable-librav1e --disable-librtmp --disable-libsmbclient --enable-sdl2 --disable-libshaderc --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-librsvg --enable-libsvtav1 --disable-libtensorflow --enable-libtheora --enable-libv4l2 --enable-v4l2-m2m --enable-vaapi --enable-vdpau --disable-libvpl --disable-videotoolbox --disable-libvidstab --disable-libvmaf --disable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-vulkan --disable-libwebp --enable-libx264 --enable-libx265 --disable-libxavs --disable-libxcb --disable-libxcb-shape --disable-libxcb-shm --disable-libxcb-xfixes --disable-xlib --disable-libxml2 --enable-libxvid --enable-libzimg --enable-zlib --disable-libzmq --disable-debug --enable-optimizations --disable-extra-warnings --disable-stripping
+2026-05-07 17:23:01.61
+21b29434
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-07 17:23:01.61
+21b29434
+User
+libavutil 58. 29.100 / 58. 29.100
+2026-05-07 17:23:01.61
+21b29434
+User
+libpostproc 57. 3.100 / 57. 3.100
+2026-05-07 17:23:01.61
+21b29434
+User
+creation_time : 2026-05-07T21:19:50.000000Z
+2026-05-07 17:23:01.61
+21b29434
+User
+libavdevice 60. 3.100 / 60. 3.100
