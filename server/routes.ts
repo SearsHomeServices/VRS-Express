@@ -4,6 +4,7 @@ import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { storage, db } from "./storage";
+import { sql } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
 import type { User, Technician } from "@shared/schema";
@@ -1651,6 +1652,40 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.stage1RejectionReason = rejectionReasons?.join(", ") || "More information needed";
 
+        // Tyler 2026-05-07 (post-fix audit): detect "wrongful no-photos
+        // rejection" pattern in real time. Fires when an agent rejects with
+        // a photo-related reason on a ticket whose `photos` column actually
+        // contains URLs and where no individual photos were marked rejected
+        // via rejectedMedia.photos. This is the same shape as the prod fire
+        // (SO 8107-13694650, ticket 828, Zorn). Logs a structured warning
+        // visible in deployment logs and returns the flag in the audit feed
+        // so admins can spot recurrence patterns by agent.
+        try {
+          const PHOTO_REASON_RE = /missing required photo|estimate screenshot missing|incomplete submission|photos do not meet|model\/serial number not visible|missing appliance information|no photo|no pic|no estimate|no model|no serial/i;
+          const reasonText = (rejectionReasons || []).join(" | ");
+          const matchesPhotoReason = PHOTO_REASON_RE.test(reasonText);
+          let dbPhotoCount = 0;
+          if (submission.photos) {
+            try {
+              const parsed = JSON.parse(submission.photos);
+              if (Array.isArray(parsed)) {
+                dbPhotoCount = parsed.filter((u: any) => typeof u === "string" && u).length;
+              } else if (parsed && typeof parsed === "object") {
+                const est = Array.isArray(parsed.estimate) ? parsed.estimate.filter((u: any) => typeof u === "string" && u).length : 0;
+                const iss = Array.isArray(parsed.issue) ? parsed.issue.filter((u: any) => typeof u === "string" && u).length : 0;
+                dbPhotoCount = est + iss;
+              }
+            } catch { /* malformed photos, treat as 0 */ }
+          }
+          const individualPhotosRejected = Array.isArray((rejectedMedia as any)?.photos) && (rejectedMedia as any).photos.length > 0;
+          if (matchesPhotoReason && dbPhotoCount > 0 && !individualPhotosRejected) {
+            console.warn(`[suspicious-rejection] submission=${submission.id} so=${submission.serviceOrder} agent=${authReq.user!.id}(${authReq.user!.email || authReq.user!.name || "?"}) photosInDb=${dbPhotoCount} reasons="${reasonText}" tech=${submission.technicianLdapId || submission.technicianId} warranty="${submission.warrantyProvider || submission.warrantyType || ""}"`);
+          }
+        } catch (auditErr) {
+          // Detector must never block the rejection — log and continue.
+          console.error(`[suspicious-rejection] detector error on submission ${submission.id}:`, auditErr);
+        }
+
         const host = req.get("host") || "";
         const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
         const resubmitLink = `${protocol}://${host}/tech/resubmit/${submission.id}`;
@@ -3166,6 +3201,86 @@ export async function registerRoutes(
     } catch (error) {
       console.error("District rollup error:", error);
       return res.status(500).json({ error: "Failed to get district rollup" });
+    }
+  });
+
+  // Tyler 2026-05-07 (post-fix audit dashboard): admin-only feed of
+  // rejections that match the "wrongful no-photos" pattern. Mirrors the
+  // detector in the reject path of /api/submissions/:id/process so the
+  // server-side console warning and this list always agree on what counts
+  // as suspicious. Pure read; no schema change. Default window = 30 days.
+  app.get("/api/admin/suspicious-rejections", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt((req.query.days as string) || "30", 10) || 30, 1), 90);
+      const result = await db.execute(sql`
+        SELECT
+          s.id,
+          s.service_order AS "serviceOrder",
+          s.technician_ldap_id AS "technicianLdapId",
+          s.appliance_type AS "applianceType",
+          s.warranty_provider AS "warrantyProvider",
+          s.created_at AS "createdAt",
+          s.reviewed_at AS "reviewedAt",
+          s.rejection_reasons AS "rejectionReasons",
+          s.rejected_media AS "rejectedMedia",
+          s.photos AS "photos",
+          s.reviewed_by AS "reviewedBy",
+          u.name AS "reviewingAgentName",
+          EXISTS (SELECT 1 FROM submissions r WHERE r.resubmission_of = s.id) AS "hasResubmission"
+        FROM submissions s
+        LEFT JOIN users u ON u.id = s.reviewed_by
+        WHERE s.ticket_status = 'rejected'
+          AND s.reviewed_at >= NOW() - (${days}::int * INTERVAL '1 day')
+          AND s.photos IS NOT NULL AND s.photos != '' AND length(s.photos) > 30
+          AND LOWER(COALESCE(s.rejection_reasons::text, '')) ~ 'missing required photo|estimate screenshot missing|incomplete submission|photos do not meet|model/serial number not visible|missing appliance information|no photo|no pic|no estimate|no model|no serial'
+        ORDER BY s.reviewed_at DESC
+        LIMIT 500
+      `);
+      const rows: any[] = (result as any).rows || [];
+      // Filter out rows where the agent actually marked individual photos
+      // rejected via rejectedMedia.photos — those are legitimate per-photo
+      // rejections, not the "no photos" pattern.
+      const flagged = rows.filter((r) => {
+        try {
+          if (!r.rejectedMedia) return true;
+          const rm = typeof r.rejectedMedia === "string" ? JSON.parse(r.rejectedMedia) : r.rejectedMedia;
+          return !(Array.isArray(rm?.photos) && rm.photos.length > 0);
+        } catch { return true; }
+      }).map((r) => {
+        let photoCount = 0;
+        try {
+          const p = typeof r.photos === "string" ? JSON.parse(r.photos) : r.photos;
+          if (Array.isArray(p)) photoCount = p.filter((u: any) => typeof u === "string" && u).length;
+          else if (p && typeof p === "object") {
+            const est = Array.isArray(p.estimate) ? p.estimate.filter((u: any) => typeof u === "string" && u).length : 0;
+            const iss = Array.isArray(p.issue) ? p.issue.filter((u: any) => typeof u === "string" && u).length : 0;
+            photoCount = est + iss;
+          }
+        } catch {}
+        let reasons: string[] = [];
+        try {
+          const rr = typeof r.rejectionReasons === "string" ? JSON.parse(r.rejectionReasons) : r.rejectionReasons;
+          if (Array.isArray(rr)) reasons = rr;
+        } catch {}
+        return {
+          id: r.id,
+          serviceOrder: r.serviceOrder,
+          technicianLdapId: r.technicianLdapId,
+          applianceType: r.applianceType,
+          warrantyProvider: r.warrantyProvider,
+          createdAt: r.createdAt,
+          reviewedAt: r.reviewedAt,
+          reviewingAgentName: r.reviewingAgentName,
+          reviewingAgentId: r.reviewedBy,
+          rejectionReasons: reasons,
+          photoCount,
+          hasResubmission: !!r.hasResubmission,
+        };
+      });
+      return res.status(200).json({ days, total: flagged.length, items: flagged });
+    } catch (error) {
+      console.error("Suspicious rejections error:", error);
+      return res.status(500).json({ error: "Failed to get suspicious rejections" });
     }
   });
 
