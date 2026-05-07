@@ -3990,15 +3990,41 @@ export async function registerRoutes(
       const writeStream = createWriteStream(inputPath);
       await pipeline(readStream, writeStream);
 
-      await execFileAsync("ffmpeg", [
-        "-i", inputPath,
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-movflags", "+faststart",
-        "-preset", "fast",
-        "-crf", "23",
-        outputPath,
-      ], { timeout: 120000 });
+      // iPhone .mov files often include an extra Apple Positional Audio
+      // (apac / spatial audio) stream that ffmpeg 6.1.1 cannot decode,
+      // which causes the whole conversion to fail. Map only the first
+      // video and first AAC audio stream explicitly, ignoring unknown
+      // codecs. If that still fails (e.g. the only audio track is apac),
+      // retry with audio stripped so the tech still gets a playable MP4.
+      try {
+        await execFileAsync("ffmpeg", [
+          "-i", inputPath,
+          "-map", "0:v:0",
+          "-map", "0:a:0?",
+          "-ignore_unknown",
+          "-c:v", "libx264",
+          "-c:a", "aac",
+          "-ac", "2",
+          "-movflags", "+faststart",
+          "-preset", "fast",
+          "-crf", "23",
+          "-y",
+          outputPath,
+        ], { timeout: 120000 });
+      } catch (firstErr: any) {
+        console.warn("Video conversion: first pass failed, retrying without audio:", firstErr?.message);
+        await execFileAsync("ffmpeg", [
+          "-i", inputPath,
+          "-map", "0:v:0",
+          "-an",
+          "-c:v", "libx264",
+          "-movflags", "+faststart",
+          "-preset", "fast",
+          "-crf", "23",
+          "-y",
+          outputPath,
+        ], { timeout: 120000 });
+      }
 
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const newObjectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
