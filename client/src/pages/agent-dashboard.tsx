@@ -680,11 +680,20 @@ export default function AgentDashboard() {
   // detail panel reads here for the heavy columns. Default fetcher joins the
   // queryKey with "/" → "/api/submissions/<id>". Cache scoped per id; reasonable
   // staleTime so flipping back to the same ticket doesn't refetch.
-  const { data: selectedFullData } = useQuery<{ submission: Submission }>({
+  const { data: selectedFullData, isLoading: isSelectedFullLoading } = useQuery<{ submission: Submission }>({
     queryKey: ["/api/submissions", selectedId],
     enabled: !!selectedId,
     staleTime: 30000,
   });
+  // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no photos"):
+  // True only while the heavy /api/submissions/:id fetch is in-flight for
+  // the currently-selected ticket. Used below to render a skeleton in the
+  // photos card instead of "No photos attached" so a fast agent can never
+  // see a misleading empty state on a ticket whose detail hasn't arrived
+  // yet. The slim list row also now carries photos/videoUrl/voiceNoteUrl
+  // (see SubmissionListItem in shared/schema.ts) so this skeleton should
+  // almost never actually render — it's a safety net.
+  const photosStillLoading = !!selectedId && isSelectedFullLoading && !selectedFullData;
 
   const { data: statsData } = useQuery<{ queueCount: number; pendingCount: number; completedToday: number; nlaQueueCount?: number; nlaPendingCount?: number; nlaCompletedToday?: number }>({
     queryKey: ["/api/agent/stats"],
@@ -2287,6 +2296,24 @@ export default function AgentDashboard() {
                         {(() => {
                           let parsed: any = null;
                           try { parsed = selectedSubmission.photos ? JSON.parse(selectedSubmission.photos) : null; } catch { parsed = null; }
+                          // Tyler 2026-05-07 (prod fire — VRS rejecting
+                          // tickets as "no photos"): if the heavy detail
+                          // fetch is still in-flight AND the slim row
+                          // didn't carry a photos string, render a skeleton
+                          // grid instead of the empty state. This is a
+                          // safety net — the slim row now includes photos
+                          // (see SubmissionListItem in shared/schema.ts)
+                          // so we should land on `parsed` directly almost
+                          // every time.
+                          if (!parsed && photosStillLoading) {
+                            return (
+                              <div className="grid grid-cols-3 gap-2" data-testid="photos-loading">
+                                {[0, 1, 2].map((i) => (
+                                  <div key={i} className="aspect-square bg-muted rounded-md animate-pulse" />
+                                ))}
+                              </div>
+                            );
+                          }
                           if (!parsed) return <p className="text-sm text-muted-foreground" data-testid="text-no-photos">No photos attached</p>;
 
                           const isNewFormat = parsed && typeof parsed === "object" && !Array.isArray(parsed);

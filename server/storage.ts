@@ -848,6 +848,14 @@ export class DatabaseStorage implements IStorage {
           clientNm: submissions.clientNm,
           invalidReason: submissions.invalidReason,
           declineReason: submissions.declineReason,
+          // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no
+          // photos"): URL-only media metadata. See SubmissionListItem
+          // comment in shared/schema.ts for the full rationale. These are
+          // small string columns and don't reintroduce the Task #4 payload
+          // bloat from agentNotes/auditTrail/rejectedMedia.
+          photos: submissions.photos,
+          videoUrl: submissions.videoUrl,
+          voiceNoteUrl: submissions.voiceNoteUrl,
         },
         technicianName: users.name,
         technicianPhone: users.phone,

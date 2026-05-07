@@ -188,6 +188,17 @@ export type SubmissionListItem = Pick<Submission,
   | "resubmissionOf" | "nlaEscalatedBy"
   | "procId" | "clientNm"
   | "invalidReason" | "declineReason"
+  // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no photos"):
+  // photos/videoUrl/voiceNoteUrl are URL-only metadata strings (a few
+  // hundred bytes per ticket — actual media bytes live in object storage)
+  // and are required up-front so the detail panel can render media even
+  // before the heavy /api/submissions/:id detail fetch resolves. Removing
+  // them in the original Task #4 slim-down created a render window where
+  // "No photos attached" showed for ~50–300 ms, prompting fast agents to
+  // wrongly reject tickets that did contain photos. Putting them back here
+  // closes that window without re-introducing the heavy columns
+  // (agentNotes / auditTrail / rejectedMedia / partNumbers / etc.).
+  | "photos" | "videoUrl" | "voiceNoteUrl"
 >;
 
 export type SubmissionListItemWithTech = SubmissionListItem & {
