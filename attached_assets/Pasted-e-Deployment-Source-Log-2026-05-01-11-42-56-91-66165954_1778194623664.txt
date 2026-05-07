@@ -1,0 +1,260 @@
+e
+Deployment
+Source
+Log
+2026-05-01 11:42:56.91
+66165954
+User
+[intake-confirm reqId=intake-confirm:1777650176874:a9rhh7 userId=46 subId=561 op=not-approved] status=fail ticketStatus=rejected isNla=false
+2026-05-01 12:06:48.36
+66165954
+User
+fetchProcIdForServiceOrder error: Error: snowflake-sdk is not available in this environment
+2026-05-01 12:06:48.36
+66165954
+User
+at Cpe (/home/runner/workspace/dist/index.cjs:495:677)
+2026-05-01 12:06:48.36
+66165954
+User
+at $Ai (/home/runner/workspace/dist/index.cjs:451:54123)
+2026-05-01 12:06:48.36
+66165954
+User
+at new Promise (<anonymous>)
+2026-05-01 12:06:48.36
+66165954
+User
+at dbt (/home/runner/workspace/dist/index.cjs:495:35)
+2026-05-01 12:06:48.36
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:783:18529
+2026-05-01 12:06:48.36
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:495:168
+2026-05-01 12:06:48.36
+66165954
+User
+at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-05-01 12:07:28.09
+66165954
+User
+libavformat 60. 16.100 / 60. 16.100
+2026-05-01 12:07:28.09
+66165954
+User
+Metadata:
+2026-05-01 12:07:28.09
+66165954
+User
+libswscale 7. 5.100 / 7. 5.100
+2026-05-01 12:07:28.09
+66165954
+User
+libavutil 58. 29.100 / 58. 29.100
+2026-05-01 12:07:28.09
+66165954
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-9175d724-a7b1-4d63-8d0e-90e850dcf904 -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-cfc37a7d-aec0-4530-8a43-b3621163d79f.mp4
+2026-05-01 12:07:28.09
+66165954
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-01 12:07:28.09
+66165954
+User
+libavdevice 60. 3.100 / 60. 3.100
+2026-05-01 12:07:28.09
+66165954
+User
+libavfilter 9. 12.100 / 9. 12.100
+2026-05-01 12:07:28.09
+66165954
+User
+configuration: --disable-static --prefix=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1 --target_os=linux --arch=x86_64 --pkg-config=pkg-config --enable-gpl --enable-version3 --disable-nonfree --disable-static --enable-shared --enable-pic --disable-thumb --disable-small --enable-runtime-cpudetect --disable-gray --enable-swscale-alpha --enable-hardcoded-tables --enable-safe-bitstream-reader --enable-pthreads --disable-w32threads --disable-os2threads --enable-network --enable-pixelutils --datadir=/nix/store/71hcrwn1g6ncki859v14jq18i8fx84sk-ffmpeg-6.1.1-data/share/ffmpeg --enable-ffmpeg --enable-ffplay --enable-ffprobe --bindir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-bin/bin --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-avutil --enable-postproc --enable-swresample --enable-swscale --libdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-lib/lib --incdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-dev/include --enable-doc --enable-htmlpages --enable-manpages --mandir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-man/share/man --enable-podpages --enable-txtpages --docdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-doc/share/doc/ffmpeg --enable-alsa --disable-libaom --disable-appkit --disable-libaribcaption --enable-libass --disable-audiotoolbox --disable-avfoundation --disable-avisynth --disable-libbluray --disable-libbs2b --enable-bzlib --disable-libcaca --disable-libcelt --disable-chromaprint --disable-libcodec2 --disable-coreimage --disable-cuda --disable-cuda-llvm --enable-cuvid --enable-libdav1d --disable-libdc1394 --enable-libdrm --disable-libfdk-aac --enable-ffnvcodec --disable-libflite --enable-fontconfig --enable-libfontconfig --enable-libfreetype --disable-frei0r --disable-libfribidi --disable-libgme --enable-gnutls --disable-libgsm --enable-libharfbuzz --enable-iconv --disable-libjack --disable-libjxl --disable-ladspa --enable-lzma --disable-libmfx --disable-libmodplug --enable-libmp3lame --disable-libmysofa --enable-nvdec --enable-nvenc --disable-openal --disable-opencl --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-opengl --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --enable-libopus --disable-libplacebo --enable-libpulse --disable-librav1e --disable-librtmp --disable-libsmbclient --enable-sdl2 --disable-libshaderc --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-librsvg --enable-libsvtav1 --disable-libtensorflow --enable-libtheora --enable-libv4l2 --enable-v4l2-m2m --enable-vaapi --enable-vdpau --disable-libvpl --disable-videotoolbox --disable-libvidstab --disable-libvmaf --disable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-vulkan --disable-libwebp --enable-libx264 --enable-libx265 --disable-libxavs --disable-libxcb --disable-libxcb-shape --disable-libxcb-shm --disable-libxcb-xfixes --disable-xlib --disable-libxml2 --enable-libxvid --enable-libzimg --enable-zlib --disable-libzmq --disable-debug --enable-optimizations --disable-extra-warnings --disable-stripping
+2026-05-01 12:07:28.09
+66165954
+User
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/video-input-9175d724-a7b1-4d63-8d0e-90e850dcf904':
+2026-05-01 12:07:28.09
+66165954
+User
+libavcodec 60. 31.102 / 60. 31.102
+2026-05-01 12:07:28.09
+66165954
+User
+libpostproc 57. 3.100 / 57. 3.100
+2026-05-01 12:07:28.09
+66165954
+User
+major_brand : qt
+2026-05-01 12:07:28.09
+66165954
+User
+libswresample 4. 12.100 / 4. 12.100
+2026-05-01 12:09:35.62
+66165954
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-a73ffdd2-6fab-4417-9705-136f02cd1e67 -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-22e4d3d6-52e9-4388-8115-681c1d8405b5.mp4
+2026-05-01 12:09:35.62
+66165954
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-01 12:09:35.62
+66165954
+User
+built with gcc 13.2.0 (GCC)
+2026-05-01 12:09:35.62
+66165954
+User
+configuration: --disable-static --prefix=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1 --target_os=linux --arch=x86_64 --pkg-config=pkg-config --enable-gpl --enable-version3 --disable-nonfree --disable-static --enable-shared --enable-pic --disable-thumb --disable-small --enable-runtime-cpudetect --disable-gray --enable-swscale-alpha --enable-hardcoded-tables --enable-safe-bitstream-reader --enable-pthreads --disable-w32threads --disable-os2threads --enable-network --enable-pixelutils --datadir=/nix/store/71hcrwn1g6ncki859v14jq18i8fx84sk-ffmpeg-6.1.1-data/share/ffmpeg --enable-ffmpeg --enable-ffplay --enable-ffprobe --bindir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-bin/bin --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-avutil --enable-postproc --enable-swresample --enable-swscale --libdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-lib/lib --incdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-dev/include --enable-doc --enable-htmlpages --enable-manpages --mandir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-man/share/man --enable-podpages --enable-txtpages --docdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-doc/share/doc/ffmpeg --enable-alsa --disable-libaom --disable-appkit --disable-libaribcaption --enable-libass --disable-audiotoolbox --disable-avfoundation --disable-avisynth --disable-libbluray --disable-libbs2b --enable-bzlib --disable-libcaca --disable-libcelt --disable-chromaprint --disable-libcodec2 --disable-coreimage --disable-cuda --disable-cuda-llvm --enable-cuvid --enable-libdav1d --disable-libdc1394 --enable-libdrm --disable-libfdk-aac --enable-ffnvcodec --disable-libflite --enable-fontconfig --enable-libfontconfig --enable-libfreetype --disable-frei0r --disable-libfribidi --disable-libgme --enable-gnutls --disable-libgsm --enable-libharfbuzz --enable-iconv --disable-libjack --disable-libjxl --disable-ladspa --enable-lzma --disable-libmfx --disable-libmodplug --enable-libmp3lame --disable-libmysofa --enable-nvdec --enable-nvenc --disable-openal --disable-opencl --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-opengl --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --enable-libopus --disable-libplacebo --enable-libpulse --disable-librav1e --disable-librtmp --disable-libsmbclient --enable-sdl2 --disable-libshaderc --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-librsvg --enable-libsvtav1 --disable-libtensorflow --enable-libtheora --enable-libv4l2 --enable-v4l2-m2m --enable-vaapi --enable-vdpau --disable-libvpl --disable-videotoolbox --disable-libvidstab --disable-libvmaf --disable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-vulkan --disable-libwebp --enable-libx264 --enable-libx265 --disable-libxavs --disable-libxcb --disable-libxcb-shape --disable-libxcb-shm --disable-libxcb-xfixes --disable-xlib --disable-libxml2 --enable-libxvid --enable-libzimg --enable-zlib --disable-libzmq --disable-debug --enable-optimizations --disable-extra-warnings --disable-stripping
+2026-05-01 12:18:53.98
+66165954
+User
+at Cpe (/home/runner/workspace/dist/index.cjs:495:677)
+2026-05-01 12:18:53.98
+66165954
+User
+fetchProcIdForServiceOrder error: Error: snowflake-sdk is not available in this environment
+2026-05-01 12:18:53.98
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:783:18529
+2026-05-01 12:18:53.98
+66165954
+User
+at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-05-01 12:18:53.98
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:495:168
+2026-05-01 12:18:53.98
+66165954
+User
+at dbt (/home/runner/workspace/dist/index.cjs:495:35)
+2026-05-01 12:18:53.98
+66165954
+User
+at $Ai (/home/runner/workspace/dist/index.cjs:451:54123)
+2026-05-01 12:18:53.98
+66165954
+User
+at new Promise (<anonymous>)
+2026-05-01 12:22:22.65
+66165954
+User
+Metadata:
+2026-05-01 12:22:22.65
+66165954
+User
+libpostproc 57. 3.100 / 57. 3.100
+2026-05-01 12:22:22.65
+66165954
+User
+libavutil 58. 29.100 / 58. 29.100
+2026-05-01 12:22:22.65
+66165954
+User
+com.apple.quicktime.location.accuracy.horizontal: 10.650626
+2026-05-01 12:22:22.65
+66165954
+User
+Video conversion error: Error: Command failed: ffmpeg -i /tmp/video-input-299c33ff-8397-442c-997f-9876e654a7ab -c:v libx264 -c:a aac -movflags +faststart -preset fast -crf 23 /tmp/video-output-913d58e7-aacb-46a0-8060-5d85afa7e689.mp4
+2026-05-01 12:22:22.65
+66165954
+User
+libswresample 4. 12.100 / 4. 12.100
+2026-05-01 12:22:22.65
+66165954
+User
+configuration: --disable-static --prefix=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1 --target_os=linux --arch=x86_64 --pkg-config=pkg-config --enable-gpl --enable-version3 --disable-nonfree --disable-static --enable-shared --enable-pic --disable-thumb --disable-small --enable-runtime-cpudetect --disable-gray --enable-swscale-alpha --enable-hardcoded-tables --enable-safe-bitstream-reader --enable-pthreads --disable-w32threads --disable-os2threads --enable-network --enable-pixelutils --datadir=/nix/store/71hcrwn1g6ncki859v14jq18i8fx84sk-ffmpeg-6.1.1-data/share/ffmpeg --enable-ffmpeg --enable-ffplay --enable-ffprobe --bindir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-bin/bin --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-avutil --enable-postproc --enable-swresample --enable-swscale --libdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-lib/lib --incdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-dev/include --enable-doc --enable-htmlpages --enable-manpages --mandir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-man/share/man --enable-podpages --enable-txtpages --docdir=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffmpeg-6.1.1-doc/share/doc/ffmpeg --enable-alsa --disable-libaom --disable-appkit --disable-libaribcaption --enable-libass --disable-audiotoolbox --disable-avfoundation --disable-avisynth --disable-libbluray --disable-libbs2b --enable-bzlib --disable-libcaca --disable-libcelt --disable-chromaprint --disable-libcodec2 --disable-coreimage --disable-cuda --disable-cuda-llvm --enable-cuvid --enable-libdav1d --disable-libdc1394 --enable-libdrm --disable-libfdk-aac --enable-ffnvcodec --disable-libflite --enable-fontconfig --enable-libfontconfig --enable-libfreetype --disable-frei0r --disable-libfribidi --disable-libgme --enable-gnutls --disable-libgsm --enable-libharfbuzz --enable-iconv --disable-libjack --disable-libjxl --disable-ladspa --enable-lzma --disable-libmfx --disable-libmodplug --enable-libmp3lame --disable-libmysofa --enable-nvdec --enable-nvenc --disable-openal --disable-opencl --disable-libopencore-amrnb --disable-libopencore-amrwb --disable-opengl --disable-libopenh264 --disable-libopenjpeg --disable-libopenmpt --enable-libopus --disable-libplacebo --enable-libpulse --disable-librav1e --disable-librtmp --disable-libsmbclient --enable-sdl2 --disable-libshaderc --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-librsvg --enable-libsvtav1 --disable-libtensorflow --enable-libtheora --enable-libv4l2 --enable-v4l2-m2m --enable-vaapi --enable-vdpau --disable-libvpl --disable-videotoolbox --disable-libvidstab --disable-libvmaf --disable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-vulkan --disable-libwebp --enable-libx264 --enable-libx265 --disable-libxavs --disable-libxcb --disable-libxcb-shape --disable-libxcb-shm --disable-libxcb-xfixes --disable-xlib --disable-libxml2 --enable-libxvid --enable-libzimg --enable-zlib --disable-libzmq --disable-debug --enable-optimizations --disable-extra-warnings --disable-stripping
+2026-05-01 12:22:22.65
+66165954
+User
+libavformat 60. 16.100 / 60. 16.100
+2026-05-01 12:22:22.65
+66165954
+User
+libswscale 7. 5.100 / 7. 5.100
+2026-05-01 12:22:22.65
+66165954
+User
+minor_version : 0
+2026-05-01 12:22:22.65
+66165954
+User
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/tmp/video-input-299c33ff-8397-442c-997f-9876e654a7ab':
+2026-05-01 12:22:22.65
+66165954
+User
+compatible_brands: qt
+2026-05-01 12:22:22.65
+66165954
+User
+libavdevice 60. 3.100 / 60. 3.100
+2026-05-01 12:22:22.65
+66165954
+User
+libavfilter 9. 12.100 / 9. 12.100
+2026-05-01 12:22:22.65
+66165954
+User
+major_brand : qt
+2026-05-01 12:22:22.65
+66165954
+User
+libavcodec 60. 31.102 / 60. 31.102
+2026-05-01 12:22:22.65
+66165954
+User
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+2026-05-01 12:22:22.65
+66165954
+User
+built with gcc 13.2.0 (GCC)
+2026-05-01 12:22:22.65
+66165954
+User
+creation_time : 2026-05-01T16:19:54.000000Z
+2026-05-01 12:22:58.20
+66165954
+User
+[SMS template] render fallback for submission_approved.stage1: unresolved placeholder(s) in body
+2026-05-01 12:23:05.76
+66165954
+User
+[UPLOAD-DIAGNOSTIC] {"stage":"xhr-error","fileName":"IMG_7134.jpeg","fileSize":1942682,"fileType":"image/jpeg","errorMessage":"network error","attempt":0,"userAgent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7.5 Mobile/15E148 Safari/604.1","timestamp":"2026-05-01T16:23:05.568Z"}
+2026-05-01 12:24:41.56
+66165954
+User
+[intake-confirm reqId=intake-confirm:1777652681522:p5wd5v userId=46 subId=563 op=not-approved] status=fail ticketStatus=pending isNla=false
+2026-05-01 12:25:40.86
+66165954
+User
+at dbt (/home/runner/workspace/dist/index.cjs:495:35)
+2026-05-01 12:25:40.86
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:495:168
+2026-05-01 12:25:40.86
+66165954
+User
+at /home/runner/workspace/dist/index.cjs:783:18529
+2026-05-01 12:25:40.86
+66165954
+User
+at $Ai (/home/runner/workspace/dist/index.cjs:451:54123)
+2026-05-01 12:25:40.86
+66165954
+User
+fetchProcIdForServiceOrder error: Error: snowflake-sdk is not available in this environment
+2026-05-01 12:25:40.86
+66165954
+User
+at Cpe (/home/runner/workspace/dist/index.cjs:495:677)
+2026-05-01 12:25:40.86
+66165954
+User
+at new Promise (<anonymous>)

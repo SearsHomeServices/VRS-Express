@@ -159,10 +159,16 @@ export async function sendSms(
 // guarantees admin typos (e.g. {servceOrder} instead of {serviceOrder}) can
 // never produce a half-blank SMS to a technician.
 function applyVariables(body: string, vars: Record<string, string | undefined | null>): string | null {
+  // Tyler 2026-05-07 — only treat truly absent variables (null/undefined) as
+  // "missing". Callers intentionally pass "" for optional placeholders
+  // (e.g. technicianMessageLine when the agent didn't add a note) and that
+  // SHOULD render as empty, not trigger the fallback. The previous behavior
+  // caused [SMS template] render fallback warnings on every approval that
+  // had no agent note attached, which masked real template errors.
   let missing = false;
   const out = body.replace(/\{(\w+)\}/g, (_match, name) => {
     const v = vars[name];
-    if (v == null || String(v).length === 0) {
+    if (v == null) {
       missing = true;
       return "";
     }
