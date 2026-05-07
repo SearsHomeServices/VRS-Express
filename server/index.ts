@@ -57,19 +57,21 @@ app.use((req, res, next) => {
 
       log(logLine);
     } else if (path.startsWith("/objects/")) {
-      // Tyler 2026-05-07 — VRS reported "can't see photos in Ticket Detail".
-      // The original logger only captured /api/*, so /objects/<uuid> requests
-      // (which serve the photo/video bytes) were invisible in production logs,
-      // making the failure unreproducible. Log non-2xx responses always, plus
-      // any request that took longer than 1s so slow GCS reads also surface.
-      const isError = res.statusCode >= 400;
-      const isSlow = duration > 1000;
-      if (isError || isSlow) {
-        const range = (req.headers["range"] as string | undefined) || "-";
-        log(
-          `[objects] ${req.method} ${path} ${res.statusCode} in ${duration}ms range=${range}`,
-        );
-      }
+      // Tyler 2026-05-07 — VRS reported "can't see photos/videos in Ticket
+      // Detail". The original logger only captured /api/*, so /objects/<uuid>
+      // requests (which serve the photo/video bytes) were invisible in
+      // production logs, making the failure unreproducible. Log EVERY
+      // /objects/* request (success and failure) with status, duration, byte
+      // counts, and Range header so we can debug image and video issues going
+      // forward. Errors are tagged so they're easy to grep.
+      const range = (req.headers["range"] as string | undefined) || "-";
+      const contentLength = res.getHeader("content-length") ?? "-";
+      const contentType = res.getHeader("content-type") ?? "-";
+      const tag = res.statusCode >= 400 ? "[objects-error]" : "[objects]";
+      log(
+        `${tag} ${req.method} ${path} ${res.statusCode} in ${duration}ms ` +
+          `range=${range} bytes=${contentLength} type=${contentType}`,
+      );
     }
   });
 
