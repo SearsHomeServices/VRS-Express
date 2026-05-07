@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -129,7 +129,6 @@ import {
   ChevronRight,
   Package,
   CreditCard,
-  ShieldAlert,
 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
@@ -174,7 +173,7 @@ function formatDuration(ms: number | null): string {
 
 type SafeUser = Omit<User, "password">;
 
-type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback" | "suspicious";
+type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback";
 
 const DIVISION_KEYS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"] as const;
 
@@ -1829,157 +1828,8 @@ function FeedbackSection() {
   );
 }
 
-interface SuspiciousRejection {
-  id: number;
-  serviceOrder: string;
-  technicianLdapId: string | null;
-  applianceType: string;
-  warrantyProvider: string | null;
-  createdAt: string;
-  reviewedAt: string;
-  reviewingAgentName: string | null;
-  reviewingAgentId: number | null;
-  rejectionReasons: string[];
-  photoCount: number;
-  hasResubmission: boolean;
-}
-
-function SuspiciousRejectionsSection() {
-  const [days, setDays] = useState<number>(30);
-  const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
-  const { data, isLoading } = useQuery<{ days: number; total: number; items: SuspiciousRejection[] }>({
-    queryKey: ["/api/admin/suspicious-rejections", days],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/suspicious-rejections?days=${days}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
-      });
-      if (!res.ok) throw new Error("Failed to load");
-      return res.json();
-    },
-  });
-
-  const items = data?.items || [];
-  const byAgent = new Map<string, number>();
-  for (const it of items) {
-    const k = it.reviewingAgentName || "Unknown";
-    byAgent.set(k, (byAgent.get(k) || 0) + 1);
-  }
-  const topAgents = Array.from(byAgent.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-  return (
-    <div className="p-4 space-y-4" data-testid="suspicious-view">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ShieldAlert className="w-5 h-5 text-amber-500" />
-            Wrongful "No Photos" Rejections
-          </CardTitle>
-          <CardDescription>
-            Tickets rejected with photo-related reasons (e.g. "Missing required photos", "Estimate screenshot missing")
-            even though photos were attached and the agent did not mark any individual photo as rejected. This is the
-            same pattern as the May 7 production fire. Live detection runs on every rejection — entries appear here
-            automatically.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Label className="text-sm">Window:</Label>
-            <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
-              <SelectTrigger className="w-32" data-testid="select-suspicious-days">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">Last 24h</SelectItem>
-                <SelectItem value="7">Last 7 days</SelectItem>
-                <SelectItem value="30">Last 30 days</SelectItem>
-                <SelectItem value="90">Last 90 days</SelectItem>
-              </SelectContent>
-            </Select>
-            <Badge variant="outline" data-testid="badge-suspicious-total">
-              {isLoading ? "…" : `${data?.total ?? 0} flagged`}
-            </Badge>
-          </div>
-
-          {topAgents.length > 0 && (
-            <div className="rounded-md border p-3 bg-muted/30">
-              <div className="text-xs font-medium mb-2 text-muted-foreground">Top agents in window</div>
-              <div className="flex flex-wrap gap-2">
-                {topAgents.map(([name, count]) => (
-                  <Badge key={name} variant="secondary" data-testid={`badge-agent-${name}`}>
-                    {name}: {count}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {isLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : items.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-500" />
-              <p>No suspicious rejections detected in this window.</p>
-            </div>
-          ) : (
-            <div className="rounded-md border overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr className="text-left">
-                    <th className="px-3 py-2 font-medium">Reviewed</th>
-                    <th className="px-3 py-2 font-medium">SO #</th>
-                    <th className="px-3 py-2 font-medium">Agent</th>
-                    <th className="px-3 py-2 font-medium">Tech</th>
-                    <th className="px-3 py-2 font-medium">Photos</th>
-                    <th className="px-3 py-2 font-medium">Reason</th>
-                    <th className="px-3 py-2 font-medium">Resubmitted?</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it) => (
-                    <tr
-                      key={it.id}
-                      className="border-t hover:bg-muted/30 cursor-pointer"
-                      onClick={() => setSelectedTicketId(it.id)}
-                      data-testid={`row-suspicious-${it.id}`}
-                    >
-                      <td className="px-3 py-2 whitespace-nowrap">{formatDate(it.reviewedAt)}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{it.serviceOrder}</td>
-                      <td className="px-3 py-2">{it.reviewingAgentName || "—"}</td>
-                      <td className="px-3 py-2 text-xs">{it.technicianLdapId || "—"}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline" className="font-mono">{it.photoCount}</Badge>
-                      </td>
-                      <td className="px-3 py-2 text-xs max-w-md truncate" title={it.rejectionReasons.join(", ")}>
-                        {it.rejectionReasons.join(", ") || "—"}
-                      </td>
-                      <td className="px-3 py-2">
-                        {it.hasResubmission ? (
-                          <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">Yes</Badge>
-                        ) : (
-                          <Badge variant="outline">No</Badge>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <TicketDetailDialog
-        ticketId={selectedTicketId}
-        open={selectedTicketId !== null}
-        onClose={() => setSelectedTicketId(null)}
-      />
-    </div>
-  );
-}
+// Removed per request 2026-05-07: backend audit logs to deployment logs only.
+// No UI surface — see [suspicious-rejection] warnings in /api/submissions/:id/process.
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
@@ -2627,16 +2477,6 @@ export default function AdminDashboard() {
                   </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      onClick={() => setActiveView("suspicious")}
-                      data-active={activeView === "suspicious"}
-                      data-testid="nav-suspicious"
-                    >
-                      <ShieldAlert className="w-4 h-4" />
-                      <span>Suspicious Rejections</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
                       onClick={() => setActiveView("feedback")}
                       data-active={activeView === "feedback"}
                       data-testid="nav-feedback"
@@ -2730,7 +2570,6 @@ export default function AdminDashboard() {
                 {activeView === "business-hours" && "Business Hours"}
                 {activeView === "tickets" && "Ticket Overview"}
                 {activeView === "feedback" && "Technician Feedback"}
-                {activeView === "suspicious" && "Suspicious Rejections"}
               </h1>
             </div>
             {activeView === "users" && userTab === "staff" && (
@@ -3729,9 +3568,6 @@ export default function AdminDashboard() {
             )}
             {activeView === "feedback" && (
               <FeedbackSection />
-            )}
-            {activeView === "suspicious" && (
-              <SuspiciousRejectionsSection />
             )}
           </div>
         </div>

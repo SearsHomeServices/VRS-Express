@@ -3206,9 +3206,9 @@ export async function registerRoutes(
 
   // Tyler 2026-05-07 (post-fix audit dashboard): admin-only feed of
   // rejections that match the "wrongful no-photos" pattern. Mirrors the
-  // detector in the reject path of /api/submissions/:id/process so the
-  // server-side console warning and this list always agree on what counts
-  // as suspicious. Pure read; no schema change. Default window = 30 days.
+  // detector in the reject path of /api/submissions/:id/process. Per
+  // user request the UI surface was removed; this endpoint is left in
+  // place for ad-hoc curl/dashboard access (still RBAC-guarded).
   app.get("/api/admin/suspicious-rejections", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
       const days = Math.min(Math.max(parseInt((req.query.days as string) || "30", 10) || 30, 1), 90);
