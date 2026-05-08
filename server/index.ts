@@ -39,6 +39,8 @@ export function log(message: string, source = "express") {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
+  const debugApiBodyLogs = process.env.DEBUG_API_BODY_LOGS === "true";
+  const logAllObjectRequests = process.env.LOG_ALL_OBJECT_REQUESTS === "true";
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
@@ -51,7 +53,7 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      if (debugApiBodyLogs && capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
 
@@ -67,11 +69,13 @@ app.use((req, res, next) => {
       const range = (req.headers["range"] as string | undefined) || "-";
       const contentLength = res.getHeader("content-length") ?? "-";
       const contentType = res.getHeader("content-type") ?? "-";
-      const tag = res.statusCode >= 400 ? "[objects-error]" : "[objects]";
-      log(
-        `${tag} ${req.method} ${path} ${res.statusCode} in ${duration}ms ` +
-          `range=${range} bytes=${contentLength} type=${contentType}`,
-      );
+      if (res.statusCode >= 400 || logAllObjectRequests) {
+        const tag = res.statusCode >= 400 ? "[objects-error]" : "[objects]";
+        log(
+          `${tag} ${req.method} ${path} ${res.statusCode} in ${duration}ms ` +
+            `range=${range} bytes=${contentLength} type=${contentType}`,
+        );
+      }
     }
   });
 

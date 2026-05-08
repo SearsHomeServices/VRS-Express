@@ -1,13 +1,15 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-04-27 22:19
+Updated: 2026-05-08 00:00
 
 ## Current Session
 
-- GitHub fetch/pull completed from `origin`.
-- Local `main` fast-forwarded from `c23a9b5` to `52ebd75`.
-- Remote branches verified: `main` and `feat/pilot-feedback-fixes`; no `development` branch exists.
-- Added `docs/vrs-tech-submission-video-plan.md` for Tyler's East Coast technician training video.
+- Implemented and shipped a first-pass performance hot-path patch set focused on sluggishness and lag:
+  - Bounded-concurrency photo uploads (3 workers) in tech submit/resubmit flows.
+  - Safe upload MIME fallback when `File.type` is empty (common iPhone edge case).
+  - Lazy image loading in agent/admin media grids.
+  - Reduced logging overhead in `server/index.ts` by disabling full API body serialization unless explicitly enabled.
+- Updated `CHANGELOG.md` under `[Unreleased]` with the shipped performance fixes.
 
 ## Technician Submission Flow Verified
 
@@ -23,3 +25,4 @@ Updated: 2026-04-27 22:19
 
 - `rg.exe` failed with Access denied in this Windows/Codex bundle; use `Select-String` if it recurs.
 - Root `AGENTS.md` is currently untracked.
+- Current modified files from performance patch: `client/src/pages/tech-submit.tsx`, `client/src/pages/tech-resubmit.tsx`, `client/src/pages/agent-dashboard.tsx`, `client/src/pages/admin-dashboard.tsx`, `server/index.ts`, plus changelog/memory files.

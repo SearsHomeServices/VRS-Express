@@ -2356,7 +2356,13 @@ export default function AgentDashboard() {
                                           onClick={() => selectedAction === "reject" ? togglePhotoRejection(url) : openLightbox(allPhotos, offset + i)}
                                           data-testid={`${testIdPrefix}-photo-${i}`}
                                         >
-                                          <img src={url} alt={`${label} ${i + 1}`} className={`w-full h-full object-cover pointer-events-none ${rejected ? "opacity-40" : ""}`} />
+                                          <img
+                                            src={url}
+                                            alt={`${label} ${i + 1}`}
+                                            loading="lazy"
+                                            decoding="async"
+                                            className={`w-full h-full object-cover pointer-events-none ${rejected ? "opacity-40" : ""}`}
+                                          />
                                           {selectedAction === "reject" && (
                                             <div className={`absolute inset-0 flex items-center justify-center transition-opacity ${rejected ? "bg-red-500/30 opacity-100" : "opacity-0 group-hover:opacity-100 bg-red-500/20"}`}>
                                               {rejected ? (
@@ -2583,7 +2589,13 @@ export default function AgentDashboard() {
                                   onClick={() => openLightbox(priorAll, baseOffset + i)}
                                   data-testid={`prior-${testIdPrefix}-photo-${i}`}
                                 >
-                                  <img src={url} alt={`${label} ${i + 1}`} className="w-full h-full object-cover pointer-events-none" />
+                                  <img
+                                    src={url}
+                                    alt={`${label} ${i + 1}`}
+                                    loading="lazy"
+                                    decoding="async"
+                                    className="w-full h-full object-cover pointer-events-none"
+                                  />
                                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                     <ZoomIn className="w-6 h-6 text-white" />
                                   </div>

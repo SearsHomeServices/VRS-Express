@@ -165,6 +165,21 @@ export default function TechSubmitPage() {
     } catch {}
   }
 
+  function getUploadContentType(file: File): string {
+    if (file.type && file.type.trim().length > 0) return file.type;
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+    if (name.endsWith(".png")) return "image/png";
+    if (name.endsWith(".webp")) return "image/webp";
+    if (name.endsWith(".heic")) return "image/heic";
+    if (name.endsWith(".heif")) return "image/heif";
+    if (name.endsWith(".mp4")) return "video/mp4";
+    if (name.endsWith(".mov")) return "video/quicktime";
+    if (name.endsWith(".m4a")) return "audio/mp4";
+    if (name.endsWith(".mp3")) return "audio/mpeg";
+    return "application/octet-stream";
+  }
+
   async function uploadSinglePhoto(file: File, retries = 2): Promise<string | null> {
     const token = getToken();
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -178,7 +193,7 @@ export default function TechSubmitPage() {
           body: JSON.stringify({
             name: file.name,
             size: file.size,
-            contentType: file.type,
+            contentType: getUploadContentType(file),
           }),
         });
         if (!urlRes.ok) {
@@ -207,7 +222,7 @@ export default function TechSubmitPage() {
             resolve(null);
           });
           xhr.open("PUT", uploadURL);
-          xhr.setRequestHeader("Content-Type", file.type);
+          xhr.setRequestHeader("Content-Type", getUploadContentType(file));
           xhr.send(file);
         });
         if (result) return result;
@@ -254,25 +269,34 @@ export default function TechSubmitPage() {
     const newPreviews: Record<string, string> = {};
     const newFailures: FailedUpload[] = [];
     const categoryForList: "estimate" | "issue" = setUrls === setEstimatePhotoUrls ? "estimate" : "issue";
-    for (let i = 0; i < filesToUpload.length; i++) {
-      const file = filesToUpload[i];
-      const localBlob = URL.createObjectURL(file);
-      const url = await uploadSinglePhoto(file);
-      if (url) {
-        newUrls.push(url);
-        newPreviews[url] = localBlob;
-      } else {
-        URL.revokeObjectURL(localBlob);
-        newFailures.push({
-          id: crypto.randomUUID(),
-          file,
-          category: categoryForList,
-          lastError: "Upload failed after retries",
-          attemptsUsed: 3,
-        });
+    const maxConcurrent = 3;
+    let completed = 0;
+    let cursor = 0;
+    const runNext = async (): Promise<void> => {
+      while (cursor < filesToUpload.length) {
+        const idx = cursor++;
+        const file = filesToUpload[idx];
+        const localBlob = URL.createObjectURL(file);
+        const url = await uploadSinglePhoto(file);
+        if (url) {
+          newUrls.push(url);
+          newPreviews[url] = localBlob;
+        } else {
+          URL.revokeObjectURL(localBlob);
+          newFailures.push({
+            id: crypto.randomUUID(),
+            file,
+            category: categoryForList,
+            lastError: "Upload failed after retries",
+            attemptsUsed: 3,
+          });
+        }
+        completed += 1;
+        setCount({ done: completed, total: filesToUpload.length });
       }
-      setCount({ done: i + 1, total: filesToUpload.length });
-    }
+    };
+    const workers = Array.from({ length: Math.min(maxConcurrent, filesToUpload.length) }, () => runNext());
+    await Promise.all(workers);
     setUrls((prev) => [...prev, ...newUrls]);
     if (setLocalPreviews) {
       setLocalPreviews((prev) => ({ ...prev, ...newPreviews }));
@@ -465,7 +489,7 @@ export default function TechSubmitPage() {
       });
 
       xhr.open("PUT", uploadURL);
-      xhr.setRequestHeader("Content-Type", file.type);
+      xhr.setRequestHeader("Content-Type", getUploadContentType(file));
       xhr.send(file);
     } catch (err) {
       setIsUploading(false);

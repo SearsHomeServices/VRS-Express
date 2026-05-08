@@ -1,18 +1,19 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-04-27 22:19
+Updated: 2026-05-08 00:00
 
 ## Done
 
-- [x] Verified GitHub remote and fetched latest refs.
-- [x] Confirmed no remote `development` branch exists.
-- [x] Fast-forwarded local `main` to `origin/main` commit `52ebd75`.
-- [x] Identified the three current technician request types.
-- [x] Added a fast video plan for the 2026-04-28 morning East Coast meeting.
+- [x] Shipped bounded-concurrency photo uploads in `tech-submit`.
+- [x] Shipped bounded-concurrency photo uploads in `tech-resubmit`.
+- [x] Added safe content-type fallback for upload requests with empty MIME type.
+- [x] Enabled lazy image loading for agent/admin media thumbnail grids.
+- [x] Reduced API/object-route logging overhead in `server/index.ts`.
+- [x] Documented the performance patch set in `CHANGELOG.md`.
 
 ## Open
 
-- [ ] Record the 7-9 minute technician-side walkthrough.
-- [ ] Use demo technician login (`testtech1` or `tmorri1`) if available in the recording environment.
-- [ ] Export MP4 and post to Teams/SharePoint before the meeting.
-- [ ] Consider updating `VRS_PLATFORM_USER_GUIDE.md` because its "Submitting a Request" section is behind the current three-request-type form.
+- [ ] Add server-side pagination and SQL-backed search for `/api/submissions` to avoid broad fetch + in-memory filtering under large volumes.
+- [ ] Stream CSV export rows instead of building one large in-memory string.
+- [ ] Remove duplicate metadata/ACL fetches in object-serving path to reduce image/video time-to-first-byte.
+- [ ] Add indexes for hottest submission filters/sorts and verify with `EXPLAIN ANALYZE`.

@@ -199,6 +199,20 @@ export default function TechResubmitPage() {
   }
 
   async function uploadSingleFile(file: File): Promise<string | null> {
+    const getUploadContentType = (input: File): string => {
+      if (input.type && input.type.trim().length > 0) return input.type;
+      const name = input.name.toLowerCase();
+      if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+      if (name.endsWith(".png")) return "image/png";
+      if (name.endsWith(".webp")) return "image/webp";
+      if (name.endsWith(".heic")) return "image/heic";
+      if (name.endsWith(".heif")) return "image/heif";
+      if (name.endsWith(".mp4")) return "video/mp4";
+      if (name.endsWith(".mov")) return "video/quicktime";
+      if (name.endsWith(".m4a")) return "audio/mp4";
+      if (name.endsWith(".mp3")) return "audio/mpeg";
+      return "application/octet-stream";
+    };
     const token = getToken();
     try {
       const urlRes = await fetch("/api/uploads/request-url", {
@@ -207,7 +221,7 @@ export default function TechResubmitPage() {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type }),
+        body: JSON.stringify({ name: file.name, size: file.size, contentType: getUploadContentType(file) }),
       });
       if (!urlRes.ok) throw new Error("Failed to get upload URL");
       const { uploadURL, objectPath } = await urlRes.json();
@@ -218,7 +232,7 @@ export default function TechResubmitPage() {
         });
         xhr.addEventListener("error", () => resolve(null));
         xhr.open("PUT", uploadURL);
-        xhr.setRequestHeader("Content-Type", file.type);
+        xhr.setRequestHeader("Content-Type", getUploadContentType(file));
         xhr.send(file);
       });
     } catch {
@@ -245,10 +259,17 @@ export default function TechResubmitPage() {
     const filesToUpload = validFiles.slice(0, totalAllowed);
     setUploading(true);
     const newUrls: string[] = [];
-    for (const file of filesToUpload) {
-      const url = await uploadSingleFile(file);
-      if (url) newUrls.push(url);
-    }
+    const maxConcurrent = 3;
+    let cursor = 0;
+    const runNext = async (): Promise<void> => {
+      while (cursor < filesToUpload.length) {
+        const idx = cursor++;
+        const url = await uploadSingleFile(filesToUpload[idx]);
+        if (url) newUrls.push(url);
+      }
+    };
+    const workers = Array.from({ length: Math.min(maxConcurrent, filesToUpload.length) }, () => runNext());
+    await Promise.all(workers);
     setUrls((prev) => [...prev, ...newUrls]);
     setUploading(false);
     if (inputRef.current) inputRef.current.value = "";

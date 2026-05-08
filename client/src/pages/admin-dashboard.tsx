@@ -700,7 +700,13 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                                 onClick={() => openLightbox(allPhotos, offset + i)}
                                 data-testid={`admin-${testIdPrefix}-photo-${i}`}
                               >
-                                <img src={url} alt={`${label} ${i + 1}`} className="w-full h-full object-cover pointer-events-none" />
+                                <img
+                                  src={url}
+                                  alt={`${label} ${i + 1}`}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-full h-full object-cover pointer-events-none"
+                                />
                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                   <ZoomIn className="w-6 h-6 text-white" />
                                 </div>
