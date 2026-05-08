@@ -50,7 +50,35 @@ export function getDivisionLabel(divisionKey: string): string {
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
+  // Tyler 2026-05-08 — application-level heartbeat. Replit's load balancer
+  // (and corporate proxies between agents and us) silently drop idle WS
+  // connections after ~30–60s of inactivity, which produced cascades of
+  // [ws] WebSocket disconnected lines in prod and made agents feel "kicked
+  // out" because real-time updates stopped flowing. We ping every 25s
+  // (under the typical 30s proxy idle window). The browser auto-replies
+  // with a protocol-level pong; if we don't see a pong before the next
+  // tick we terminate the dead socket so the client's reconnect loop
+  // (client/src/lib/websocket.ts scheduleReconnect) takes over cleanly.
+  const HEARTBEAT_INTERVAL_MS = 25000;
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      const tagged = ws as WebSocket & { isAlive?: boolean };
+      if (tagged.isAlive === false) {
+        try { ws.terminate(); } catch {}
+        return;
+      }
+      tagged.isAlive = false;
+      try { ws.ping(); } catch {}
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  wss.on("close", () => clearInterval(heartbeatInterval));
+
   wss.on("connection", async (ws, req) => {
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    ws.on("pong", () => {
+      (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    });
+
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const token = url.searchParams.get("token");
 

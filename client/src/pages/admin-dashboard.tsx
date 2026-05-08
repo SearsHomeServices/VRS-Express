@@ -703,7 +703,6 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                                 <img
                                   src={url}
                                   alt={`${label} ${i + 1}`}
-                                  loading="lazy"
                                   decoding="async"
                                   className="w-full h-full object-cover pointer-events-none"
                                 />

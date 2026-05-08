@@ -2359,7 +2359,6 @@ export default function AgentDashboard() {
                                           <img
                                             src={url}
                                             alt={`${label} ${i + 1}`}
-                                            loading="lazy"
                                             decoding="async"
                                             className={`w-full h-full object-cover pointer-events-none ${rejected ? "opacity-40" : ""}`}
                                           />
@@ -2592,7 +2591,6 @@ export default function AgentDashboard() {
                                   <img
                                     src={url}
                                     alt={`${label} ${i + 1}`}
-                                    loading="lazy"
                                     decoding="async"
                                     className="w-full h-full object-cover pointer-events-none"
                                   />
