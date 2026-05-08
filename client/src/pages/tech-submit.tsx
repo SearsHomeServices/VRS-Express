@@ -204,7 +204,7 @@ export default function TechSubmitPage() {
 
         const result = await new Promise<string | null>((resolve) => {
           const xhr = new XMLHttpRequest();
-          xhr.timeout = 120000;
+          xhr.timeout = 300000;
           xhr.addEventListener("load", () => {
             if (xhr.status >= 200 && xhr.status < 300) {
               resolve(objectPath);
@@ -218,7 +218,7 @@ export default function TechSubmitPage() {
             resolve(null);
           });
           xhr.addEventListener("timeout", () => {
-            reportUploadError({ stage: "xhr-timeout", fileName: file.name, fileSize: file.size, fileType: file.type, errorMessage: "timeout after 120s", attempt });
+            reportUploadError({ stage: "xhr-timeout", fileName: file.name, fileSize: file.size, fileType: file.type, errorMessage: "timeout after 300s", attempt });
             resolve(null);
           });
           xhr.open("PUT", uploadURL);
