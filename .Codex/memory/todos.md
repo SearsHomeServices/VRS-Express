@@ -10,6 +10,10 @@ Updated: 2026-05-08 00:00
 - [x] Enabled lazy image loading for agent/admin media thumbnail grids.
 - [x] Reduced API/object-route logging overhead in `server/index.ts`.
 - [x] Documented the performance patch set in `CHANGELOG.md`.
+- [x] Updated technician after-hours SMS wording to keep business-hours notice without implying agents/admins are blocked until next business day.
+- [x] Added legacy after-hours template normalization in `server/sms.ts` for existing template rows.
+- [x] Updated Help Center after-hours/pending guidance to match the new processing policy.
+- [x] Updated seeded after-hours submission templates to the new policy wording.
 
 ## Open
 

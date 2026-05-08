@@ -199,12 +199,13 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
 
   // ---- Submission received — AFTER HOURS variants --------------------------
   // 2026-04-30 — Tyler request. The day-time templates above promise "an
-  // agent will review shortly", which is misleading for submissions that
-  // land outside business hours (no agent is on shift). The SMS builder
+  // agent will review shortly", which can be misleading for submissions that
+  // land outside business hours. The SMS builder
   // routes to these `_after_hours` variants when applicable and falls back
   // to the day variant if the after-hours row is missing or its render
-  // fails. Wording explicitly releases the tech from the site since
-  // waiting for a next-business-day response on-site is unreasonable.
+  // fails. Wording explicitly releases the tech from the site and clarifies
+  // the request may still be processed outside posted hours if an agent/admin
+  // is available.
   //
   // 2026-05-01 — wording fix per GM bug report (Central → Eastern, 6p → 8p).
   // 2026-05-01 (followup) — Saturday added to the open days.
@@ -219,7 +220,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "submission_received.standard_after_hours",
     name: "Submission received — standard ticket (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nYour submission was received outside of standard VRS hours ({hoursLabel}). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
+    body: `VRS Submission received for SO#{serviceOrder}\n\nYour submission was received outside of standard VRS hours ({hoursLabel}). Agents/admins may still review tickets outside these hours when available; otherwise your ticket continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },
@@ -229,7 +230,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "submission_received.nla_after_hours",
     name: "Submission received — NLA (parts) (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nNLA submission received outside of VRS parts-team hours ({hoursLabel}). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available.`,
+    body: `VRS Submission received for SO#{serviceOrder}\n\nNLA submission received outside of VRS parts-team hours ({hoursLabel}). The ticket remains in queue and may still be processed outside these hours when agents/admins are available; otherwise it continues into the next business window. You do NOT need to remain at the site; you'll receive a follow-up text with the sourcing decision when it's available.`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },
@@ -239,7 +240,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "submission_received.external_warranty_after_hours",
     name: "Submission received — AHS / First American (after hours)",
-    body: `VRS Submission received for SO#{serviceOrder}\n\nThis is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours ({hoursLabel}) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
+    body: `VRS Submission received for SO#{serviceOrder}\n\nThis is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours ({hoursLabel}). Agents/admins may still process tickets outside these hours when available; otherwise your request continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "hoursLabel", required: true, sample: "Mon–Sat 8am–8pm EST" },

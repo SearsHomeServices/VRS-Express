@@ -375,7 +375,11 @@ export async function buildSubmissionReceivedMessage(
   // yet (e.g. brand-new prod) — flagged by architect review.
   if (afterHours) {
     const ah = await renderTemplate(`${dayKey}_after_hours`, { serviceOrder, hoursLabel });
-    if (ah !== null) return ah;
+    if (ah !== null) {
+      // Keep admin-edited templates, but normalize legacy wording that
+      // implied processing could only happen on the next business day.
+      return normalizeLegacyAfterHoursSubmissionCopy(ah);
+    }
   }
   const dayRendered = await renderTemplate(dayKey, { serviceOrder, hoursLabel });
   if (dayRendered !== null && !afterHours) return dayRendered;
@@ -391,19 +395,40 @@ export async function buildSubmissionReceivedMessage(
     // a multi-day wait, which combined with the claim-SMS "DO NOT LEAVE
     // THE SITE" wording was making them stand by at the home for hours.
     waitCopy = afterHours
-      ? `NLA submission received outside of VRS parts-team hours (${hoursLabel}). The parts team will source this on the next business day. Reschedule this call accordingly — you'll receive a follow-up text with the sourcing decision when it's available.`
+      ? `NLA submission received outside of VRS parts-team hours (${hoursLabel}). The ticket remains in queue and may still be processed outside these hours when agents/admins are available; otherwise it continues into the next business window. You do NOT need to remain at the site; you'll receive a follow-up text with the sourcing decision when it's available.`
       : "NLA submission received by the VRS parts team. Typical turnaround is same-day. Reschedule this call for later today and move on to your next stop — you'll receive a follow-up text with the sourcing decision.";
   } else if (isExternal) {
     waitCopy = afterHours
-      ? `This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (${hoursLabel}) — VRS will work this on the next business day, when the provider callback can be initiated. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
+      ? `This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (${hoursLabel}). Agents/admins may still process tickets outside these hours when available; otherwise your request continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
       : "This is an external-warranty request (AHS / First American). Approvals require a provider callback and can take longer than standard Sears Protect tickets. Please remain at the site until you receive the approval/rejection text.";
   } else {
     waitCopy = afterHours
-      ? `Your submission was received outside of standard VRS hours (${hoursLabel}). It will be reviewed when agents are next available — typically the next business day. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
+      ? `Your submission was received outside of standard VRS hours (${hoursLabel}). Agents/admins may still review tickets outside these hours when available; otherwise your ticket continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
       : "A VRS agent will review your request shortly. Standard turnaround is a few minutes during business hours. Please remain at the site until you receive the approval/rejection text.";
   }
 
   return `VRS Submission received for SO#${serviceOrder}\n\n${waitCopy}\n\nYou will receive a follow-up text when the decision is made.`;
+}
+
+function normalizeLegacyAfterHoursSubmissionCopy(message: string): string {
+  let next = message;
+  next = next.replace(
+    /when agents are next available\s*[—-]\s*typically the next business day\.?/gi,
+    "when agents/admins are available (including outside standard hours), or it will continue in queue for the next business window."
+  );
+  next = next.replace(
+    /processed when agents are back online(?: the following business day)?\.?/gi,
+    "processed when agents/admins are available, including outside standard hours."
+  );
+  next = next.replace(
+    /will work this on the next business day\.?/gi,
+    "will work this as soon as an agent/admin is available, including outside standard hours."
+  );
+  next = next.replace(
+    /The parts team will source this on the next business day\.?/gi,
+    "The parts team will source this as soon as an agent/admin is available; otherwise it continues in queue for the next business window."
+  );
+  return next;
 }
 
 // ============================================================================

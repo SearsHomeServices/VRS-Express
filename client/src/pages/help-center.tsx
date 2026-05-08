@@ -138,7 +138,7 @@ const troubleshootingItems: HelpItem[] = [
   {
     title: "My submission is stuck on Pending",
     content:
-      "A submission may stay in Pending status if no agents are currently available to review it, or if the queue volume is high. If you submitted after business hours, your request will be processed once agents are back online the following business day. If your submission has been pending for an unusually long time, contact your supervisor.",
+      "A submission may stay in Pending status if no agents are currently available to review it, or if the queue volume is high. If you submitted after business hours, your request remains in queue and may still be processed outside normal hours when an agent/admin is available; otherwise it continues into the next business window. If your submission has been pending for an unusually long time, contact your supervisor.",
   },
   {
     title: "I didn't receive an authorization code",
@@ -159,7 +159,7 @@ const troubleshootingItems: HelpItem[] = [
   {
     title: "Submitting after business hours",
     content:
-      "If you need to submit an authorization request outside of business hours, you can still send it. Your submission will be placed in the queue and processed when agents are back online the next business day. After submitting, reach out through your normal scheduling channels to have the service call rescheduled so that the authorization can be obtained and processed before the follow-up appointment.",
+      "If you need to submit an authorization request outside of business hours, you can still send it. Your submission is placed in queue and can still be processed outside normal hours when an agent/admin is available; if no one is available, it continues into the next business window. You will receive follow-up texts when there is an update.",
   },
 ];
 
