@@ -37,6 +37,46 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+// Tyler 2026-05-09 — perf (final pass): in-process LRU cache for GCS
+// object metadata. After the 3-RPC → 1-RPC collapse in the previous
+// commit (711c4d9), each /objects/* request still pays one
+// file.getMetadata() round-trip. Photos in this app are immutable
+// (uploaded once via signed URL to /uploads/<uuid>, never overwritten),
+// so the [size, contentType, etag] triple is safe to cache for minutes
+// at a time. With a 12-photo dialog reopen during a busy review
+// session, this turns 12 GCS RPCs into 0 and the dialog opens roughly
+// instantly. Cache hits also free Node event-loop slots that were
+// previously blocked on metadata RPCs — addresses Hamed's "lag during
+// peak" report.
+//
+// Capacity 5000 entries × ~100 bytes = ~500KB upper bound, negligible.
+// TTL 10min — long enough to absorb back-to-back ticket reopens, short
+// enough that ACL changes (none today, but defensive) propagate.
+const META_CACHE_MAX = 5000;
+const META_CACHE_TTL_MS = 10 * 60 * 1000;
+type CachedMeta = { size: number; contentType: string; etag: string | undefined; expiresAt: number };
+const metadataCache = new Map<string, CachedMeta>();
+function getCachedMetadata(key: string): CachedMeta | null {
+  const hit = metadataCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    metadataCache.delete(key);
+    return null;
+  }
+  // LRU touch: re-insert moves to end of Map iteration order.
+  metadataCache.delete(key);
+  metadataCache.set(key, hit);
+  return hit;
+}
+function setCachedMetadata(key: string, meta: Omit<CachedMeta, "expiresAt">): void {
+  if (metadataCache.size >= META_CACHE_MAX) {
+    // Evict oldest (Map preserves insertion order).
+    const firstKey = metadataCache.keys().next().value;
+    if (firstKey !== undefined) metadataCache.delete(firstKey);
+  }
+  metadataCache.set(key, { ...meta, expiresAt: Date.now() + META_CACHE_TTL_MS });
+}
+
 // The object storage service is used to interact with the object storage service.
 export class ObjectStorageService {
   constructor() {}
@@ -134,22 +174,36 @@ export class ObjectStorageService {
       // itself throw a 404 below. Now: one getMetadata() per request,
       // everything served via /objects/* is private, ETag emitted so the
       // browser can do conditional revalidation (304s).
-      let metadata: any;
-      try {
-        [metadata] = await file.getMetadata();
-      } catch (err: any) {
-        // GCS surfaces "no such object" as a 404. Translate into our
-        // domain error so the caller (serveObject in routes.ts) returns
-        // a clean 404 instead of a 500.
-        if (err && (err.code === 404 || err.status === 404)) {
-          throw new ObjectNotFoundError();
+      // Cache key includes bucket + object so two buckets with the same
+      // object name don't collide.
+      const cacheKey = `${file.bucket.name}/${file.name}`;
+      let totalSize: number;
+      let contentType: string;
+      let etag: string | undefined;
+      const cached = getCachedMetadata(cacheKey);
+      if (cached) {
+        totalSize = cached.size;
+        contentType = cached.contentType;
+        etag = cached.etag;
+      } else {
+        let metadata: any;
+        try {
+          [metadata] = await file.getMetadata();
+        } catch (err: any) {
+          // GCS surfaces "no such object" as a 404. Translate into our
+          // domain error so the caller (serveObject in routes.ts) returns
+          // a clean 404 instead of a 500.
+          if (err && (err.code === 404 || err.status === 404)) {
+            throw new ObjectNotFoundError();
+          }
+          throw err;
         }
-        throw err;
+        totalSize = Number(metadata.size) || 0;
+        contentType = metadata.contentType || "application/octet-stream";
+        etag = metadata.etag ? String(metadata.etag) : undefined;
+        setCachedMetadata(cacheKey, { size: totalSize, contentType, etag });
       }
-      const totalSize = Number(metadata.size) || 0;
-      const contentType = metadata.contentType || "application/octet-stream";
       const cacheControl = `private, max-age=${cacheTtlSec}`;
-      const etag = metadata.etag ? String(metadata.etag) : undefined;
 
       // Conditional GET: if the browser already has the bytes, return 304
       // and skip the entire stream. Object store contents are immutable
