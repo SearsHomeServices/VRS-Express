@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Service Order History (SHSAI) tab hidden with unavailable notice (2026-05-09)
+- **Hidden the "Service Order History" tab in the agent right-panel** because the upstream SHSAI service (`https://ais.tellurideplatform.com/tell/api/hs/routing/v1/init`) is returning 403 Forbidden on every request — confirmed by direct curl from the Replit network and by the `/api/shsai/query 500` errors flooding the workflow logs (Hamed report 2026-05-09). Likely an IP-allowlist change or credentials change on Telluride's side; not fixable from our app.
+- **Added an amber notice banner** above the right-panel tab strip that reads *"Service Order History is currently unavailable. The previous source is no longer working — a new source for service order history is being located."* The banner sits above the Calculator and Intake Form tabs so it's visible regardless of which tab is active.
+- **Default landing tab switched from `shsai` → `calculator`.** Saved per-user `localStorage` preferences of `"shsai"` are migrated to `"calculator"` on hydrate so existing users don't land on a hidden tab.
+- **Disabled the auto-fetch** that previously fired `/api/shsai/query` on every ticket selection — was producing one 500 server error per ticket open. The `fetchShsaiData` function and `TabsContent value="shsai"` block remain in source so we can quickly restore once a replacement source is wired up.
+
 ### Security — Hardened `/api/submissions/:id/history` agent gating (2026-05-09)
 - **`GET /api/submissions/:id/history` now enforces the same vrs_agent assignment / division / queued-NLA-specialization gating as `GET /api/submissions/:id`.** Previously the history route only blocked non-owner technicians; any authenticated `vrs_agent` could enumerate IDs and pull full submission chains (including `agentNotes`, `auditTrail`, `rejectedMedia`, etc.) for tickets in other queues or other divisions. Surfaced by architect review of the Internal Agent Notes change below — that change deliberately consumes `agentNotes` in agent UI, raising the practical sensitivity of the gap. Logic mirrors lines 1055-1078 of the single-submission route (server/routes.ts).
 
