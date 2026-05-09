@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — After-hours paper-close advisory in tech submission SMS (2026-05-09)
+- **After-hours `submission_received` SMS now explicitly tells the tech to fall back to the paper close process** so they don't stand by at the site waiting on VRS. Appended to all three after-hours variants (standard / external-warranty / NLA) in `server/sms.ts`. Also added to the `normalizeLegacyAfterHoursSubmissionCopy` helper so admin-edited templates without the line still get it appended (idempotent — skipped if the template author already wrote it in).
+- **Confirmed agents and admins are NOT blocked from working tickets after hours.** Audited `/api/submissions/:id/claim`, `/process`, and `/process-nla` — none has a business-hours gate. The 24h intake-form claim gate was removed 2026-04-26 (ADR-013) and the only remaining checks are role / assignment / status / division.
+
 ### Fixed — Same SO# on a different day no longer blocked (2026-05-09)
 - **Tech submissions for a service order that already has a queued/pending ticket from a previous day are now allowed.** VRS reported techs getting `409 "you already have a submission in the queue"` on day-2 visits when yesterday's ticket hadn't been processed before agent shift-end. The duplicate-block in `hasActiveSubmissionForServiceOrder` (`server/storage.ts`) now only fires when the prior queued/pending submission was created on the **same calendar day**. Different calendar day → pass through. Same-day double-tap protection (and the 60s silent idempotency window) is preserved.
 

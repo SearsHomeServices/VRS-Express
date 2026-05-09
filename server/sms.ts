@@ -387,6 +387,16 @@ export async function buildSubmissionReceivedMessage(
   // fall through to the hardcoded after-hours copy below — better to ship
   // accurate after-hours wording than a misleading day-time promise.
 
+  // Tyler 2026-05-09 (VRS request): when a tech submits after hours, the
+  // SMS must explicitly remind them that the paper close option is the
+  // proper after-hours fallback. Agents/admins MAY still pick the ticket
+  // up outside standard hours (no server-side block), but the tech should
+  // not stand by at the site waiting on it — they should fall back to the
+  // paper close process so the customer gets resolved tonight. Appended to
+  // every after-hours variant (standard / external / NLA).
+  const paperCloseAdvisory =
+    "If you need to close out tonight, follow the paper close process — do not wait at the site for VRS to respond.";
+
   let waitCopy: string;
   if (isNla) {
     // 2026-04-28 (Tyler pilot-feedback Task A, stopgap):
@@ -395,15 +405,15 @@ export async function buildSubmissionReceivedMessage(
     // a multi-day wait, which combined with the claim-SMS "DO NOT LEAVE
     // THE SITE" wording was making them stand by at the home for hours.
     waitCopy = afterHours
-      ? `NLA submission received outside of VRS parts-team hours (${hoursLabel}). The ticket remains in queue and may still be processed outside these hours when agents/admins are available; otherwise it continues into the next business window. You do NOT need to remain at the site; you'll receive a follow-up text with the sourcing decision when it's available.`
+      ? `NLA submission received outside of VRS parts-team hours (${hoursLabel}). The ticket remains in queue and may still be processed outside these hours when agents/admins are available; otherwise it continues into the next business window. You do NOT need to remain at the site; you'll receive a follow-up text with the sourcing decision when it's available. ${paperCloseAdvisory}`
       : "NLA submission received by the VRS parts team. Typical turnaround is same-day. Reschedule this call for later today and move on to your next stop — you'll receive a follow-up text with the sourcing decision.";
   } else if (isExternal) {
     waitCopy = afterHours
-      ? `This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (${hoursLabel}). Agents/admins may still process tickets outside these hours when available; otherwise your request continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
+      ? `This is an external-warranty request (AHS / First American). Submitted outside of standard VRS hours (${hoursLabel}). Agents/admins may still process tickets outside these hours when available; otherwise your request continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made. ${paperCloseAdvisory}`
       : "This is an external-warranty request (AHS / First American). Approvals require a provider callback and can take longer than standard Sears Protect tickets. Please remain at the site until you receive the approval/rejection text.";
   } else {
     waitCopy = afterHours
-      ? `Your submission was received outside of standard VRS hours (${hoursLabel}). Agents/admins may still review tickets outside these hours when available; otherwise your ticket continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made.`
+      ? `Your submission was received outside of standard VRS hours (${hoursLabel}). Agents/admins may still review tickets outside these hours when available; otherwise your ticket continues in queue for the next business window. You do NOT need to remain at the site; you'll receive a follow-up text when the decision is made. ${paperCloseAdvisory}`
       : "A VRS agent will review your request shortly. Standard turnaround is a few minutes during business hours. Please remain at the site until you receive the approval/rejection text.";
   }
 
@@ -428,6 +438,14 @@ function normalizeLegacyAfterHoursSubmissionCopy(message: string): string {
     /The parts team will source this on the next business day\.?/gi,
     "The parts team will source this as soon as an agent/admin is available; otherwise it continues in queue for the next business window."
   );
+  // Tyler 2026-05-09 (VRS request): admin-edited after-hours templates may
+  // not yet include the paper-close advisory. Append it (idempotently —
+  // skip if the template author already wrote it in) so techs always see
+  // the fallback even when the template is admin-overridden.
+  if (!/paper\s*close/i.test(next)) {
+    next = next.trimEnd() +
+      "\n\nIf you need to close out tonight, follow the paper close process — do not wait at the site for VRS to respond.";
+  }
   return next;
 }
 
