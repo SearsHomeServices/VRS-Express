@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Same SO# on a different day no longer blocked (2026-05-09)
+- **Tech submissions for a service order that already has a queued/pending ticket from a previous day are now allowed.** VRS reported techs getting `409 "you already have a submission in the queue"` on day-2 visits when yesterday's ticket hadn't been processed before agent shift-end. The duplicate-block in `hasActiveSubmissionForServiceOrder` (`server/storage.ts`) now only fires when the prior queued/pending submission was created on the **same calendar day**. Different calendar day → pass through. Same-day double-tap protection (and the 60s silent idempotency window) is preserved.
+
 ### Performance — In-process LRU cache for GCS object metadata (2026-05-09)
 - **Added a 5000-entry / 10-minute LRU cache for object-storage metadata** (`server/replit_integrations/object_storage/objectStorage.ts`). After the prior 3-RPC → 1-RPC collapse (commit 711c4d9), each `/objects/*` request still paid one `file.getMetadata()` GCS round-trip. Photos in this app are immutable (uploaded once via signed URL to `/uploads/<uuid>`, never overwritten) so the `[size, contentType, etag]` triple is safe to cache. Net effect: a 12-photo Ticket Detail dialog reopen drops from 12 GCS RPCs to **0** on warm cache, and the dialog opens roughly instantly. Cache hits also free Node event-loop slots that were previously blocked on metadata RPCs — directly addresses the "lag during peak review" reports. Capacity bound is ~500KB. ETag/304 conditional-GET behavior is preserved.
 

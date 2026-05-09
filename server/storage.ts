@@ -1082,9 +1082,24 @@ export class DatabaseStorage implements IStorage {
     // are closed business — they should not gate future submissions on the
     // same SO#. Only truly in-flight work (queued waiting for an agent, or
     // pending under active review) needs to block to prevent dupe-text.
+    //
+    // Tyler 2026-05-09 (VRS report — techs blocked on day-2 visits): even
+    // the `queued`/`pending` block was over-broad. Real-world failure mode:
+    // tech submits SO# X late on day 1, the agent doesn't get to it before
+    // shift-end and the ticket sits in the queue overnight. Day 2, tech
+    // returns to the same job needing a fresh authorization (e.g. customer
+    // approved a different repair path, parts arrived, separate issue) and
+    // gets a 409 "you already have a submission in the queue." Per VRS:
+    // if the prior submission is from a DIFFERENT calendar day, allow the
+    // new one — the tech is on a separate visit. We still block same-day
+    // duplicates because that's what the gate is actually for (preventing
+    // double-tap and dupe SMS on the same visit). Combined with the 60s
+    // `findRecentDuplicateSubmission` idempotency window above, this gives
+    // us: < 60s = silent idempotent return; same calendar day = explicit
+    // 409; different calendar day = pass through.
     const activeStatuses = ["queued", "pending"];
     const results = await db
-      .select({ id: submissions.id, ticketStatus: submissions.ticketStatus })
+      .select({ id: submissions.id, ticketStatus: submissions.ticketStatus, createdAt: submissions.createdAt })
       .from(submissions)
       .where(
         and(
@@ -1093,9 +1108,25 @@ export class DatabaseStorage implements IStorage {
           inArray(submissions.ticketStatus, activeStatuses)
         )
       )
+      .orderBy(desc(submissions.createdAt))
       .limit(1);
-    if (results.length > 0) {
-      return { exists: true, status: results[0].ticketStatus };
+    if (results.length === 0) {
+      return { exists: false };
+    }
+    const prior = results[0];
+    if (!prior.createdAt) {
+      // Defensive: if we somehow have an active row with no createdAt,
+      // fall back to the prior behavior and block.
+      return { exists: true, status: prior.ticketStatus };
+    }
+    const now = new Date();
+    const priorCreated = new Date(prior.createdAt);
+    const sameCalendarDay =
+      priorCreated.getFullYear() === now.getFullYear() &&
+      priorCreated.getMonth() === now.getMonth() &&
+      priorCreated.getDate() === now.getDate();
+    if (sameCalendarDay) {
+      return { exists: true, status: prior.ticketStatus };
     }
     return { exists: false };
   }
