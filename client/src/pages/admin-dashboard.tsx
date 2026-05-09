@@ -446,6 +446,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
     timeline: AuditTimelineEntry[];
     userNames: Record<number, string>;
     smsLogs: any[];
+    priorSubmissions?: any[];
   }>({
     queryKey: ["/api/admin/submissions", ticketId, "audit"],
     queryFn: async () => {
@@ -461,6 +462,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
   const sub = data?.submission;
   const timeline = data?.timeline || [];
   const userNames = data?.userNames || {};
+  const priorSubmissions = data?.priorSubmissions || [];
 
   const getEventIcon = (event: string) => {
     if (event === "Submitted") return <CircleDot className="w-4 h-4 text-blue-500" />;
@@ -659,7 +661,84 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                 {sub.agentNotes && (
                   <div className="rounded-lg border p-3 bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Agent Notes</p>
-                    <p className="text-sm">{sub.agentNotes}</p>
+                    <p className="text-sm whitespace-pre-wrap" data-testid="text-detail-agent-notes">{sub.agentNotes}</p>
+                  </div>
+                )}
+
+                {sub.appealNotes && (
+                  <div className="rounded-lg border p-3 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
+                    <p className="text-xs text-blue-700 dark:text-blue-300 mb-1 uppercase tracking-wider font-medium">Technician Appeal Notes (Resubmission)</p>
+                    <p className="text-sm whitespace-pre-wrap text-blue-900 dark:text-blue-100" data-testid="text-detail-appeal-notes">{sub.appealNotes}</p>
+                  </div>
+                )}
+
+                {priorSubmissions.length > 0 && (
+                  <div className="rounded-lg border p-3 space-y-3" data-testid="panel-prior-submissions">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1.5">
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Previous Submissions in this Thread ({priorSubmissions.length})
+                    </p>
+                    {priorSubmissions.map((p: any) => {
+                      let pReasons: string[] = [];
+                      if (p.rejectionReasons) {
+                        try { pReasons = typeof p.rejectionReasons === "string" ? JSON.parse(p.rejectionReasons) : p.rejectionReasons; } catch {}
+                      }
+                      const reviewer = p.reviewedBy ? userNames[p.reviewedBy] : (p.stage1ReviewedBy ? userNames[p.stage1ReviewedBy] : null);
+                      return (
+                        <div key={p.id} className="rounded-md border p-3 bg-muted/10 space-y-2" data-testid={`prior-submission-${p.id}`}>
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium">Ticket #{p.id}</span>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${getStatusColor(p.ticketStatus)}`}>
+                                {getStatusLabel(p.ticketStatus)}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">
+                              {formatTsFull(p.createdAt)}
+                              {reviewer ? ` • Reviewed by ${reviewer}` : ""}
+                            </span>
+                          </div>
+                          {p.issueDescription && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Tech Issue Description</p>
+                              <p className="text-xs whitespace-pre-wrap">{p.issueDescription}</p>
+                            </div>
+                          )}
+                          {p.appealNotes && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-blue-700 dark:text-blue-300 mb-0.5">Tech Appeal Notes</p>
+                              <p className="text-xs whitespace-pre-wrap text-blue-900 dark:text-blue-100">{p.appealNotes}</p>
+                            </div>
+                          )}
+                          {pReasons.length > 0 && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-red-700 dark:text-red-400 mb-0.5">Rejection Reasons</p>
+                              <ul className="text-xs text-red-700 dark:text-red-400 list-disc list-inside space-y-0.5">
+                                {pReasons.map((r, i) => <li key={i}>{r}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                          {p.technicianMessage && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Message Sent to Technician</p>
+                              <p className="text-xs whitespace-pre-wrap">{p.technicianMessage}</p>
+                            </div>
+                          )}
+                          {p.agentNotes && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Internal Agent Notes</p>
+                              <p className="text-xs whitespace-pre-wrap">{p.agentNotes}</p>
+                            </div>
+                          )}
+                          {p.invalidReason && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Invalid Reason</p>
+                              <p className="text-xs whitespace-pre-wrap">{p.invalidReason}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 

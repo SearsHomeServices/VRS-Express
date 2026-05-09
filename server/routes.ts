@@ -1245,12 +1245,32 @@ export async function registerRoutes(
 
       const smsLogs = await storage.getSmsNotifications(id);
 
+      // Tyler 2026-05-09 (VRS request): admin ticket detail must show the
+      // tech's and agent's notes from PRIOR submissions in the same SO#
+      // resubmission thread, not just the current row. Mirrors what
+      // agents see in the Previous Rejection card. Chain is the root
+      // submission + all rows whose `resubmissionOf` points at the root,
+      // sorted oldest-first. Excludes the current submission so the UI
+      // can render it as a distinct "previous submissions" section.
+      const allRelated = await storage.getSubmissionHistory(submission.serviceOrder);
+      const rootId = submission.resubmissionOf || submission.id;
+      const fullChain = allRelated
+        .filter(s => s.id === rootId || s.resubmissionOf === rootId)
+        .sort((a, b) => new Date(a.createdAt!).getTime() - new Date(b.createdAt!).getTime());
+      const priorSubmissions = fullChain.filter(s => s.id !== submission.id);
+
       const userIds = new Set<number>();
       if (submission.technicianId) userIds.add(submission.technicianId);
       if (submission.assignedTo) userIds.add(submission.assignedTo);
       if (submission.reviewedBy) userIds.add(submission.reviewedBy);
       if (submission.stage1ReviewedBy) userIds.add(submission.stage1ReviewedBy);
       if (submission.stage2ReviewedBy) userIds.add(submission.stage2ReviewedBy);
+      priorSubmissions.forEach(p => {
+        if (p.technicianId) userIds.add(p.technicianId);
+        if (p.reviewedBy) userIds.add(p.reviewedBy);
+        if (p.stage1ReviewedBy) userIds.add(p.stage1ReviewedBy);
+        if (p.stage2ReviewedBy) userIds.add(p.stage2ReviewedBy);
+      });
 
       const userNames: Record<number, string> = {};
       for (const uid of userIds) {
@@ -1382,6 +1402,7 @@ export async function registerRoutes(
         timeline: deduped,
         userNames,
         smsLogs,
+        priorSubmissions,
       });
     } catch (error) {
       console.error("Admin audit trail error:", error);

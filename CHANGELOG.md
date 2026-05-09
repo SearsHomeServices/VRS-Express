@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Admin ticket detail now shows tech + agent notes from prior resubmissions (2026-05-09)
+- **Admin's Ticket Detail dialog** now surfaces (1) the technician's `appealNotes` for the current row (resubmission "what changed" comments) and (2) a "Previous Submissions in this Thread" section listing every prior submission in the SO# resubmission chain with that ticket's tech issue description, tech appeal notes, rejection reasons, message-to-tech, internal agent notes, invalid reason, reviewer name, and timestamp. Mirrors the context agents get on the Previous Rejection card so admins reviewing a ticket no longer have to bounce between rows. Backed by extending `GET /api/admin/submissions/:id/audit` to include `priorSubmissions` (root + all rows whose `resubmissionOf` points at the root, current excluded). User name lookup expanded to cover prior reviewers.
+
 ### Changed — Agent Status page sorts Available agents to the top (2026-05-09)
 - **Live Agent Status table now sorts by status**: Available (green) → Working (yellow) → Unavailable/offline (gray). Within each bucket, alphabetical by name for stable ordering across WebSocket-driven refreshes. VRS requested this so an admin can see who's pickable at a glance during peak. Single `useMemo` sort in `admin-dashboard.tsx` `AgentStatusSection`.
 
