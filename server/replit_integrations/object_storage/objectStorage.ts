@@ -5,7 +5,6 @@ import {
   ObjectAclPolicy,
   ObjectPermission,
   canAccessObject,
-  getObjectAclPolicy,
   setObjectAclPolicy,
 } from "./objectAcl";
 
@@ -120,12 +119,61 @@ export class ObjectStorageService {
     rangeHeader?: string,
   ) {
     try {
-      const [metadata] = await file.getMetadata();
-      const aclPolicy = await getObjectAclPolicy(file);
-      const isPublic = aclPolicy?.visibility === "public";
+      // Tyler 2026-05-09 — perf: previously this method made THREE separate
+      // GCS round-trips per request: objectFile.exists() in
+      // getObjectEntityFile + an explicit getMetadata() here + a
+      // getObjectAclPolicy() (which internally also calls getMetadata).
+      // With ~12 photos in a ticket detail dialog opening at once that
+      // was ~36 round-trips — the cause of agents seeing grey placeholder
+      // tiles (race) AND the general dashboard latency (event loop slots
+      // blocked on metadata RPCs). The ACL lookup was useless for this
+      // route: getObjectEntityFile only resolves paths under
+      // PRIVATE_OBJECT_DIR so /objects/* is always effectively private —
+      // the ACL was solely used to flip Cache-Control public/private. The
+      // exists() preflight was also pointless because getMetadata() will
+      // itself throw a 404 below. Now: one getMetadata() per request,
+      // everything served via /objects/* is private, ETag emitted so the
+      // browser can do conditional revalidation (304s).
+      let metadata: any;
+      try {
+        [metadata] = await file.getMetadata();
+      } catch (err: any) {
+        // GCS surfaces "no such object" as a 404. Translate into our
+        // domain error so the caller (serveObject in routes.ts) returns
+        // a clean 404 instead of a 500.
+        if (err && (err.code === 404 || err.status === 404)) {
+          throw new ObjectNotFoundError();
+        }
+        throw err;
+      }
       const totalSize = Number(metadata.size) || 0;
       const contentType = metadata.contentType || "application/octet-stream";
-      const cacheControl = `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`;
+      const cacheControl = `private, max-age=${cacheTtlSec}`;
+      const etag = metadata.etag ? String(metadata.etag) : undefined;
+
+      // Conditional GET: if the browser already has the bytes, return 304
+      // and skip the entire stream. Object store contents are immutable
+      // (uploaded once via signed URL, never overwritten) so the etag is
+      // a strong validator. Parse the standard If-None-Match grammar
+      // (RFC 9110 §13.1.2): "*", or comma-separated entity-tags, each
+      // optionally weak-prefixed with W/. Match if our strong etag equals
+      // any provided tag (with optional W/ stripped) or if "*" is present.
+      if (etag && !rangeHeader) {
+        const ifNoneMatch = (res.req.headers["if-none-match"] as string | undefined)?.trim();
+        if (ifNoneMatch) {
+          const matched = ifNoneMatch === "*" || ifNoneMatch
+            .split(",")
+            .map(t => t.trim().replace(/^W\//, ""))
+            .some(t => t === etag);
+          if (matched) {
+            res.status(304).set({
+              "ETag": etag,
+              "Cache-Control": cacheControl,
+            });
+            return res.end();
+          }
+        }
+      }
 
       // Parse Range header if present. Only single-range `bytes=start-end`
       // is supported (which is what every browser <video>/<audio> sends).
@@ -166,20 +214,25 @@ export class ObjectStorageService {
 
       const chunkSize = end - start + 1;
 
+      const baseHeaders: Record<string, string> = {
+        "Cache-Control": cacheControl,
+      };
+      if (etag) baseHeaders["ETag"] = etag;
+
       if (isRange) {
         res.status(206).set({
+          ...baseHeaders,
           "Content-Type": contentType,
           "Content-Length": String(chunkSize),
           "Content-Range": `bytes ${start}-${end}/${totalSize}`,
           "Accept-Ranges": "bytes",
-          "Cache-Control": cacheControl,
         });
       } else {
         res.status(200).set({
+          ...baseHeaders,
           "Content-Type": contentType,
           "Content-Length": String(totalSize),
           "Accept-Ranges": "bytes",
-          "Cache-Control": cacheControl,
         });
       }
 
@@ -219,6 +272,14 @@ export class ObjectStorageService {
 
       stream.pipe(res);
     } catch (error) {
+      // Tyler 2026-05-09 (architect 2026-05-09 follow-up #2): rethrow
+      // ObjectNotFoundError so serveObject in routes.ts can map it to a
+      // clean 404. Without this rethrow the inner getMetadata-404 path
+      // (introduced when we removed the exists() preflight) would be
+      // swallowed here and surface as 500 to the browser.
+      if (error instanceof ObjectNotFoundError) {
+        throw error;
+      }
       console.error("Error downloading file:", error);
       if (!res.headersSent) {
         res.status(500).json({ error: "Error downloading file" });
@@ -270,10 +331,16 @@ export class ObjectStorageService {
     const { bucketName, objectName } = parseObjectPath(objectEntityPath);
     const bucket = objectStorageClient.bucket(bucketName);
     const objectFile = bucket.file(objectName);
-    const [exists] = await objectFile.exists();
-    if (!exists) {
-      throw new ObjectNotFoundError();
-    }
+    // Tyler 2026-05-09 — perf (architect 2026-05-09 follow-up): the prior
+    // objectFile.exists() preflight added a third GCS RPC to every
+    // /objects/* request. The downstream consumers — downloadObject() and
+    // the conversion routes in server/routes.ts:3937,3988 — all immediately
+    // call getMetadata() / createReadStream() / setMetadata() which will
+    // themselves throw a GCS 404 if the object does not exist. Callers
+    // already translate that into an ObjectNotFoundError (see the catch in
+    // downloadObject below and serveObject in routes.ts). Removing the
+    // preflight collapses /objects/* to a single GCS RPC per request and
+    // is the difference between 36 RPCs and 12 RPCs for a 12-photo dialog.
     return objectFile;
   }
 
