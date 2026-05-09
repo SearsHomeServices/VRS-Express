@@ -1106,6 +1106,31 @@ export async function registerRoutes(
       if (user.role === "technician" && submission.technicianId !== user.id) {
         return res.status(403).json({ error: "Access denied" });
       }
+      // Tyler 2026-05-09 (architect review of Hamed's "show agentNotes to
+      // other agents" change): /history previously only blocked non-owner
+      // technicians and had NO assignment/division check for vrs_agent.
+      // Any authenticated agent could enumerate IDs and read full chains
+      // including agentNotes. Now that we deliberately surface agentNotes
+      // to agents in the UI (resubmission Previous Rejection card and
+      // P-card pickup), this gap becomes more sensitive. Mirror the
+      // gating from GET /api/submissions/:id (lines ~1055-1078).
+      if (user.role === "vrs_agent") {
+        const isAssignedToAgent = submission.assignedTo === user.id;
+        const isQueued = submission.ticketStatus === "queued";
+        const isReviewer = submission.reviewedBy === user.id;
+        if (!isAssignedToAgent && !isQueued && !isReviewer) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+        if (isQueued) {
+          const specs = await storage.getSpecializations(user.id);
+          const divisions = specs.map(s => s.division);
+          const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
+          const isNlaTicket = submission.requestType === "parts_nla";
+          if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(submission.applianceType))) {
+            return res.status(403).json({ error: "Access denied" });
+          }
+        }
+      }
 
       const allRelated = await storage.getSubmissionHistory(submission.serviceOrder);
       const rootId = submission.resubmissionOf || submission.id;
@@ -1906,8 +1931,17 @@ export async function registerRoutes(
         rgcCode = todayRgcCode.code;
       }
 
+      // Tyler 2026-05-09 (architect review): preserve the escalating
+      // research agent's agentNotes when the P-card tech confirms an
+      // order without writing their own notes. Previously `agentNotes ||
+      // null` would null-out the escalation context whenever the P-card
+      // tech left their notes textarea blank. For nla_pcard_confirm
+      // (single-step handoff) we keep the existing value when the
+      // incoming field is empty.
       const updateData: Record<string, unknown> = {
-        agentNotes: agentNotes || null,
+        agentNotes: agentNotes && agentNotes.trim()
+          ? agentNotes
+          : (action === "nla_pcard_confirm" ? (submission.agentNotes ?? null) : null),
         updatedAt: new Date(),
       };
 

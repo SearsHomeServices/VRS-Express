@@ -942,6 +942,12 @@ export default function AgentDashboard() {
       technicianMessage: (last.technicianMessage as string | null) || null,
       reviewerName: last.stage1ReviewedBy ? data.reviewerNames[last.stage1ReviewedBy] || null : null,
       reviewedAt: (last.stage1ReviewedAt || last.reviewedAt || last.updatedAt || null) as string | null,
+      // 2026-05-09 (Hamed feedback via screenshot 2026-05-09): when an
+      // agent claims a resubmission they need to see the prior reviewer's
+      // INTERNAL agent notes too — not just the customer-facing rejection
+      // message. Previously only admins could see agentNotes; agents
+      // re-evaluated blind to context the prior reviewer left for them.
+      agentNotes: (last.agentNotes as string | null) || null,
       // 2026-05-06 (Hamed clarification): agent reviewing a resubmission also
       // needs the prior submission's `issueDescription` to compare against the
       // text in front of them, e.g. to verify the tech actually expanded on
@@ -2766,6 +2772,19 @@ export default function AgentDashboard() {
                                   </p>
                                 </div>
                               )}
+                              {priorRejection.agentNotes && (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Internal Agent Notes
+                                  </p>
+                                  <p
+                                    className="text-xs whitespace-pre-wrap text-red-900 dark:text-red-100"
+                                    data-testid="text-nla-prior-rejection-agent-notes"
+                                  >
+                                    {priorRejection.agentNotes}
+                                  </p>
+                                </div>
+                              )}
                               {(priorRejection.reviewerName || priorRejection.reviewedAt) && (
                                 <p className="text-[10px] text-red-700/60 dark:text-red-400/60">
                                   {priorRejection.reviewerName ? `Reviewed by ${priorRejection.reviewerName}` : "Reviewed"}
@@ -2807,6 +2826,22 @@ export default function AgentDashboard() {
                                   <div>
                                     <span className="text-muted-foreground text-xs">Message to Technician:</span>
                                     <p className="text-sm">{selectedSubmission.technicianMessage}</p>
+                                  </div>
+                                )}
+                                {/* 2026-05-09 (Hamed feedback): show the
+                                    escalating agent's INTERNAL notes to the
+                                    P-card tech who's picking this up.
+                                    Without this, the P-card tech only sees
+                                    the customer-facing message and re-orders
+                                    blind to context the research agent left.
+                                    selectedSubmission.agentNotes here is the
+                                    escalating agent's text — the P-card tech
+                                    will overwrite it with their own when
+                                    they confirm via /process-nla. */}
+                                {selectedSubmission.agentNotes && (
+                                  <div data-testid="text-nla-pcard-prior-agent-notes">
+                                    <span className="text-muted-foreground text-xs">Internal Agent Notes:</span>
+                                    <p className="text-sm whitespace-pre-wrap">{selectedSubmission.agentNotes}</p>
                                   </div>
                                 )}
                               </div>
@@ -3271,6 +3306,19 @@ export default function AgentDashboard() {
                                     data-testid="text-prior-rejection-message"
                                   >
                                     {priorRejection.technicianMessage}
+                                  </p>
+                                </div>
+                              )}
+                              {priorRejection.agentNotes && (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider text-red-700/70 dark:text-red-400/70 mb-0.5">
+                                    Internal Agent Notes
+                                  </p>
+                                  <p
+                                    className="text-xs whitespace-pre-wrap text-red-900 dark:text-red-100"
+                                    data-testid="text-prior-rejection-agent-notes"
+                                  >
+                                    {priorRejection.agentNotes}
                                   </p>
                                 </div>
                               )}
