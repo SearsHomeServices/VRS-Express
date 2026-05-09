@@ -239,7 +239,25 @@ function AgentStatusSection() {
     },
   });
 
-  const agents = data?.agents || [];
+  // Tyler 2026-05-09 (VRS request): sort Available agents to the top so
+  // an admin scanning this page during peak can see who's actually
+  // pickable at a glance, then Working, then Unavailable/offline at the
+  // bottom. Within each status bucket, fall back to alphabetical by name
+  // for a stable, predictable order (no jitter on every WS refresh).
+  const STATUS_RANK: Record<string, number> = {
+    online: 0,   // Available
+    working: 1,  // Working
+    offline: 2,  // Unavailable
+  };
+  const agents = useMemo(() => {
+    const list = data?.agents || [];
+    return [...list].sort((a, b) => {
+      const ra = STATUS_RANK[a.agentStatus] ?? 3;
+      const rb = STATUS_RANK[b.agentStatus] ?? 3;
+      if (ra !== rb) return ra - rb;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }, [data?.agents]);
 
   const statusDot = (status: string) => {
     if (status === "online") return "bg-green-500";

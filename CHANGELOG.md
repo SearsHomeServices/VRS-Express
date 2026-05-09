@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Agent Status page sorts Available agents to the top (2026-05-09)
+- **Live Agent Status table now sorts by status**: Available (green) → Working (yellow) → Unavailable/offline (gray). Within each bucket, alphabetical by name for stable ordering across WebSocket-driven refreshes. VRS requested this so an admin can see who's pickable at a glance during peak. Single `useMemo` sort in `admin-dashboard.tsx` `AgentStatusSection`.
+
 ### Added — After-hours paper-close advisory in tech submission SMS (2026-05-09)
 - **After-hours `submission_received` SMS now explicitly tells the tech to fall back to the paper close process** so they don't stand by at the site waiting on VRS. Appended to all three after-hours variants (standard / external-warranty / NLA) in `server/sms.ts`. Also added to the `normalizeLegacyAfterHoursSubmissionCopy` helper so admin-edited templates without the line still get it appended (idempotent — skipped if the template author already wrote it in).
 - **Confirmed agents and admins are NOT blocked from working tickets after hours.** Audited `/api/submissions/:id/claim`, `/process`, and `/process-nla` — none has a business-hours gate. The 24h intake-form claim gate was removed 2026-04-26 (ADR-013) and the only remaining checks are role / assignment / status / division.
