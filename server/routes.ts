@@ -2741,22 +2741,44 @@ export async function registerRoutes(
         agentHasNewDivision = true;
       }
 
+      // Tyler 2026-05-11 (two-agents-on-one-ticket fix, completing audit):
+      // both branches were unconditional UPDATE BY ID. The "release"
+      // branch in particular could clobber an admin reassignment that
+      // landed between this route's read at L2705 and the write below
+      // — re-queuing a ticket the new assignee already owned. For
+      // vrs_agent actors we pin the assignee so a concurrent reassign
+      // is detected; admins keep the ownership-bypass behavior they
+      // have on /process and /reassign.
+      const expectAssignee =
+        authReq.user!.role === "vrs_agent" ? authReq.user!.id : undefined;
       if (agentHasNewDivision) {
-        const updated = await storage.updateSubmission(id, {
+        const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
           applianceType: newDivision,
           agentNotes: existingNotes,
           updatedAt: new Date(),
-        } as any);
+        } as any, expectAssignee);
+        if (!updated) {
+          return res.status(409).json({
+            error: "This ticket was already moved or reassigned. Please refresh and try again.",
+            code: "STALE_STATUS",
+          });
+        }
         return res.status(200).json({ submission: updated, agentKeepsTicket: true });
       } else {
-        const updated = await storage.updateSubmission(id, {
+        const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
           applianceType: newDivision,
           ticketStatus: "queued",
           statusChangedAt: new Date(),
           assignedTo: null,
           agentNotes: existingNotes,
           updatedAt: new Date(),
-        } as any);
+        } as any, expectAssignee);
+        if (!updated) {
+          return res.status(409).json({
+            error: "This ticket was already moved or reassigned. Please refresh and try again.",
+            code: "STALE_STATUS",
+          });
+        }
 
         await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
         updateClientStatus(authReq.user!.id, "online");
