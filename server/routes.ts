@@ -2904,6 +2904,196 @@ export async function registerRoutes(
     }
   });
 
+  // ========================================================================
+  // SYSTEM HEALTH REGRESSION WATCH (2026-05-11)
+  // ========================================================================
+  // GET /api/admin/health/regression-check
+  //   Runs all named regression checks tied to fixes shipped today, upserts
+  //   findings into system_health_log (opens new incidents, touches still-
+  //   present incidents, clears resolved incidents), and returns a summary.
+  //
+  // GET /api/admin/health/incidents?checkName=&openOnly=&limit=
+  //   Lists historical findings from the audit log.
+  //
+  // Each check name corresponds to a fix area:
+  //   - send_to_nla_status_stuck   -> Rob's "stuck Working" fix watch
+  //   - escalate_audit_gap         -> Zorn's escalate retry-wrapper fix watch
+  //                                   (footprint: completed parts_nla with
+  //                                    nla_resolution=part_found_vrs_ordered
+  //                                    but nla_escalated_by IS NULL — means
+  //                                    a P-card agent finalized without an
+  //                                    audit breadcrumb of the prior escalate)
+  //   - stale_pending_nla          -> NLA tickets stuck > 4h on an offline
+  //                                   agent (potential abandoned escalates)
+  app.get("/api/admin/health/regression-check", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
+    try {
+      const results: Array<{
+        checkName: string;
+        severity: string;
+        currentCount: number;
+        opened: number;
+        touched: number;
+        cleared: number;
+        sample: Array<{ entityType: string; entityId: number; finding: any }>;
+      }> = [];
+
+      type Detection = { entityType: string; entityId: number; finding: any };
+
+      async function runCheck(
+        checkName: string,
+        severity: "info" | "warning" | "critical",
+        detect: () => Promise<Detection[]>
+      ) {
+        const detections = await detect();
+        const open = await storage.listOpenHealthIncidentsByCheck(checkName);
+        const openMap = new Map<string, typeof open[number]>(
+          open.map((o) => [`${o.entityType}:${o.entityId}`, o])
+        );
+        let opened = 0;
+        let touched = 0;
+        for (const d of detections) {
+          const key = `${d.entityType}:${d.entityId}`;
+          const existing = openMap.get(key);
+          if (existing) {
+            await storage.touchHealthIncident(existing.id);
+            touched++;
+            openMap.delete(key);
+          } else {
+            await storage.openHealthIncident({
+              checkName,
+              severity,
+              entityType: d.entityType,
+              entityId: d.entityId,
+              finding: d.finding,
+            });
+            opened++;
+          }
+        }
+        let cleared = 0;
+        for (const stale of openMap.values()) {
+          await storage.clearHealthIncident(stale.id);
+          cleared++;
+        }
+        results.push({
+          checkName,
+          severity,
+          currentCount: detections.length,
+          opened,
+          touched,
+          cleared,
+          sample: detections.slice(0, 5),
+        });
+      }
+
+      // Check 1 — send_to_nla_status_stuck (Rob's bug class)
+      // VRS agents/admins with agent_status='working', no open pending
+      // tickets, and no status update in the last 10 minutes. The fix
+      // shipped today restores status correctly when a Send-to-NLA leaves
+      // the agent with no remaining work; this watches for any future
+      // regression of that path.
+      await runCheck("send_to_nla_status_stuck", "warning", async () => {
+        const r = await db.execute(sql`
+          SELECT u.id, u.name, u.rac_id, u.agent_status, u.updated_at
+          FROM users u
+          LEFT JOIN submissions s
+            ON s.assigned_to = u.id AND s.ticket_status = 'pending'
+          WHERE u.role IN ('vrs_agent', 'admin')
+            AND u.agent_status = 'working'
+            AND u.updated_at < NOW() - INTERVAL '10 minutes'
+          GROUP BY u.id, u.name, u.rac_id, u.agent_status, u.updated_at
+          HAVING COUNT(s.id) = 0
+        `);
+        return (r.rows as any[]).map((row) => ({
+          entityType: "user",
+          entityId: Number(row.id),
+          finding: {
+            name: row.name,
+            racId: row.rac_id,
+            agentStatus: row.agent_status,
+            stuckSince: row.updated_at,
+          },
+        }));
+      });
+
+      // Check 2 — escalate_audit_gap (Zorn's bug class, ticket #985 footprint)
+      // Completed parts_nla submissions where a P-card agent finalized but
+      // nla_escalated_by is NULL despite nla_resolution=part_found_vrs_ordered.
+      // The retry wrapper shipped today should keep the escalate intent
+      // captured; any new occurrence here means escalate intent was lost.
+      await runCheck("escalate_audit_gap", "warning", async () => {
+        const r = await db.execute(sql`
+          SELECT id, service_order, reviewed_by, status_changed_at
+          FROM submissions
+          WHERE request_type = 'parts_nla'
+            AND ticket_status = 'completed'
+            AND nla_resolution = 'part_found_vrs_ordered'
+            AND nla_escalated_by IS NULL
+            AND status_changed_at > NOW() - INTERVAL '7 days'
+        `);
+        return (r.rows as any[]).map((row) => ({
+          entityType: "submission",
+          entityId: Number(row.id),
+          finding: {
+            serviceOrder: row.service_order,
+            reviewedBy: row.reviewed_by,
+            statusChangedAt: row.status_changed_at,
+          },
+        }));
+      });
+
+      // Check 3 — stale_pending_nla (potential abandoned escalates)
+      // NLA tickets sitting in 'pending' for > 4 hours, assigned to an
+      // agent who is currently offline. Catches the failure-mode where a
+      // transient escalate failure leaves a ticket orphaned on a logged-out
+      // agent before any retry wrapper protection.
+      await runCheck("stale_pending_nla", "warning", async () => {
+        const r = await db.execute(sql`
+          SELECT s.id, s.service_order, s.assigned_to, s.claimed_at, u.agent_status
+          FROM submissions s
+          JOIN users u ON u.id = s.assigned_to
+          WHERE s.request_type = 'parts_nla'
+            AND s.ticket_status = 'pending'
+            AND s.claimed_at < NOW() - INTERVAL '4 hours'
+            AND u.agent_status = 'offline'
+        `);
+        return (r.rows as any[]).map((row) => ({
+          entityType: "submission",
+          entityId: Number(row.id),
+          finding: {
+            serviceOrder: row.service_order,
+            assignedTo: row.assigned_to,
+            claimedAt: row.claimed_at,
+            agentStatus: row.agent_status,
+          },
+        }));
+      });
+
+      const totalOpen = results.reduce((sum, r) => sum + r.currentCount, 0);
+      return res.status(200).json({
+        ranAt: new Date().toISOString(),
+        overallStatus: totalOpen === 0 ? "green" : "issues_detected",
+        totalActiveFindings: totalOpen,
+        checks: results,
+      });
+    } catch (error) {
+      console.error("Regression check error:", error);
+      return res.status(500).json({ error: "Failed to run regression check" });
+    }
+  });
+
+  app.get("/api/admin/health/incidents", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const checkName = (req.query.checkName as string) || undefined;
+      const openOnly = req.query.openOnly === "true";
+      const limit = req.query.limit ? Math.min(Number(req.query.limit), 1000) : 200;
+      const incidents = await storage.listHealthIncidents({ checkName, openOnly, limit });
+      return res.status(200).json({ incidents, count: incidents.length });
+    } catch (error) {
+      console.error("List incidents error:", error);
+      return res.status(500).json({ error: "Failed to list incidents" });
+    }
+  });
+
   app.get("/api/admin/rgc-code", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
       const date = (req.query.date as string) || getEtDateString();

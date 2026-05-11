@@ -347,6 +347,39 @@ export const systemSettings = pgTable("system_settings", {
 export type SystemSetting = typeof systemSettings.$inferSelect;
 
 // ============================================================================
+// SYSTEM HEALTH LOG (2026-05-11 — regression watch for shipped fixes)
+// ============================================================================
+// Persistent audit trail of regression-check findings. The
+// /api/admin/health/regression-check endpoint runs a set of named checks
+// (one per shipped fix area) and:
+//   - opens a new row when a problem is first detected for an entity
+//   - touches lastSeenAt while the problem is still present
+//   - sets clearedAt when the problem is no longer detected
+// Lets the agent (and humans) look back at when bugs occurred and what
+// cleared them, even between manual checks.
+export const systemHealthLog = pgTable("system_health_log", {
+  id: serial("id").primaryKey(),
+  checkName: varchar("check_name", { length: 64 }).notNull(),
+  severity: varchar("severity", { length: 16 }).notNull(),
+  entityType: varchar("entity_type", { length: 32 }).notNull(),
+  entityId: integer("entity_id").notNull(),
+  finding: jsonb("finding").notNull(),
+  detectedAt: timestamp("detected_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  clearedAt: timestamp("cleared_at"),
+});
+
+export const insertSystemHealthLogSchema = createInsertSchema(systemHealthLog).omit({
+  id: true,
+  detectedAt: true,
+  lastSeenAt: true,
+  clearedAt: true,
+});
+
+export type InsertSystemHealthLog = z.infer<typeof insertSystemHealthLogSchema>;
+export type SystemHealthLog = typeof systemHealthLog.$inferSelect;
+
+// ============================================================================
 // INTAKE FORMS TABLE (Smartsheet "VRS Unrep Intake Form 2.0" submission audit)
 // ============================================================================
 // One row per submission once the agent has confirmed they completed the

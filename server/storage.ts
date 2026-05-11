@@ -42,6 +42,9 @@ import {
   CommunicationTemplate,
   communicationTemplateVersions,
   CommunicationTemplateVersion,
+  systemHealthLog,
+  InsertSystemHealthLog,
+  SystemHealthLog,
 } from "@shared/schema";
 import { getBusinessElapsedMs } from "@shared/business-hours";
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
@@ -291,6 +294,22 @@ export interface IStorage {
     data: InsertAgentExternalCredential
   ): Promise<AgentExternalCredential>;
   deleteAgentCredential(userId: number, service: string): Promise<boolean>;
+
+  // System health regression watch (2026-05-11)
+  findOpenHealthIncident(
+    checkName: string,
+    entityType: string,
+    entityId: number
+  ): Promise<SystemHealthLog | undefined>;
+  openHealthIncident(data: InsertSystemHealthLog): Promise<SystemHealthLog>;
+  touchHealthIncident(id: number): Promise<void>;
+  clearHealthIncident(id: number): Promise<void>;
+  listHealthIncidents(opts: {
+    openOnly?: boolean;
+    checkName?: string;
+    limit?: number;
+  }): Promise<SystemHealthLog[]>;
+  listOpenHealthIncidentsByCheck(checkName: string): Promise<SystemHealthLog[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2023,6 +2042,79 @@ export class DatabaseStorage implements IStorage {
       .from(communicationTemplateVersions)
       .where(eq(communicationTemplateVersions.templateId, templateId))
       .orderBy(desc(communicationTemplateVersions.version));
+  }
+
+  // ==========================================================================
+  // SYSTEM HEALTH REGRESSION WATCH (2026-05-11)
+  // ==========================================================================
+  async findOpenHealthIncident(
+    checkName: string,
+    entityType: string,
+    entityId: number
+  ): Promise<SystemHealthLog | undefined> {
+    const [row] = await db
+      .select()
+      .from(systemHealthLog)
+      .where(
+        and(
+          eq(systemHealthLog.checkName, checkName),
+          eq(systemHealthLog.entityType, entityType),
+          eq(systemHealthLog.entityId, entityId),
+          isNull(systemHealthLog.clearedAt)
+        )
+      )
+      .limit(1);
+    return row;
+  }
+
+  async openHealthIncident(
+    data: InsertSystemHealthLog
+  ): Promise<SystemHealthLog> {
+    const [row] = await db.insert(systemHealthLog).values(data).returning();
+    return row;
+  }
+
+  async touchHealthIncident(id: number): Promise<void> {
+    await db
+      .update(systemHealthLog)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(systemHealthLog.id, id));
+  }
+
+  async clearHealthIncident(id: number): Promise<void> {
+    await db
+      .update(systemHealthLog)
+      .set({ clearedAt: new Date() })
+      .where(eq(systemHealthLog.id, id));
+  }
+
+  async listHealthIncidents(opts: {
+    openOnly?: boolean;
+    checkName?: string;
+    limit?: number;
+  }): Promise<SystemHealthLog[]> {
+    const conds = [];
+    if (opts.openOnly) conds.push(isNull(systemHealthLog.clearedAt));
+    if (opts.checkName) conds.push(eq(systemHealthLog.checkName, opts.checkName));
+    let q = db.select().from(systemHealthLog).$dynamic();
+    if (conds.length) q = q.where(and(...conds));
+    return await q
+      .orderBy(desc(systemHealthLog.detectedAt))
+      .limit(opts.limit ?? 200);
+  }
+
+  async listOpenHealthIncidentsByCheck(
+    checkName: string
+  ): Promise<SystemHealthLog[]> {
+    return await db
+      .select()
+      .from(systemHealthLog)
+      .where(
+        and(
+          eq(systemHealthLog.checkName, checkName),
+          isNull(systemHealthLog.clearedAt)
+        )
+      );
   }
 }
 

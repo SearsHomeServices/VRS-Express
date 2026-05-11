@@ -70,6 +70,16 @@ Key architectural patterns include:
 - `DELETE /api/admin/users/:id` blocks: self-delete, system accounts, super_admin role.
 - All primary keys are `serial`. Never change to varchar/UUID.
 
+## System Health Regression Watch (2026-05-11)
+- **Table:** `system_health_log` (id, check_name, severity, entity_type, entity_id, finding jsonb, detected_at, last_seen_at, cleared_at). Storage methods: `findOpenHealthIncident`, `openHealthIncident`, `touchHealthIncident`, `clearHealthIncident`, `listHealthIncidents`, `listOpenHealthIncidentsByCheck`.
+- **Endpoint:** `GET /api/admin/health/regression-check` (admin/super_admin) runs all named checks, upserts findings (opens new, touches still-present, clears resolved), returns `{ overallStatus, totalActiveFindings, checks[] }`.
+- **History:** `GET /api/admin/health/incidents?checkName=&openOnly=&limit=` lists rows from the audit log.
+- **Checks (one per shipped fix area):**
+  - `send_to_nla_status_stuck` — VRS agents/admins on `agent_status='working'` with no open pending tickets and `updated_at > 10 min` ago. Watches Rob's bug class.
+  - `escalate_audit_gap` — completed `parts_nla` rows where `nla_resolution='part_found_vrs_ordered'` and `nla_escalated_by IS NULL` (last 7 days). Watches Zorn's #985 footprint.
+  - `stale_pending_nla` — `parts_nla` pending > 4 hours assigned to an offline agent. Catches abandoned escalates.
+- **Add new checks** by adding another `await runCheck(name, severity, async () => [...])` call inside the route handler — no schema changes needed.
+
 ## Memory System Boundaries
 - **`memory/`** — Replit Agent's memory (this agent). Do NOT read or write from Claude AI.
 - **`.claude/memory/`** — Claude AI's memory (VS Code SSH). Do NOT read or write from Replit Agent.
