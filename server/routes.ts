@@ -1497,17 +1497,25 @@ export async function registerRoutes(
         });
       }
 
-      if (authReq.user!.role === "vrs_agent" && authReq.user!.agentStatus !== "working") {
-        await storage.updateUser(authReq.user!.id, { agentStatus: "working", updatedAt: new Date() } as any);
-        updateClientStatus(authReq.user!.id, "working");
-        broadcastToAdmins({
-          type: "agent_status_changed",
-          payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "working" },
-        });
-        broadcastToAgent(authReq.user!.id, {
-          type: "own_status_changed",
-          payload: { status: "working" },
-        });
+      // Tyler 2026-05-11 (sweep): JWT payload has no `agentStatus` field, so
+      // the prior check `authReq.user!.agentStatus !== "working"` was always
+      // true and every claim emitted a spurious UPDATE + 2 broadcasts even
+      // when the agent was already on `working`. Read the fresh agent_status
+      // from DB and only update + broadcast on actual transition.
+      if (authReq.user!.role === "vrs_agent") {
+        const claimer = await storage.getUser(authReq.user!.id);
+        if (claimer && claimer.agentStatus !== "working") {
+          await storage.updateUser(authReq.user!.id, { agentStatus: "working", updatedAt: new Date() } as any);
+          updateClientStatus(authReq.user!.id, "working");
+          broadcastToAdmins({
+            type: "agent_status_changed",
+            payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "working" },
+          });
+          broadcastToAgent(authReq.user!.id, {
+            type: "own_status_changed",
+            payload: { status: "working" },
+          });
+        }
       }
 
       if (submission.requestType === "parts_nla") {
@@ -4163,7 +4171,10 @@ export async function registerRoutes(
           firstLogin: true,
           mustChangePassword: true,
         });
-        if (role === "admin" || role === "super_admin") {
+        // CSV import only ever assigns "admin" or "vrs_agent" (line above).
+        // super_admin is intentionally not creatable via CSV; only "admin"
+        // gets full division access by seed.
+        if (role === "admin") {
           await storage.setSpecializations(newUser.id, ALL_DIVISIONS);
         }
         imported++;
