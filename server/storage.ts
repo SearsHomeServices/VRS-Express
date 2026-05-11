@@ -2070,8 +2070,28 @@ export class DatabaseStorage implements IStorage {
   async openHealthIncident(
     data: InsertSystemHealthLog
   ): Promise<SystemHealthLog> {
-    const [row] = await db.insert(systemHealthLog).values(data).returning();
-    return row;
+    // Race-safe: a partial unique index on (check_name, entity_type,
+    // entity_id) WHERE cleared_at IS NULL guarantees at most one open
+    // incident per (check, entity). On conflict the loser falls back to
+    // touching the existing open row.
+    const inserted = await db
+      .insert(systemHealthLog)
+      .values(data)
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length > 0) return inserted[0];
+    const existing = await this.findOpenHealthIncident(
+      data.checkName,
+      data.entityType,
+      data.entityId
+    );
+    if (!existing) {
+      throw new Error(
+        `openHealthIncident: insert conflicted but no open incident found for ${data.checkName}/${data.entityType}:${data.entityId}`
+      );
+    }
+    await this.touchHealthIncident(existing.id);
+    return existing;
   }
 
   async touchHealthIncident(id: number): Promise<void> {

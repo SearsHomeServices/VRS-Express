@@ -3085,7 +3085,8 @@ export async function registerRoutes(
     try {
       const checkName = (req.query.checkName as string) || undefined;
       const openOnly = req.query.openOnly === "true";
-      const limit = req.query.limit ? Math.min(Number(req.query.limit), 1000) : 200;
+      const rawLimit = req.query.limit ? Number(req.query.limit) : NaN;
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 200;
       const incidents = await storage.listHealthIncidents({ checkName, openOnly, limit });
       return res.status(200).json({ incidents, count: incidents.length });
     } catch (error) {

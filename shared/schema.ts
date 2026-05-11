@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, integer, timestamp, date, unique, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -357,17 +357,27 @@ export type SystemSetting = typeof systemSettings.$inferSelect;
 //   - sets clearedAt when the problem is no longer detected
 // Lets the agent (and humans) look back at when bugs occurred and what
 // cleared them, even between manual checks.
-export const systemHealthLog = pgTable("system_health_log", {
-  id: serial("id").primaryKey(),
-  checkName: varchar("check_name", { length: 64 }).notNull(),
-  severity: varchar("severity", { length: 16 }).notNull(),
-  entityType: varchar("entity_type", { length: 32 }).notNull(),
-  entityId: integer("entity_id").notNull(),
-  finding: jsonb("finding").notNull(),
-  detectedAt: timestamp("detected_at").notNull().defaultNow(),
-  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
-  clearedAt: timestamp("cleared_at"),
-});
+export const systemHealthLog = pgTable(
+  "system_health_log",
+  {
+    id: serial("id").primaryKey(),
+    checkName: varchar("check_name", { length: 64 }).notNull(),
+    severity: varchar("severity", { length: 16 }).notNull(),
+    entityType: varchar("entity_type", { length: 32 }).notNull(),
+    entityId: integer("entity_id").notNull(),
+    finding: jsonb("finding").notNull(),
+    detectedAt: timestamp("detected_at").notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+    clearedAt: timestamp("cleared_at"),
+  },
+  (table) => ({
+    // Partial unique index — at most one OPEN incident per (check, entity).
+    // Concurrent inserts collide and the loser is retried as a touch.
+    uniqueOpen: uniqueIndex("system_health_log_unique_open_idx")
+      .on(table.checkName, table.entityType, table.entityId)
+      .where(sql`cleared_at IS NULL`),
+  })
+);
 
 export const insertSystemHealthLogSchema = createInsertSchema(systemHealthLog).omit({
   id: true,
