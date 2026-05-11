@@ -20,18 +20,24 @@ interface WSEvent {
 
 const clients = new Map<number, ConnectedClient[]>();
 
-// Tyler 2026-05-09 (VRS desync bug): brief WS disconnects (laptop sleep,
-// Wi-Fi blip, browser tab backgrounded long enough for the socket to
-// drop) used to immediately flip the agent's DB status to "offline" and
+// Tyler 2026-05-11 (VRS follow-up): brief WS disconnects (laptop sleep,
+// Wi-Fi blip, browser tab backgrounded, mobile browser throttling)
+// used to immediately flip the agent's DB status to "offline" and
 // notify admins. The agent's own UI didn't know — they kept seeing
 // "Available" while admin saw "Unavailable", and no new tickets routed
-// to them because server-side `client.agentStatus` was offline. We now
-// schedule the auto-offline with a 30s grace window. If the agent's
-// reconnect loop (client/src/lib/websocket.ts scheduleReconnect) lands
-// a new socket within that window, we cancel the timer and the agent
-// stays online without a flicker. If they're truly gone, the timer
-// fires and admins/techs are notified as before.
-const AUTO_OFFLINE_GRACE_MS = 30000;
+// to them because server-side `client.agentStatus` was offline.
+// VRS confirmed they want agents to stay Available through transient
+// drops since the desktop notification + audio alert fires regardless
+// of which tab is focused. We schedule the auto-offline with a 5min
+// grace window — generous enough to ride out a backgrounded tab, a
+// laptop lid close-and-reopen, a coffee-shop Wi-Fi reconnect, etc. If
+// the agent's reconnect loop (client/src/lib/websocket.ts
+// scheduleReconnect, exponential backoff capped at 30s) lands a new
+// socket within that window, we cancel the timer and the agent stays
+// online without a flicker. If they're truly gone (browser fully
+// closed, machine asleep > 5min), the timer fires and admins/techs are
+// notified as before.
+const AUTO_OFFLINE_GRACE_MS = 5 * 60 * 1000;
 const pendingOfflineTimers = new Map<number, NodeJS.Timeout>();
 
 const WARRANTY_LABELS: Record<string, string> = {
