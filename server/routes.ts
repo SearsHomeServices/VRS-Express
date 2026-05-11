@@ -1618,10 +1618,17 @@ export async function registerRoutes(
         // already moved. Now: status-conditional UPDATE returns 409 on
         // concurrent loss, and SMS is best-effort so a downstream SMS
         // outage cannot retroactively poison a successful approval.
-        const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+        // Tyler 2026-05-11 (two-agents-on-one-ticket fix): also pin the
+        // assignee at write time when the actor is a vrs_agent. Closes
+        // the TOCTOU window where an admin reassigned the ticket from
+        // A → B between A's read and A's UPDATE — previously A's write
+        // still won because status was still "pending". Admins keep the
+        // long-standing intentional bypass.
+        const expectAssignee = authReq.user!.role === "vrs_agent" ? authReq.user!.id : undefined;
+        const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any, expectAssignee);
         if (!updated) {
           return res.status(409).json({
-            error: "This ticket was already moved by another agent. Please refresh and try again.",
+            error: "This ticket was already moved or reassigned. Please refresh and try again.",
             code: "STALE_STATUS",
           });
         }
@@ -1797,10 +1804,15 @@ export async function registerRoutes(
       // sending duplicate SMS). The route already validates
       // `ticketStatus === "pending"` at the top so we encode the same
       // expectation here. Losing concurrent writer gets 409.
-      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+      // Tyler 2026-05-11 (two-agents-on-one-ticket fix): also pin the
+      // assignee at write time for vrs_agent actors so an admin
+      // reassign that lands between this route's read and write cannot
+      // be silently overwritten by the original (now-stale) assignee.
+      const expectAssignee = authReq.user!.role === "vrs_agent" ? authReq.user!.id : undefined;
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any, expectAssignee);
       if (!updated) {
         return res.status(409).json({
-          error: "This ticket was already moved by another agent. Please refresh and try again.",
+          error: "This ticket was already moved or reassigned. Please refresh and try again.",
           code: "STALE_STATUS",
         });
       }
@@ -2199,10 +2211,14 @@ export async function registerRoutes(
       // pattern fixed on /process. Route validates `pending` at the top;
       // we re-encode that as the UPDATE predicate. Losing concurrent
       // writer gets 409 instead of silently overwriting.
-      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any);
+      // Tyler 2026-05-11 (two-agents-on-one-ticket fix): also pin the
+      // assignee for vrs_agent actors so a concurrent admin reassign or
+      // /send-to-nla cannot be silently overwritten.
+      const expectAssignee = authReq.user!.role === "vrs_agent" ? authReq.user!.id : undefined;
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any, expectAssignee);
       if (!updated) {
         return res.status(409).json({
-          error: "This NLA ticket was already moved by another agent. Please refresh and try again.",
+          error: "This NLA ticket was already moved or reassigned. Please refresh and try again.",
           code: "STALE_STATUS",
         });
       }
@@ -2488,13 +2504,25 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Cannot assign to an inactive user" });
         }
 
-        const updated = await storage.updateSubmission(id, {
+        // Tyler 2026-05-11 (two-agents-on-one-ticket fix): was an
+        // unconditional UPDATE BY ID — could clobber a ticket that the
+        // current assignee had just completed in the gap between this
+        // route's read at L2473 and write here, re-surfacing a
+        // finished ticket as "pending" in the new agent's queue. The
+        // status guard rejects with 409 if the ticket already moved.
+        const updated = await storage.updateSubmissionIfStatus(id, ["queued", "pending"], {
           assignedTo: parsed.data.agentId,
           ticketStatus: "pending",
           statusChangedAt: new Date(),
           reassignmentNotes: parsed.data.notes || null,
           updatedAt: new Date(),
         } as any);
+        if (!updated) {
+          return res.status(409).json({
+            error: "This ticket was just completed or moved by the assigned agent. Please refresh.",
+            code: "STALE_STATUS",
+          });
+        }
 
         const assignedEvent = {
           type: "ticket_assigned" as const,
@@ -2514,13 +2542,23 @@ export async function registerRoutes(
         return res.status(200).json({ submission: updated });
       }
 
-      const updated = await storage.updateSubmission(id, {
+      // Tyler 2026-05-11 (two-agents-on-one-ticket fix): same race
+      // window as the agent-target branch above — a "send back to
+      // queue" reassign could overwrite a ticket the prior assignee
+      // had just completed.
+      const updated = await storage.updateSubmissionIfStatus(id, ["queued", "pending"], {
         ticketStatus: "queued",
         statusChangedAt: new Date(),
         assignedTo: null,
         reassignmentNotes: parsed.data.notes || null,
         updatedAt: new Date(),
       } as any);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This ticket was just completed or moved by the assigned agent. Please refresh.",
+          code: "STALE_STATUS",
+        });
+      }
 
       if (updated.requestType === "parts_nla") {
         broadcastToNlaDivisionAgents(updated.applianceType, {
@@ -2600,7 +2638,17 @@ export async function registerRoutes(
 
       const targetDivision = parsed.data.division || submission.applianceType;
 
-      const updated = await storage.updateSubmission(id, {
+      // Tyler 2026-05-11 (two-agents-on-one-ticket fix): was an
+      // unconditional UPDATE BY ID. Could clobber a ticket the
+      // assigned agent had just /process'd in the gap between this
+      // route's read at L2583 and the write here, re-surfacing the
+      // already-completed ticket in the NLA queue. Status guard makes
+      // a stale send-to-nla return 409. For non-admin actors we also
+      // pin the assignee so an admin reassignment between read/write
+      // can't be silently overwritten either.
+      const isAdminActor = authReq.user.role === "admin" || authReq.user.role === "super_admin";
+      const expectAssignee = isAdminActor ? undefined : authReq.user.id;
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
         requestType: "parts_nla",
         applianceType: targetDivision,
         ticketStatus: "queued",
@@ -2608,7 +2656,13 @@ export async function registerRoutes(
         reassignmentNotes: parsed.data.notes || `Sent to NLA queue by ${authReq.user.name}`,
         statusChangedAt: new Date(),
         updatedAt: new Date(),
-      } as any);
+      } as any, expectAssignee);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This ticket was already moved or reassigned. Please refresh and try again.",
+          code: "STALE_STATUS",
+        });
+      }
 
       broadcastToNlaDivisionAgents(updated.applianceType, {
         type: "ticket_queued",

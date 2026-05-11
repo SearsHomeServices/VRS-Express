@@ -140,10 +140,18 @@ export interface IStorage {
   // expected values. Returns undefined when no row was updated (i.e. the
   // ticket was already moved by another agent or process). Callers MUST
   // treat undefined as a 409 Conflict, not a 404.
+  // Tyler 2026-05-11: optional `expectedAssignedTo` parameter closes a
+  // TOCTOU window where an admin reassigns a still-pending ticket from
+  // agent A to agent B between A's getSubmission read and A's UPDATE.
+  // The status-only guard let A win the write. Passing the read-time
+  // assignee lifts the assignment check INTO the UPDATE predicate so
+  // a stale assignee gets undefined and the route returns 409.
+  // `null` is allowed and means "must still be unassigned" (resubmits).
   updateSubmissionIfStatus(
     id: number,
     expectedStatuses: string[],
-    data: Partial<InsertSubmission>
+    data: Partial<InsertSubmission>,
+    expectedAssignedTo?: number | null
   ): Promise<Submission | undefined>;
   deleteSubmission(id: number): Promise<boolean>;
   getAllSubmissions(startDate?: Date | null, endDate?: Date | null, techLdap?: string | null): Promise<Submission[]>;
@@ -559,22 +567,35 @@ export class DatabaseStorage implements IStorage {
   async updateSubmissionIfStatus(
     id: number,
     expectedStatuses: string[],
-    data: Partial<InsertSubmission>
+    data: Partial<InsertSubmission>,
+    expectedAssignedTo?: number | null
   ): Promise<Submission | undefined> {
     if (!expectedStatuses || expectedStatuses.length === 0) {
       // Defensive: caller must supply at least one expected status. We
       // refuse to silently degrade to an unconditional update.
       throw new Error("updateSubmissionIfStatus requires at least one expectedStatus");
     }
+    const predicates = [
+      eq(submissions.id, id),
+      inArray(submissions.ticketStatus, expectedStatuses),
+    ];
+    // Tyler 2026-05-11: optional assignee guard. `undefined` means "do
+    // not check"; `null` means "must still be unassigned"; a number
+    // means "must still be assigned to this user". This is the second
+    // half of the two-agents-on-one-ticket fix — without it an admin
+    // reassign mid-process let the original assignee still win the
+    // UPDATE because the status alone hadn't moved.
+    if (expectedAssignedTo !== undefined) {
+      if (expectedAssignedTo === null) {
+        predicates.push(sql`${submissions.assignedTo} IS NULL`);
+      } else {
+        predicates.push(eq(submissions.assignedTo, expectedAssignedTo));
+      }
+    }
     const result = await db
       .update(submissions)
       .set(data)
-      .where(
-        and(
-          eq(submissions.id, id),
-          inArray(submissions.ticketStatus, expectedStatuses)
-        )
-      )
+      .where(and(...predicates))
       .returning();
     return result[0];
   }
