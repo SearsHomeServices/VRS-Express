@@ -561,6 +561,24 @@ export default function AgentDashboard() {
       }
     });
 
+    // Tyler 2026-05-11 (VRS desync hardening) — when the tab regains
+    // focus after being backgrounded, refetch the authoritative DB
+    // status. Closes the gap where a heartbeat-killed WebSocket missed
+    // an admin-driven own_status_changed event before reconnecting.
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || isAdminViewing) return;
+      fetch("/api/agent/status", {
+        headers: { Authorization: `Bearer ${localStorage.getItem("vrs_token")}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.agentStatus) setLocalAgentStatus(data.agentStatus);
+        })
+        .catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onVisibilityChange);
+
     // Tyler 2026-05-01 (architect fix): admin saved new business hours →
     // refetch so the queue urgency math + "after hours" indicator
     // re-render without a manual reload.
@@ -578,6 +596,8 @@ export default function AgentDashboard() {
       unsub7();
       unsub8();
       unsub9();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onVisibilityChange);
     };
   }, [subscribe, toast, isAdminViewing]);
 

@@ -2312,6 +2312,23 @@ export async function registerRoutes(
   // AGENT STATUS ROUTES
   // ========================================================================
 
+  // Tyler 2026-05-11 (VRS desync hardening) — lightweight GET so the
+  // agent dashboard can reconcile its local toggle against the
+  // authoritative DB on tab refocus (visibilitychange). Closes the gap
+  // where a backgrounded tab missed an admin-initiated own_status_changed
+  // because its WebSocket was killed by the heartbeat before reconnecting.
+  app.get("/api/agent/status", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const user = await storage.getUser(authReq.user!.id);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      return res.status(200).json({ agentStatus: (user as any).agentStatus || "offline" });
+    } catch (error) {
+      console.error("Get agent status error:", error);
+      return res.status(500).json({ error: "Failed to fetch status" });
+    }
+  });
+
   app.patch("/api/agent/status", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
