@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
 import {
@@ -1090,7 +1090,17 @@ export default function AgentDashboard() {
 
   const processMutation = useMutation({
     mutationFn: async ({ submissionId, body }: { submissionId: number; body: Record<string, unknown> }) => {
-      const res = await apiRequest("PATCH", `/api/submissions/${submissionId}/process`, body);
+      // Tyler 2026-05-11 — same edge-flake retry as nlaProcessMutation.
+      // Server enforces optimistic-lock via updateSubmissionIfStatus,
+      // so a duplicate retry returns JSON 409 STALE_STATUS rather than
+      // double-processing. Only transient (HTML 403/5xx, network) is
+      // retried; real JSON 4xx errors throw immediately.
+      const res = await apiRequestWithRetry(
+        "PATCH",
+        `/api/submissions/${submissionId}/process`,
+        body,
+        { logTag: "process-retry" },
+      );
       return res.json();
     },
     onSuccess: (data: any) => {
@@ -1179,7 +1189,19 @@ export default function AgentDashboard() {
 
   const nlaProcessMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("PATCH", `/api/submissions/${selectedId}/process-nla`, data);
+      // Tyler 2026-05-11 (Zorn NLA escalate failure, SO 8380-13547409):
+      // edge proxy returned HTML 403 on PATCH /process-nla, killing the
+      // P-Card escalation. Same edge-flake we already self-heal on tech
+      // submissions. Server uses updateSubmissionIfStatus, so a retry
+      // that races a successful first attempt returns JSON 409 STALE_
+      // STATUS (not duplicate side effects). Safe to retry transient
+      // errors only.
+      const res = await apiRequestWithRetry(
+        "PATCH",
+        `/api/submissions/${selectedId}/process-nla`,
+        data,
+        { logTag: "process-nla-retry" },
+      );
       return await res.json();
     },
     // Tyler 2026-04-30 (NLA intake-form parity with AUTH): mirrors the

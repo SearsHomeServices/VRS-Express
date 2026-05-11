@@ -62,6 +62,58 @@ export async function apiRequest(
   return res;
 }
 
+// Tyler 2026-05-11 — Replit's edge proxy occasionally rejects POSTs/PATCHs
+// before they reach Express, returning a stock HTML 403/5xx page instead
+// of our app's JSON. First seen on tech submissions (Mike, AHS, SO 8420-
+// 13676372) and again on agent NLA escalation (Zorn, SO 8380-13547409 —
+// "Processing Failed" toast with edge HTML 403 body). This helper retries
+// the request up to `maxAttempts` times with 800ms / 1600ms backoff when
+// the error looks transient. JSON 4xx errors (real validation failures
+// from our own server) are NOT retried — caller still sees the actual
+// message immediately. Safe by construction for routes that are either
+// idempotent (POST /api/submissions has 60s tech-SO# idempotency) or
+// status-conditional (PATCH /process, /process-nla use updateSubmission-
+// IfStatus, so a duplicate retry returns 409 STALE_STATUS as JSON, not
+// extra side effects). Server already enforces these guarantees.
+export function isTransientApiError(msg: string): boolean {
+  const m = (msg || "").toLowerCase();
+  // Replit edge HTML 403 page (no JSON, contains "<title>403")
+  if (m.includes("<!doctype html") && m.includes("403")) return true;
+  // Generic edge HTML for 502/503/504
+  if (m.includes("<!doctype html") && /50\d/.test(m)) return true;
+  // fetch network failures
+  if (m === "failed to fetch" || m.includes("networkerror")) return true;
+  // Server 5xx surfaced as "internal server error" / similar
+  if (m.includes("internal server error")) return true;
+  return false;
+}
+
+export async function apiRequestWithRetry(
+  method: string,
+  url: string,
+  data?: unknown | undefined,
+  opts: { maxAttempts?: number; logTag?: string } = {},
+): Promise<Response> {
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const logTag = opts.logTag ?? "api-retry";
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await apiRequest(method, url, data);
+    } catch (err: any) {
+      lastErr = err;
+      const msg = err?.message || String(err);
+      if (attempt >= maxAttempts || !isTransientApiError(msg)) throw err;
+      const backoffMs = 800 * Math.pow(2, attempt - 1);
+      console.warn(
+        `[${logTag}] attempt ${attempt} failed (transient) — retrying in ${backoffMs}ms. Error: ${msg.slice(0, 160)}`,
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr;
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;

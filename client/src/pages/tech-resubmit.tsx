@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation, Link } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
 import { useAuth, getToken } from "@/lib/auth";
 import { parseVideoUrls, MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
@@ -363,35 +363,17 @@ export default function TechResubmitPage() {
 
   const mutation = useMutation({
     mutationFn: async (data: any) => {
-      // 2026-05-11 — same transient-edge-403 self-heal as tech-submit.
-      // Server idempotency at routes.ts:~590 makes retries safe (60s
-      // (tech, SO#) window returns the existing row without extra SMS).
-      const isTransientErr = (msg: string): boolean => {
-        const m = (msg || "").toLowerCase();
-        if (m.includes("<!doctype html") && m.includes("403")) return true;
-        if (m.includes("<!doctype html") && /50\d/.test(m)) return true;
-        if (m === "failed to fetch" || m.includes("networkerror")) return true;
-        if (m.includes("internal server error")) return true;
-        return false;
-      };
-      const maxAttempts = 3;
-      let lastErr: any;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const res = await apiRequest("POST", "/api/submissions", data);
-          return await res.json();
-        } catch (err: any) {
-          lastErr = err;
-          const msg = err?.message || String(err);
-          if (attempt >= maxAttempts || !isTransientErr(msg)) throw err;
-          const backoffMs = 800 * Math.pow(2, attempt - 1);
-          console.warn(
-            `[resubmit-retry] attempt ${attempt} failed (transient) — retrying in ${backoffMs}ms. Error: ${msg.slice(0, 160)}`,
-          );
-          await new Promise((r) => setTimeout(r, backoffMs));
-        }
-      }
-      throw lastErr;
+      // 2026-05-11 — same transient-edge-403 self-heal as tech-submit,
+      // via shared apiRequestWithRetry helper. Server idempotency at
+      // routes.ts:~590 makes retries safe (60s (tech, SO#) window
+      // returns the existing row without extra SMS).
+      const res = await apiRequestWithRetry(
+        "POST",
+        "/api/submissions",
+        data,
+        { logTag: "resubmit-retry" },
+      );
+      return await res.json();
     },
     onSuccess: (data: any) => {
       toast({ title: "Resubmission Sent", description: `SO# ${data.submission.serviceOrder} resubmitted successfully.` });

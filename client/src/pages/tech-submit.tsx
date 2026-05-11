@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
 import { useAuth, getToken } from "@/lib/auth";
 import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
@@ -686,45 +686,19 @@ export default function TechSubmitPage() {
     mutationFn: async (data: SubmissionFormData & { originalDescription?: string; aiEnhanced?: boolean }) => {
       // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) hit a
       // "Submission Failed" toast whose body was Replit's edge-proxy
-      // HTML 403 page; the request never reached Express. To self-heal
-      // transient edge-layer hiccups (deploy-warmup, momentary WAF/bot
-      // trip, mobile-network proxy blip), retry POST /api/submissions
-      // up to 2 extra times with 800ms / 1600ms backoff. This is SAFE
-      // because the server enforces 60s (tech, SO#) idempotency at
-      // routes.ts:~590 and storage.createSubmissionWithIdempotency, so
-      // a duplicate retry returns the existing row without a second
-      // SMS or insert. Only retry on transient signals — never on
-      // genuine 4xx errors (those are JSON with a real message).
-      const isTransientErr = (msg: string): boolean => {
-        const m = (msg || "").toLowerCase();
-        // Replit edge HTML 403 page (no JSON, contains "<title>403")
-        if (m.includes("<!doctype html") && m.includes("403")) return true;
-        // Generic edge HTML for 502/503/504
-        if (m.includes("<!doctype html") && /50\d/.test(m)) return true;
-        // fetch network failures
-        if (m === "failed to fetch" || m.includes("networkerror")) return true;
-        // Server 5xx surfaced as "internal server error" / similar
-        if (m.includes("internal server error")) return true;
-        return false;
-      };
-      const maxAttempts = 3;
-      let lastErr: any;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const res = await apiRequest("POST", "/api/submissions", data);
-          return await res.json();
-        } catch (err: any) {
-          lastErr = err;
-          const msg = err?.message || String(err);
-          if (attempt >= maxAttempts || !isTransientErr(msg)) throw err;
-          const backoffMs = 800 * Math.pow(2, attempt - 1);
-          console.warn(
-            `[submit-retry] attempt ${attempt} failed (transient) — retrying in ${backoffMs}ms. Error: ${msg.slice(0, 160)}`,
-          );
-          await new Promise((r) => setTimeout(r, backoffMs));
-        }
-      }
-      throw lastErr;
+      // HTML 403 page; the request never reached Express. Self-heal via
+      // shared apiRequestWithRetry helper (queryClient.ts) — retries
+      // transient edge-layer hiccups up to 2 extra times with 800/1600ms
+      // backoff. SAFE because server enforces 60s (tech, SO#) idempotency
+      // at routes.ts:~590 / createSubmissionWithIdempotency, so a
+      // duplicate retry returns the existing row without a second SMS.
+      const res = await apiRequestWithRetry(
+        "POST",
+        "/api/submissions",
+        data,
+        { logTag: "submit-retry" },
+      );
+      return await res.json();
     },
     onSuccess: (data) => {
       try { localStorage.removeItem(DRAFT_KEY); } catch {}
