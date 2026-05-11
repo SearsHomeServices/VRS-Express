@@ -565,6 +565,25 @@ export async function registerRoutes(
     resubmissionOf: z.number().optional(),
   });
 
+  // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
+  // "Submission Failed" toast whose body was Replit's edge-proxy HTML
+  // 403 page. The corresponding POST /api/submissions never appeared in
+  // the deployment logs, suggesting the request was rejected before
+  // Express. This pre-route middleware logs every POST /api/submissions
+  // entry (auth header presence, content-length, user-agent) so that if
+  // it happens again we can confirm whether the request actually
+  // reached our app and rule the edge layer in or out.
+  app.post("/api/submissions", (req, _res, next) => {
+    const auth = req.headers["authorization"];
+    const cl = req.headers["content-length"] || "-";
+    const ua = (req.headers["user-agent"] || "-").toString().slice(0, 80);
+    console.log(
+      `[submit-entry] POST /api/submissions reached Express ` +
+        `auth=${auth ? "present" : "MISSING"} content-length=${cl} ua="${ua}"`,
+    );
+    next();
+  });
+
   app.post("/api/submissions", authenticateToken, requireRole("technician"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
