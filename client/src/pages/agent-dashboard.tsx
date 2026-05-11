@@ -548,6 +548,19 @@ export default function AgentDashboard() {
       }
     });
 
+    // Tyler 2026-05-09 (VRS desync bug): the server now echoes the
+    // authoritative DB agentStatus on every (re)connect. Sync the
+    // local toggle from it so the UI can never silently disagree with
+    // what admins see — e.g. if a brief disconnect already pushed the
+    // user past the 30s grace window and they were auto-offlined, this
+    // is what flips the toggle from green "Available" back to gray
+    // "Unavailable" without a page refresh.
+    const unsub9 = subscribe("connected", (payload: any) => {
+      if (payload?.agentStatus && !isAdminViewing) {
+        setLocalAgentStatus(payload.agentStatus);
+      }
+    });
+
     // Tyler 2026-05-01 (architect fix): admin saved new business hours →
     // refetch so the queue urgency math + "after hours" indicator
     // re-render without a manual reload.
@@ -564,8 +577,9 @@ export default function AgentDashboard() {
       unsub6();
       unsub7();
       unsub8();
+      unsub9();
     };
-  }, [subscribe, toast]);
+  }, [subscribe, toast, isAdminViewing]);
 
   useEffect(() => {
     if (!statusChecked && user && !isAdminViewing && agentStatus === "offline") {

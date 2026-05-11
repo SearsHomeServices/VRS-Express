@@ -20,6 +20,20 @@ interface WSEvent {
 
 const clients = new Map<number, ConnectedClient[]>();
 
+// Tyler 2026-05-09 (VRS desync bug): brief WS disconnects (laptop sleep,
+// Wi-Fi blip, browser tab backgrounded long enough for the socket to
+// drop) used to immediately flip the agent's DB status to "offline" and
+// notify admins. The agent's own UI didn't know — they kept seeing
+// "Available" while admin saw "Unavailable", and no new tickets routed
+// to them because server-side `client.agentStatus` was offline. We now
+// schedule the auto-offline with a 30s grace window. If the agent's
+// reconnect loop (client/src/lib/websocket.ts scheduleReconnect) lands
+// a new socket within that window, we cancel the timer and the agent
+// stays online without a flicker. If they're truly gone, the timer
+// fires and admins/techs are notified as before.
+const AUTO_OFFLINE_GRACE_MS = 30000;
+const pendingOfflineTimers = new Map<number, NodeJS.Timeout>();
+
 const WARRANTY_LABELS: Record<string, string> = {
   sears_protect: "SPHW",
   sears_pa: "Sears PA",
@@ -118,6 +132,16 @@ export function setupWebSocket(server: Server) {
         agentStatus: (user as any).agentStatus || "offline",
       };
 
+      // Cancel any pending auto-offline timer for this user — they're
+      // back within the grace window, treat the prior disconnect as
+      // transient and keep their status as-is.
+      const pendingTimer = pendingOfflineTimers.get(decoded.id);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingOfflineTimers.delete(decoded.id);
+        log(`Cancelled pending auto-offline for ${user.name} (reconnected within ${AUTO_OFFLINE_GRACE_MS / 1000}s grace)`, "ws");
+      }
+
       const existing = clients.get(decoded.id) || [];
       existing.push(client);
       clients.set(decoded.id, existing);
@@ -135,22 +159,39 @@ export function setupWebSocket(server: Server) {
             log(`WebSocket disconnected: ${client.name} (id=${client.userId}, last session)`, "ws");
 
             if (client.role === "vrs_agent" && client.agentStatus !== "offline") {
-              try {
-                await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
-                broadcastToAdmins({
-                  type: "agent_status_changed",
-                  payload: { userId: client.userId, name: client.name, status: "offline" },
-                });
-                log(`Agent ${client.name} auto-set offline on disconnect`, "ws");
-                const onlineCount = await storage.getOnlineAgentCount();
-                const queuedCount = await storage.getQueuedCountAll();
-                broadcastToTechnicians({
-                  type: 'vrs_availability',
-                  payload: { onlineAgents: onlineCount, queuedTickets: queuedCount }
-                });
-              } catch (err) {
-                log(`Failed to auto-offline agent ${client.name}: ${err}`, "ws");
-              }
+              // Schedule the offline flip with a grace window. The
+              // (re)connect handler above clears this timer if the
+              // agent is back in time.
+              const existingPending = pendingOfflineTimers.get(client.userId);
+              if (existingPending) clearTimeout(existingPending);
+              const timer = setTimeout(async () => {
+                pendingOfflineTimers.delete(client.userId);
+                // Double-check: user may have come back without our
+                // connect path cancelling for some reason.
+                const liveSessions = clients.get(client.userId);
+                if (liveSessions && liveSessions.length > 0) {
+                  log(`Skipped auto-offline for ${client.name} — sessions reappeared after grace`, "ws");
+                  return;
+                }
+                try {
+                  await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
+                  broadcastToAdmins({
+                    type: "agent_status_changed",
+                    payload: { userId: client.userId, name: client.name, status: "offline" },
+                  });
+                  log(`Agent ${client.name} auto-set offline after ${AUTO_OFFLINE_GRACE_MS / 1000}s grace`, "ws");
+                  const onlineCount = await storage.getOnlineAgentCount();
+                  const queuedCount = await storage.getQueuedCountAll();
+                  broadcastToTechnicians({
+                    type: 'vrs_availability',
+                    payload: { onlineAgents: onlineCount, queuedTickets: queuedCount }
+                  });
+                } catch (err) {
+                  log(`Failed to auto-offline agent ${client.name}: ${err}`, "ws");
+                }
+              }, AUTO_OFFLINE_GRACE_MS);
+              pendingOfflineTimers.set(client.userId, timer);
+              log(`Scheduled auto-offline for ${client.name} in ${AUTO_OFFLINE_GRACE_MS / 1000}s (no live sessions)`, "ws");
             }
           }
         }
@@ -168,7 +209,14 @@ export function setupWebSocket(server: Server) {
         }
       });
 
-      sendToClient(ws, { type: "connected", payload: { userId: decoded.id } });
+      // Echo back the authoritative DB agentStatus so the client's
+      // local UI state can re-sync on every (re)connect. Without this,
+      // a UI that stuck on "Available" through a disconnect could
+      // disagree with the DB and with admin's view.
+      sendToClient(ws, {
+        type: "connected",
+        payload: { userId: decoded.id, agentStatus: (user as any).agentStatus || "offline" },
+      });
 
       if (client.role === 'technician') {
         try {
