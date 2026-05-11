@@ -2694,6 +2694,33 @@ export async function registerRoutes(
         },
       });
 
+      // Tyler 2026-05-11 (Rob Seda "Cannot Go Unavailable" fix): when a
+      // vrs_agent sends their claimed ticket to the NLA queue, the route
+      // previously cleared assignedTo + flipped requestType=parts_nla
+      // but never restored the agent's `agentStatus` from "working"
+      // back to "online". The agent's toggle stayed locked on Working
+      // and the next tick's getPendingCount/race could leave them
+      // blocked from going unavailable even though they had no open
+      // VRS tickets. Mirrors the exact pattern in /process and
+      // /process-nla; admins keep their independent status flow.
+      if (authReq.user.role === "vrs_agent") {
+        try {
+          await storage.updateUser(authReq.user.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          updateClientStatus(authReq.user.id, "online");
+          broadcastToAdmins({
+            type: "agent_status_changed",
+            payload: { userId: authReq.user.id, name: authReq.user.name, status: "online" },
+          });
+          broadcastToAgent(authReq.user.id, {
+            type: "own_status_changed",
+            payload: { status: "online" },
+          });
+          await broadcastVrsAvailability();
+        } catch (postErr) {
+          console.error(`[send-to-nla] post-commit agent-status update failed for submission ${updated.id}:`, postErr);
+        }
+      }
+
       return res.status(200).json({ submission: updated });
     } catch (error) {
       console.error("Send to NLA error:", error);
