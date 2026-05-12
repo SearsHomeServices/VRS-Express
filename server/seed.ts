@@ -158,29 +158,42 @@ export async function seedDatabase() {
 // Tyler 2026-05-12 (perf sweep): Submissions table in prod had only the primary
 // key — every queue/pending/history/idempotency lookup was a Seq Scan. At 776
 // rows the hot queue query took ~29ms; degrades linearly. Added 6 indexes
-// covering the hottest filter/sort columns. CREATE INDEX IF NOT EXISTS is
-// idempotent + safe to re-run on every boot. Skipped CONCURRENTLY because at
-// current table size the brief lock is microseconds and we want this to run
-// inside seed startup deterministically.
+// covering the hottest filter/sort columns. Uses CREATE INDEX CONCURRENTLY so
+// no table lock is held — active users don't see any pause. CONCURRENTLY can
+// leave behind an `indisvalid=false` index if interrupted (build crash mid-
+// way), so we detect and drop+rebuild any invalid index before recreating.
+// Idempotent: safe to re-run on every boot.
 async function ensurePerformanceIndexes() {
-  const indexes: Array<{ name: string; ddl: string }> = [
-    { name: "idx_submissions_status_request",      ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_status_request ON submissions (ticket_status, request_type)` },
-    { name: "idx_submissions_assigned_status",     ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_assigned_status ON submissions (assigned_to, ticket_status)` },
-    { name: "idx_submissions_service_order",       ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_service_order ON submissions (service_order)` },
-    { name: "idx_submissions_technician_created",  ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_technician_created ON submissions (technician_id, created_at DESC)` },
-    { name: "idx_submissions_created_at",          ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_created_at ON submissions (created_at)` },
-    { name: "idx_users_rac_id",                    ddl: `CREATE INDEX IF NOT EXISTS idx_users_rac_id ON users (rac_id)` },
+  const indexes: Array<{ name: string; cols: string; table: string }> = [
+    { name: "idx_submissions_status_request",      table: "submissions", cols: "(ticket_status, request_type)" },
+    { name: "idx_submissions_assigned_status",     table: "submissions", cols: "(assigned_to, ticket_status)" },
+    { name: "idx_submissions_service_order",       table: "submissions", cols: "(service_order)" },
+    { name: "idx_submissions_technician_created",  table: "submissions", cols: "(technician_id, created_at DESC)" },
+    { name: "idx_submissions_created_at",          table: "submissions", cols: "(created_at)" },
+    { name: "idx_users_rac_id",                    table: "users",       cols: "(rac_id)" },
   ];
   let createdCount = 0;
   for (const idx of indexes) {
     try {
-      await db.execute(sql.raw(idx.ddl));
+      // Drop any prior invalid (interrupted CONCURRENTLY build) leftover so
+      // the next CREATE will succeed cleanly. CONCURRENTLY required for
+      // DROP too so the live table is never locked.
+      const invalidCheck = await db.execute(sql.raw(
+        `SELECT 1 FROM pg_class c JOIN pg_index i ON c.oid = i.indexrelid WHERE c.relname = '${idx.name}' AND i.indisvalid = false`
+      ));
+      if ((invalidCheck.rows as any[]).length > 0) {
+        await db.execute(sql.raw(`DROP INDEX CONCURRENTLY IF EXISTS ${idx.name}`));
+        console.log(`[perf-indexes] Dropped prior invalid ${idx.name}`);
+      }
+      await db.execute(sql.raw(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${idx.name} ON ${idx.table} ${idx.cols}`
+      ));
       createdCount++;
     } catch (err: any) {
       console.warn(`[perf-indexes] Failed to ensure ${idx.name}: ${err?.message || err}`);
     }
   }
-  console.log(`[perf-indexes] Ensured ${createdCount}/${indexes.length} performance indexes`);
+  console.log(`[perf-indexes] Ensured ${createdCount}/${indexes.length} performance indexes (CONCURRENTLY, no table lock)`);
 }
 
 // ============================================================================
