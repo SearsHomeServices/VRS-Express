@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, index, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -44,7 +44,11 @@ export const users = pgTable("users", {
   notificationVolume: varchar("notification_volume", { length: 10 }).notNull().default("0.5"),
   createdAt: timestamp("created_at").default(sql`now()`),
   updatedAt: timestamp("updated_at").default(sql`now()`),
-});
+}, (table) => ({
+  // Tyler 2026-05-12 — runtime-created in seed.ts ensurePerformanceIndexes().
+  // Declared here so drizzle-kit push doesn't try to drop them on schema sync.
+  racIdIdx: index("idx_users_rac_id").on(table.racId),
+}));
 
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -146,7 +150,17 @@ export const submissions = pgTable("submissions", {
   statusChangedAt: timestamp("status_changed_at").default(sql`now()`),
   createdAt: timestamp("created_at").default(sql`now()`),
   updatedAt: timestamp("updated_at").default(sql`now()`),
-});
+}, (table) => ({
+  // Tyler 2026-05-12 — runtime-created in seed.ts ensurePerformanceIndexes()
+  // (CREATE INDEX CONCURRENTLY). Declared here so drizzle-kit push doesn't
+  // try to drop them on schema sync. Order/columns must match the runtime
+  // CREATE INDEX statements exactly.
+  statusRequestIdx: index("idx_submissions_status_request").on(table.ticketStatus, table.requestType),
+  assignedStatusIdx: index("idx_submissions_assigned_status").on(table.assignedTo, table.ticketStatus),
+  serviceOrderIdx: index("idx_submissions_service_order").on(table.serviceOrder),
+  technicianCreatedIdx: index("idx_submissions_technician_created").on(table.technicianId, sql`created_at DESC`),
+  createdAtIdx: index("idx_submissions_created_at").on(table.createdAt),
+}));
 
 export const insertSubmissionSchema = createInsertSchema(submissions).omit({
   id: true,

@@ -150,6 +150,7 @@ export async function seedDatabase() {
   await resetAllPasswords();
   await backfillClaimedAt();
   await ensurePerformanceIndexes();
+  await ensureSystemHealthLogTable();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
   await seedDefaultCommunicationTemplates();
@@ -194,6 +195,38 @@ async function ensurePerformanceIndexes() {
     }
   }
   console.log(`[perf-indexes] Ensured ${createdCount}/${indexes.length} performance indexes (CONCURRENTLY, no table lock)`);
+}
+
+// Tyler 2026-05-12 — system_health_log table backs the regression-watch
+// system + admin "System Health" view. Created here as an idempotent boot-
+// time migration so prod gets it on next deploy without requiring a manual
+// drizzle-kit push (which would be interactive and risky against prod).
+// The schema mirrors shared/schema.ts:systemHealthLog exactly. Safe to
+// re-run on every boot — IF NOT EXISTS makes it a no-op when present.
+async function ensureSystemHealthLogTable() {
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS system_health_log (
+        id SERIAL PRIMARY KEY,
+        check_name VARCHAR(64) NOT NULL,
+        severity VARCHAR(16) NOT NULL,
+        entity_type VARCHAR(32) NOT NULL,
+        entity_id INTEGER NOT NULL,
+        finding JSONB NOT NULL,
+        detected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        cleared_at TIMESTAMP
+      )
+    `));
+    await db.execute(sql.raw(`
+      CREATE UNIQUE INDEX IF NOT EXISTS system_health_log_unique_open_idx
+      ON system_health_log (check_name, entity_type, entity_id)
+      WHERE cleared_at IS NULL
+    `));
+    console.log("[system-health-log] Table + unique-open index ensured");
+  } catch (err: any) {
+    console.warn(`[system-health-log] Failed to ensure table: ${err?.message || err}`);
+  }
 }
 
 // ============================================================================

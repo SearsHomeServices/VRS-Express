@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -129,6 +129,8 @@ import {
   ChevronRight,
   Package,
   CreditCard,
+  Activity,
+  AlertTriangle,
 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
@@ -173,7 +175,7 @@ function formatDuration(ms: number | null): string {
 
 type SafeUser = Omit<User, "password">;
 
-type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback";
+type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback" | "health";
 
 const DIVISION_KEYS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"] as const;
 
@@ -1933,6 +1935,349 @@ function FeedbackSection() {
 // Removed per request 2026-05-07: backend audit logs to deployment logs only.
 // No UI surface — see [suspicious-rejection] warnings in /api/submissions/:id/process.
 
+// ============================================================================
+// HealthSection — admin-only system health / regression-watch view.
+// Shows real-time results of the named regression checks plus the recent
+// audit history of opened/cleared incidents from system_health_log.
+// ============================================================================
+type HealthCheck = {
+  checkName: string;
+  severity: string;
+  currentCount: number;
+  opened: number;
+  touched: number;
+  cleared: number;
+  sample: Array<{ entityType: string; entityId: number; finding: any }>;
+};
+type HealthCheckResponse = {
+  ranAt: string;
+  overallStatus: "green" | "issues_detected";
+  totalActiveFindings: number;
+  checks: HealthCheck[];
+};
+type HealthIncident = {
+  id: number;
+  checkName: string;
+  severity: string;
+  entityType: string;
+  entityId: number;
+  finding: any;
+  detectedAt: string;
+  lastSeenAt: string;
+  clearedAt: string | null;
+};
+
+const CHECK_LABELS: Record<string, { title: string; description: string }> = {
+  send_to_nla_status_stuck: {
+    title: "Agent Status Stuck on Working",
+    description: "VRS agents/admins shown as Working but with no pending tickets and idle > 10 min. Watches Rob's send-to-NLA status fix.",
+  },
+  escalate_audit_gap: {
+    title: "NLA Escalate Audit Gap",
+    description: "Completed P-card NLA tickets missing the prior escalate breadcrumb. Watches Zorn's escalate retry-wrapper fix (ticket #985 footprint).",
+  },
+  stale_pending_nla: {
+    title: "Abandoned NLA Tickets",
+    description: "NLA tickets pending > 4 hours assigned to an offline agent. Catches orphaned escalates.",
+  },
+};
+
+function HealthSection() {
+  const [filterCheck, setFilterCheck] = useState<string>("");
+  const [openOnly, setOpenOnly] = useState(true);
+
+  const checkQuery = useQuery<HealthCheckResponse>({
+    queryKey: ["/api/admin/health/regression-check"],
+    refetchOnWindowFocus: false,
+  });
+
+  const incidentsQuery = useQuery<{ incidents: HealthIncident[]; count: number }>({
+    queryKey: ["/api/admin/health/incidents", { checkName: filterCheck || undefined, openOnly, limit: 100 }],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filterCheck) params.set("checkName", filterCheck);
+      if (openOnly) params.set("openOnly", "true");
+      params.set("limit", "100");
+      const url = `/api/admin/health/incidents?${params.toString()}`;
+      const token = localStorage.getItem("vrs_token");
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = text;
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    refetchOnWindowFocus: false,
+  });
+
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/health/regression-check"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/health/incidents"] });
+  };
+
+  const data = checkQuery.data;
+  const isError = checkQuery.isError;
+  const errorMessage = checkQuery.error instanceof Error ? checkQuery.error.message : "Failed to load health checks";
+
+  return (
+    <div className="space-y-6" data-testid="health-section">
+      {/* Overall status banner */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle data-testid="text-health-title">Regression Watch</CardTitle>
+            <CardDescription>
+              Active monitoring of shipped bug-fix areas. Each check corresponds to a real production fix.
+            </CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={checkQuery.isFetching}
+            data-testid="button-refresh-health"
+          >
+            {checkQuery.isFetching ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <RotateCcw className="w-4 h-4 mr-2" />
+            )}
+            Run Checks
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {checkQuery.isLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground" data-testid="text-health-loading">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Running checks…
+            </div>
+          ) : isError ? (
+            <div
+              className="flex items-start gap-2 p-3 rounded-md border border-destructive/30 bg-destructive/10 text-destructive"
+              data-testid="text-health-error"
+            >
+              <AlertTriangle className="w-4 h-4 mt-0.5" />
+              <div className="text-sm">
+                <div className="font-medium">Health checks unavailable</div>
+                <div className="text-xs opacity-80">
+                  {errorMessage}. The <code className="font-mono">system_health_log</code> table may not exist in this environment yet.
+                </div>
+              </div>
+            </div>
+          ) : data ? (
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center gap-3">
+                {data.overallStatus === "green" ? (
+                  <>
+                    <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-500" />
+                    <div>
+                      <div className="text-lg font-semibold text-green-700 dark:text-green-400" data-testid="text-health-status">
+                        All Clear
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Last run {new Date(data.ranAt).toLocaleString()}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-500" />
+                    <div>
+                      <div className="text-lg font-semibold text-amber-700 dark:text-amber-400" data-testid="text-health-status">
+                        {data.totalActiveFindings} Active Finding{data.totalActiveFindings === 1 ? "" : "s"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Last run {new Date(data.ranAt).toLocaleString()}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Per-check breakdown */}
+      {data && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {data.checks.map((check) => {
+            const meta = CHECK_LABELS[check.checkName] || {
+              title: check.checkName,
+              description: "Custom regression check.",
+            };
+            const isClean = check.currentCount === 0;
+            return (
+              <Card
+                key={check.checkName}
+                className={isClean ? "border-green-200 dark:border-green-900" : "border-amber-300 dark:border-amber-800"}
+                data-testid={`card-check-${check.checkName}`}
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <CardTitle className="text-base">{meta.title}</CardTitle>
+                    {isClean ? (
+                      <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-400 dark:border-green-800">
+                        OK
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800">
+                        {check.currentCount}
+                      </Badge>
+                    )}
+                  </div>
+                  <CardDescription className="text-xs">{meta.description}</CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-2">
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    <span data-testid={`text-opened-${check.checkName}`}>
+                      Opened: <span className="font-mono font-medium text-foreground">{check.opened}</span>
+                    </span>
+                    <span data-testid={`text-touched-${check.checkName}`}>
+                      Still present: <span className="font-mono font-medium text-foreground">{check.touched}</span>
+                    </span>
+                    <span data-testid={`text-cleared-${check.checkName}`}>
+                      Cleared: <span className="font-mono font-medium text-foreground">{check.cleared}</span>
+                    </span>
+                  </div>
+                  {check.sample.length > 0 && (
+                    <div className="border-t pt-2 mt-2 space-y-1">
+                      <div className="text-xs font-medium text-muted-foreground">Sample findings:</div>
+                      {check.sample.slice(0, 3).map((s, i) => (
+                        <div
+                          key={`${s.entityType}-${s.entityId}-${i}`}
+                          className="text-xs font-mono bg-muted/40 rounded px-2 py-1"
+                          data-testid={`sample-${check.checkName}-${i}`}
+                        >
+                          {s.entityType} #{s.entityId}
+                          {s.finding && typeof s.finding === "object" && (
+                            <span className="text-muted-foreground">
+                              {" — "}
+                              {Object.entries(s.finding)
+                                .slice(0, 2)
+                                .map(([k, v]) => `${k}: ${typeof v === "string" && v.length > 24 ? v.slice(0, 24) + "…" : String(v)}`)
+                                .join(", ")}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                      {check.sample.length > 3 && (
+                        <div className="text-xs text-muted-foreground italic">+ {check.sample.length - 3} more</div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Incident history */}
+      <Card>
+        <CardHeader className="space-y-3">
+          <div>
+            <CardTitle>Incident History</CardTitle>
+            <CardDescription>Audit log of every detection, kept indefinitely. Cleared incidents stay for retro analysis.</CardDescription>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Select value={filterCheck || "all"} onValueChange={(v) => setFilterCheck(v === "all" ? "" : v)}>
+              <SelectTrigger className="w-[280px]" data-testid="select-incident-check">
+                <SelectValue placeholder="Filter by check" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All checks</SelectItem>
+                {Object.entries(CHECK_LABELS).map(([key, meta]) => (
+                  <SelectItem key={key} value={key}>{meta.title}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="health-open-only"
+                checked={openOnly}
+                onChange={(e) => setOpenOnly(e.target.checked)}
+                data-testid="checkbox-open-only"
+                className="rounded"
+              />
+              <label htmlFor="health-open-only" className="text-sm cursor-pointer select-none">
+                Open incidents only
+              </label>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {incidentsQuery.isLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground" data-testid="text-incidents-loading">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading history…
+            </div>
+          ) : incidentsQuery.isError ? (
+            <div className="text-sm text-muted-foreground" data-testid="text-incidents-error">
+              History unavailable. The audit table may not exist in this environment yet.
+            </div>
+          ) : !incidentsQuery.data || incidentsQuery.data.count === 0 ? (
+            <div className="text-sm text-muted-foreground py-8 text-center" data-testid="text-incidents-empty">
+              No incidents recorded {openOnly ? "are currently open" : "in the audit log"}.
+            </div>
+          ) : (
+            <div className="border rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Check</TableHead>
+                    <TableHead>Entity</TableHead>
+                    <TableHead>Detected</TableHead>
+                    <TableHead>Last Seen</TableHead>
+                    <TableHead>Cleared</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {incidentsQuery.data.incidents.map((inc) => {
+                    const isOpen = inc.clearedAt === null;
+                    const meta = CHECK_LABELS[inc.checkName];
+                    return (
+                      <TableRow key={inc.id} data-testid={`row-incident-${inc.id}`}>
+                        <TableCell>
+                          {isOpen ? (
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800">
+                              Open
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-400 dark:border-green-800">
+                              Cleared
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          <div className="font-medium">{meta?.title || inc.checkName}</div>
+                          <div className="text-muted-foreground font-mono text-[10px]">{inc.checkName}</div>
+                        </TableCell>
+                        <TableCell className="text-xs font-mono">
+                          {inc.entityType} #{inc.entityId}
+                        </TableCell>
+                        <TableCell className="text-xs">{new Date(inc.detectedAt).toLocaleString()}</TableCell>
+                        <TableCell className="text-xs">{new Date(inc.lastSeenAt).toLocaleString()}</TableCell>
+                        <TableCell className="text-xs">{inc.clearedAt ? new Date(inc.clearedAt).toLocaleString() : "—"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const { toast } = useToast();
@@ -2589,6 +2934,16 @@ export default function AdminDashboard() {
                   </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton
+                      onClick={() => setActiveView("health")}
+                      data-active={activeView === "health"}
+                      data-testid="nav-health"
+                    >
+                      <Activity className="w-4 h-4" />
+                      <span>System Health</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
                       onClick={() => navigate("/agent/dashboard")}
                       data-testid="nav-agent-view"
                     >
@@ -2672,6 +3027,7 @@ export default function AdminDashboard() {
                 {activeView === "business-hours" && "Business Hours"}
                 {activeView === "tickets" && "Ticket Overview"}
                 {activeView === "feedback" && "Technician Feedback"}
+                {activeView === "health" && "System Health"}
               </h1>
             </div>
             {activeView === "users" && userTab === "staff" && (
@@ -3670,6 +4026,9 @@ export default function AdminDashboard() {
             )}
             {activeView === "feedback" && (
               <FeedbackSection />
+            )}
+            {activeView === "health" && (
+              <HealthSection />
             )}
           </div>
         </div>
