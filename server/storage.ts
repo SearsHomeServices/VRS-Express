@@ -303,7 +303,7 @@ export interface IStorage {
   ): Promise<SystemHealthLog | undefined>;
   openHealthIncident(data: InsertSystemHealthLog): Promise<SystemHealthLog>;
   touchHealthIncident(id: number): Promise<void>;
-  clearHealthIncident(id: number): Promise<void>;
+  clearHealthIncident(id: number, clearedBy?: number, clearReason?: string): Promise<void>;
   listHealthIncidents(opts: {
     openOnly?: boolean;
     checkName?: string;
@@ -2101,10 +2101,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(systemHealthLog.id, id));
   }
 
-  async clearHealthIncident(id: number): Promise<void> {
+  async clearHealthIncident(id: number, clearedBy?: number, clearReason?: string): Promise<void> {
     await db
       .update(systemHealthLog)
-      .set({ clearedAt: new Date() })
+      .set({
+        clearedAt: new Date(),
+        clearedBy: clearedBy ?? null,
+        clearReason: clearReason ?? null,
+      })
       .where(eq(systemHealthLog.id, id));
   }
 

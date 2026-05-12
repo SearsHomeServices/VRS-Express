@@ -223,7 +223,27 @@ async function ensureSystemHealthLogTable() {
       ON system_health_log (check_name, entity_type, entity_id)
       WHERE cleared_at IS NULL
     `));
-    console.log("[system-health-log] Table + unique-open index ensured");
+    // 2026-05-12 — manual clear audit columns (added after initial table ship).
+    // ADD COLUMN IF NOT EXISTS keeps this idempotent across boots and prod.
+    // Add columns first WITHOUT the FK, then attach the FK separately so we
+    // can guarantee ON DELETE SET NULL — otherwise a column added on an earlier
+    // boot would have the default NO ACTION constraint, and deleting an admin
+    // who manually cleared incidents would fail with an FK violation.
+    await db.execute(sql.raw(`
+      ALTER TABLE system_health_log
+        ADD COLUMN IF NOT EXISTS cleared_by INTEGER,
+        ADD COLUMN IF NOT EXISTS clear_reason TEXT
+    `));
+    await db.execute(sql.raw(`
+      ALTER TABLE system_health_log
+        DROP CONSTRAINT IF EXISTS system_health_log_cleared_by_fkey
+    `));
+    await db.execute(sql.raw(`
+      ALTER TABLE system_health_log
+        ADD CONSTRAINT system_health_log_cleared_by_fkey
+        FOREIGN KEY (cleared_by) REFERENCES users(id) ON DELETE SET NULL
+    `));
+    console.log("[system-health-log] Table + unique-open index + manual-clear columns ensured (FK ON DELETE SET NULL)");
   } catch (err: any) {
     console.warn(`[system-health-log] Failed to ensure table: ${err?.message || err}`);
   }

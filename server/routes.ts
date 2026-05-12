@@ -3109,6 +3109,33 @@ export async function registerRoutes(
     }
   });
 
+  // 2026-05-12 — manual clear endpoint. For incidents the admin has handled
+  // out-of-band (data fixed manually, known accepted exception, etc) or wants
+  // to silence even though the check still fires. Records who cleared and why
+  // for the audit trail. Auto-clear continues to work normally on the next
+  // regression-check run for findings that genuinely no longer match.
+  const clearIncidentSchema = z.object({
+    reason: z.string().trim().min(1).max(500).optional(),
+  });
+  app.post("/api/admin/health/incidents/:id/clear", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ error: "Invalid incident id" });
+      }
+      const parsed = clearIncidentSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      await storage.clearHealthIncident(id, authReq.user!.id, parsed.data.reason);
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error("Clear incident error:", error);
+      return res.status(500).json({ error: "Failed to clear incident" });
+    }
+  });
+
   app.get("/api/admin/rgc-code", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
       const date = (req.query.date as string) || getEtDateString();

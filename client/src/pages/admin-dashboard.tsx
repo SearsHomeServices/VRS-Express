@@ -1965,6 +1965,8 @@ type HealthIncident = {
   detectedAt: string;
   lastSeenAt: string;
   clearedAt: string | null;
+  clearedBy: number | null;
+  clearReason: string | null;
 };
 
 const CHECK_LABELS: Record<string, { title: string; description: string }> = {
@@ -1983,12 +1985,47 @@ const CHECK_LABELS: Record<string, { title: string; description: string }> = {
 };
 
 function HealthSection() {
+  const { toast } = useToast();
   const [filterCheck, setFilterCheck] = useState<string>("");
   const [openOnly, setOpenOnly] = useState(true);
+  const [clearTarget, setClearTarget] = useState<HealthIncident | null>(null);
+  const [clearReasonInput, setClearReasonInput] = useState("");
+
+  // Lookup table for "Cleared by" display name. Reuses the same /api/admin/users
+  // cache the rest of the dashboard already populates — usually a cache hit.
+  const { data: usersData } = useQuery<{ users: SafeUser[] }>({
+    queryKey: ["/api/admin/users"],
+    refetchOnWindowFocus: false,
+  });
+  const userNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    (usersData?.users || []).forEach((u) => map.set(u.id, u.name));
+    return map;
+  }, [usersData]);
 
   const checkQuery = useQuery<HealthCheckResponse>({
     queryKey: ["/api/admin/health/regression-check"],
     refetchOnWindowFocus: false,
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: async ({ id, reason }: { id: number; reason?: string }) => {
+      return apiRequest("POST", `/api/admin/health/incidents/${id}/clear`, reason ? { reason } : {});
+    },
+    onSuccess: () => {
+      toast({ title: "Incident cleared" });
+      setClearTarget(null);
+      setClearReasonInput("");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/health/incidents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/health/regression-check"] });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to clear",
+        description: err?.message || "Unknown error",
+        variant: "destructive",
+      });
+    },
   });
 
   const incidentsQuery = useQuery<{ incidents: HealthIncident[]; count: number }>({
@@ -2236,12 +2273,15 @@ function HealthSection() {
                     <TableHead>Detected</TableHead>
                     <TableHead>Last Seen</TableHead>
                     <TableHead>Cleared</TableHead>
+                    <TableHead>Cleared By</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {incidentsQuery.data.incidents.map((inc) => {
                     const isOpen = inc.clearedAt === null;
                     const meta = CHECK_LABELS[inc.checkName];
+                    const clearedByName = inc.clearedBy ? (userNameById.get(inc.clearedBy) || `user #${inc.clearedBy}`) : null;
                     return (
                       <TableRow key={inc.id} data-testid={`row-incident-${inc.id}`}>
                         <TableCell>
@@ -2265,6 +2305,36 @@ function HealthSection() {
                         <TableCell className="text-xs">{new Date(inc.detectedAt).toLocaleString()}</TableCell>
                         <TableCell className="text-xs">{new Date(inc.lastSeenAt).toLocaleString()}</TableCell>
                         <TableCell className="text-xs">{inc.clearedAt ? new Date(inc.clearedAt).toLocaleString() : "—"}</TableCell>
+                        <TableCell className="text-xs">
+                          {clearedByName ? (
+                            <div>
+                              <div className="font-medium" data-testid={`text-cleared-by-${inc.id}`}>{clearedByName}</div>
+                              {inc.clearReason && (
+                                <div className="text-muted-foreground italic mt-0.5" data-testid={`text-clear-reason-${inc.id}`}>
+                                  "{inc.clearReason}"
+                                </div>
+                              )}
+                            </div>
+                          ) : inc.clearedAt ? (
+                            <span className="text-muted-foreground italic">auto</span>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isOpen ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => { setClearTarget(inc); setClearReasonInput(""); }}
+                              data-testid={`button-clear-incident-${inc.id}`}
+                            >
+                              Mark Resolved
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -2274,6 +2344,53 @@ function HealthSection() {
           )}
         </CardContent>
       </Card>
+
+      {/* Manual clear dialog */}
+      <Dialog open={!!clearTarget} onOpenChange={(o) => { if (!o) { setClearTarget(null); setClearReasonInput(""); } }}>
+        <DialogContent data-testid="dialog-clear-incident">
+          <DialogHeader>
+            <DialogTitle>Mark Incident Resolved</DialogTitle>
+            <DialogDescription>
+              {clearTarget && (
+                <>
+                  Manually clear <span className="font-mono">{CHECK_LABELS[clearTarget.checkName]?.title || clearTarget.checkName}</span> for {clearTarget.entityType} #{clearTarget.entityId}.
+                  This silences the alert immediately. The audit row stays in history with your name and reason recorded.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="clear-reason">Reason (optional)</Label>
+            <Textarea
+              id="clear-reason"
+              value={clearReasonInput}
+              onChange={(e) => setClearReasonInput(e.target.value)}
+              placeholder="e.g. Data fixed manually, known accepted exception, ticket reassigned offline…"
+              maxLength={500}
+              rows={3}
+              data-testid="textarea-clear-reason"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setClearTarget(null); setClearReasonInput(""); }}
+              disabled={clearMutation.isPending}
+              data-testid="button-cancel-clear"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => clearTarget && clearMutation.mutate({ id: clearTarget.id, reason: clearReasonInput.trim() || undefined })}
+              disabled={clearMutation.isPending || !clearTarget}
+              data-testid="button-confirm-clear"
+            >
+              {clearMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Mark Resolved
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

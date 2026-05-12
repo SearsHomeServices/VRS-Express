@@ -383,6 +383,11 @@ export const systemHealthLog = pgTable(
     detectedAt: timestamp("detected_at").notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
     clearedAt: timestamp("cleared_at"),
+    // 2026-05-12 — manual clear audit. Set when an admin marks an incident
+    // resolved by hand from the System Health view (vs auto-clear when the
+    // check no longer matches). Null for auto-cleared rows.
+    clearedBy: integer("cleared_by").references(() => users.id, { onDelete: "set null" }),
+    clearReason: text("clear_reason"),
   },
   (table) => ({
     // Partial unique index — at most one OPEN incident per (check, entity).
