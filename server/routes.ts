@@ -3028,6 +3028,11 @@ export async function registerRoutes(
       // nla_escalated_by is NULL despite nla_resolution=part_found_vrs_ordered.
       // The retry wrapper shipped today should keep the escalate intent
       // captured; any new occurrence here means escalate intent was lost.
+      // assigned_to <> reviewed_by guard (2026-05-12): exclude P-card agents
+      // self-serving their own research (no escalation occurred, so
+      // nla_escalated_by SHOULD be NULL). Real Zorn signature is a handoff
+      // where the escalator audit got lost. IS DISTINCT FROM handles NULL
+      // safely vs plain <>.
       await runCheck("escalate_audit_gap", "warning", async () => {
         const r = await db.execute(sql`
           SELECT id, service_order, reviewed_by, status_changed_at
@@ -3036,6 +3041,7 @@ export async function registerRoutes(
             AND ticket_status = 'completed'
             AND nla_resolution = 'part_found_vrs_ordered'
             AND nla_escalated_by IS NULL
+            AND assigned_to IS DISTINCT FROM reviewed_by
             AND status_changed_at > NOW() - INTERVAL '7 days'
         `);
         return (r.rows as any[]).map((row) => ({
