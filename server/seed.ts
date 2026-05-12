@@ -149,9 +149,38 @@ export async function seedDatabase() {
 
   await resetAllPasswords();
   await backfillClaimedAt();
+  await ensurePerformanceIndexes();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
   await seedDefaultCommunicationTemplates();
+}
+
+// Tyler 2026-05-12 (perf sweep): Submissions table in prod had only the primary
+// key — every queue/pending/history/idempotency lookup was a Seq Scan. At 776
+// rows the hot queue query took ~29ms; degrades linearly. Added 6 indexes
+// covering the hottest filter/sort columns. CREATE INDEX IF NOT EXISTS is
+// idempotent + safe to re-run on every boot. Skipped CONCURRENTLY because at
+// current table size the brief lock is microseconds and we want this to run
+// inside seed startup deterministically.
+async function ensurePerformanceIndexes() {
+  const indexes: Array<{ name: string; ddl: string }> = [
+    { name: "idx_submissions_status_request",      ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_status_request ON submissions (ticket_status, request_type)` },
+    { name: "idx_submissions_assigned_status",     ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_assigned_status ON submissions (assigned_to, ticket_status)` },
+    { name: "idx_submissions_service_order",       ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_service_order ON submissions (service_order)` },
+    { name: "idx_submissions_technician_created",  ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_technician_created ON submissions (technician_id, created_at DESC)` },
+    { name: "idx_submissions_created_at",          ddl: `CREATE INDEX IF NOT EXISTS idx_submissions_created_at ON submissions (created_at)` },
+    { name: "idx_users_rac_id",                    ddl: `CREATE INDEX IF NOT EXISTS idx_users_rac_id ON users (rac_id)` },
+  ];
+  let createdCount = 0;
+  for (const idx of indexes) {
+    try {
+      await db.execute(sql.raw(idx.ddl));
+      createdCount++;
+    } catch (err: any) {
+      console.warn(`[perf-indexes] Failed to ensure ${idx.name}: ${err?.message || err}`);
+    }
+  }
+  console.log(`[perf-indexes] Ensured ${createdCount}/${indexes.length} performance indexes`);
 }
 
 // ============================================================================
