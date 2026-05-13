@@ -123,6 +123,13 @@ export default function TechSubmitPage() {
   const [issuePhotoUploading, setIssuePhotoUploading] = useState(false);
   const [estimatePhotoUploadCount, setEstimatePhotoUploadCount] = useState({ done: 0, total: 0 });
   const [issuePhotoUploadCount, setIssuePhotoUploadCount] = useState({ done: 0, total: 0 });
+  // Tyler 2026-05-12: per-photo upload progress as a fraction 0..1, keyed by
+  // a transient photo id (crypto.randomUUID() generated at upload-start). The
+  // worker pool below pushes 0 on start, calls xhr.upload progress events to
+  // update, and clears the id on success/failure. Surfaces a progress bar
+  // under the per-section "Uploading N/M" text so the tech can see movement
+  // instead of staring at a frozen spinner on weak signal.
+  const [photoUploadProgress, setPhotoUploadProgress] = useState<Record<string, number>>({});
   const [aiPreview, setAiPreview] = useState<string | null>(null);
   const [originalBeforeAi, setOriginalBeforeAi] = useState<string | null>(null);
   const [aiUsed, setAiUsed] = useState(false);
@@ -181,7 +188,11 @@ export default function TechSubmitPage() {
     return "application/octet-stream";
   }
 
-  async function uploadSinglePhoto(file: File, retries = 2): Promise<string | null> {
+  async function uploadSinglePhoto(
+    file: File,
+    retries = 2,
+    onProgress?: (fraction: number) => void,
+  ): Promise<string | null> {
     const token = getToken();
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -205,7 +216,15 @@ export default function TechSubmitPage() {
 
         const result = await new Promise<string | null>((resolve) => {
           const xhr = new XMLHttpRequest();
-          xhr.timeout = 300000;
+          // Tyler 2026-05-12: was 300000 (5 min). With compressed photos
+          // (~300-500 KB) anything >60s is a real network problem, not a
+          // slow upload — fail fast so retry / UI can react.
+          xhr.timeout = 60000;
+          xhr.upload.addEventListener("progress", (e) => {
+            if (e.lengthComputable && onProgress) {
+              onProgress(e.loaded / e.total);
+            }
+          });
           xhr.addEventListener("load", () => {
             if (xhr.status >= 200 && xhr.status < 300) {
               resolve(objectPath);
@@ -219,7 +238,7 @@ export default function TechSubmitPage() {
             resolve(null);
           });
           xhr.addEventListener("timeout", () => {
-            reportUploadError({ stage: "xhr-timeout", fileName: file.name, fileSize: file.size, fileType: file.type, errorMessage: "timeout after 300s", attempt });
+            reportUploadError({ stage: "xhr-timeout", fileName: file.name, fileSize: file.size, fileType: file.type, errorMessage: "timeout after 60s", attempt });
             resolve(null);
           });
           xhr.open("PUT", uploadURL);
@@ -228,12 +247,16 @@ export default function TechSubmitPage() {
         });
         if (result) return result;
         if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          // Tyler 2026-05-12: exponential backoff with jitter. Was linear
+          // 1000 * (attempt+1). New: ~1-2s, ~2-3s, ~4-5s, capped at 30s.
+          const delay = Math.min(30000, 2 ** attempt * 1000) + Math.floor(Math.random() * 1000);
+          await new Promise(r => setTimeout(r, delay));
         }
       } catch (error) {
         reportUploadError({ stage: "unknown", fileName: file.name, fileSize: file.size, fileType: file.type, errorMessage: String(error), attempt });
         if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          const delay = Math.min(30000, 2 ** attempt * 1000) + Math.floor(Math.random() * 1000);
+          await new Promise(r => setTimeout(r, delay));
         }
       }
     }
@@ -340,7 +363,16 @@ export default function TechSubmitPage() {
         const idx = cursor++;
         const file = filesToUpload[idx];
         const localBlob = URL.createObjectURL(file);
-        const url = await uploadSinglePhoto(file);
+        const progressKey = crypto.randomUUID();
+        setPhotoUploadProgress((prev) => ({ ...prev, [progressKey]: 0 }));
+        const url = await uploadSinglePhoto(file, 2, (fraction) => {
+          setPhotoUploadProgress((prev) => ({ ...prev, [progressKey]: fraction }));
+        });
+        setPhotoUploadProgress((prev) => {
+          const next = { ...prev };
+          delete next[progressKey];
+          return next;
+        });
         if (url) {
           newUrls.push(url);
           newPreviews[url] = localBlob;
@@ -1774,12 +1806,30 @@ export default function TechSubmitPage() {
                       ))}
                   </div>
                 )}
-                {issuePhotoUploading && (
-                  <div className="flex items-center justify-center gap-2 py-3" data-testid="issue-photo-uploading">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="text-sm text-muted-foreground">Uploading {issuePhotoUploadCount.done}/{issuePhotoUploadCount.total} photos...</span>
-                  </div>
-                )}
+                {issuePhotoUploading && (() => {
+                  // Tyler 2026-05-12: aggregate progress across in-flight
+                  // photos. photoUploadProgress holds fractions 0..1 keyed
+                  // by transient ids; we sum and add completed-count to get
+                  // an overall fraction of total. Mirrors video xhr.upload
+                  // progress treatment (Progress + % text) from tech-submit
+                  // line 1891ish.
+                  const inflight = Object.values(photoUploadProgress);
+                  const inflightSum = inflight.reduce((a, b) => a + b, 0);
+                  const total = issuePhotoUploadCount.total || 1;
+                  const pct = Math.min(100, Math.round(((issuePhotoUploadCount.done + inflightSum) / total) * 100));
+                  return (
+                    <div className="space-y-2 py-3" data-testid="issue-photo-uploading">
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span className="text-sm text-muted-foreground">Uploading {issuePhotoUploadCount.done}/{issuePhotoUploadCount.total} photos...</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <Progress value={pct} className="flex-1" data-testid="progress-issue-photo-upload" />
+                        <span className="text-sm text-muted-foreground whitespace-nowrap">{pct}%</span>
+                      </div>
+                    </div>
+                  );
+                })()}
                 {issuePhotoUrls.length < 15 && !issuePhotoUploading && (
                   <div className="border-2 border-dashed rounded-md p-6 text-center cursor-pointer hover-elevate" onClick={() => issuePhotoInputRef.current?.click()} data-testid="button-add-issue-photos">
                     <Camera className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
@@ -1876,12 +1926,26 @@ export default function TechSubmitPage() {
                         ))}
                     </div>
                   )}
-                  {estimatePhotoUploading && (
-                    <div className="flex items-center justify-center gap-2 py-3" data-testid="estimate-photo-uploading">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm text-muted-foreground">Uploading {estimatePhotoUploadCount.done}/{estimatePhotoUploadCount.total} photos...</span>
-                    </div>
-                  )}
+                  {estimatePhotoUploading && (() => {
+                    // Tyler 2026-05-12: same aggregate progress treatment as
+                    // the issue-photo block above. See comment there.
+                    const inflight = Object.values(photoUploadProgress);
+                    const inflightSum = inflight.reduce((a, b) => a + b, 0);
+                    const total = estimatePhotoUploadCount.total || 1;
+                    const pct = Math.min(100, Math.round(((estimatePhotoUploadCount.done + inflightSum) / total) * 100));
+                    return (
+                      <div className="space-y-2 py-3" data-testid="estimate-photo-uploading">
+                        <div className="flex items-center justify-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-sm text-muted-foreground">Uploading {estimatePhotoUploadCount.done}/{estimatePhotoUploadCount.total} photos...</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <Progress value={pct} className="flex-1" data-testid="progress-estimate-photo-upload" />
+                          <span className="text-sm text-muted-foreground whitespace-nowrap">{pct}%</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {estimatePhotoUrls.length < 5 && !estimatePhotoUploading && (
                     <div className="border-2 border-dashed rounded-md p-6 text-center cursor-pointer hover-elevate" onClick={() => estimatePhotoInputRef.current?.click()} data-testid="button-add-estimate-photos">
                       <Camera className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
