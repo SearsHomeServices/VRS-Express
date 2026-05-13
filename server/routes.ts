@@ -22,6 +22,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
+import { Readable } from "stream";
 import { fetchTechniciansFromSnowflake, fetchProcIdForServiceOrder } from "./services/snowflake";
 import { seedDatabase } from "./seed";
 import {
@@ -4411,12 +4412,19 @@ export async function registerRoutes(
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const newObjectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
 
-      const fileBuffer = fs.readFileSync(outputPath);
+      // Tyler 2026-05-12 — stream the converted file to GCS instead of
+      // readFileSync into a Buffer. A 200MB audio Buffer + ffmpeg's residual
+      // RSS was the OOM trigger that took the smallest Reserved VM tier down.
+      const outputStat = fs.statSync(outputPath);
       const uploadRes = await fetch(uploadURL, {
         method: "PUT",
-        headers: { "Content-Type": "audio/mpeg" },
-        body: fileBuffer,
-      });
+        headers: {
+          "Content-Type": "audio/mpeg",
+          "Content-Length": String(outputStat.size),
+        },
+        body: Readable.toWeb(fs.createReadStream(outputPath)) as any,
+        duplex: "half",
+      } as any);
 
       if (!uploadRes.ok) {
         throw new Error(`Upload failed with status ${uploadRes.status}`);
@@ -4490,12 +4498,20 @@ export async function registerRoutes(
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const newObjectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
 
-      const fileBuffer = fs.readFileSync(outputPath);
+      // Tyler 2026-05-12 — stream the converted file to GCS instead of
+      // readFileSync into a Buffer. iPhone 4K .mov re-encodes routinely produce
+      // 100-200MB MP4 outputs, and a Buffer that large on top of ffmpeg's
+      // residual RSS pushed the smallest Reserved VM into OOM kill.
+      const outputStat = fs.statSync(outputPath);
       const uploadRes = await fetch(uploadURL, {
         method: "PUT",
-        headers: { "Content-Type": "video/mp4" },
-        body: fileBuffer,
-      });
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Length": String(outputStat.size),
+        },
+        body: Readable.toWeb(fs.createReadStream(outputPath)) as any,
+        duplex: "half",
+      } as any);
 
       if (!uploadRes.ok) {
         throw new Error(`Upload failed with status ${uploadRes.status}`);
