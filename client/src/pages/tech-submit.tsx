@@ -40,6 +40,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Camera, Send, Lock, Video, X, Sparkles, Loader2, AlertTriangle, Square, Mic, MicOff, Trash2, Info, Plus, CheckCircle2 } from "lucide-react";
+import imageCompression from "browser-image-compression";
 import HelpTooltip from "@/components/help-tooltip";
 import {
   parseAndValidateDraft,
@@ -259,17 +260,79 @@ export default function TechSubmitPage() {
       return;
     }
     const totalAllowed = maxPhotos - currentUrls.length;
-    const filesToUpload = validFiles.slice(0, totalAllowed);
-    if (filesToUpload.length < validFiles.length) {
-      toast({ title: "Photo Limit", description: `Maximum ${maxPhotos} photos allowed. Only uploading ${filesToUpload.length} more.` });
+    const filesSelected = validFiles.slice(0, totalAllowed);
+    if (filesSelected.length < validFiles.length) {
+      toast({ title: "Photo Limit", description: `Maximum ${maxPhotos} photos allowed. Only uploading ${filesSelected.length} more.` });
     }
     setUploading(true);
-    setCount({ done: 0, total: filesToUpload.length });
+    setCount({ done: 0, total: filesSelected.length });
+
+    // Compress images client-side before upload to dramatically reduce
+    // payload size on weak cell signal. Skips non-image files (defensive —
+    // the validFiles filter above should already exclude them). HEIC/HEIF
+    // and any other Canvas-decode failure falls back to the original file.
+    const compressionStart = performance.now();
+    let preparingToastShown = false;
+    const preparingTimer = window.setTimeout(() => {
+      preparingToastShown = true;
+      toast({ title: "Preparing photos...", description: "Optimizing for upload on weak signal." });
+    }, 250);
+    const filesToUpload = await Promise.all(
+      filesSelected.map(async (file) => {
+        if (!file.type.startsWith("image/")) return file;
+        try {
+          const compressed = await imageCompression(file, {
+            maxSizeMB: 0.6,
+            maxWidthOrHeight: 1920,
+            useWebWorker: true,
+            initialQuality: 0.75,
+          });
+          // imageCompression returns a Blob on some paths and a File on others.
+          // Normalize to a File that preserves the original name + extension so
+          // dedup/rename logic downstream (and the server `name` field) still
+          // sees the same identifier.
+          if (compressed instanceof File && compressed.name === file.name) {
+            return compressed;
+          }
+          return new File([compressed], file.name, {
+            type: compressed.type || file.type,
+            lastModified: file.lastModified,
+          });
+        } catch (err) {
+          // HEIC/HEIF on browsers that can't decode it, OOM on giant images,
+          // canvas tainted errors, etc. Keep the original file rather than
+          // dropping it — upload-side retry/timeout handling will deal with it.
+          console.warn("[tech-submit] image compression failed; using original file", {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return file;
+        }
+      })
+    );
+    window.clearTimeout(preparingTimer);
+    if (preparingToastShown) {
+      const elapsed = Math.round(performance.now() - compressionStart);
+      console.info(`[tech-submit] compressed ${filesToUpload.length} photo(s) in ${elapsed}ms`);
+    }
     const newUrls: string[] = [];
     const newPreviews: Record<string, string> = {};
     const newFailures: FailedUpload[] = [];
     const categoryForList: "estimate" | "issue" = setUrls === setEstimatePhotoUrls ? "estimate" : "issue";
-    const maxConcurrent = 3;
+    // Tyler 2026-05-12: adaptive concurrency. iOS Safari historically does
+    // not expose navigator.connection, so guard every access with ?. and
+    // `as any`. On weak/saving connections drop to 1 in-flight upload so we
+    // don't compete with ourselves; otherwise keep at 3.
+    const conn = (navigator as any).connection;
+    const slowConn = !!(
+      conn?.saveData ||
+      conn?.effectiveType === "2g" ||
+      conn?.effectiveType === "slow-2g" ||
+      conn?.effectiveType === "3g"
+    );
+    const maxConcurrent = slowConn ? 1 : 3;
     let completed = 0;
     let cursor = 0;
     const runNext = async (): Promise<void> => {
