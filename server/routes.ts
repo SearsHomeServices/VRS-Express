@@ -142,6 +142,38 @@ export async function registerRoutes(
 
   registerObjectStorageRoutes(app);
 
+  // Tyler 2026-05-12 — lightweight liveness + readiness probe. Returns 200 only
+  // if the DB ping completes inside 2s. Used by external uptime monitoring
+  // (Replit Scheduled Deployment / UptimeRobot / cron) so a hard-down VM gets
+  // a page instead of being discovered by a tech failing to log in. Unauth'd
+  // intentionally — the response body carries nothing sensitive.
+  app.get("/api/healthz", async (_req, res) => {
+    const start = Date.now();
+    let dbOk = false;
+    let dbMs: number | null = null;
+    try {
+      const pingStart = Date.now();
+      await Promise.race([
+        db.execute(sql`SELECT 1`),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("db ping >2s")), 2000)),
+      ]);
+      dbMs = Date.now() - pingStart;
+      dbOk = true;
+    } catch {
+      dbOk = false;
+    }
+    const mem = process.memoryUsage();
+    const body = {
+      ok: dbOk,
+      uptimeSec: Math.round(process.uptime()),
+      rssMb: Math.round(mem.rss / 1024 / 1024),
+      heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
+      dbMs,
+      checkMs: Date.now() - start,
+    };
+    res.status(dbOk ? 200 : 503).json(body);
+  });
+
   app.post("/api/auth/register", async (req, res) => {
     try {
       const parsed = registerSchema.safeParse(req.body);
