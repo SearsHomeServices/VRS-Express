@@ -149,8 +149,20 @@ export async function seedDatabase() {
 
   await resetAllPasswords();
   await backfillClaimedAt();
-  await ensurePerformanceIndexes();
-  await ensureSystemHealthLogTable();
+  // Tyler 2026-05-12 — `CREATE INDEX CONCURRENTLY` waits for a snapshot on Neon
+  // and can hang indefinitely if any session holds a long-running transaction
+  // on the target table. `ADD CONSTRAINT` in ensureSystemHealthLogTable takes
+  // ACCESS EXCLUSIVE and can also stall. Both used to be awaited here, which
+  // blocked the boot path before httpServer.listen() ran — Replit's edge
+  // returned sustained 502 with low latency because the upstream process was
+  // alive but never bound the port. Now fire-and-forget: both are idempotent,
+  // so if they fail this boot they'll retry on the next one.
+  void (async () => {
+    try { await ensurePerformanceIndexes(); }
+    catch (e: any) { console.warn(`[perf-indexes] background ensure failed: ${e?.message || e}`); }
+    try { await ensureSystemHealthLogTable(); }
+    catch (e: any) { console.warn(`[system-health-log] background ensure failed: ${e?.message || e}`); }
+  })();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
   await seedDefaultCommunicationTemplates();
