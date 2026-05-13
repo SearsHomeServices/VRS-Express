@@ -305,10 +305,17 @@ export default function TechSubmitPage() {
         if (!file.type.startsWith("image/")) return file;
         try {
           const compressed = await imageCompression(file, {
-            maxSizeMB: 0.6,
-            maxWidthOrHeight: 1920,
+            // Tyler 2026-05-12 — tuned for agent-side legibility at max zoom.
+            // PhotoLightbox allows zoom up to 300%; at that level model
+            // plates / voltage readings / estimate-screenshot text must
+            // remain readable. 2560px max edge + q=0.85 retains enough
+            // detail for ~2x more readable pixels at 300% zoom vs the
+            // initial 1920/0.75 settings, while still cutting payloads
+            // ~2.5x (2.6 MB iPhone JPEG -> ~900 KB-1.2 MB).
+            maxSizeMB: 1.2,
+            maxWidthOrHeight: 2560,
             useWebWorker: true,
-            initialQuality: 0.75,
+            initialQuality: 0.85,
           });
           // imageCompression returns a Blob on some paths and a File on others.
           // Normalize to a File that preserves the original name + extension so
