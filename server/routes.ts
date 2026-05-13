@@ -152,16 +152,21 @@ export async function registerRoutes(
     const start = Date.now();
     let dbOk = false;
     let dbMs: number | null = null;
+    let pingTimer: NodeJS.Timeout | undefined;
     try {
       const pingStart = Date.now();
       await Promise.race([
         db.execute(sql`SELECT 1`),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("db ping >2s")), 2000)),
+        new Promise((_, reject) => {
+          pingTimer = setTimeout(() => reject(new Error("db ping >2s")), 2000);
+        }),
       ]);
       dbMs = Date.now() - pingStart;
       dbOk = true;
     } catch {
       dbOk = false;
+    } finally {
+      if (pingTimer) clearTimeout(pingTimer);
     }
     const mem = process.memoryUsage();
     const body = {
