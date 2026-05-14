@@ -2505,6 +2505,11 @@ export default function AdminDashboard() {
   const [techSearchQuery, setTechSearchQuery] = useState("");
   const [techSortField, setTechSortField] = useState<"name" | "district" | "totalTickets">("name");
   const [techSortDir, setTechSortDir] = useState<"asc" | "desc">("asc");
+  // Tyler 2026-05-14 — sort state for the analytics "Technicians with
+  // Resubmissions" table. Default: highest rate first (most-problematic at
+  // the top), matching how admins read the existing color-coded badges.
+  const [resubSortField, setResubSortField] = useState<"resubmissions" | "rate">("rate");
+  const [resubSortDir, setResubSortDir] = useState<"asc" | "desc">("desc");
 
   const { data: usersData, isLoading: usersLoading } = useQuery<{ users: SafeUser[] }>({
     queryKey: ["/api/admin/users"],
@@ -4055,12 +4060,47 @@ export default function AdminDashboard() {
                                       <th className="text-left p-2 font-medium">Technician</th>
                                       <th className="text-left p-2 font-medium">LDAP</th>
                                       <th className="text-center p-2 font-medium">Total</th>
-                                      <th className="text-center p-2 font-medium">Resubs</th>
-                                      <th className="text-center p-2 font-medium">Rate</th>
+                                      <th className="text-center p-2 font-medium">
+                                        <button
+                                          className="inline-flex items-center gap-1 hover:text-foreground mx-auto"
+                                          onClick={() => {
+                                            if (resubSortField === "resubmissions") {
+                                              setResubSortDir(d => d === "asc" ? "desc" : "asc");
+                                            } else {
+                                              setResubSortField("resubmissions");
+                                              setResubSortDir("desc");
+                                            }
+                                          }}
+                                          data-testid="sort-resub-count"
+                                        >
+                                          Resubs <ArrowUpDown className="w-3 h-3" />
+                                        </button>
+                                      </th>
+                                      <th className="text-center p-2 font-medium">
+                                        <button
+                                          className="inline-flex items-center gap-1 hover:text-foreground mx-auto"
+                                          onClick={() => {
+                                            if (resubSortField === "rate") {
+                                              setResubSortDir(d => d === "asc" ? "desc" : "asc");
+                                            } else {
+                                              setResubSortField("rate");
+                                              setResubSortDir("desc");
+                                            }
+                                          }}
+                                          data-testid="sort-resub-rate"
+                                        >
+                                          Rate <ArrowUpDown className="w-3 h-3" />
+                                        </button>
+                                      </th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {resubmissionData.topTechnicians.map((t, i) => (
+                                    {[...resubmissionData.topTechnicians].sort((a, b) => {
+                                      const dir = resubSortDir === "asc" ? 1 : -1;
+                                      const aVal = resubSortField === "rate" ? a.rate : a.resubmissions;
+                                      const bVal = resubSortField === "rate" ? b.rate : b.resubmissions;
+                                      return (aVal - bVal) * dir;
+                                    }).map((t, i) => (
                                       <tr key={t.technicianId} className={i % 2 === 0 ? "" : "bg-muted/20"} data-testid={`resub-row-${t.technicianId}`}>
                                         <td className="p-2">{t.techName}</td>
                                         <td className="p-2 font-mono text-xs">{t.techLdap}</td>
