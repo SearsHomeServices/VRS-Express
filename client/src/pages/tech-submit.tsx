@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useAuth, getToken } from "@/lib/auth";
 import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
@@ -809,7 +809,11 @@ export default function TechSubmitPage() {
       setLocation(`/tech/submissions/${data.submission.id}`);
     },
     onError: (error: Error) => {
-      toast({ title: "Submission Failed", description: error.message, variant: "destructive" });
+      // Tyler 2026-05-14 — friendlyApiErrorMessage converts the raw Replit
+      // edge-proxy HTML 403 / "Failed to fetch" / 5xx HTML blob into a short,
+      // tech-readable "Connection issue — please tap Submit again." Real
+      // server validation errors (JSON) pass through unchanged.
+      toast({ title: "Submission Failed", description: friendlyApiErrorMessage(error), variant: "destructive" });
     },
   });
 

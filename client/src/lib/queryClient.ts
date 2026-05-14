@@ -88,6 +88,26 @@ export function isTransientApiError(msg: string): boolean {
   return false;
 }
 
+// Tyler 2026-05-14 — when all retries in apiRequestWithRetry are exhausted
+// and the underlying error is one of the known transient/edge-layer failures,
+// the raw error.message is either a giant HTML blob ("<!doctype html>...
+// <title>403</title>403 Forbidden") or an opaque "Failed to fetch". Showing
+// that to a tech in a toast is confusing and looks like a real server error.
+// This helper returns a short, plain-English message for those cases and
+// passes through real server errors (JSON validation messages, etc.) as-is.
+export function friendlyApiErrorMessage(err: unknown): string {
+  const raw = (err instanceof Error ? err.message : String(err ?? "")).trim();
+  if (!raw) return "Something went wrong. Please try again.";
+  if (isTransientApiError(raw)) {
+    return "Connection issue — please tap Submit again.";
+  }
+  // Strip any stray HTML if a non-transient HTML body somehow leaked through.
+  if (raw.toLowerCase().includes("<!doctype html")) {
+    return "Something went wrong. Please try again.";
+  }
+  return raw;
+}
+
 export async function apiRequestWithRetry(
   method: string,
   url: string,
