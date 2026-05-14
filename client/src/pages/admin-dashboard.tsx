@@ -3436,10 +3436,20 @@ export default function AdminDashboard() {
                                     <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 no-default-hover-elevate no-default-active-elevate">{t.pendingCount}</Badge>
                                   </TableCell>
                                   <TableCell data-testid={`text-tech-approved-${t.id}`}>
-                                    <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 no-default-hover-elevate no-default-active-elevate">{t.approvedCount}</Badge>
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 no-default-hover-elevate no-default-active-elevate">{t.approvedCount}</Badge>
+                                      <span className="text-xs text-muted-foreground tabular-nums" data-testid={`text-tech-approved-pct-${t.id}`}>
+                                        {t.totalTickets > 0 ? `${Math.round((t.approvedCount / t.totalTickets) * 100)}%` : "—"}
+                                      </span>
+                                    </div>
                                   </TableCell>
                                   <TableCell data-testid={`text-tech-rejected-${t.id}`}>
-                                    <Badge variant="secondary" className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 no-default-hover-elevate no-default-active-elevate">{t.rejectedCount}</Badge>
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="secondary" className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 no-default-hover-elevate no-default-active-elevate">{t.rejectedCount}</Badge>
+                                      <span className="text-xs text-muted-foreground tabular-nums" data-testid={`text-tech-rejected-pct-${t.id}`}>
+                                        {t.totalTickets > 0 ? `${Math.round((t.rejectedCount / t.totalTickets) * 100)}%` : "—"}
+                                      </span>
+                                    </div>
                                   </TableCell>
                                 </TableRow>
                               ))}
