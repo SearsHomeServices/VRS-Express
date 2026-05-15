@@ -132,6 +132,7 @@ import {
   CreditCard,
   Activity,
   AlertTriangle,
+  GraduationCap,
 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
@@ -163,6 +164,25 @@ interface ResubmissionStats {
   totalResubmissions: number;
   resubmissionRate: number;
   topTechnicians: { technicianId: number; techName: string; techLdap: string; totalTickets: number; resubmissions: number; rate: number }[];
+}
+
+interface CoachingDuplicate {
+  technicianId: number;
+  techName: string;
+  techLdap: string;
+  serviceOrder: string;
+  previousId: number;
+  previousStatus: string;
+  previousAt: string;
+  newId: number;
+  newStatus: string;
+  newAt: string;
+  minutesBetween: number;
+}
+
+interface CoachingDuplicatesResponse {
+  days: number;
+  rows: CoachingDuplicate[];
 }
 
 interface DistrictRollup {
@@ -2691,6 +2711,19 @@ export default function AdminDashboard() {
     enabled: activeView === "analytics",
   });
 
+  const [coachingDays, setCoachingDays] = useState(30);
+  const { data: coachingData } = useQuery<CoachingDuplicatesResponse>({
+    queryKey: ["/api/admin/analytics/coaching-duplicates", coachingDays],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/analytics/coaching-duplicates?days=${coachingDays}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+      });
+      if (!res.ok) throw new Error(`Failed to load coaching duplicates: ${res.status}`);
+      return res.json();
+    },
+    enabled: activeView === "analytics",
+  });
+
   const { data: nlaAnalytics } = useQuery<{ today: number; week: number; month: number; allTime: number }>({
     queryKey: ["/api/admin/nla-analytics"],
     enabled: activeView === "analytics",
@@ -4335,6 +4368,92 @@ export default function AdminDashboard() {
                                         </td>
                                       </tr>
                                     ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {coachingData && (
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div>
+                              <CardTitle className="text-base flex items-center gap-2">
+                                <GraduationCap className="w-4 h-4 text-amber-600 dark:text-amber-500" />
+                                Coaching: New ticket after rejection
+                              </CardTitle>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Techs who submitted a brand-new ticket for the same SO instead of using the resubmit-after-rejection flow.
+                              </p>
+                            </div>
+                            <Select value={String(coachingDays)} onValueChange={(v) => setCoachingDays(parseInt(v, 10))}>
+                              <SelectTrigger className="w-32" data-testid="select-coaching-days">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="7">Last 7 days</SelectItem>
+                                <SelectItem value="14">Last 14 days</SelectItem>
+                                <SelectItem value="30">Last 30 days</SelectItem>
+                                <SelectItem value="60">Last 60 days</SelectItem>
+                                <SelectItem value="90">Last 90 days</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          {coachingData.rows.length === 0 ? (
+                            <p className="text-sm text-muted-foreground py-4 text-center" data-testid="text-coaching-empty">
+                              No coaching cases in the last {coachingData.days} days. Techs are using the resubmit flow correctly.
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-sm text-muted-foreground mb-3" data-testid="text-coaching-count">
+                                <span className="font-semibold text-foreground">{coachingData.rows.length}</span> case{coachingData.rows.length === 1 ? "" : "s"} in the last {coachingData.days} days
+                              </p>
+                              <div className="rounded-md border overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="bg-muted/50 border-b">
+                                      <th className="text-left p-2 font-medium">Technician</th>
+                                      <th className="text-left p-2 font-medium">LDAP</th>
+                                      <th className="text-left p-2 font-medium">Service Order</th>
+                                      <th className="text-left p-2 font-medium">Previous (Rejected)</th>
+                                      <th className="text-left p-2 font-medium">New Ticket</th>
+                                      <th className="text-right p-2 font-medium">Gap</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {coachingData.rows.map((c, i) => {
+                                      const gapLabel = c.minutesBetween < 60
+                                        ? `${c.minutesBetween}m`
+                                        : c.minutesBetween < 1440
+                                        ? `${Math.round(c.minutesBetween / 60)}h`
+                                        : `${Math.round(c.minutesBetween / 1440)}d`;
+                                      return (
+                                        <tr key={`${c.previousId}-${c.newId}`} className={i % 2 === 0 ? "" : "bg-muted/20"} data-testid={`coaching-row-${c.newId}`}>
+                                          <td className="p-2" data-testid={`text-coaching-name-${c.newId}`}>{c.techName || "—"}</td>
+                                          <td className="p-2 font-mono text-xs" data-testid={`text-coaching-ldap-${c.newId}`}>{c.techLdap || "—"}</td>
+                                          <td className="p-2 font-mono text-xs" data-testid={`text-coaching-so-${c.newId}`}>{c.serviceOrder}</td>
+                                          <td className="p-2 text-xs">
+                                            <div className="flex items-center gap-2">
+                                              <Badge variant="destructive" className="text-xs">#{c.previousId}</Badge>
+                                              <span className="text-muted-foreground" data-testid={`text-coaching-prev-at-${c.newId}`}>{formatDate(c.previousAt)}</span>
+                                            </div>
+                                          </td>
+                                          <td className="p-2 text-xs">
+                                            <div className="flex items-center gap-2">
+                                              <Badge variant="outline" className="text-xs">#{c.newId}</Badge>
+                                              <span className="text-muted-foreground" data-testid={`text-coaching-new-at-${c.newId}`}>{formatDate(c.newAt)}</span>
+                                            </div>
+                                          </td>
+                                          <td className="p-2 text-right font-mono text-xs" data-testid={`text-coaching-gap-${c.newId}`}>{gapLabel}</td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>

@@ -245,6 +245,20 @@ export interface IStorage {
     topTechnicians: { technicianId: number; techName: string; techLdap: string; totalTickets: number; resubmissions: number; rate: number }[];
   }>;
 
+  getCoachingDuplicateSubmissions(days: number): Promise<{
+    technicianId: number;
+    techName: string;
+    techLdap: string;
+    serviceOrder: string;
+    previousId: number;
+    previousStatus: string;
+    previousAt: string;
+    newId: number;
+    newStatus: string;
+    newAt: string;
+    minutesBetween: number;
+  }[]>;
+
   getDistrictRollup(): Promise<{
     district: string;
     totalTickets: number;
@@ -1499,6 +1513,74 @@ export class DatabaseStorage implements IStorage {
       resubmissionRate: total > 0 ? Math.round((totalResubs / total) * 100) : 0,
       topTechnicians,
     };
+  }
+
+  async getCoachingDuplicateSubmissions(days: number): Promise<{
+    technicianId: number;
+    techName: string;
+    techLdap: string;
+    serviceOrder: string;
+    previousId: number;
+    previousStatus: string;
+    previousAt: string;
+    newId: number;
+    newStatus: string;
+    newAt: string;
+    minutesBetween: number;
+  }[]> {
+    // Coaching opportunity = tech submitted a brand-new ticket
+    // (resubmission_of IS NULL) for a (tech, SO) pair where the
+    // immediately-prior row was a terminal failure status — instead of
+    // using the proper resubmit-after-rejection flow. The 60s idempotency
+    // guard at the insert path means anything past that window is a real
+    // user choice, not a system retry. Bounded by the days param.
+    const safeDays = Math.min(Math.max(Math.floor(days) || 30, 1), 365);
+    // Inner CTE expands the lookback by 90 days so that a "new" ticket inside
+    // the requested window can still find its true prior rejection even when
+    // that rejection occurred up to 90 days before the window opens. The
+    // outer WHERE filters on the new row's timestamp to honor the user's
+    // requested window. Without the backstop, lag() returns NULL for prev_*
+    // at the window boundary and we silently miss real coaching cases.
+    const lookbackDays = Math.min(safeDays + 90, 365);
+    const rows = await db.execute(sql`
+      WITH ordered AS (
+        SELECT
+          s.id,
+          s.technician_id,
+          s.service_order,
+          s.ticket_status,
+          s.created_at,
+          s.resubmission_of,
+          LAG(s.id) OVER w AS prev_id,
+          LAG(s.ticket_status) OVER w AS prev_status,
+          LAG(s.created_at) OVER w AS prev_at
+        FROM submissions s
+        WHERE s.created_at > NOW() - (${lookbackDays}::int * INTERVAL '1 day')
+        WINDOW w AS (PARTITION BY s.technician_id, s.service_order ORDER BY s.created_at)
+      )
+      SELECT
+        o.technician_id              AS "technicianId",
+        COALESCE(u.name, t.name, '') AS "techName",
+        COALESCE(u.rac_id, t.ldap_id, '') AS "techLdap",
+        o.service_order              AS "serviceOrder",
+        o.prev_id                    AS "previousId",
+        o.prev_status                AS "previousStatus",
+        o.prev_at                    AS "previousAt",
+        o.id                         AS "newId",
+        o.ticket_status              AS "newStatus",
+        o.created_at                 AS "newAt",
+        ROUND(EXTRACT(EPOCH FROM (o.created_at - o.prev_at)) / 60.0)::int AS "minutesBetween"
+      FROM ordered o
+      LEFT JOIN users u ON u.id = o.technician_id
+      LEFT JOIN technicians t ON t.ldap_id = u.rac_id
+      WHERE o.prev_id IS NOT NULL
+        AND o.resubmission_of IS NULL
+        AND o.prev_status IN ('rejected','rejected_closed','invalid')
+        AND o.created_at > NOW() - (${safeDays}::int * INTERVAL '1 day')
+      ORDER BY o.created_at DESC
+      LIMIT 500;
+    `);
+    return rows.rows as any;
   }
 
   async getDistrictRollup(): Promise<{

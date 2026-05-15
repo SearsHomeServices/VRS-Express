@@ -3656,6 +3656,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/analytics/coaching-duplicates", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt((req.query.days as string) || "30", 10) || 30, 1), 365);
+      const rows = await storage.getCoachingDuplicateSubmissions(days);
+      return res.status(200).json({ days, rows });
+    } catch (error) {
+      console.error("Coaching duplicates error:", error);
+      return res.status(500).json({ error: "Failed to get coaching duplicates" });
+    }
+  });
+
   app.get("/api/admin/analytics/districts", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
       const rollup = await storage.getDistrictRollup();
