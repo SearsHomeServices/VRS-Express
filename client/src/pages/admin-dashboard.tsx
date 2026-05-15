@@ -2639,7 +2639,21 @@ export default function AdminDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
     });
 
-    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); };
+    // Tyler 2026-05-15: VRS reported the admin Ticket Overview showed a
+    // ticket as still-pending with a live "Handle Time" ticking past 58
+    // minutes — but on manual refresh the ticket was already completed.
+    // Root cause: with the 60s /api/submissions poll, completion events
+    // had no realtime push to admins. Server now emits `ticket_updated`
+    // from /process and /process-nla on every status transition; this
+    // listener invalidates the submissions cache + analytics so the row
+    // re-renders the moment the DB row commits. Silent (no toast/sound)
+    // — admins don't need to be paged on every completion.
+    const unsub9 = subscribe("ticket_updated", () => {
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+    });
+
+    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
   }, [subscribe]);
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");

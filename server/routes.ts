@@ -1943,6 +1943,18 @@ export async function registerRoutes(
       }
 
       try {
+        // Tyler 2026-05-15: admin Ticket Overview was showing a stale
+        // pending row (with a live "Handle Time" still ticking) for up
+        // to 60s after an agent completed/rejected/etc. — until the
+        // next /api/submissions poll. /process-nla already emits
+        // `ticket_updated` after every action; /process did not. Mirror
+        // the same broadcast here so the admin dashboard's
+        // `ticket_updated` subscription invalidates the submissions
+        // cache the moment the DB row commits.
+        broadcastToAdmins({
+          type: "ticket_updated",
+          payload: { submissionId: id, ticketStatus: updated?.ticketStatus },
+        });
         await broadcastVrsAvailability();
       } catch (broadcastErr) {
         console.error(`[process:${action}] final VRS availability broadcast failed for submission ${submission.id}:`, broadcastErr);
