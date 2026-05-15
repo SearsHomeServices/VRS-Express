@@ -1333,62 +1333,62 @@ function TicketOverviewSection() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table className="text-xs [&_th]:px-2 [&_th]:py-2 [&_td]:px-2 [&_td]:py-2">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[140px]">
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("serviceOrder")} data-testid="sort-ticket-so">
-                        Service Order <ArrowUpDown className="w-3 h-3" />
+                    <TableHead className="w-[110px]">
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("serviceOrder")} data-testid="sort-ticket-so" title="Service Order">
+                        SO # <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("status")} data-testid="sort-ticket-status">
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("status")} data-testid="sort-ticket-status">
                         Status <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("assigned")} data-testid="sort-ticket-assigned">
-                        Assigned To <ArrowUpDown className="w-3 h-3" />
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("assigned")} data-testid="sort-ticket-assigned" title="Assigned To">
+                        Assigned <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("technician")} data-testid="sort-ticket-tech">
-                        Technician <ArrowUpDown className="w-3 h-3" />
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("technician")} data-testid="sort-ticket-tech">
+                        Tech <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("division")} data-testid="sort-ticket-division">
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("division")} data-testid="sort-ticket-division">
                         Division <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("warranty")} data-testid="sort-ticket-warranty">
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("warranty")} data-testid="sort-ticket-warranty">
                         Warranty <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead>
-                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("intakeForm")} data-testid="sort-ticket-intake">
-                        Intake Form Complete <ArrowUpDown className="w-3 h-3" />
+                      <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("intakeForm")} data-testid="sort-ticket-intake" title="Intake Form Complete">
+                        Intake <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
-                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("lastUpdated")} data-testid="sort-ticket-updated">
-                        Last Updated <ArrowUpDown className="w-3 h-3" />
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto whitespace-nowrap" onClick={() => handleTicketSort("lastUpdated")} data-testid="sort-ticket-updated" title="Last Updated">
+                        Updated <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
-                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("queueWait")} data-testid="sort-ticket-queuewait">
-                        Queue Wait <ArrowUpDown className="w-3 h-3" />
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto whitespace-nowrap" onClick={() => handleTicketSort("queueWait")} data-testid="sort-ticket-queuewait" title="Queue Wait — created → claimed">
+                        Queue <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
-                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("handleTime")} data-testid="sort-ticket-handletime">
-                        Handle Time <ArrowUpDown className="w-3 h-3" />
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto whitespace-nowrap" onClick={() => handleTicketSort("handleTime")} data-testid="sort-ticket-handletime" title="Handle Time — claimed → status change">
+                        Handle <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
-                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("totalTime")} data-testid="sort-ticket-totaltime">
-                        Total Time <ArrowUpDown className="w-3 h-3" />
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto whitespace-nowrap" onClick={() => handleTicketSort("totalTime")} data-testid="sort-ticket-totaltime" title="Total Time — created → status change">
+                        Total <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
                     {(statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
@@ -1463,7 +1463,7 @@ function TicketOverviewSection() {
                         </TableCell>
                         <TableCell className="text-sm">
                           {ticket.warrantyType === "sears_protect" ? "Sears Protect" :
-                           ticket.warrantyType === "ahs" ? "AHS" :
+                           ticket.warrantyType === "ahs" || ticket.warrantyType === "american_home_shield" ? "AHS" :
                            ticket.warrantyType === "first_american" ? "First American" :
                            ticket.warrantyType || "—"}
                         </TableCell>
