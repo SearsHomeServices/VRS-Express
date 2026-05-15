@@ -357,16 +357,6 @@ export function updateClientDivisions(userId: number, divisions: string[]) {
   }
 }
 
-export function getConnectedClient(userId: number): ConnectedClient | undefined {
-  const sessions = clients.get(userId);
-  return sessions?.[0];
-}
-
-export function isAgentConnectedAndOnline(userId: number): boolean {
-  const sessions = clients.get(userId);
-  return !!sessions && sessions.length > 0 && sessions[0].agentStatus === "online";
-}
-
 export function getOnlineAgentCount(): number {
   let count = 0;
   for (const [, sessions] of clients) {

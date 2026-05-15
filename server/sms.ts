@@ -455,12 +455,6 @@ function normalizeLegacyAfterHoursSubmissionCopy(message: string): string {
 // Communication Templates page like every other tech-facing message.
 // ============================================================================
 
-export async function buildResubmissionClaimMessage(serviceOrder: string): Promise<string> {
-  const rendered = await renderTemplate("ticket_claimed.resubmission", { serviceOrder });
-  if (rendered !== null) return rendered;
-  return `VRS Update for SO#${serviceOrder}: An agent is actively working on your resubmitted ticket. Stand by for confirmation of your submission, which will let you know when you can leave.\n\nDO NOT LEAVE THE SITE until you receive that confirmation text.`;
-}
-
 export async function buildStandardClaimMessage(serviceOrder: string): Promise<string> {
   const rendered = await renderTemplate("ticket_claimed.standard", { serviceOrder });
   if (rendered !== null) return rendered;

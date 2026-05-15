@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed — Dead/legacy code sweep (2026-05-15)
+- **Codebase audit + targeted removal of confirmed-dead exports** (zero references via ts-prune + ripgrep). No behavior change.
+- `server/sms.ts` — Removed `buildResubmissionClaimMessage` (already noted obsolete in `server/routes.ts:46` since the resubmission routing change on 2026-05-06 — resubmissions enter the queue and the standard claim SMS fires when an agent claims).
+- `server/routes.ts` — Removed the now-stale comment that referenced the deleted helper.
+- `server/websocket.ts` — Removed unused exports `getConnectedClient` and `isAgentConnectedAndOnline` (never imported anywhere; `getOnlineAgentCount` is the live one).
+- `client/src/lib/business-hours.ts` — Pruned re-exports with zero consumers: `VRS_OPEN_HOUR_ET`, `VRS_CLOSE_HOUR_ET`, `getBusinessElapsedFromNow`, `DEFAULT_PROFILE`, `DEFAULT_HVAC_PROFILE`, `DayKey`, and the unused hook `useBusinessHoursProfile`. The dashboards' actual imports (`getBusinessElapsedMs`, `formatBusinessElapsed`, `useBusinessHoursConfig`, `categoryForApplianceType`, `BusinessHoursProfile`, etc.) are preserved.
+- `shared/business-hours.ts` — Removed the deprecated `VRS_OPEN_HOUR_ET` / `VRS_CLOSE_HOUR_ET` constants AND the unused `getBusinessElapsedFromNow` function (the only consumer was the client re-export above; removed in tandem).
+- **Intentionally NOT removed** (safety per `replit.md`): `server/seed.ts` one-time migration guards, `shared/schema.ts` insert schemas/types (public surface), `client/src/components/ObjectUploader.tsx` + `client/src/hooks/use-upload.ts` (documented helpers from the `javascript_object_storage` integration template — kept as building blocks), and intentional structured `console.log` audit lines in `routes.ts` / `websocket.ts`.
+- **Verification.** `tsc --noEmit` shows only the pre-existing errors that predate this sweep (none reference any removed symbol). Workflow restarted clean. `rg` for every removed identifier returns zero hits.
+
 ### Fixed — Agent NLA escalate killed by edge HTML 403 + shared retry helper (2026-05-11)
 - **Zorn (NLA agent) tried to escalate an NLA ticket to a P-Card agent (action `nla_escalate_to_pcard`, SO 8380-13547409) and got "Processing Failed" with the body = Replit's edge-proxy HTML 403 page (`<!doctype html>…<title>403</title>403 Forbidden`).** Same edge-flake we already self-heal on tech submissions earlier today — but the agent dashboard's `nlaProcessMutation` (and `processMutation`) called bare `apiRequest` with no retry, so a single edge blip killed Zorn's escalate.
 - **Extracted shared retry helper (`client/src/lib/queryClient.ts`).** New exports: `isTransientApiError(msg)` detects HTML 403/5xx pages, `Failed to fetch`, `NetworkError`, generic 5xx; `apiRequestWithRetry(method, url, data, {maxAttempts=3, logTag})` wraps `apiRequest` with 800ms / 1600ms exponential backoff. JSON 4xx errors (real validation failures from our app) are NOT retried — caller still sees the actual message immediately.

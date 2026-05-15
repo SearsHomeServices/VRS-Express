@@ -20,21 +20,15 @@ import {
 } from "@shared/business-hours";
 
 export {
-  VRS_OPEN_HOUR_ET,
-  VRS_CLOSE_HOUR_ET,
   getBusinessElapsedMs,
-  getBusinessElapsedFromNow,
   formatBusinessElapsed,
   isWithinBusinessHours,
   getEtDateString,
   formatHoursLabel,
   categoryForApplianceType,
   DEFAULT_BUSINESS_HOURS_CONFIG,
-  DEFAULT_PROFILE,
-  DEFAULT_HVAC_PROFILE,
   type BusinessHoursConfig,
   type BusinessHoursProfile,
-  type DayKey,
 } from "@shared/business-hours";
 
 export function useBusinessHoursConfig(): {
@@ -53,7 +47,3 @@ export function useBusinessHoursConfig(): {
   };
 }
 
-export function useBusinessHoursProfile(applianceType?: string): BusinessHoursProfile {
-  const { config } = useBusinessHoursConfig();
-  return config[categoryForApplianceType(applianceType)];
-}

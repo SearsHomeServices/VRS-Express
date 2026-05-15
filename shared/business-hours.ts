@@ -77,12 +77,6 @@ export const DEFAULT_BUSINESS_HOURS_CONFIG: BusinessHoursConfig = {
   hvac: DEFAULT_HVAC_PROFILE,
 };
 
-// DEPRECATED — kept for backward compat. New code should pass a profile.
-// Resolves to DEFAULT_PROFILE.open / .close hour part. Half-hour precision
-// is lost when callers read these constants — use the profile API instead.
-export const VRS_OPEN_HOUR_ET = parseInt(DEFAULT_PROFILE.open.split(":")[0], 10);
-export const VRS_CLOSE_HOUR_ET = parseInt(DEFAULT_PROFILE.close.split(":")[0], 10);
-
 // Architect-flagged perf: cache the `Intl.DateTimeFormat` instances at module
 // scope. The admin tickets table can render hundreds of rows × multiple
 // timer columns × per-render — without caching, each render constructed
@@ -192,13 +186,6 @@ export function getBusinessElapsedMs(
     safety++;
   }
   return total;
-}
-
-export function getBusinessElapsedFromNow(
-  start: Date,
-  profile: BusinessHoursProfile = DEFAULT_PROFILE,
-): number {
-  return getBusinessElapsedMs(start, new Date(), profile);
 }
 
 export function formatBusinessElapsed(ms: number): string {

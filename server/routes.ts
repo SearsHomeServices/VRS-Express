@@ -43,8 +43,6 @@ import {
   buildSubmissionReceivedMessage,
   // Tyler 2026-04-29 (Communication Templates): inline SMS strings extracted
   // into named builders so admins can edit them through the new admin page.
-  // (buildResubmissionClaimMessage no longer used — resubmissions enter the
-  // queue and the claim SMS fires from the standard claim route.)
   buildStandardClaimMessage,
   buildTwoStageClaimMessage,
   buildSubmissionApprovedMessage,
