@@ -2503,13 +2503,36 @@ export default function AdminDashboard() {
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");
   const [techSearchQuery, setTechSearchQuery] = useState("");
-  const [techSortField, setTechSortField] = useState<"name" | "district" | "totalTickets">("name");
+  // Tyler 2026-05-14 — every column in the Field Technicians table is sortable.
+  // String columns default to asc on first click; numeric columns default to
+  // desc (admins want highest counts surfaced first).
+  type TechSortField = "name" | "racId" | "phone" | "district" | "manager" | "totalTickets" | "pending" | "approved" | "rejected";
+  const TECH_NUMERIC_FIELDS: TechSortField[] = ["totalTickets", "pending", "approved", "rejected"];
+  const [techSortField, setTechSortField] = useState<TechSortField>("name");
   const [techSortDir, setTechSortDir] = useState<"asc" | "desc">("asc");
-  // Tyler 2026-05-14 — sort state for the analytics "Technicians with
-  // Resubmissions" table. Default: highest rate first (most-problematic at
-  // the top), matching how admins read the existing color-coded badges.
-  const [resubSortField, setResubSortField] = useState<"resubmissions" | "rate">("rate");
+  const handleTechSort = (field: TechSortField) => {
+    if (techSortField === field) {
+      setTechSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setTechSortField(field);
+      setTechSortDir(TECH_NUMERIC_FIELDS.includes(field) ? "desc" : "asc");
+    }
+  };
+
+  // Tyler 2026-05-14 — every column in the analytics "Technicians with
+  // Resubmissions" table is sortable. Default: highest rate first.
+  type ResubSortField = "techName" | "techLdap" | "totalTickets" | "resubmissions" | "rate";
+  const RESUB_NUMERIC_FIELDS: ResubSortField[] = ["totalTickets", "resubmissions", "rate"];
+  const [resubSortField, setResubSortField] = useState<ResubSortField>("rate");
   const [resubSortDir, setResubSortDir] = useState<"asc" | "desc">("desc");
+  const handleResubSort = (field: ResubSortField) => {
+    if (resubSortField === field) {
+      setResubSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setResubSortField(field);
+      setResubSortDir(RESUB_NUMERIC_FIELDS.includes(field) ? "desc" : "asc");
+    }
+  };
 
   const { data: usersData, isLoading: usersLoading } = useQuery<{ users: SafeUser[] }>({
     queryKey: ["/api/admin/users"],
@@ -3385,26 +3408,50 @@ export default function AdminDashboard() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>
-                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => { if (techSortField === "name") { setTechSortDir(d => d === "asc" ? "desc" : "asc"); } else { setTechSortField("name"); setTechSortDir("asc"); } }} data-testid="sort-tech-name">
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("name")} data-testid="sort-tech-name">
                                   Name <ArrowUpDown className="w-3 h-3" />
                                 </button>
                               </TableHead>
-                              <TableHead>RAC ID</TableHead>
-                              <TableHead>Phone</TableHead>
                               <TableHead>
-                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => { if (techSortField === "district") { setTechSortDir(d => d === "asc" ? "desc" : "asc"); } else { setTechSortField("district"); setTechSortDir("asc"); } }} data-testid="sort-tech-district">
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("racId")} data-testid="sort-tech-racid">
+                                  RAC ID <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("phone")} data-testid="sort-tech-phone">
+                                  Phone <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("district")} data-testid="sort-tech-district">
                                   District <ArrowUpDown className="w-3 h-3" />
                                 </button>
                               </TableHead>
-                              <TableHead>Manager</TableHead>
                               <TableHead>
-                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => { if (techSortField === "totalTickets") { setTechSortDir(d => d === "asc" ? "desc" : "asc"); } else { setTechSortField("totalTickets"); setTechSortDir("desc"); } }} data-testid="sort-tech-tickets">
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("manager")} data-testid="sort-tech-manager">
+                                  Manager <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("totalTickets")} data-testid="sort-tech-tickets">
                                   Total Tickets <ArrowUpDown className="w-3 h-3" />
                                 </button>
                               </TableHead>
-                              <TableHead>Pending</TableHead>
-                              <TableHead>Approved</TableHead>
-                              <TableHead>Rejected</TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("pending")} data-testid="sort-tech-pending">
+                                  Pending <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("approved")} data-testid="sort-tech-approved">
+                                  Approved <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
+                              <TableHead>
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTechSort("rejected")} data-testid="sort-tech-rejected">
+                                  Rejected <ArrowUpDown className="w-3 h-3" />
+                                </button>
+                              </TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -3418,13 +3465,18 @@ export default function AdminDashboard() {
                                   t.district?.toLowerCase().includes(q)
                                 );
                               })
-                              .sort((a, b) => {
+                              .sort((a: any, b: any) => {
                                 const dir = techSortDir === "asc" ? 1 : -1;
-                                if (techSortField === "totalTickets") {
-                                  return (a.totalTickets - b.totalTickets) * dir;
+                                if (TECH_NUMERIC_FIELDS.includes(techSortField)) {
+                                  const key = techSortField === "pending" ? "pendingCount"
+                                    : techSortField === "approved" ? "approvedCount"
+                                    : techSortField === "rejected" ? "rejectedCount"
+                                    : "totalTickets";
+                                  return ((a[key] ?? 0) - (b[key] ?? 0)) * dir;
                                 }
-                                const aVal = (a[techSortField] || "").toLowerCase();
-                                const bVal = (b[techSortField] || "").toLowerCase();
+                                const key = techSortField === "manager" ? "managerName" : techSortField;
+                                const aVal = (a[key] || "").toString().toLowerCase();
+                                const bVal = (b[key] || "").toString().toLowerCase();
                                 return aVal < bVal ? -dir : aVal > bVal ? dir : 0;
                               })
                               .map((t) => (
@@ -4057,49 +4109,42 @@ export default function AdminDashboard() {
                                 <table className="w-full text-sm">
                                   <thead>
                                     <tr className="bg-muted/50 border-b">
-                                      <th className="text-left p-2 font-medium">Technician</th>
-                                      <th className="text-left p-2 font-medium">LDAP</th>
-                                      <th className="text-center p-2 font-medium">Total</th>
+                                      <th className="text-left p-2 font-medium">
+                                        <button className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => handleResubSort("techName")} data-testid="sort-resub-name">
+                                          Technician <ArrowUpDown className="w-3 h-3" />
+                                        </button>
+                                      </th>
+                                      <th className="text-left p-2 font-medium">
+                                        <button className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => handleResubSort("techLdap")} data-testid="sort-resub-ldap">
+                                          LDAP <ArrowUpDown className="w-3 h-3" />
+                                        </button>
+                                      </th>
                                       <th className="text-center p-2 font-medium">
-                                        <button
-                                          className="inline-flex items-center gap-1 hover:text-foreground mx-auto"
-                                          onClick={() => {
-                                            if (resubSortField === "resubmissions") {
-                                              setResubSortDir(d => d === "asc" ? "desc" : "asc");
-                                            } else {
-                                              setResubSortField("resubmissions");
-                                              setResubSortDir("desc");
-                                            }
-                                          }}
-                                          data-testid="sort-resub-count"
-                                        >
+                                        <button className="inline-flex items-center gap-1 hover:text-foreground mx-auto" onClick={() => handleResubSort("totalTickets")} data-testid="sort-resub-total">
+                                          Total <ArrowUpDown className="w-3 h-3" />
+                                        </button>
+                                      </th>
+                                      <th className="text-center p-2 font-medium">
+                                        <button className="inline-flex items-center gap-1 hover:text-foreground mx-auto" onClick={() => handleResubSort("resubmissions")} data-testid="sort-resub-count">
                                           Resubs <ArrowUpDown className="w-3 h-3" />
                                         </button>
                                       </th>
                                       <th className="text-center p-2 font-medium">
-                                        <button
-                                          className="inline-flex items-center gap-1 hover:text-foreground mx-auto"
-                                          onClick={() => {
-                                            if (resubSortField === "rate") {
-                                              setResubSortDir(d => d === "asc" ? "desc" : "asc");
-                                            } else {
-                                              setResubSortField("rate");
-                                              setResubSortDir("desc");
-                                            }
-                                          }}
-                                          data-testid="sort-resub-rate"
-                                        >
+                                        <button className="inline-flex items-center gap-1 hover:text-foreground mx-auto" onClick={() => handleResubSort("rate")} data-testid="sort-resub-rate">
                                           Rate <ArrowUpDown className="w-3 h-3" />
                                         </button>
                                       </th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {[...resubmissionData.topTechnicians].sort((a, b) => {
+                                    {[...resubmissionData.topTechnicians].sort((a: any, b: any) => {
                                       const dir = resubSortDir === "asc" ? 1 : -1;
-                                      const aVal = resubSortField === "rate" ? a.rate : a.resubmissions;
-                                      const bVal = resubSortField === "rate" ? b.rate : b.resubmissions;
-                                      return (aVal - bVal) * dir;
+                                      if (RESUB_NUMERIC_FIELDS.includes(resubSortField)) {
+                                        return ((a[resubSortField] ?? 0) - (b[resubSortField] ?? 0)) * dir;
+                                      }
+                                      const aVal = (a[resubSortField] || "").toString().toLowerCase();
+                                      const bVal = (b[resubSortField] || "").toString().toLowerCase();
+                                      return aVal < bVal ? -dir : aVal > bVal ? dir : 0;
                                     }).map((t, i) => (
                                       <tr key={t.technicianId} className={i % 2 === 0 ? "" : "bg-muted/20"} data-testid={`resub-row-${t.technicianId}`}>
                                         <td className="p-2">{t.techName}</td>
