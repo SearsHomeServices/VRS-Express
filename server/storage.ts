@@ -234,6 +234,7 @@ export interface IStorage {
     approvedCount: number;
     rejectedCount: number;
     pendingCount: number;
+    otherStatusCounts: Record<string, number>;
     avgTimeToStage1Ms: number | null;
     avgTimeToAuthCodeMs: number | null;
   }>;
@@ -1361,6 +1362,7 @@ export class DatabaseStorage implements IStorage {
     approvedCount: number;
     rejectedCount: number;
     pendingCount: number;
+    otherStatusCounts: Record<string, number>;
     avgTimeToStage1Ms: number | null;
     avgTimeToAuthCodeMs: number | null;
   }> {
@@ -1386,6 +1388,24 @@ export class DatabaseStorage implements IStorage {
         pendingCount: sql<number>`count(*) filter (where ${submissions.stage1Status} = 'pending')`,
       })
       .from(submissions);
+
+    // Tyler 2026-05-15 — surface every stage1Status that isn't approved/
+    // rejected/pending so the Approval Rate card can render a row per
+    // remaining bucket (Invalid, Not Reviewed/null, etc.) and the displayed
+    // %s actually add up. Keeps the canonical 3 numerators unchanged.
+    const otherStatusRows = await db
+      .select({
+        status: sql<string | null>`${submissions.stage1Status}`,
+        count: sql<number>`count(*)`,
+      })
+      .from(submissions)
+      .where(sql`${submissions.stage1Status} is null or ${submissions.stage1Status} not in ('approved', 'rejected', 'pending')`)
+      .groupBy(submissions.stage1Status);
+    const otherStatusCounts: Record<string, number> = {};
+    for (const r of otherStatusRows) {
+      const key = r.status === null || r.status === "" ? "not_reviewed" : r.status;
+      otherStatusCounts[key] = Number(r.count) || 0;
+    }
 
     // Tyler 2026-04-30: averages computed in JS using business-hours math
     // so overnight time doesn't skew the headline numbers. Mirrors the
@@ -1429,6 +1449,7 @@ export class DatabaseStorage implements IStorage {
       approvedCount: Number(row.approvedCount) || 0,
       rejectedCount: Number(row.rejectedCount) || 0,
       pendingCount: Number(row.pendingCount) || 0,
+      otherStatusCounts,
       avgTimeToStage1Ms: stage1Count > 0 ? stage1Sum / stage1Count : null,
       avgTimeToAuthCodeMs: authCodeCount > 0 ? authCodeSum / authCodeCount : null,
     };

@@ -95,6 +95,7 @@ import {
   Shield,
   FileText,
   CheckCircle,
+  Circle,
   CheckCircle2,
   XCircle,
   Clock,
@@ -144,9 +145,19 @@ interface AnalyticsData {
   approvedCount: number;
   rejectedCount: number;
   pendingCount: number;
+  otherStatusCounts?: Record<string, number>;
   avgTimeToStage1Ms: number | null;
   avgTimeToAuthCodeMs: number | null;
 }
+
+const STAGE1_STATUS_LABELS: Record<string, string> = {
+  not_reviewed: "Not Reviewed",
+  invalid: "Invalid",
+  closed: "Closed",
+  rejected_closed: "Rejected (Closed)",
+};
+const formatStage1Status = (key: string): string =>
+  STAGE1_STATUS_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
 interface ResubmissionStats {
   totalResubmissions: number;
@@ -4083,6 +4094,25 @@ export default function AdminDashboard() {
                               </Badge>
                             </div>
                           </div>
+                          {analyticsData.otherStatusCounts && Object.entries(analyticsData.otherStatusCounts)
+                            .filter(([_, count]) => count > 0)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([key, count]) => (
+                              <div key={key} className="flex items-center justify-between gap-2 flex-wrap" data-testid={`row-status-${key}`}>
+                                <div className="flex items-center gap-2">
+                                  <Circle className="w-4 h-4 text-muted-foreground" />
+                                  <span className="text-sm">{formatStage1Status(key)}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold" data-testid={`text-status-count-${key}`}>{count}</span>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {analyticsData.totalSubmissions > 0
+                                      ? Math.round((count / analyticsData.totalSubmissions) * 100)
+                                      : 0}%
+                                  </Badge>
+                                </div>
+                              </div>
+                            ))}
                           {analyticsData.totalSubmissions > 0 && (
                             <div className="mt-2">
                               <div className="h-2 rounded-full bg-muted overflow-hidden flex">
@@ -4098,6 +4128,15 @@ export default function AdminDashboard() {
                                   className="bg-yellow-600 dark:bg-yellow-400"
                                   style={{ width: `${(analyticsData.pendingCount / analyticsData.totalSubmissions) * 100}%` }}
                                 />
+                                {analyticsData.otherStatusCounts && (() => {
+                                  const otherTotal = Object.values(analyticsData.otherStatusCounts).reduce((s, n) => s + n, 0);
+                                  return otherTotal > 0 ? (
+                                    <div
+                                      className="bg-muted-foreground/40"
+                                      style={{ width: `${(otherTotal / analyticsData.totalSubmissions) * 100}%` }}
+                                    />
+                                  ) : null;
+                                })()}
                               </div>
                             </div>
                           )}
