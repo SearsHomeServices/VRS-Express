@@ -1010,6 +1010,20 @@ function TicketOverviewSection() {
   // the selector beside the request-type filter. The CSV/XLSX export
   // endpoints are unaffected (different endpoints with their own scopes).
   const [createdAfterWindow, setCreatedAfterWindow] = useState<"30d" | "60d" | "90d" | "all">("30d");
+  // Tyler 2026-05-15 — every column in the Ticket Overview table is sortable.
+  // Default (null) preserves the existing FIFO behavior on the queue tab.
+  type TicketSortField = "serviceOrder" | "status" | "assigned" | "technician" | "division" | "warranty" | "intakeForm" | "lastUpdated" | "queueWait" | "handleTime" | "totalTime";
+  const TICKET_NUMERIC_FIELDS: TicketSortField[] = ["intakeForm", "lastUpdated", "queueWait", "handleTime", "totalTime"];
+  const [ticketSortField, setTicketSortField] = useState<TicketSortField | null>(null);
+  const [ticketSortDir, setTicketSortDir] = useState<"asc" | "desc">("desc");
+  const handleTicketSort = (field: TicketSortField) => {
+    if (ticketSortField === field) {
+      setTicketSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setTicketSortField(field);
+      setTicketSortDir(TICKET_NUMERIC_FIELDS.includes(field) ? "desc" : "asc");
+    }
+  };
   const createdAfterIso = useMemo(() => {
     if (createdAfterWindow === "all") return null;
     const days = createdAfterWindow === "60d" ? 60 : createdAfterWindow === "90d" ? 90 : 30;
@@ -1115,10 +1129,51 @@ function TicketOverviewSection() {
     ? allTickets
     : allTickets.filter(t => t.ticketStatus === statusFilter);
 
-  if (statusFilter === "queued") {
-    filteredTickets = [...filteredTickets].sort((a, b) =>
-      (safeDate(a.createdAt)?.getTime() || 0) - (safeDate(b.createdAt)?.getTime() || 0)
-    );
+  // Tyler 2026-05-15 — every column in the Ticket Overview table is sortable.
+  // When ticketSortField is null we keep the existing FIFO behavior for the
+  // "queued" tab so the live queue stays oldest-first by default.
+  if (ticketSortField === null) {
+    if (statusFilter === "queued") {
+      filteredTickets = [...filteredTickets].sort((a, b) =>
+        (safeDate(a.createdAt)?.getTime() || 0) - (safeDate(b.createdAt)?.getTime() || 0)
+      );
+    }
+  } else {
+    const dir = ticketSortDir === "asc" ? 1 : -1;
+    const field = ticketSortField;
+    const ts = (v: any) => safeDate(v)?.getTime() || 0;
+    const num = (t: any): number => {
+      switch (field) {
+        case "lastUpdated": return ts(t.updatedAt || t.statusChangedAt || t.createdAt);
+        case "intakeForm": return ts(t.intakeFormCompletedAt);
+        case "queueWait": return t.claimedAt ? ts(t.claimedAt) - ts(t.createdAt) : Infinity;
+        case "handleTime": return t.claimedAt && t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.claimedAt) : -1;
+        case "totalTime": return t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.createdAt) : -1;
+        default: return 0;
+      }
+    };
+    const str = (t: any): string => {
+      switch (field) {
+        case "serviceOrder": return (t.serviceOrder || "").toString().toLowerCase();
+        case "status": return (t.ticketStatus || "").toString().toLowerCase();
+        case "assigned": return (t.assignedAgentName || "").toString().toLowerCase();
+        case "technician": return (t.technicianName || "").toString().toLowerCase();
+        case "division": return (t.applianceType || "").toString().toLowerCase();
+        case "warranty": return (t.warrantyType || "").toString().toLowerCase();
+        default: return "";
+      }
+    };
+    filteredTickets = [...filteredTickets].sort((a, b) => {
+      if (TICKET_NUMERIC_FIELDS.includes(field)) {
+        const av = num(a); const bv = num(b);
+        if (av === Infinity && bv === Infinity) return 0;
+        if (av === Infinity) return 1;
+        if (bv === Infinity) return -1;
+        return (av - bv) * dir;
+      }
+      const av = str(a); const bv = str(b);
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
   }
 
   if (searchQuery.trim()) {
@@ -1250,17 +1305,61 @@ function TicketOverviewSection() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[140px]">Service Order</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Assigned To</TableHead>
-                    <TableHead>Technician</TableHead>
-                    <TableHead>Division</TableHead>
-                    <TableHead>Warranty</TableHead>
-                    <TableHead>Intake Form Complete</TableHead>
-                    <TableHead className="text-right">Last Updated</TableHead>
-                    <TableHead className="text-right">Queue Wait</TableHead>
-                    <TableHead className="text-right">Handle Time</TableHead>
-                    <TableHead className="text-right">Total Time</TableHead>
+                    <TableHead className="w-[140px]">
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("serviceOrder")} data-testid="sort-ticket-so">
+                        Service Order <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("status")} data-testid="sort-ticket-status">
+                        Status <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("assigned")} data-testid="sort-ticket-assigned">
+                        Assigned To <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("technician")} data-testid="sort-ticket-tech">
+                        Technician <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("division")} data-testid="sort-ticket-division">
+                        Division <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("warranty")} data-testid="sort-ticket-warranty">
+                        Warranty <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleTicketSort("intakeForm")} data-testid="sort-ticket-intake">
+                        Intake Form Complete <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("lastUpdated")} data-testid="sort-ticket-updated">
+                        Last Updated <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("queueWait")} data-testid="sort-ticket-queuewait">
+                        Queue Wait <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("handleTime")} data-testid="sort-ticket-handletime">
+                        Handle Time <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button className="inline-flex items-center gap-1 hover:text-foreground ml-auto" onClick={() => handleTicketSort("totalTime")} data-testid="sort-ticket-totaltime">
+                        Total Time <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </TableHead>
                     {(statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
                       <TableHead className="w-[80px]"></TableHead>
                     )}
@@ -2519,6 +2618,19 @@ export default function AdminDashboard() {
     }
   };
 
+  // Tyler 2026-05-15 — every column in the Users (admin) table is sortable.
+  type UserSortField = "name" | "role" | "phone" | "racId" | "isActive";
+  const [userSortField, setUserSortField] = useState<UserSortField>("name");
+  const [userSortDir, setUserSortDir] = useState<"asc" | "desc">("asc");
+  const handleUserSort = (field: UserSortField) => {
+    if (userSortField === field) {
+      setUserSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setUserSortField(field);
+      setUserSortDir("asc");
+    }
+  };
+
   // Tyler 2026-05-14 — every column in the analytics "Technicians with
   // Resubmissions" table is sortable. Default: highest rate first.
   type ResubSortField = "techName" | "techLdap" | "totalTickets" | "resubmissions" | "rate";
@@ -3262,14 +3374,32 @@ export default function AdminDashboard() {
                         <Table data-testid="table-users" className="min-w-[700px] mx-4">
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Role</TableHead>
-                            <TableHead className="hidden sm:table-cell">Phone</TableHead>
-                            <TableHead>RAC ID</TableHead>
+                            <TableHead>
+                              <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleUserSort("name")} data-testid="sort-user-name">
+                                Name <ArrowUpDown className="w-3 h-3" />
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleUserSort("role")} data-testid="sort-user-role">
+                                Role <ArrowUpDown className="w-3 h-3" />
+                              </button>
+                            </TableHead>
+                            <TableHead className="hidden sm:table-cell">
+                              <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleUserSort("phone")} data-testid="sort-user-phone">
+                                Phone <ArrowUpDown className="w-3 h-3" />
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleUserSort("racId")} data-testid="sort-user-racid">
+                                RAC ID <ArrowUpDown className="w-3 h-3" />
+                              </button>
+                            </TableHead>
                             <TableHead className="hidden sm:table-cell">Password Status</TableHead>
                             <TableHead>
                               <div className="flex items-center gap-1.5">
-                                Status
+                                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => handleUserSort("isActive")} data-testid="sort-user-status">
+                                  Status <ArrowUpDown className="w-3 h-3" />
+                                </button>
                                 <HelpTooltip content="Deactivated users cannot log in. Their pending submissions remain in the queue." />
                               </div>
                             </TableHead>
@@ -3287,6 +3417,14 @@ export default function AdminDashboard() {
                               u.phone?.toLowerCase().includes(q) ||
                               u.email?.toLowerCase().includes(q)
                             );
+                          }).slice().sort((a: any, b: any) => {
+                            const dir = userSortDir === "asc" ? 1 : -1;
+                            if (userSortField === "isActive") {
+                              return ((a.isActive ? 1 : 0) - (b.isActive ? 1 : 0)) * dir;
+                            }
+                            const av = (a[userSortField] || "").toString().toLowerCase();
+                            const bv = (b[userSortField] || "").toString().toLowerCase();
+                            return av < bv ? -dir : av > bv ? dir : 0;
                           }).map((u) => (
                             <TableRow key={u.id} data-testid={`row-user-${u.id}`}>
                               <TableCell data-testid={`text-user-name-${u.id}`}>{u.name}</TableCell>
