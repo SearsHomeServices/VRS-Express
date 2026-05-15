@@ -599,7 +599,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                     <p className="text-xs text-muted-foreground">Warranty</p>
                     <p className="text-sm font-medium">
                       {sub.warrantyType === "sears_protect" ? "Sears Protect" :
-                       sub.warrantyType === "ahs" ? "AHS" :
+                       sub.warrantyType === "ahs" || sub.warrantyType === "american_home_shield" ? "AHS" :
                        sub.warrantyType === "first_american" ? "First American" :
                        sub.warrantyType || "—"}
                     </p>
@@ -2716,7 +2716,7 @@ export default function AdminDashboard() {
     queryKey: ["/api/admin/analytics/coaching-duplicates", coachingDays],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics/coaching-duplicates?days=${coachingDays}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem("vrs_token") || ""}` },
       });
       if (!res.ok) throw new Error(`Failed to load coaching duplicates: ${res.status}`);
       return res.json();
@@ -4002,6 +4002,10 @@ export default function AdminDashboard() {
                   </div>
                 ) : analyticsData ? (
                   <>
+                    <div className="space-y-1">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Volume</h2>
+                      <p className="text-xs text-muted-foreground">Submission counts across timeframes.</p>
+                    </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       <Card>
                         <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
@@ -4076,221 +4080,11 @@ export default function AdminDashboard() {
                       </Card>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <Card>
-                        <CardHeader>
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <CardTitle className="text-base">Approval Rate</CardTitle>
-                            <TrendingUp className="w-4 h-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                              <span className="text-sm">Approved</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold" data-testid="text-approved-count">{analyticsData.approvedCount}</span>
-                              <Badge variant="secondary" className="text-xs">
-                                {analyticsData.totalSubmissions > 0
-                                  ? Math.round((analyticsData.approvedCount / analyticsData.totalSubmissions) * 100)
-                                  : 0}%
-                              </Badge>
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-                              <span className="text-sm">Rejected</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold" data-testid="text-rejected-count">{analyticsData.rejectedCount}</span>
-                              <Badge variant="secondary" className="text-xs">
-                                {analyticsData.totalSubmissions > 0
-                                  ? Math.round((analyticsData.rejectedCount / analyticsData.totalSubmissions) * 100)
-                                  : 0}%
-                              </Badge>
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              <Clock className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
-                              <span className="text-sm">Pending</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold" data-testid="text-pending-count">{analyticsData.pendingCount}</span>
-                              <Badge variant="secondary" className="text-xs">
-                                {analyticsData.totalSubmissions > 0
-                                  ? Math.round((analyticsData.pendingCount / analyticsData.totalSubmissions) * 100)
-                                  : 0}%
-                              </Badge>
-                            </div>
-                          </div>
-                          {analyticsData.otherStatusCounts && Object.entries(analyticsData.otherStatusCounts)
-                            .filter(([_, count]) => count > 0)
-                            .sort((a, b) => b[1] - a[1])
-                            .map(([key, count]) => (
-                              <div key={key} className="flex items-center justify-between gap-2 flex-wrap" data-testid={`row-status-${key}`}>
-                                <div className="flex items-center gap-2">
-                                  <Circle className="w-4 h-4 text-muted-foreground" />
-                                  <span className="text-sm">{formatStage1Status(key)}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-bold" data-testid={`text-status-count-${key}`}>{count}</span>
-                                  <Badge variant="secondary" className="text-xs">
-                                    {analyticsData.totalSubmissions > 0
-                                      ? Math.round((count / analyticsData.totalSubmissions) * 100)
-                                      : 0}%
-                                  </Badge>
-                                </div>
-                              </div>
-                            ))}
-                          {analyticsData.totalSubmissions > 0 && (
-                            <div className="mt-2">
-                              <div className="h-2 rounded-full bg-muted overflow-hidden flex">
-                                <div
-                                  className="bg-green-600 dark:bg-green-400"
-                                  style={{ width: `${(analyticsData.approvedCount / analyticsData.totalSubmissions) * 100}%` }}
-                                />
-                                <div
-                                  className="bg-red-600 dark:bg-red-400"
-                                  style={{ width: `${(analyticsData.rejectedCount / analyticsData.totalSubmissions) * 100}%` }}
-                                />
-                                <div
-                                  className="bg-yellow-600 dark:bg-yellow-400"
-                                  style={{ width: `${(analyticsData.pendingCount / analyticsData.totalSubmissions) * 100}%` }}
-                                />
-                                {analyticsData.otherStatusCounts && (() => {
-                                  const otherTotal = Object.values(analyticsData.otherStatusCounts).reduce((s, n) => s + n, 0);
-                                  return otherTotal > 0 ? (
-                                    <div
-                                      className="bg-muted-foreground/40"
-                                      style={{ width: `${(otherTotal / analyticsData.totalSubmissions) * 100}%` }}
-                                    />
-                                  ) : null;
-                                })()}
-                              </div>
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
 
-                      <Card>
-                        <CardHeader>
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <CardTitle className="text-base">Processing Times</CardTitle>
-                            <Clock className="w-4 h-4 text-muted-foreground" />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-1">Avg. Submission to Stage 1</p>
-                            <p className="text-xl font-bold" data-testid="text-avg-stage1-time">
-                              {formatDuration(analyticsData.avgTimeToStage1Ms)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">from submission to initial review</p>
-                          </div>
-                          <Separator />
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-1">Avg. Stage 1 to Auth Code</p>
-                            <p className="text-xl font-bold" data-testid="text-avg-authcode-time">
-                              {formatDuration(analyticsData.avgTimeToAuthCodeMs)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">from approval to auth code sent</p>
-                          </div>
-                        </CardContent>
-                      </Card>
+                    <div className="space-y-1 pt-2">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quality Signals</h2>
+                      <p className="text-xs text-muted-foreground">Tech behavior issues that warrant coaching follow-up.</p>
                     </div>
-
-                    <Card>
-                      <CardHeader>
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <CardTitle className="text-base">Export Tickets</CardTitle>
-                          <Download className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <p className="text-sm text-muted-foreground">Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review.</p>
-                        <div className="flex flex-wrap gap-2">
-                          {[
-                            { preset: "today", label: "Today" },
-                            { preset: "week", label: "This Week" },
-                            { preset: "month", label: "This Month" },
-                            { preset: "all", label: "All Time" },
-                          ].map(({ preset, label }) => (
-                            <Button
-                              key={preset}
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setExportPreset(preset)}
-                              data-testid={`button-preset-${preset}`}
-                            >
-                              <Calendar className="w-3 h-3 mr-1" />
-                              {label}
-                            </Button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">Start Date</Label>
-                            <Input
-                              type="date"
-                              value={exportStartDate}
-                              onChange={(e) => setExportStartDate(e.target.value)}
-                              data-testid="input-export-start-date"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">End Date</Label>
-                            <Input
-                              type="date"
-                              value={exportEndDate}
-                              onChange={(e) => setExportEndDate(e.target.value)}
-                              data-testid="input-export-end-date"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">Technician LDAP ID</Label>
-                            <Input
-                              type="text"
-                              placeholder="e.g. tmorri1"
-                              value={exportTechLdap}
-                              onChange={(e) => setExportTechLdap(e.target.value)}
-                              data-testid="input-export-tech-ldap"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <Button
-                            onClick={handleExportCsv}
-                            disabled={exportingRange !== null}
-                            variant="outline"
-                            data-testid="button-export-csv"
-                          >
-                            {exportingRange === "exporting" ? (
-                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                            ) : (
-                              <Download className="w-4 h-4 mr-2" />
-                            )}
-                            Export CSV
-                          </Button>
-                          <Button
-                            onClick={handleExportXlsx}
-                            disabled={exportingRange !== null}
-                            data-testid="button-export-xlsx"
-                          >
-                            {exportingRange === "exporting_xlsx" ? (
-                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                            ) : (
-                              <Download className="w-4 h-4 mr-2" />
-                            )}
-                            Export XLSX
-                            <span className="ml-1 text-[10px] font-normal opacity-70">(2 sheets)</span>
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
 
                     {resubmissionData && (
                       <Card>
@@ -4463,6 +4257,143 @@ export default function AdminDashboard() {
                       </Card>
                     )}
 
+                    <div className="space-y-1 pt-2">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Performance</h2>
+                      <p className="text-xs text-muted-foreground">Outcomes and processing-time averages across all tickets.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <CardTitle className="text-base">Approval Rate</CardTitle>
+                            <TrendingUp className="w-4 h-4 text-muted-foreground" />
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                              <span className="text-sm">Approved</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold" data-testid="text-approved-count">{analyticsData.approvedCount}</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {analyticsData.totalSubmissions > 0
+                                  ? Math.round((analyticsData.approvedCount / analyticsData.totalSubmissions) * 100)
+                                  : 0}%
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                              <span className="text-sm">Rejected</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold" data-testid="text-rejected-count">{analyticsData.rejectedCount}</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {analyticsData.totalSubmissions > 0
+                                  ? Math.round((analyticsData.rejectedCount / analyticsData.totalSubmissions) * 100)
+                                  : 0}%
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
+                              <span className="text-sm">Pending</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold" data-testid="text-pending-count">{analyticsData.pendingCount}</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {analyticsData.totalSubmissions > 0
+                                  ? Math.round((analyticsData.pendingCount / analyticsData.totalSubmissions) * 100)
+                                  : 0}%
+                              </Badge>
+                            </div>
+                          </div>
+                          {analyticsData.otherStatusCounts && Object.entries(analyticsData.otherStatusCounts)
+                            .filter(([_, count]) => count > 0)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([key, count]) => (
+                              <div key={key} className="flex items-center justify-between gap-2 flex-wrap" data-testid={`row-status-${key}`}>
+                                <div className="flex items-center gap-2">
+                                  <Circle className="w-4 h-4 text-muted-foreground" />
+                                  <span className="text-sm">{formatStage1Status(key)}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold" data-testid={`text-status-count-${key}`}>{count}</span>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {analyticsData.totalSubmissions > 0
+                                      ? Math.round((count / analyticsData.totalSubmissions) * 100)
+                                      : 0}%
+                                  </Badge>
+                                </div>
+                              </div>
+                            ))}
+                          {analyticsData.totalSubmissions > 0 && (
+                            <div className="mt-2">
+                              <div className="h-2 rounded-full bg-muted overflow-hidden flex">
+                                <div
+                                  className="bg-green-600 dark:bg-green-400"
+                                  style={{ width: `${(analyticsData.approvedCount / analyticsData.totalSubmissions) * 100}%` }}
+                                />
+                                <div
+                                  className="bg-red-600 dark:bg-red-400"
+                                  style={{ width: `${(analyticsData.rejectedCount / analyticsData.totalSubmissions) * 100}%` }}
+                                />
+                                <div
+                                  className="bg-yellow-600 dark:bg-yellow-400"
+                                  style={{ width: `${(analyticsData.pendingCount / analyticsData.totalSubmissions) * 100}%` }}
+                                />
+                                {analyticsData.otherStatusCounts && (() => {
+                                  const otherTotal = Object.values(analyticsData.otherStatusCounts).reduce((s, n) => s + n, 0);
+                                  return otherTotal > 0 ? (
+                                    <div
+                                      className="bg-muted-foreground/40"
+                                      style={{ width: `${(otherTotal / analyticsData.totalSubmissions) * 100}%` }}
+                                    />
+                                  ) : null;
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <CardTitle className="text-base">Processing Times</CardTitle>
+                            <Clock className="w-4 h-4 text-muted-foreground" />
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div>
+                            <p className="text-sm text-muted-foreground mb-1">Avg. Submission to Stage 1</p>
+                            <p className="text-xl font-bold" data-testid="text-avg-stage1-time">
+                              {formatDuration(analyticsData.avgTimeToStage1Ms)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">from submission to initial review</p>
+                          </div>
+                          <Separator />
+                          <div>
+                            <p className="text-sm text-muted-foreground mb-1">Avg. Stage 1 to Auth Code</p>
+                            <p className="text-xl font-bold" data-testid="text-avg-authcode-time">
+                              {formatDuration(analyticsData.avgTimeToAuthCodeMs)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">from approval to auth code sent</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <div className="space-y-1 pt-2">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Breakdown</h2>
+                      <p className="text-xs text-muted-foreground">Per-district rollup of submission outcomes.</p>
+                    </div>
+
                     {districtData && districtData.length > 0 && (
                       <Card>
                         <CardHeader>
@@ -4511,6 +4442,100 @@ export default function AdminDashboard() {
                         </CardContent>
                       </Card>
                     )}
+
+                    <div className="space-y-1 pt-2">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tools</h2>
+                      <p className="text-xs text-muted-foreground">Pull tickets out of the system for offline review or audit.</p>
+                    </div>
+
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <CardTitle className="text-base">Export Tickets</CardTitle>
+                          <Download className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <p className="text-sm text-muted-foreground">Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review.</p>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { preset: "today", label: "Today" },
+                            { preset: "week", label: "This Week" },
+                            { preset: "month", label: "This Month" },
+                            { preset: "all", label: "All Time" },
+                          ].map(({ preset, label }) => (
+                            <Button
+                              key={preset}
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setExportPreset(preset)}
+                              data-testid={`button-preset-${preset}`}
+                            >
+                              <Calendar className="w-3 h-3 mr-1" />
+                              {label}
+                            </Button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">Start Date</Label>
+                            <Input
+                              type="date"
+                              value={exportStartDate}
+                              onChange={(e) => setExportStartDate(e.target.value)}
+                              data-testid="input-export-start-date"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">End Date</Label>
+                            <Input
+                              type="date"
+                              value={exportEndDate}
+                              onChange={(e) => setExportEndDate(e.target.value)}
+                              data-testid="input-export-end-date"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground mb-1 block">Technician LDAP ID</Label>
+                            <Input
+                              type="text"
+                              placeholder="e.g. tmorri1"
+                              value={exportTechLdap}
+                              onChange={(e) => setExportTechLdap(e.target.value)}
+                              data-testid="input-export-tech-ldap"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Button
+                            onClick={handleExportCsv}
+                            disabled={exportingRange !== null}
+                            variant="outline"
+                            data-testid="button-export-csv"
+                          >
+                            {exportingRange === "exporting" ? (
+                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                            ) : (
+                              <Download className="w-4 h-4 mr-2" />
+                            )}
+                            Export CSV
+                          </Button>
+                          <Button
+                            onClick={handleExportXlsx}
+                            disabled={exportingRange !== null}
+                            data-testid="button-export-xlsx"
+                          >
+                            {exportingRange === "exporting_xlsx" ? (
+                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                            ) : (
+                              <Download className="w-4 h-4 mr-2" />
+                            )}
+                            Export XLSX
+                            <span className="ml-1 text-[10px] font-normal opacity-70">(2 sheets)</span>
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </>
                 ) : (
                   <div className="flex items-center justify-center min-h-[400px]">

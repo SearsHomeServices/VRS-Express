@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed + Changed — Admin Analytics hierarchy + Coaching report invisible in prod (2026-05-15)
+- **Coaching report was invisible in production.** The new "Coaching: New ticket after rejection" card never rendered because its custom `queryFn` was reading the auth token from `localStorage.getItem("token")` — but this app stores it under the key `vrs_token` (see `client/src/lib/auth.tsx`). Result: every request went out unauthenticated, hit 401, the query stayed `undefined`, and the `{coachingData && (...)}` guard hid the whole card. Verified the rest of the codebase consistently uses `vrs_token`.
+- **Fix (`client/src/pages/admin-dashboard.tsx`).** Swapped the localStorage key in the coaching `queryFn` to `vrs_token`. One-character bug, complete invisibility — classic.
+- **Reorganized admin Analytics view for "key sections first."** New top-down hierarchy with section headings (uppercase eyebrow + one-line subtitle):
+  1. **Volume** — submissions counts grid + NLA Parts card
+  2. **Quality Signals** — Resubmission Rate Tracking + Coaching: New ticket after rejection (moved up from below Export — these are the actionable management reports)
+  3. **Performance** — Approval Rate + Processing Times grid
+  4. **Breakdown** — District-Level Rollup
+  5. **Tools** — Export Tickets (moved from middle to bottom — it's a utility, not a metric)
+- **No data/logic changes** — the queries, cards, and rendered content are byte-identical. Pure JSX reorder + 5 heading blocks.
+
+### Changed — Admin Ticket Overview table fits in one view (2026-05-15)
+- **Problem.** The 11-column ticket overview table overflowed horizontally — admins couldn't see Total Time without scrolling. Verbose headers ("Service Order", "Intake Form Complete", "Last Updated", "Queue Wait", "Handle Time", "Total Time", "Assigned To", "Technician") consumed the width.
+- **Fix (`client/src/pages/admin-dashboard.tsx`).** Shortened headers (Service Order→SO #, Assigned To→Assigned, Technician→Tech, Intake Form Complete→Intake, Last Updated→Updated, Queue Wait→Queue, Handle Time→Handle, Total Time→Total). Full names preserved as `title` tooltips. Compacted the table with `text-xs` + `[&_th]:px-2 [&_td]:px-2`, dropped SO column from 140px→110px, added `whitespace-nowrap` to header buttons so sort labels don't wrap on clicks.
+- **Bonus warranty mapping fix.** The Warranty column was rendering raw `american_home_shield` (visible in the bug screenshot) — only `ahs` was mapped. Added the alias in both the ticket overview row (`~1466`) and the ticket detail dialog (`~602`) so both values render as "AHS" everywhere admins see warranty data. Architect code review caught the second site after only the first was patched.
+- **Sort handlers, test IDs, conditional Actions column — all unchanged.** Pure visual compression.
+
 ### Added — Resubmission Coaching admin report (2026-05-15)
 - **Surfaces techs who submit a brand-new ticket for the same service order after a rejection** (instead of using the proper resubmit-after-rejection flow). VRS reported this pattern was hard to spot; ad-hoc prod queries earlier today found 20+ real cases in the last 30 days (e.g. Eric Kennedy submitted a fresh ticket 26 minutes after his rejection on SO 7084-13719960; Steven Harrington did it 6 days later on SO 8096-13694856).
 - **Detection logic.** A coaching pair = same `(technician_id, service_order)` where the immediately-prior row was terminal (`ticket_status IN ('rejected','rejected_closed','invalid')`) and the next row has `resubmission_of IS NULL` (= tech hit "Submit New Ticket" instead of the resubmit flow). Implemented as a `LAG(...) OVER (PARTITION BY tech, SO ORDER BY created_at)` window in PostgreSQL.
