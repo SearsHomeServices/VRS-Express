@@ -166,6 +166,13 @@ interface ResubmissionStats {
   topTechnicians: { technicianId: number; techName: string; techLdap: string; totalTickets: number; resubmissions: number; rate: number }[];
 }
 
+interface CoachingDuplicateNewTicket {
+  id: number;
+  status: string;
+  at: string;
+  minutesAfter: number;
+}
+
 interface CoachingDuplicate {
   technicianId: number;
   techName: string;
@@ -174,10 +181,10 @@ interface CoachingDuplicate {
   previousId: number;
   previousStatus: string;
   previousAt: string;
-  newId: number;
-  newStatus: string;
-  newAt: string;
+  newTickets: CoachingDuplicateNewTicket[];
+  newCount: number;
   minutesBetween: number;
+  latestNewAt: string;
 }
 
 interface CoachingDuplicatesResponse {
@@ -2554,6 +2561,10 @@ export default function AdminDashboard() {
   const [rgcDate, setRgcDate] = useState(() => getEtDateString());
   const [rgcDigits, setRgcDigits] = useState("");
   const [adminStatus, setAdminStatus] = useState<string>((user as any)?.agentStatus || "offline");
+  // Coaching report (Analytics view) opens ticket detail in this dialog —
+  // separate from TicketOverviewSection's own selectedTicketId because that
+  // state lives in a different component scope.
+  const [coachingDetailTicketId, setCoachingDetailTicketId] = useState<number | null>(null);
 
   useEffect(() => {
     if (user && (user as any).agentStatus) {
@@ -4216,35 +4227,57 @@ export default function AdminDashboard() {
                                       <th className="text-left p-2 font-medium">LDAP</th>
                                       <th className="text-left p-2 font-medium">Service Order</th>
                                       <th className="text-left p-2 font-medium">Previous (Rejected)</th>
-                                      <th className="text-left p-2 font-medium">New Ticket</th>
-                                      <th className="text-right p-2 font-medium">Gap</th>
+                                      <th className="text-left p-2 font-medium">New Tickets</th>
+                                      <th className="text-right p-2 font-medium">First Gap</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {coachingData.rows.map((c, i) => {
-                                      const gapLabel = c.minutesBetween < 60
-                                        ? `${c.minutesBetween}m`
-                                        : c.minutesBetween < 1440
-                                        ? `${Math.round(c.minutesBetween / 60)}h`
-                                        : `${Math.round(c.minutesBetween / 1440)}d`;
+                                      const fmtGap = (m: number) => m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+                                      const gapLabel = fmtGap(c.minutesBetween);
+                                      const tickets = c.newTickets || [];
                                       return (
-                                        <tr key={`${c.previousId}-${c.newId}`} className={i % 2 === 0 ? "" : "bg-muted/20"} data-testid={`coaching-row-${c.newId}`}>
-                                          <td className="p-2" data-testid={`text-coaching-name-${c.newId}`}>{c.techName || "—"}</td>
-                                          <td className="p-2 font-mono text-xs" data-testid={`text-coaching-ldap-${c.newId}`}>{c.techLdap || "—"}</td>
-                                          <td className="p-2 font-mono text-xs" data-testid={`text-coaching-so-${c.newId}`}>{c.serviceOrder}</td>
-                                          <td className="p-2 text-xs">
+                                        <tr key={`${c.previousId}`} className={i % 2 === 0 ? "" : "bg-muted/20"} data-testid={`coaching-row-${c.previousId}`}>
+                                          <td className="p-2 align-top" data-testid={`text-coaching-name-${c.previousId}`}>{c.techName || "—"}</td>
+                                          <td className="p-2 font-mono text-xs align-top" data-testid={`text-coaching-ldap-${c.previousId}`}>{c.techLdap || "—"}</td>
+                                          <td className="p-2 font-mono text-xs align-top" data-testid={`text-coaching-so-${c.previousId}`}>{c.serviceOrder}</td>
+                                          <td className="p-2 text-xs align-top">
                                             <div className="flex items-center gap-2">
-                                              <Badge variant="destructive" className="text-xs">#{c.previousId}</Badge>
-                                              <span className="text-muted-foreground" data-testid={`text-coaching-prev-at-${c.newId}`}>{formatDate(c.previousAt)}</span>
+                                              <button
+                                                type="button"
+                                                onClick={() => setCoachingDetailTicketId(c.previousId)}
+                                                className="hover-elevate active-elevate-2 rounded-sm"
+                                                data-testid={`button-coaching-prev-${c.previousId}`}
+                                              >
+                                                <Badge variant="destructive" className="text-xs cursor-pointer">#{c.previousId}</Badge>
+                                              </button>
+                                              <span className="text-muted-foreground" data-testid={`text-coaching-prev-at-${c.previousId}`}>{formatDate(c.previousAt)}</span>
                                             </div>
                                           </td>
-                                          <td className="p-2 text-xs">
-                                            <div className="flex items-center gap-2">
-                                              <Badge variant="outline" className="text-xs">#{c.newId}</Badge>
-                                              <span className="text-muted-foreground" data-testid={`text-coaching-new-at-${c.newId}`}>{formatDate(c.newAt)}</span>
+                                          <td className="p-2 text-xs align-top">
+                                            <div className="flex flex-col gap-1">
+                                              {tickets.length > 1 && (
+                                                <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-500 font-semibold" data-testid={`text-coaching-newcount-${c.previousId}`}>
+                                                  {tickets.length} duplicate new tickets
+                                                </span>
+                                              )}
+                                              {tickets.map((nt) => (
+                                                <div key={nt.id} className="flex items-center gap-2 flex-wrap">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setCoachingDetailTicketId(nt.id)}
+                                                    className="hover-elevate active-elevate-2 rounded-sm"
+                                                    data-testid={`button-coaching-new-${nt.id}`}
+                                                  >
+                                                    <Badge variant="outline" className="text-xs cursor-pointer">#{nt.id}</Badge>
+                                                  </button>
+                                                  <span className="text-muted-foreground" data-testid={`text-coaching-new-at-${nt.id}`}>{formatDate(nt.at)}</span>
+                                                  <span className="text-muted-foreground/70 font-mono text-[10px]" data-testid={`text-coaching-new-gap-${nt.id}`}>+{fmtGap(nt.minutesAfter)}</span>
+                                                </div>
+                                              ))}
                                             </div>
                                           </td>
-                                          <td className="p-2 text-right font-mono text-xs" data-testid={`text-coaching-gap-${c.newId}`}>{gapLabel}</td>
+                                          <td className="p-2 text-right font-mono text-xs align-top" data-testid={`text-coaching-gap-${c.previousId}`}>{gapLabel}</td>
                                         </tr>
                                       );
                                     })}
@@ -4803,6 +4836,11 @@ export default function AdminDashboard() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <TicketDetailDialog
+        ticketId={coachingDetailTicketId}
+        open={coachingDetailTicketId !== null}
+        onClose={() => setCoachingDetailTicketId(null)}
+      />
     </SidebarProvider>
   );
 }

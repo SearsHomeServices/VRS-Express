@@ -253,10 +253,10 @@ export interface IStorage {
     previousId: number;
     previousStatus: string;
     previousAt: string;
-    newId: number;
-    newStatus: string;
-    newAt: string;
+    newTickets: { id: number; status: string; at: string; minutesAfter: number }[];
+    newCount: number;
     minutesBetween: number;
+    latestNewAt: string;
   }[]>;
 
   getDistrictRollup(): Promise<{
@@ -1523,61 +1523,80 @@ export class DatabaseStorage implements IStorage {
     previousId: number;
     previousStatus: string;
     previousAt: string;
-    newId: number;
-    newStatus: string;
-    newAt: string;
+    newTickets: { id: number; status: string; at: string; minutesAfter: number }[];
+    newCount: number;
     minutesBetween: number;
+    latestNewAt: string;
   }[]> {
     // Coaching opportunity = tech submitted a brand-new ticket
-    // (resubmission_of IS NULL) for a (tech, SO) pair where the
-    // immediately-prior row was a terminal failure status — instead of
-    // using the proper resubmit-after-rejection flow. The 60s idempotency
-    // guard at the insert path means anything past that window is a real
-    // user choice, not a system retry. Bounded by the days param.
+    // (resubmission_of IS NULL) for a (tech, SO) pair AFTER a prior
+    // rejected/invalid ticket on the same SO — instead of using the
+    // proper resubmit-after-rejection flow. The 60s idempotency guard
+    // at the insert path means anything past that window is a real user
+    // choice, not a system retry.
+    //
+    // We attribute every offending new ticket to the MOST RECENT prior
+    // rejection on the same (tech, SO) via a LATERAL lookup, then group
+    // by that rejection so a single coaching event surfaces ALL the
+    // duplicate new tickets it spawned (some techs file 2+ new tickets
+    // after one rejection). Bounded by the days param.
     const safeDays = Math.min(Math.max(Math.floor(days) || 30, 1), 365);
-    // Inner CTE expands the lookback by 90 days so that a "new" ticket inside
-    // the requested window can still find its true prior rejection even when
-    // that rejection occurred up to 90 days before the window opens. The
-    // outer WHERE filters on the new row's timestamp to honor the user's
-    // requested window. Without the backstop, lag() returns NULL for prev_*
-    // at the window boundary and we silently miss real coaching cases.
-    const lookbackDays = Math.min(safeDays + 90, 365);
     const rows = await db.execute(sql`
-      WITH ordered AS (
+      WITH new_tickets AS (
         SELECT
           s.id,
           s.technician_id,
           s.service_order,
           s.ticket_status,
-          s.created_at,
-          s.resubmission_of,
-          LAG(s.id) OVER w AS prev_id,
-          LAG(s.ticket_status) OVER w AS prev_status,
-          LAG(s.created_at) OVER w AS prev_at
+          s.created_at
         FROM submissions s
-        WHERE s.created_at > NOW() - (${lookbackDays}::int * INTERVAL '1 day')
-        WINDOW w AS (PARTITION BY s.technician_id, s.service_order ORDER BY s.created_at)
+        WHERE s.resubmission_of IS NULL
+          AND s.created_at > NOW() - (${safeDays}::int * INTERVAL '1 day')
+      ),
+      with_prev AS (
+        SELECT
+          n.id            AS new_id,
+          n.ticket_status AS new_status,
+          n.created_at    AS new_at,
+          n.technician_id,
+          n.service_order,
+          p.id            AS prev_id,
+          p.ticket_status AS prev_status,
+          p.created_at    AS prev_at
+        FROM new_tickets n
+        CROSS JOIN LATERAL (
+          SELECT s2.id, s2.ticket_status, s2.created_at
+          FROM submissions s2
+          WHERE s2.technician_id = n.technician_id
+            AND s2.service_order = n.service_order
+            AND s2.created_at < n.created_at
+            AND s2.ticket_status IN ('rejected','rejected_closed','invalid')
+          ORDER BY s2.created_at DESC
+          LIMIT 1
+        ) p
       )
       SELECT
-        o.technician_id              AS "technicianId",
-        COALESCE(u.name, t.name, '') AS "techName",
+        wp.technician_id              AS "technicianId",
+        COALESCE(u.name, t.name, '')  AS "techName",
         COALESCE(u.rac_id, t.ldap_id, '') AS "techLdap",
-        o.service_order              AS "serviceOrder",
-        o.prev_id                    AS "previousId",
-        o.prev_status                AS "previousStatus",
-        o.prev_at                    AS "previousAt",
-        o.id                         AS "newId",
-        o.ticket_status              AS "newStatus",
-        o.created_at                 AS "newAt",
-        ROUND(EXTRACT(EPOCH FROM (o.created_at - o.prev_at)) / 60.0)::int AS "minutesBetween"
-      FROM ordered o
-      LEFT JOIN users u ON u.id = o.technician_id
+        wp.service_order              AS "serviceOrder",
+        wp.prev_id                    AS "previousId",
+        MAX(wp.prev_status)           AS "previousStatus",
+        MAX(wp.prev_at)               AS "previousAt",
+        jsonb_agg(jsonb_build_object(
+          'id',           wp.new_id,
+          'status',       wp.new_status,
+          'at',           wp.new_at,
+          'minutesAfter', ROUND(EXTRACT(EPOCH FROM (wp.new_at - wp.prev_at)) / 60.0)::int
+        ) ORDER BY wp.new_at)         AS "newTickets",
+        COUNT(*)::int                 AS "newCount",
+        MIN(ROUND(EXTRACT(EPOCH FROM (wp.new_at - wp.prev_at)) / 60.0)::int) AS "minutesBetween",
+        MAX(wp.new_at)                AS "latestNewAt"
+      FROM with_prev wp
+      LEFT JOIN users u ON u.id = wp.technician_id
       LEFT JOIN technicians t ON t.ldap_id = u.rac_id
-      WHERE o.prev_id IS NOT NULL
-        AND o.resubmission_of IS NULL
-        AND o.prev_status IN ('rejected','rejected_closed','invalid')
-        AND o.created_at > NOW() - (${safeDays}::int * INTERVAL '1 day')
-      ORDER BY o.created_at DESC
+      GROUP BY wp.technician_id, wp.service_order, wp.prev_id, u.name, t.name, u.rac_id, t.ldap_id
+      ORDER BY MAX(wp.new_at) DESC
       LIMIT 500;
     `);
     return rows.rows as any;
