@@ -71,6 +71,39 @@ function scheduleReconnect() {
   }, delay);
 }
 
+// Tyler 2026-05-15 — when the tab regains focus, the network comes back,
+// or the browser unhides the tab, force an immediate reconnect instead
+// of waiting for the next backoff tick. Browsers throttle setTimeout to
+// ~1/min in background tabs, so a socket that died while backgrounded
+// could take minutes to retry on its own — long enough to trip the
+// server's auto-offline grace and flip the agent to offline. This
+// closes that gap.
+function forceReconnectIfDead() {
+  const token = getToken();
+  if (!token) return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  // Cancel any pending backoff and try right now, but DO NOT reset
+  // reconnectAttempts — that's reset on successful ws.onopen. If the
+  // server is genuinely unreachable, the next failed attempt will fall
+  // back into the exponential backoff and we won't create a connect
+  // storm from repeated visibility/focus events.
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  connect();
+}
+
+if (typeof window !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") forceReconnectIfDead();
+  });
+  window.addEventListener("focus", forceReconnectIfDead);
+  window.addEventListener("online", forceReconnectIfDead);
+}
+
 export function disconnectWs() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);

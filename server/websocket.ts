@@ -37,7 +37,15 @@ const clients = new Map<number, ConnectedClient[]>();
 // online without a flicker. If they're truly gone (browser fully
 // closed, machine asleep > 5min), the timer fires and admins/techs are
 // notified as before.
-const AUTO_OFFLINE_GRACE_MS = 5 * 60 * 1000;
+// Tyler 2026-05-15 — bumped 5min → 10min. Prod logs (5/15) showed ~100
+// auto-offline events across 3 hours, dominated by ~25 repeat-offender
+// agents whose tabs were backgrounded during autoscale-driven socket
+// drops. Browsers throttle setTimeout in background tabs to ~1/min, so
+// the client-side reconnect loop (now with visibilitychange/focus/online
+// listeners) sometimes still needs >5min when the page comes back. 10min
+// absorbs that worst case without meaningfully delaying detection of
+// "agent actually went home" (admins still get the eventual broadcast).
+const AUTO_OFFLINE_GRACE_MS = 10 * 60 * 1000;
 const pendingOfflineTimers = new Map<number, NodeJS.Timeout>();
 
 const WARRANTY_LABELS: Record<string, string> = {
