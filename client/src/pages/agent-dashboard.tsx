@@ -420,26 +420,18 @@ export default function AgentDashboard() {
   const [localAgentStatus, setLocalAgentStatus] = useState<string>(user?.agentStatus || "offline");
 
   // Tyler 2026-05-20 (VRS "random unavailable" reports from Zorn & Roger):
-  // wrap every status mutation in a diagnostic logger AND guard the two
-  // server-echo paths (the React-Query `user` mirror below + the `connected`
-  // WS echo further down) so they can NEVER silently downgrade an already-
-  // active agent to "offline". Explicit paths (toggle click, ticket
-  // claim/complete, admin force-offline via own_status_changed) remain
-  // unrestricted — they can go any direction. Prod logs across 5/20 showed
-  // zero `auto-set offline` events, which means every "I went Unavailable"
-  // report is a client-side flip caused by a stale echo racing a reconnect.
+  // every status transition flows through this wrapper for a single
+  // diagnostic log line. Per VRS direction, the UI MUST always reflect the
+  // backend — no client-side blocking or guarding. If the server says
+  // offline, the toggle goes offline. The grace window in
+  // server/websocket.ts (30min) is the only knob protecting against
+  // transient disconnects. The diag log gives DevTools evidence the next
+  // time an agent reports a flip.
   const applyAgentStatus = useCallback((next: string, source: string) => {
     setLocalAgentStatus((prev) => {
-      if (prev === next) return prev;
-      const isEcho = source === "user-query-mirror" || source === "connected-echo";
-      const isDowngradeToOffline = next === "offline" && (prev === "online" || prev === "working");
-      if (isEcho && isDowngradeToOffline) {
-        console.warn(
-          `[diag][agent-status] BLOCKED ${prev} → ${next} from ${source} (echo path may be stale; explicit path required to downgrade)`
-        );
-        return prev;
+      if (prev !== next) {
+        console.log(`[diag][agent-status] ${prev} → ${next} (source: ${source})`);
       }
-      console.log(`[diag][agent-status] ${prev} → ${next} (source: ${source})`);
       return next;
     });
   }, []);
