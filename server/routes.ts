@@ -2519,7 +2519,10 @@ export async function registerRoutes(
       if (!user || user.role !== "vrs_agent") {
         return res.status(400).json({ error: "User is not a VRS agent" });
       }
-      const updated = await storage.updateUser(id, { agentStatus: parsed.data.status } as any);
+      // Tyler 2026-05-20 — admin override also clears the inactivity
+      // flag so the agent doesn't later see a stale "marked Unavailable
+      // due to inactivity" prompt for what was actually an admin action.
+      const updated = await storage.updateUser(id, { agentStatus: parsed.data.status, autoOfflinedAt: null } as any);
       updateClientStatus(id, parsed.data.status);
       broadcastToAdmins({
         type: "agent_status_changed",
