@@ -806,7 +806,13 @@ export default function AgentDashboard() {
         fetchShsaiData(sub.serviceOrder, sub.id);
       }
     }
-  }, [selectedId, activeView, shsaiVisible]);
+    // Tyler 2026-05-20: include submissionsData in deps. Without it, a
+    // brand-new ticket selected before the submissions list refetches
+    // would silently skip the SHSAI fetch (the .find() returns undefined
+    // on the first pass and the effect never re-runs once the list
+    // updates). VRS confirmed this caused empty Service Order History
+    // panels on freshly-submitted tickets until manual page refresh.
+  }, [selectedId, activeView, shsaiVisible, submissionsData]);
 
   const submissions = useMemo(() => {
     return submissionsData?.submissions || [];
