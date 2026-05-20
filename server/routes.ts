@@ -123,6 +123,17 @@ function signToken(user: User): string {
 
 const ALL_DIVISIONS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"];
 
+// Tyler 2026-05-20 (afternoon) — best-effort write to agent_activity_log.
+// Logging must NEVER break the underlying status change, so any failure is
+// logged to the server console and swallowed.
+async function safeLogActivity(userId: number, eventType: string, details?: Record<string, any>) {
+  try {
+    await storage.logAgentActivity({ userId, eventType, details: details ?? null } as any);
+  } catch (err) {
+    console.error(`[activity-log] failed to write ${eventType} for user ${userId}:`, err);
+  }
+}
+
 async function broadcastVrsAvailability() {
   const onlineAgents = await storage.getOnlineAgentCount();
   const queuedTickets = await storage.getQueuedCountAll();
@@ -1542,6 +1553,9 @@ export async function registerRoutes(
         const claimer = await storage.getUser(authReq.user!.id);
         if (claimer && claimer.agentStatus !== "working") {
           await storage.updateUser(authReq.user!.id, { agentStatus: "working", updatedAt: new Date() } as any);
+          await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+            from: claimer.agentStatus, to: "working", trigger: "claim", submissionId: id,
+          });
           updateClientStatus(authReq.user!.id, "working");
           broadcastToAdmins({
             type: "agent_status_changed",
@@ -1897,6 +1911,9 @@ export async function registerRoutes(
       if (authReq.user!.role === "vrs_agent") {
         try {
           await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+            from: "working", to: "online", trigger: "process", submissionId: id, action: req.body?.action ?? null,
+          });
           updateClientStatus(authReq.user!.id, "online");
           broadcastToAdmins({
             type: "agent_status_changed",
@@ -2317,6 +2334,9 @@ export async function registerRoutes(
       if (authReq.user!.role === "vrs_agent") {
         try {
           await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+            from: "working", to: "online", trigger: "process_nla", submissionId: id, action: req.body?.action ?? null,
+          });
           updateClientStatus(authReq.user!.id, "online");
           broadcastToAdmins({
             type: "agent_status_changed",
@@ -2435,10 +2455,18 @@ export async function registerRoutes(
     try {
       const authReq = req as AuthenticatedRequest;
       const userId = authReq.user!.id;
+      // Capture request source for the activity log so we can tell client-tab
+      // POSTs from cURL/scripted callers when investigating reports.
+      const source = {
+        ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() || req.ip,
+        ua: (req.headers["user-agent"] as string || "").slice(0, 200),
+        idleMsClient: req.body?.idleMs ?? null,
+      };
 
       const current = await storage.getUser(userId);
       if (!current) return res.status(404).json({ error: "User not found" });
       if ((current as any).agentStatus !== "online") {
+        await safeLogActivity(userId, "auto_offline_skipped_not_online", { agentStatus: (current as any).agentStatus, source });
         return res.status(200).json({ skipped: true, reason: "not_online", agentStatus: (current as any).agentStatus });
       }
 
@@ -2448,11 +2476,13 @@ export async function registerRoutes(
       const pendingCount = await storage.getPendingCount(userId);
       const nlaPendingCount = await storage.getNlaPendingCount(userId);
       if (pendingCount > 0 || nlaPendingCount > 0) {
+        await safeLogActivity(userId, "auto_offline_skipped_pending", { pendingCount, nlaPendingCount, source });
         return res.status(200).json({ skipped: true, reason: "pending_ticket" });
       }
 
       const now = new Date();
       await storage.updateUser(userId, { agentStatus: "offline", autoOfflinedAt: now, updatedAt: now } as any);
+      await safeLogActivity(userId, "auto_offline_fired", { autoOfflinedAt: now.toISOString(), source });
       updateClientStatus(userId, "offline");
       broadcastToAdmins({
         type: "agent_status_changed",
@@ -2478,6 +2508,7 @@ export async function registerRoutes(
     try {
       const authReq = req as AuthenticatedRequest;
       await storage.updateUser(authReq.user!.id, { autoOfflinedAt: null } as any);
+      await safeLogActivity(authReq.user!.id, "auto_offline_ack", {});
       return res.status(200).json({ ok: true });
     } catch (error) {
       console.error("Auto-offline ack error:", error);
@@ -2507,7 +2538,13 @@ export async function registerRoutes(
       // Tyler 2026-05-20 — any explicit toggle clears the auto-offline
       // flag so the "marked Unavailable due to inactivity" modal won't
       // re-appear next reconnect.
+      const priorUser = await storage.getUser(authReq.user!.id);
       const updated = await storage.updateUser(authReq.user!.id, { agentStatus: parsed.data.status, autoOfflinedAt: null, updatedAt: new Date() } as any);
+      await safeLogActivity(authReq.user!.id, "status_toggle_self", {
+        from: (priorUser as any)?.agentStatus ?? null,
+        to: parsed.data.status,
+        clearedAutoOfflinedFlag: !!(priorUser as any)?.autoOfflinedAt,
+      });
       updateClientStatus(authReq.user!.id, parsed.data.status);
       broadcastToAdmins({
         type: "agent_status_changed",
@@ -2573,6 +2610,13 @@ export async function registerRoutes(
       // flag so the agent doesn't later see a stale "marked Unavailable
       // due to inactivity" prompt for what was actually an admin action.
       const updated = await storage.updateUser(id, { agentStatus: parsed.data.status, autoOfflinedAt: null } as any);
+      await safeLogActivity(id, "status_toggle_admin", {
+        from: (user as any)?.agentStatus ?? null,
+        to: parsed.data.status,
+        adminUserId: (req as AuthenticatedRequest).user!.id,
+        adminName: (req as AuthenticatedRequest).user!.name,
+        clearedAutoOfflinedFlag: !!(user as any)?.autoOfflinedAt,
+      });
       updateClientStatus(id, parsed.data.status);
       broadcastToAdmins({
         type: "agent_status_changed",
@@ -2587,6 +2631,36 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Admin set agent status error:", error);
       return res.status(500).json({ error: "Failed to update agent status" });
+    }
+  });
+
+  // Tyler 2026-05-20 (afternoon) — append-only activity log for the new
+  // screen-inactivity auto-offline feature. Admin-only. Filters:
+  //   ?userId=N           — single agent
+  //   ?eventType=...      — auto_offline_fired, status_toggle_self, etc.
+  //   ?sinceHours=N       — last N hours (default 24)
+  //   ?limit=N            — capped at 1000
+  app.get("/api/admin/agent-activity", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      // Architect 2026-05-20 — validate query inputs so bad values return
+      // 400 with a useful message instead of 500 from the DB layer.
+      const querySchema = z.object({
+        userId: z.coerce.number().int().positive().optional(),
+        eventType: z.string().max(48).optional(),
+        sinceHours: z.coerce.number().positive().max(24 * 30).optional(),
+        limit: z.coerce.number().int().positive().max(1000).optional(),
+      });
+      const parsed = querySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid query", issues: parsed.error.flatten() });
+      }
+      const { userId, eventType, sinceHours = 24, limit = 200 } = parsed.data;
+      const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
+      const rows = await storage.getRecentAgentActivity({ userId, eventType, since, limit });
+      return res.status(200).json({ events: rows, filters: { userId, eventType, sinceHours, limit } });
+    } catch (error) {
+      console.error("Agent activity list error:", error);
+      return res.status(500).json({ error: "Failed to list agent activity" });
     }
   });
 
@@ -2836,6 +2910,9 @@ export async function registerRoutes(
       if (authReq.user.role === "vrs_agent") {
         try {
           await storage.updateUser(authReq.user.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          await safeLogActivity(authReq.user.id, "status_change_ticket_flow", {
+            from: "working", to: "online", trigger: "send_to_nla", submissionId: id,
+          });
           updateClientStatus(authReq.user.id, "online");
           broadcastToAdmins({
             type: "agent_status_changed",
@@ -2957,6 +3034,9 @@ export async function registerRoutes(
         }
 
         await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+        await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+          from: "working", to: "online", trigger: "correct_division_release", submissionId: id,
+        });
         updateClientStatus(authReq.user!.id, "online");
 
         broadcastToAdmins({

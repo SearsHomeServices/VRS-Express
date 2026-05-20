@@ -199,9 +199,23 @@ export function setupWebSocket(server: Server) {
                   const nlaPendingCount = await storage.getNlaPendingCount(client.userId);
                   if (pendingCount > 0 || nlaPendingCount > 0) {
                     log(`Skipped presence cleanup for ${client.name} — open pending ticket`, "ws");
+                    try {
+                      await storage.logAgentActivity({
+                        userId: client.userId,
+                        eventType: "presence_stale_skipped_pending",
+                        details: { pendingCount, nlaPendingCount, staleMinutes: PRESENCE_STALE_MS / 60000 } as any,
+                      } as any);
+                    } catch {}
                     return;
                   }
                   await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
+                  try {
+                    await storage.logAgentActivity({
+                      userId: client.userId,
+                      eventType: "presence_stale_cleanup",
+                      details: { staleMinutes: PRESENCE_STALE_MS / 60000, reason: "no_active_ws_sessions" } as any,
+                    } as any);
+                  } catch {}
                   broadcastToAdmins({
                     type: "agent_status_changed",
                     payload: { userId: client.userId, name: client.name, status: "offline" },

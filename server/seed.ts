@@ -162,6 +162,8 @@ export async function seedDatabase() {
     catch (e: any) { console.warn(`[perf-indexes] background ensure failed: ${e?.message || e}`); }
     try { await ensureSystemHealthLogTable(); }
     catch (e: any) { console.warn(`[system-health-log] background ensure failed: ${e?.message || e}`); }
+    try { await ensureAgentActivityLogTable(); }
+    catch (e: any) { console.warn(`[agent-activity-log] background ensure failed: ${e?.message || e}`); }
   })();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
@@ -258,6 +260,35 @@ async function ensureSystemHealthLogTable() {
     console.log("[system-health-log] Table + unique-open index + manual-clear columns ensured (FK ON DELETE SET NULL)");
   } catch (err: any) {
     console.warn(`[system-health-log] Failed to ensure table: ${err?.message || err}`);
+  }
+}
+
+// Tyler 2026-05-20 (afternoon) — agent_activity_log table. Mirrors the
+// system_health_log pattern: idempotent boot-time migration so prod gets
+// it on next deploy without a manual drizzle-kit push. Mirrors
+// shared/schema.ts:agentActivityLog exactly. Safe to re-run.
+async function ensureAgentActivityLogTable() {
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS agent_activity_log (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_type VARCHAR(48) NOT NULL,
+        details JSONB,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `));
+    await db.execute(sql.raw(`
+      CREATE INDEX IF NOT EXISTS agent_activity_log_user_idx
+      ON agent_activity_log (user_id, created_at)
+    `));
+    await db.execute(sql.raw(`
+      CREATE INDEX IF NOT EXISTS agent_activity_log_event_idx
+      ON agent_activity_log (event_type, created_at)
+    `));
+    console.log("[agent-activity-log] Table + (user_id, created_at) + (event_type, created_at) indexes ensured");
+  } catch (err: any) {
+    console.warn(`[agent-activity-log] Failed to ensure table: ${err?.message || err}`);
   }
 }
 

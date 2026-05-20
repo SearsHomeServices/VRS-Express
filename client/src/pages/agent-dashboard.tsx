@@ -640,8 +640,22 @@ export default function AgentDashboard() {
     if (isAdminViewing) return;
     if (localAgentStatus !== "online") return;
 
-    const INACTIVITY_MS = 30 * 60 * 1000;
-    const CHECK_INTERVAL_MS = 60 * 1000;
+    // Tyler 2026-05-20 — `?inactivityMs=N&checkMs=M` URL overrides exist
+    // ONLY so we can verify the full client-side trigger path without
+    // waiting 30 real minutes (used by the e2e test). Both must be
+    // explicitly opted in, both clamped to the production defaults as
+    // the upper bound — there's no way to weaken the threshold in a
+    // shipped build via this knob alone (server still enforces all
+    // pending-ticket safety guards regardless of how fast we call it).
+    const urlParams = new URLSearchParams(window.location.search);
+    const inactivityOverride = parseInt(urlParams.get("inactivityMs") || "", 10);
+    const checkOverride = parseInt(urlParams.get("checkMs") || "", 10);
+    const INACTIVITY_MS = Number.isFinite(inactivityOverride) && inactivityOverride > 0
+      ? Math.min(inactivityOverride, 30 * 60 * 1000)
+      : 30 * 60 * 1000;
+    const CHECK_INTERVAL_MS = Number.isFinite(checkOverride) && checkOverride > 0
+      ? Math.min(checkOverride, 60 * 1000)
+      : 60 * 1000;
     let lastActivity = Date.now();
     let firing = false;
 
@@ -663,7 +677,8 @@ export default function AgentDashboard() {
       if (Date.now() - lastActivity < INACTIVITY_MS) return;
       firing = true;
       try {
-        const res = await apiRequest("POST", "/api/agent/auto-offline");
+        const idleMs = Date.now() - lastActivity;
+        const res = await apiRequest("POST", "/api/agent/auto-offline", { idleMs });
         const data = await res.json();
         if (data?.agentStatus === "offline") {
           setAutoOfflinedAt(data.autoOfflinedAt || new Date().toISOString());

@@ -45,6 +45,9 @@ import {
   systemHealthLog,
   InsertSystemHealthLog,
   SystemHealthLog,
+  agentActivityLog,
+  InsertAgentActivityLog,
+  AgentActivityLog,
 } from "@shared/schema";
 import { getBusinessElapsedMs } from "@shared/business-hours";
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
@@ -325,6 +328,15 @@ export interface IStorage {
     limit?: number;
   }): Promise<SystemHealthLog[]>;
   listOpenHealthIncidentsByCheck(checkName: string): Promise<SystemHealthLog[]>;
+
+  // Agent activity log (2026-05-20)
+  logAgentActivity(data: InsertAgentActivityLog): Promise<AgentActivityLog>;
+  getRecentAgentActivity(opts: {
+    userId?: number;
+    eventType?: string;
+    since?: Date;
+    limit?: number;
+  }): Promise<(AgentActivityLog & { userName?: string })[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2261,6 +2273,46 @@ export class DatabaseStorage implements IStorage {
           isNull(systemHealthLog.clearedAt)
         )
       );
+  }
+
+  // ==========================================================================
+  // AGENT ACTIVITY LOG (2026-05-20)
+  // Append-only audit of every auto-offline / status-change event. Used by
+  // /api/admin/agent-activity to confirm the screen-inactivity feature is
+  // firing for the right reasons. Logging is best-effort — a failed insert
+  // must never break the underlying status change, so callers wrap us in
+  // try/catch and swallow errors.
+  // ==========================================================================
+  async logAgentActivity(data: InsertAgentActivityLog): Promise<AgentActivityLog> {
+    const [row] = await db.insert(agentActivityLog).values(data).returning();
+    return row;
+  }
+
+  async getRecentAgentActivity(opts: {
+    userId?: number;
+    eventType?: string;
+    since?: Date;
+    limit?: number;
+  }): Promise<(AgentActivityLog & { userName?: string })[]> {
+    const conds = [];
+    if (opts.userId) conds.push(eq(agentActivityLog.userId, opts.userId));
+    if (opts.eventType) conds.push(eq(agentActivityLog.eventType, opts.eventType));
+    if (opts.since) conds.push(sql`${agentActivityLog.createdAt} >= ${opts.since}`);
+    const rows = await db
+      .select({
+        id: agentActivityLog.id,
+        userId: agentActivityLog.userId,
+        eventType: agentActivityLog.eventType,
+        details: agentActivityLog.details,
+        createdAt: agentActivityLog.createdAt,
+        userName: users.name,
+      })
+      .from(agentActivityLog)
+      .leftJoin(users, eq(agentActivityLog.userId, users.id))
+      .where(conds.length ? and(...conds) : undefined)
+      .orderBy(desc(agentActivityLog.createdAt))
+      .limit(Math.min(opts.limit ?? 200, 1000));
+    return rows as any;
   }
 }
 

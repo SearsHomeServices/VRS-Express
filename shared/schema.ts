@@ -409,6 +409,43 @@ export const insertSystemHealthLogSchema = createInsertSchema(systemHealthLog).o
 export type InsertSystemHealthLog = z.infer<typeof insertSystemHealthLogSchema>;
 export type SystemHealthLog = typeof systemHealthLog.$inferSelect;
 
+// Tyler 2026-05-20 (afternoon) — agent activity log. Append-only audit of
+// every auto-offline / status-change event so we can confirm the new
+// screen-inactivity feature is firing for the right reasons (and so VRS
+// can investigate future "I got bumped offline" reports without guessing).
+// Event types:
+//   auto_offline_fired               — POST /api/agent/auto-offline succeeded (client idle 30 min)
+//   auto_offline_skipped_pending     — skipped due to pending ticket
+//   auto_offline_skipped_not_online  — skipped because agent was already offline
+//   auto_offline_ack                 — agent dismissed inactivity modal (stay offline)
+//   status_toggle_self               — PATCH /api/agent/status by agent
+//   status_toggle_admin              — PATCH /api/admin/users/:id/status by admin
+//   presence_stale_cleanup           — server WS-disconnect 60-min fallback fired
+//   presence_stale_skipped_pending   — fallback skipped due to pending ticket
+// `details` carries event-specific context: prior/next status, pending counts,
+// source (request IP, user-agent snippet), admin actor id, etc.
+export const agentActivityLog = pgTable(
+  "agent_activity_log",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    eventType: varchar("event_type", { length: 48 }).notNull(),
+    details: jsonb("details"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    byUser: index("agent_activity_log_user_idx").on(table.userId, table.createdAt),
+    byEvent: index("agent_activity_log_event_idx").on(table.eventType, table.createdAt),
+  })
+);
+
+export const insertAgentActivityLogSchema = createInsertSchema(agentActivityLog).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAgentActivityLog = z.infer<typeof insertAgentActivityLogSchema>;
+export type AgentActivityLog = typeof agentActivityLog.$inferSelect;
+
 // ============================================================================
 // INTAKE FORMS TABLE (Smartsheet "VRS Unrep Intake Form 2.0" submission audit)
 // ============================================================================
