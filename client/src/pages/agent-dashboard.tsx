@@ -418,6 +418,12 @@ export default function AgentDashboard() {
   const [showStatusPopup, setShowStatusPopup] = useState(false);
   const [statusChecked, setStatusChecked] = useState(false);
   const [localAgentStatus, setLocalAgentStatus] = useState<string>(user?.agentStatus || "offline");
+  // Tyler 2026-05-20 — when set, the status modal renders "due to
+  // inactivity" wording instead of the generic "you're unavailable"
+  // copy. Populated from the WS `connected` echo or `/api/auth/me`.
+  const [autoOfflinedAt, setAutoOfflinedAt] = useState<string | null>(
+    (user as any)?.autoOfflinedAt || null
+  );
 
   // Tyler 2026-05-20 (VRS "random unavailable" reports from Zorn & Roger):
   // every status transition flows through this wrapper for a single
@@ -572,6 +578,12 @@ export default function AgentDashboard() {
     const unsub9 = subscribe("connected", (payload: any) => {
       if (payload?.agentStatus && !isAdminViewing) {
         applyAgentStatus(payload.agentStatus, "connected-echo");
+      }
+      if (!isAdminViewing && payload && Object.prototype.hasOwnProperty.call(payload, "autoOfflinedAt")) {
+        setAutoOfflinedAt(payload.autoOfflinedAt || null);
+        if (payload.autoOfflinedAt && payload.agentStatus === "offline") {
+          setShowStatusPopup(true);
+        }
       }
     });
 
@@ -4832,23 +4844,46 @@ export default function AgentDashboard() {
       <AlertDialog open={showStatusPopup} onOpenChange={setShowStatusPopup}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle data-testid="text-status-popup-title">You're currently unavailable</AlertDialogTitle>
+            <AlertDialogTitle data-testid="text-status-popup-title">
+              {autoOfflinedAt
+                ? "You were marked Unavailable due to inactivity"
+                : "You're currently unavailable"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Set yourself as available to start receiving tickets?
+              {autoOfflinedAt
+                ? "Your connection was inactive for 30 minutes, so we set you to Unavailable. Want to go back online and start receiving tickets again?"
+                : "Set yourself as available to start receiving tickets?"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setShowStatusPopup(false)} data-testid="button-stay-offline">
-              Stay Unavailable
+            <AlertDialogCancel
+              onClick={() => {
+                setShowStatusPopup(false);
+                if (autoOfflinedAt) {
+                  // Clear the server-side flag so we don't re-prompt
+                  // on every reconnect/refresh until the agent toggles.
+                  fetch("/api/agent/auto-offline-ack", {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${localStorage.getItem("vrs_token")}` },
+                  }).catch(() => {});
+                  setAutoOfflinedAt(null);
+                }
+              }}
+              data-testid="button-stay-offline"
+            >
+              {autoOfflinedAt ? "No, stay Unavailable" : "Stay Unavailable"}
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
+                // statusMutation → PATCH /api/agent/status clears
+                // autoOfflinedAt server-side automatically.
                 statusMutation.mutate("online");
                 setShowStatusPopup(false);
+                setAutoOfflinedAt(null);
               }}
               data-testid="button-go-online"
             >
-              Go Available
+              {autoOfflinedAt ? "Yes, Go Available" : "Go Available"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

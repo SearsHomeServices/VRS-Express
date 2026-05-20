@@ -39,6 +39,7 @@ export const users = pgTable("users", {
   passwordResetToken: varchar("password_reset_token", { length: 100 }),
   passwordResetExpires: timestamp("password_reset_expires"),
   agentStatus: text("agent_status").notNull().default("offline"),
+  autoOfflinedAt: timestamp("auto_offlined_at"),
   canOrderParts: boolean("can_order_parts").notNull().default(false),
   notificationTone: varchar("notification_tone", { length: 50 }).notNull().default("chime"),
   notificationVolume: varchar("notification_volume", { length: 10 }).notNull().default("0.5"),

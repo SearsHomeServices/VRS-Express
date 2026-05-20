@@ -196,7 +196,13 @@ export function setupWebSocket(server: Server) {
                   return;
                 }
                 try {
-                  await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
+                  // Tyler 2026-05-20 — also stamp `autoOfflinedAt` so the
+                  // agent's next browser visit can show the "you were
+                  // marked Unavailable due to inactivity, go back online?"
+                  // confirm modal. Flag is cleared by
+                  // /api/agent/auto-offline-ack and by any explicit
+                  // status toggle.
+                  await storage.updateUser(client.userId, { agentStatus: "offline", autoOfflinedAt: new Date(), updatedAt: new Date() } as any);
                   broadcastToAdmins({
                     type: "agent_status_changed",
                     payload: { userId: client.userId, name: client.name, status: "offline" },
@@ -237,7 +243,11 @@ export function setupWebSocket(server: Server) {
       // disagree with the DB and with admin's view.
       sendToClient(ws, {
         type: "connected",
-        payload: { userId: decoded.id, agentStatus: (user as any).agentStatus || "offline" },
+        payload: {
+          userId: decoded.id,
+          agentStatus: (user as any).agentStatus || "offline",
+          autoOfflinedAt: (user as any).autoOfflinedAt || null,
+        },
       });
 
       if (client.role === 'technician') {

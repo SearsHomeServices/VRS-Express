@@ -2413,10 +2413,28 @@ export async function registerRoutes(
       const authReq = req as AuthenticatedRequest;
       const user = await storage.getUser(authReq.user!.id);
       if (!user) return res.status(404).json({ error: "User not found" });
-      return res.status(200).json({ agentStatus: (user as any).agentStatus || "offline" });
+      return res.status(200).json({
+        agentStatus: (user as any).agentStatus || "offline",
+        autoOfflinedAt: (user as any).autoOfflinedAt || null,
+      });
     } catch (error) {
       console.error("Get agent status error:", error);
       return res.status(500).json({ error: "Failed to fetch status" });
+    }
+  });
+
+  // Tyler 2026-05-20 — clear the auto-offline flag without changing
+  // status. Called by the client modal's "Stay Unavailable" button so
+  // the prompt doesn't re-appear on every reconnect. The "Go Available"
+  // button instead calls PATCH /api/agent/status which also clears it.
+  app.post("/api/agent/auto-offline-ack", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      await storage.updateUser(authReq.user!.id, { autoOfflinedAt: null } as any);
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error("Auto-offline ack error:", error);
+      return res.status(500).json({ error: "Failed to acknowledge" });
     }
   });
 
@@ -2436,7 +2454,10 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateUser(authReq.user!.id, { agentStatus: parsed.data.status, updatedAt: new Date() } as any);
+      // Tyler 2026-05-20 — any explicit toggle clears the auto-offline
+      // flag so the "marked Unavailable due to inactivity" modal won't
+      // re-appear next reconnect.
+      const updated = await storage.updateUser(authReq.user!.id, { agentStatus: parsed.data.status, autoOfflinedAt: null, updatedAt: new Date() } as any);
       updateClientStatus(authReq.user!.id, parsed.data.status);
       broadcastToAdmins({
         type: "agent_status_changed",
