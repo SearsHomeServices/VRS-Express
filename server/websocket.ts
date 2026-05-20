@@ -45,7 +45,15 @@ const clients = new Map<number, ConnectedClient[]>();
 // listeners) sometimes still needs >5min when the page comes back. 10min
 // absorbs that worst case without meaningfully delaying detection of
 // "agent actually went home" (admins still get the eventual broadcast).
-const AUTO_OFFLINE_GRACE_MS = 10 * 60 * 1000;
+// Tyler 2026-05-20 — bumped 10min → 30min after Zorn & Roger reported the
+// toggle randomly flipping to Unavailable. Prod logs across 5/20 showed
+// ZERO `auto-set offline` events (every disconnect was cancelled within
+// the 10min grace), so the grace was already doing its job — but raising
+// to 30min closes the remaining edge case of a long laptop-lid-close or
+// laptop-suspend without forcing a flip. Pairs with the client-side
+// echo-downgrade guard in agent-dashboard.tsx (Option A from the
+// 5/20 desync triage).
+const AUTO_OFFLINE_GRACE_MS = 30 * 60 * 1000;
 const pendingOfflineTimers = new Map<number, NodeJS.Timeout>();
 
 const WARRANTY_LABELS: Record<string, string> = {

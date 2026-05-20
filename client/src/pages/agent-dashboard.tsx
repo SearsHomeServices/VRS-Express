@@ -419,11 +419,36 @@ export default function AgentDashboard() {
   const [statusChecked, setStatusChecked] = useState(false);
   const [localAgentStatus, setLocalAgentStatus] = useState<string>(user?.agentStatus || "offline");
 
+  // Tyler 2026-05-20 (VRS "random unavailable" reports from Zorn & Roger):
+  // wrap every status mutation in a diagnostic logger AND guard the two
+  // server-echo paths (the React-Query `user` mirror below + the `connected`
+  // WS echo further down) so they can NEVER silently downgrade an already-
+  // active agent to "offline". Explicit paths (toggle click, ticket
+  // claim/complete, admin force-offline via own_status_changed) remain
+  // unrestricted — they can go any direction. Prod logs across 5/20 showed
+  // zero `auto-set offline` events, which means every "I went Unavailable"
+  // report is a client-side flip caused by a stale echo racing a reconnect.
+  const applyAgentStatus = useCallback((next: string, source: string) => {
+    setLocalAgentStatus((prev) => {
+      if (prev === next) return prev;
+      const isEcho = source === "user-query-mirror" || source === "connected-echo";
+      const isDowngradeToOffline = next === "offline" && (prev === "online" || prev === "working");
+      if (isEcho && isDowngradeToOffline) {
+        console.warn(
+          `[diag][agent-status] BLOCKED ${prev} → ${next} from ${source} (echo path may be stale; explicit path required to downgrade)`
+        );
+        return prev;
+      }
+      console.log(`[diag][agent-status] ${prev} → ${next} (source: ${source})`);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (user?.agentStatus) {
-      setLocalAgentStatus(user.agentStatus);
+      applyAgentStatus(user.agentStatus, "user-query-mirror");
     }
-  }, [user?.agentStatus]);
+  }, [user?.agentStatus, applyAgentStatus]);
 
   const agentStatus = localAgentStatus;
 
@@ -460,7 +485,7 @@ export default function AgentDashboard() {
       return data;
     },
     onSuccess: (_data, status) => {
-      setLocalAgentStatus(status);
+      applyAgentStatus(status, "toggle-mutation");
     },
     onError: (error: Error) => {
       toast({
@@ -541,7 +566,7 @@ export default function AgentDashboard() {
 
     const unsub7 = subscribe("own_status_changed", (payload: any) => {
       if (payload?.status) {
-        setLocalAgentStatus(payload.status);
+        applyAgentStatus(payload.status, "own_status_changed");
       }
     });
 
@@ -554,7 +579,7 @@ export default function AgentDashboard() {
     // "Unavailable" without a page refresh.
     const unsub9 = subscribe("connected", (payload: any) => {
       if (payload?.agentStatus && !isAdminViewing) {
-        setLocalAgentStatus(payload.agentStatus);
+        applyAgentStatus(payload.agentStatus, "connected-echo");
       }
     });
 
@@ -569,7 +594,7 @@ export default function AgentDashboard() {
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
-          if (data?.agentStatus) setLocalAgentStatus(data.agentStatus);
+          if (data?.agentStatus) applyAgentStatus(data.agentStatus, "visibility-refresh");
         })
         .catch(() => {});
     };
@@ -596,7 +621,7 @@ export default function AgentDashboard() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onVisibilityChange);
     };
-  }, [subscribe, toast, isAdminViewing]);
+  }, [subscribe, toast, isAdminViewing, applyAgentStatus]);
 
   useEffect(() => {
     if (!statusChecked && user && !isAdminViewing && agentStatus === "offline") {
@@ -1088,7 +1113,7 @@ export default function AgentDashboard() {
     },
     onSuccess: () => {
       toast({ title: "Ticket Claimed", description: "You are now working on this ticket." });
-      setLocalAgentStatus("working");
+      applyAgentStatus("working", "claim-success");
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
@@ -1163,9 +1188,9 @@ export default function AgentDashboard() {
       const keepSelected = selectedAction === "approve_submission" || justResolved;
       if (!keepSelected) {
         setSelectedId(null);
-        setLocalAgentStatus("online");
+        applyAgentStatus("online", "process-success-clear");
       } else if (justResolved) {
-        setLocalAgentStatus("online");
+        applyAgentStatus("online", "process-success-resolved");
         // Tyler 2026-04-27 (modal -> tab migration): auto-select the new
         // Intake Form tab in the right panel instead of opening the
         // retired modal popup. The 350ms delay lets the per-submission
@@ -1238,7 +1263,7 @@ export default function AgentDashboard() {
       const isEscalate = action === "nla_escalate_to_pcard";
       if (isEscalate) {
         setSelectedId(null);
-        setLocalAgentStatus("online");
+        applyAgentStatus("online", "nla-escalate");
         toast({ title: "NLA Ticket Escalated", description: "Sent to P-Card agent." });
         return;
       }
@@ -1247,7 +1272,7 @@ export default function AgentDashboard() {
       // The 350ms delay matches the AUTH side so the per-submission
       // intake-form-status query has time to refetch (now returning
       // required:true since the server hard-return for NLA was removed).
-      setLocalAgentStatus("online");
+      applyAgentStatus("online", "nla-resolved");
       pendingIntakeAutoFireRef.current = true;
       window.setTimeout(() => {
         if (!pendingIntakeAutoFireRef.current) return;
@@ -1342,7 +1367,7 @@ export default function AgentDashboard() {
       } else {
         toast({ title: "Division Corrected", description: "Ticket re-routed to the correct division queue." });
         setSelectedId(null);
-        setLocalAgentStatus("online");
+        applyAgentStatus("online", "division-corrected-rerouted");
         queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
         queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
         queryClient.refetchQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
@@ -4409,7 +4434,7 @@ export default function AgentDashboard() {
                             // agent confirms the Smartsheet submission —
                             // returning them to the queue / next ticket.
                             setSelectedId(null);
-                            setLocalAgentStatus("online");
+                            applyAgentStatus("online", "smartsheet-confirm");
                           }}
                         />
                       </TabsContent>
