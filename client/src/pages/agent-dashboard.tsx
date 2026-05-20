@@ -288,21 +288,18 @@ export default function AgentDashboard() {
   // that replaced the IntakeFormReviewModal popup.
   // ----------------------------------------------------------------------
   type RightPanelView = "shsai" | "calculator" | "intake";
-  // Tyler 2026-05-09 (Hamed): SHSAI upstream
-  // (ais.tellurideplatform.com) is returning 403 Forbidden on every
-  // request — the tab is hidden and the default landing tab is now
-  // Calculator. We keep "shsai" in the union so persisted localStorage
-  // values don't typecheck-explode, but any saved "shsai" preference is
-  // migrated to "calculator" on hydrate (see effect below).
-  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("calculator");
+  // Tyler 2026-05-20: SHSAI restored on the new Sears-hosted prod host
+  // (shsai-routing-assist.prod.nextgen.shs.com). The 2026-05-09 hide
+  // (Telluride UAT going to 403) has been reverted — default landing
+  // tab is back to Service Order History and any saved preference is
+  // honored as-is.
+  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("shsai");
   useEffect(() => {
     if (!user?.id) return;
     try {
       const saved = localStorage.getItem(`agent:${user.id}:rightPanel`);
-      if (saved === "calculator" || saved === "intake") {
+      if (saved === "shsai" || saved === "calculator" || saved === "intake") {
         setRightPanelView(saved);
-      } else if (saved === "shsai") {
-        setRightPanelView("calculator");
       }
     } catch {}
   }, [user?.id]);
@@ -796,13 +793,19 @@ export default function AgentDashboard() {
     }
   };
 
-  // Tyler 2026-05-09 (Hamed): SHSAI upstream is returning 403 — disable
-  // the auto-fetch on ticket selection so the server isn't hammered with
-  // doomed calls every time an agent opens a ticket. The tab is hidden
-  // in the UI; this effect is intentionally a no-op until a replacement
-  // service is wired up.
+  // Tyler 2026-05-20: re-enabled after SHSAI was migrated to the new
+  // Sears-hosted prod host (shsai-routing-assist.prod.nextgen.shs.com).
+  // Auto-fetch fires once per ticket selection so the Service Order
+  // History tab is populated as soon as the agent opens a ticket. NLA
+  // tickets are skipped — there is no useful SO history on a parts-only
+  // request, and the SHSAI bot returns noise for those.
   useEffect(() => {
-    // Intentionally disabled — see note above.
+    if (isMyTicketsView && selectedId && shsaiVisible) {
+      const sub = (submissionsData?.submissions || []).find((s) => s.id === selectedId);
+      if (sub && sub.requestType !== "parts_nla" && sub.id !== lastQueriedSubmissionId) {
+        fetchShsaiData(sub.serviceOrder, sub.id);
+      }
+    }
   }, [selectedId, activeView, shsaiVisible]);
 
   const submissions = useMemo(() => {
@@ -4130,20 +4133,6 @@ export default function AgentDashboard() {
                       onValueChange={(v) => handleRightPanelViewChange(v as RightPanelView)}
                       className="flex flex-col flex-1 min-h-0"
                     >
-                      {/* Tyler 2026-05-09 (Hamed): notice banner about
-                          SHSAI Service Order History being unavailable.
-                          Sits above the right-panel tab strip so it's
-                          visible regardless of which tab is active. */}
-                      <div
-                        className="px-3 py-2 border-b bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 flex items-start gap-2"
-                        data-testid="banner-shsai-unavailable"
-                      >
-                        <AlertTriangle className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
-                        <p className="text-xs text-amber-900 dark:text-amber-100 leading-snug">
-                          <span className="font-medium">Service Order History is currently unavailable.</span>{" "}
-                          The previous source is no longer working — a new source for service order history is being located.
-                        </p>
-                      </div>
                       <div className="px-2 py-2 border-b flex items-center justify-between gap-2 flex-wrap">
                         {/* Tyler 2026-04-27 (Q2 hardening, architect-flagged):
                             Radix Tabs only fires onValueChange when the value
@@ -4163,13 +4152,10 @@ export default function AgentDashboard() {
                             }
                           }}
                         >
-                          {/* Tyler 2026-05-09 (Hamed): Service Order
-                              History tab hidden — upstream SHSAI service
-                              (ais.tellurideplatform.com) returning 403
-                              Forbidden. Notice banner rendered above
-                              this TabsList. Tab + TabsContent retained
-                              in source (commented) for quick restore
-                              once a replacement source is located. */}
+                          <TabsTrigger value="shsai" data-testid="tab-shsai">
+                            <Globe className="w-4 h-4 mr-1" />
+                            Service Order History
+                          </TabsTrigger>
                           <TabsTrigger value="calculator" data-testid="tab-calculator">
                             Calculator
                           </TabsTrigger>
@@ -4192,9 +4178,17 @@ export default function AgentDashboard() {
                           </TabsTrigger>
                         </TabsList>
                         <div className="flex items-center gap-1">
-                          {/* Tyler 2026-05-09: refresh button only ever
-                              applied to the hidden SHSAI tab — removed
-                              from rendering. */}
+                          {rightPanelView === "shsai" && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => fetchShsaiData(selectedSubmission.serviceOrder, selectedSubmission.id)}
+                              disabled={shsaiLoading}
+                              data-testid="button-shsai-refresh"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${shsaiLoading ? "animate-spin" : ""}`} />
+                            </Button>
+                          )}
                           <Button
                             size="icon"
                             variant="ghost"

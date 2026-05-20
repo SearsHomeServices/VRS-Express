@@ -1,6 +1,12 @@
 import crypto from "crypto";
 
-const SHSAI_BASE_URL = "https://ais.tellurideplatform.com/tell/api/hs/routing/v1";
+// Tyler 2026-05-20: migrated off the Telluride-hosted UAT API
+// (ais.tellurideplatform.com, started returning 403 on 2026-05-09) onto the
+// new Sears-hosted prod SHSAI service. Path structure /tell/api/hs/routing/v1
+// is unchanged; only the host moved. New host discovered by inspecting the
+// JS bundle served by https://shsai-routing-ui.prod.nextgen.shs.com — the
+// UI compiles in shsai-routing-assist.prod.nextgen.shs.com as the API base.
+const SHSAI_BASE_URL = "https://shsai-routing-assist.prod.nextgen.shs.com/tell/api/hs/routing/v1";
 
 function generateTrackId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";

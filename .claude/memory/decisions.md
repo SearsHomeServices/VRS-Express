@@ -13,6 +13,18 @@ Use this format for new entries:
 
 ---
 
+### ADR-015: SHSAI Service Order History migrated from Telluride UAT to Sears-hosted prod
+**Date**: 2026-05-20
+**Status**: Active
+**Context**: On 2026-05-09 the SHSAI service at `ais.tellurideplatform.com/tell/api/hs/routing/v1` (Telluride UAT) began returning 403 on every request. Commit `307f514` hid the Service Order History tab, disabled the auto-fetch on ticket selection, and added an amber "currently unavailable" banner so the panel could land cleanly on the Calculator tab in the interim. Tyler was then given a new UI URL `https://shsai-routing-ui.prod.nextgen.shs.com/` for the prod-hosted replacement and was uncertain whether the API contract had changed.
+**Decision**: Treat the migration as a drop-in API base swap. Discovery: the new UI host serves a tiny Vite SPA whose JS bundle (`/assets/index-*.js`) compiles in the API base as `https://shsai-routing-assist.prod.nextgen.shs.com/tell/api/hs/routing/v1` — verified by grepping the bundle for endpoint strings (`/init`, `/sse/assist`, `/prompt`, etc., all present at that base). End-to-end probe (`/init` → `/sse/assist` against a real SO#) returned `status:SUCCESS` + a populated streamed customer-history markdown response. Implementation: one-line change in `server/services/shsai.ts` (constant `SHSAI_BASE_URL`); UI restoration in `client/src/pages/agent-dashboard.tsx` reverts the five visual/behavioral changes from `307f514` (default tab, persisted-pref migration, auto-fetch useEffect, banner, TabsTrigger + refresh button).
+**Consequences**:
+- (+) Zero contract changes. `/init` still returns `{status, thread_id, session_id}` in the body; `/sse/assist` still streams `{"type":"TEXT","content":"..."}` chunks terminated by `{"type":"STATUS","content":"COMPLETE"}`. Existing TS client (`initSession`, `sseAssist`, `queryServiceOrder`, `sendFollowup`) works unmodified.
+- (+) The `sessionId` response-header path in `initSession` is now unused — the new host returns session_id only in the body. Code keeps the `response.headers.get("sessionid") || data.session_id` fallback chain for safety; both branches now resolve to the body value.
+- (+) Restoration leaves all original test IDs intact (`tab-shsai`, `button-shsai-refresh`, `shsai-loading`, `shsai-error`, `shsai-messages`, `shsai-response-${idx}`) — downstream tooling that referenced them by ID continues to work.
+- (−) None known. The new host is in `prod.nextgen.shs.com` (Sears-managed) so reliability is now under our own infra rather than a vendor's UAT environment — a strict improvement.
+- **If the new host ever drops the JSON-body session_id and returns it only via response header again, the existing code path still works** (header lookup runs first). If both paths fail, `initSession` returns `sessionId: ""` and `sseAssist` fails fast at the upstream with the same `REQ_SESSION_ID_ERROR` we saw during discovery — a clean failure mode.
+
 ### ADR-013: ET-canonical day boundary for daily-keyed records (RGC codes)
 **Date**: 2026-05-06
 **Status**: Active

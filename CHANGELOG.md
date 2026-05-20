@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Restored — Service Order History tab (new Sears-hosted SHSAI) (2026-05-20)
+- **Background.** On 2026-05-09 the upstream SHSAI service at `ais.tellurideplatform.com` (Telluride UAT) started returning 403 on every request. The Service Order History tab was hidden, the auto-fetch was disabled, and a notice banner was added telling agents a new source was being located (commit `307f514`).
+- **New host discovered.** Tyler was given `https://shsai-routing-ui.prod.nextgen.shs.com/` as the new UI. Inspecting that UI's JS bundle revealed the new API host: `https://shsai-routing-assist.prod.nextgen.shs.com/tell/api/hs/routing/v1`. Path structure (`/init`, `/sse/assist`, `/prompt`, …) is unchanged from the old Telluride API — only the host moved.
+- **Server (`server/services/shsai.ts`).** One-line change: `SHSAI_BASE_URL` swapped from `ais.tellurideplatform.com/tell/api/hs/routing/v1` to `shsai-routing-assist.prod.nextgen.shs.com/tell/api/hs/routing/v1`. No contract changes: `/init` still returns `{status, thread_id, session_id}` (session_id read from response body via existing fallback because the new host does not echo it back as a `sessionid` response header), `/sse/assist` still streams `{"type":"TEXT","content":"..."}` SSE chunks terminated by `{"type":"STATUS","content":"COMPLETE"}`. End-to-end probe with a real SO# returned a populated customer-history response in ~7s.
+- **Client (`client/src/pages/agent-dashboard.tsx`).** Reverted the 2026-05-09 hide:
+  - Default `rightPanelView` back to `"shsai"`; persisted-preference effect honors saved `"shsai"` again instead of demoting it to `"calculator"`.
+  - Re-enabled the auto-fetch useEffect — opening any non-NLA ticket fires `fetchShsaiData(serviceOrder, id)` once per submission (`lastQueriedSubmissionId` guard prevents duplicate fetches).
+  - Removed the amber "Service Order History is currently unavailable" banner (`data-testid="banner-shsai-unavailable"`).
+  - Restored the `<TabsTrigger value="shsai">` Service Order History tab in the right-panel tab strip.
+  - Restored the per-tab refresh button (`data-testid="button-shsai-refresh"`) — only renders when the SHSAI tab is active.
+- **Verification.** `npm run check` shows the same 45 pre-existing baseline errors; zero new errors from this change. End-to-end curl probe against the new host hit `/init` → `/sse/assist` → fully streamed markdown response in ~7s.
+
 ### Fixed — Agents flipping offline all day (WebSocket churn under autoscale) (2026-05-15)
 - **Symptom (VRS report).** "VRS Express keeps flipping techs offline." Prod logs over a 3-hour window showed ~100 actual `agent_status='offline'` auto-flips concentrated on ~25 repeat-offender agents (Damian Mueller 8x, William Smith 7x, Israel Carrasco 6x, Michael Prefontaine 5x, Brandon Brownlee 5x, Maneul Quinones 5x, …), plus a constant background of 1-3 second disconnect/reconnect churn that mostly self-cancelled inside the grace window.
 - **Root cause (architectural, unfixed in this PR).** Deployment runs as `autoscale` (`.replit` `deploymentTarget = "autoscale"`). Autoscale aggressively cycles backend instances; every migration kills every WebSocket on that instance simultaneously. With ~25 agents online, one scaler event = 25 simultaneous reconnects. Migrating to a Reserved VM deployment would eliminate this root cause but requires a billing change — flagged to user, not done here.
