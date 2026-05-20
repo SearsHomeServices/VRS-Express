@@ -627,6 +627,71 @@ export default function AgentDashboard() {
     };
   }, [subscribe, toast, isAdminViewing, applyAgentStatus]);
 
+  // Tyler 2026-05-20 (afternoon) — SCREEN-INACTIVITY auto-offline.
+  // Replaces the prior server-side WS-disconnect timer (which fired
+  // mid-ticket on proxy/tab-focus churn — see Thomas Bottoms report).
+  // Counts real user activity (mouse/keyboard/touch/scroll). After 30
+  // minutes of true idle while the agent is "online", POST
+  // /api/agent/auto-offline. Server stamps autoOfflinedAt → on next
+  // activity we surface the "marked Unavailable due to inactivity"
+  // modal. Skipped server-side when a ticket is claimed (pending),
+  // so we never strand an in-flight ticket.
+  useEffect(() => {
+    if (isAdminViewing) return;
+    if (localAgentStatus !== "online") return;
+
+    const INACTIVITY_MS = 30 * 60 * 1000;
+    const CHECK_INTERVAL_MS = 60 * 1000;
+    let lastActivity = Date.now();
+    let firing = false;
+
+    const onActivity = () => {
+      lastActivity = Date.now();
+    };
+    const events: Array<keyof WindowEventMap> = [
+      "mousemove",
+      "mousedown",
+      "keydown",
+      "touchstart",
+      "scroll",
+      "wheel",
+    ];
+    events.forEach((e) => window.addEventListener(e, onActivity, { passive: true } as any));
+
+    const interval = window.setInterval(async () => {
+      if (firing) return;
+      if (Date.now() - lastActivity < INACTIVITY_MS) return;
+      firing = true;
+      try {
+        const res = await apiRequest("POST", "/api/agent/auto-offline");
+        const data = await res.json();
+        if (data?.agentStatus === "offline") {
+          setAutoOfflinedAt(data.autoOfflinedAt || new Date().toISOString());
+          applyAgentStatus("offline", "inactivity-timer");
+          setShowStatusPopup(true);
+          // Only reset the idle clock when we actually succeeded —
+          // otherwise (network blip, 5xx) we'd defer the retry by
+          // another full 30 minutes. Architect 2026-05-20.
+          lastActivity = Date.now();
+        } else if (data?.skipped) {
+          // Server skipped (pending ticket or already offline). Reset
+          // so we don't hammer once a minute.
+          lastActivity = Date.now();
+        }
+        // On failure: leave lastActivity alone; next interval will retry.
+      } catch {
+        // network blip — retry next tick (lastActivity intentionally not reset)
+      } finally {
+        firing = false;
+      }
+    }, CHECK_INTERVAL_MS);
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, onActivity as any));
+      window.clearInterval(interval);
+    };
+  }, [localAgentStatus, isAdminViewing, applyAgentStatus]);
+
   useEffect(() => {
     if (!statusChecked && user && !isAdminViewing && agentStatus === "offline") {
       setShowStatusPopup(true);

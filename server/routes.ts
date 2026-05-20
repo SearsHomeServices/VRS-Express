@@ -2423,6 +2423,53 @@ export async function registerRoutes(
     }
   });
 
+  // Tyler 2026-05-20 (afternoon) — client-driven screen-inactivity
+  // auto-offline. Replaces the prior server-side WS-disconnect timer
+  // (which fired on proxy/tab-focus churn while agents were actively
+  // working a ticket — see Thomas Bottoms screenshot). The agent
+  // dashboard tracks real mouse/keyboard/touch/scroll activity and
+  // calls this after 30 minutes of true idle. Stamps autoOfflinedAt
+  // so the modal re-prompts on next interaction/reload. Skips if the
+  // agent has an open pending ticket (don't strand a claimed ticket).
+  app.post("/api/agent/auto-offline", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const userId = authReq.user!.id;
+
+      const current = await storage.getUser(userId);
+      if (!current) return res.status(404).json({ error: "User not found" });
+      if ((current as any).agentStatus !== "online") {
+        return res.status(200).json({ skipped: true, reason: "not_online", agentStatus: (current as any).agentStatus });
+      }
+
+      // Architect 2026-05-20: getPendingCount excludes NLA tickets, so we
+      // must also check getNlaPendingCount or an agent with a claimed NLA
+      // ticket could be auto-offlined and have the NLA work stranded.
+      const pendingCount = await storage.getPendingCount(userId);
+      const nlaPendingCount = await storage.getNlaPendingCount(userId);
+      if (pendingCount > 0 || nlaPendingCount > 0) {
+        return res.status(200).json({ skipped: true, reason: "pending_ticket" });
+      }
+
+      const now = new Date();
+      await storage.updateUser(userId, { agentStatus: "offline", autoOfflinedAt: now, updatedAt: now } as any);
+      updateClientStatus(userId, "offline");
+      broadcastToAdmins({
+        type: "agent_status_changed",
+        payload: { userId, name: authReq.user!.name, status: "offline" },
+      });
+      broadcastToAgent(userId, {
+        type: "own_status_changed",
+        payload: { status: "offline" },
+      });
+      await broadcastVrsAvailability();
+      return res.status(200).json({ agentStatus: "offline", autoOfflinedAt: now.toISOString() });
+    } catch (error) {
+      console.error("Auto-offline error:", error);
+      return res.status(500).json({ error: "Failed to auto-offline" });
+    }
+  });
+
   // Tyler 2026-05-20 — clear the auto-offline flag without changing
   // status. Called by the client modal's "Stay Unavailable" button so
   // the prompt doesn't re-appear on every reconnect. The "Go Available"
@@ -2448,8 +2495,11 @@ export async function registerRoutes(
       }
 
       if (parsed.data.status === "offline") {
+        // Architect 2026-05-20: getPendingCount excludes NLA, so an agent
+        // mid-NLA could go offline and strand the NLA ticket. Check both.
         const pendingCount = await storage.getPendingCount(authReq.user!.id);
-        if (pendingCount > 0) {
+        const nlaPendingCount = await storage.getNlaPendingCount(authReq.user!.id);
+        if (pendingCount > 0 || nlaPendingCount > 0) {
           return res.status(400).json({ error: "You have an open ticket. Complete it or ask an admin to reassign it before going unavailable.", hasPendingTicket: true });
         }
       }

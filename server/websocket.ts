@@ -37,24 +37,25 @@ const clients = new Map<number, ConnectedClient[]>();
 // online without a flicker. If they're truly gone (browser fully
 // closed, machine asleep > 5min), the timer fires and admins/techs are
 // notified as before.
-// Tyler 2026-05-15 — bumped 5min → 10min. Prod logs (5/15) showed ~100
-// auto-offline events across 3 hours, dominated by ~25 repeat-offender
-// agents whose tabs were backgrounded during autoscale-driven socket
-// drops. Browsers throttle setTimeout in background tabs to ~1/min, so
-// the client-side reconnect loop (now with visibilitychange/focus/online
-// listeners) sometimes still needs >5min when the page comes back. 10min
-// absorbs that worst case without meaningfully delaying detection of
-// "agent actually went home" (admins still get the eventual broadcast).
-// Tyler 2026-05-20 — bumped 10min → 30min after Zorn & Roger reported the
-// toggle randomly flipping to Unavailable. Prod logs across 5/20 showed
-// ZERO `auto-set offline` events (every disconnect was cancelled within
-// the 10min grace), so the grace was already doing its job — but raising
-// to 30min closes the remaining edge case of a long laptop-lid-close or
-// laptop-suspend without forcing a flip. Pairs with the client-side
-// echo-downgrade guard in agent-dashboard.tsx (Option A from the
-// 5/20 desync triage).
-const AUTO_OFFLINE_GRACE_MS = 30 * 60 * 1000;
-const pendingOfflineTimers = new Map<number, NodeJS.Timeout>();
+// Tyler 2026-05-20 (afternoon) — Auto-offline logic moved client-side.
+// Thomas Bottoms reported being marked Unavailable mid-NLA ticket while
+// actively typing in a form. Root cause: WS-idle is the wrong signal for
+// "agent walked away" — proxy drops, tab focus changes, and autoscale
+// churn all look like "inactivity" while the agent is actively working.
+// The primary auto-offline path is now client-side SCREEN inactivity
+// (mousemove/keydown/touch/scroll) in agent-dashboard.tsx → POST
+// /api/agent/auto-offline.
+//
+// We keep a much longer (60 min) server-side disconnect-presence
+// fallback below to cover "agent closed the browser/laptop entirely"
+// — otherwise their DB row stays online forever, inflating the
+// tech-facing onlineAgents count and admin visibility. Window is
+// deliberately 2x the client's 30-min idle threshold so the client
+// path is always the first to fire when a tab is still alive. This
+// fallback does NOT stamp autoOfflinedAt (no modal needed — the
+// agent's browser is gone).
+const PRESENCE_STALE_MS = 60 * 60 * 1000;
+const pendingPresenceTimers = new Map<number, NodeJS.Timeout>();
 
 const WARRANTY_LABELS: Record<string, string> = {
   sears_protect: "SPHW",
@@ -154,14 +155,12 @@ export function setupWebSocket(server: Server) {
         agentStatus: (user as any).agentStatus || "offline",
       };
 
-      // Cancel any pending auto-offline timer for this user — they're
-      // back within the grace window, treat the prior disconnect as
-      // transient and keep their status as-is.
-      const pendingTimer = pendingOfflineTimers.get(decoded.id);
-      if (pendingTimer) {
-        clearTimeout(pendingTimer);
-        pendingOfflineTimers.delete(decoded.id);
-        log(`Cancelled pending auto-offline for ${user.name} (reconnected within ${AUTO_OFFLINE_GRACE_MS / 1000}s grace)`, "ws");
+      // Agent reconnected within the presence-stale window — cancel any
+      // pending "browser closed for 60 min" cleanup.
+      const pendingPresence = pendingPresenceTimers.get(decoded.id);
+      if (pendingPresence) {
+        clearTimeout(pendingPresence);
+        pendingPresenceTimers.delete(decoded.id);
       }
 
       const existing = clients.get(decoded.id) || [];
@@ -180,46 +179,45 @@ export function setupWebSocket(server: Server) {
             clients.delete(decoded.id);
             log(`WebSocket disconnected: ${client.name} (id=${client.userId}, last session)`, "ws");
 
+            // Agent's last session is gone. If they're a VRS agent still
+            // marked online, start a long (60 min) presence cleanup so
+            // tech-facing onlineAgents and admin visibility don't show
+            // a ghost-online agent forever. Does NOT stamp autoOfflinedAt
+            // (no modal — the browser is closed). Cancelled on reconnect.
             if (client.role === "vrs_agent" && client.agentStatus !== "offline") {
-              // Schedule the offline flip with a grace window. The
-              // (re)connect handler above clears this timer if the
-              // agent is back in time.
-              const existingPending = pendingOfflineTimers.get(client.userId);
-              if (existingPending) clearTimeout(existingPending);
+              const prior = pendingPresenceTimers.get(client.userId);
+              if (prior) clearTimeout(prior);
               const timer = setTimeout(async () => {
-                pendingOfflineTimers.delete(client.userId);
-                // Double-check: user may have come back without our
-                // connect path cancelling for some reason.
-                const liveSessions = clients.get(client.userId);
-                if (liveSessions && liveSessions.length > 0) {
-                  log(`Skipped auto-offline for ${client.name} — sessions reappeared after grace`, "ws");
-                  return;
-                }
+                pendingPresenceTimers.delete(client.userId);
+                const live = clients.get(client.userId);
+                if (live && live.length > 0) return;
                 try {
-                  // Tyler 2026-05-20 — also stamp `autoOfflinedAt` so the
-                  // agent's next browser visit can show the "you were
-                  // marked Unavailable due to inactivity, go back online?"
-                  // confirm modal. Flag is cleared by
-                  // /api/agent/auto-offline-ack and by any explicit
-                  // status toggle.
-                  await storage.updateUser(client.userId, { agentStatus: "offline", autoOfflinedAt: new Date(), updatedAt: new Date() } as any);
+                  const fresh = await storage.getUser(client.userId);
+                  if (!fresh || (fresh as any).agentStatus !== "online") return;
+                  // Don't strand a pending ticket.
+                  const pendingCount = await storage.getPendingCount(client.userId);
+                  const nlaPendingCount = await storage.getNlaPendingCount(client.userId);
+                  if (pendingCount > 0 || nlaPendingCount > 0) {
+                    log(`Skipped presence cleanup for ${client.name} — open pending ticket`, "ws");
+                    return;
+                  }
+                  await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
                   broadcastToAdmins({
                     type: "agent_status_changed",
                     payload: { userId: client.userId, name: client.name, status: "offline" },
                   });
-                  log(`Agent ${client.name} auto-set offline after ${AUTO_OFFLINE_GRACE_MS / 1000}s grace`, "ws");
                   const onlineCount = await storage.getOnlineAgentCount();
                   const queuedCount = await storage.getQueuedCountAll();
                   broadcastToTechnicians({
-                    type: 'vrs_availability',
-                    payload: { onlineAgents: onlineCount, queuedTickets: queuedCount }
+                    type: "vrs_availability",
+                    payload: { onlineAgents: onlineCount, queuedTickets: queuedCount },
                   });
+                  log(`Agent ${client.name} cleaned up after ${PRESENCE_STALE_MS / 60000}min of no sessions`, "ws");
                 } catch (err) {
-                  log(`Failed to auto-offline agent ${client.name}: ${err}`, "ws");
+                  log(`Presence cleanup failed for ${client.name}: ${err}`, "ws");
                 }
-              }, AUTO_OFFLINE_GRACE_MS);
-              pendingOfflineTimers.set(client.userId, timer);
-              log(`Scheduled auto-offline for ${client.name} in ${AUTO_OFFLINE_GRACE_MS / 1000}s (no live sessions)`, "ws");
+              }, PRESENCE_STALE_MS);
+              pendingPresenceTimers.set(client.userId, timer);
             }
           }
         }
