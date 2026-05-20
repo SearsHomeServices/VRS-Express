@@ -12,6 +12,7 @@
 - Phase 3 direct Smartsheet API row-write — original proposal path; needs API token from Todd Pennington.
 
 ## Done
+- [x] **Added `scripts/seed-test-ticket-from-prod.mjs`** (2026-05-20) — One-shot seeder that copies a real prod SO into dev as a queued ticket so SHSAI returns real customer history during testing.
 - [x] **SHSAI Service Order History restored on new Sears-hosted host** (2026-05-20) — Telluride UAT 403 hide from 2026-05-09 (`307f514`) reverted now that prod SHSAI is live. Base URL swapped to `shsai-routing-assist.prod.nextgen.shs.com`; tab + auto-fetch + refresh button + banner all restored in `agent-dashboard.tsx`. End-to-end probe verified the new host accepts the same request shape and streams SSE responses identically. ADR-015 captures the migration rationale.
 - [x] **Round 4 — completed-SO submission block + prior media comparison** (2026-05-06) — fixed `hasActiveSubmissionForServiceOrder` so completed (approved) tickets no longer block fresh submissions on the same SO#; added "Media on Previous Submission" card to agent dashboard so agents can compare prior photos/video/voice against the resubmission.
 - [x] **Round 3 — prior submission's issue description on resubmissions** (2026-05-06) — Tyler clarified Hamed's complaint was specifically about the original issue description not being visible when reviewing a resubmission. Extended priorRejection memo + added "Description on Previous Submission" panel inline under the current description.

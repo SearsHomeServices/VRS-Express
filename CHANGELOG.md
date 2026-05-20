@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — `scripts/seed-test-ticket-from-prod.mjs` (2026-05-20)
+- **Why.** Verifying the restored SHSAI Service Order History tab needs a dev ticket whose `service_order` actually has customer history in SHSAI's backend. The existing `scripts/seed-test-tickets.ts` uses synthetic `99999000xxx` SOs that SHSAI doesn't recognize, so the new tab would render an empty result on those.
+- **What.** New `.mjs` script that reads the most recent completed ticket from `PROD_DATABASE_URL` (or a specific SO passed as argv[2]) and inserts a queued/claimable copy into `DEV_DATABASE_URL`. Idempotent — skips if a row with that service_order already exists in dev. Only non-PII columns are read from prod (service_order, proc_id, client_nm, district_code, appliance_type, warranty_type); customer name/phone/address live in SHSAI's data store and are fetched on demand by the agent dashboard, never copied into dev.
+- **Tech tags.** Reuses the `test_tech_1` / `TEST_TECH_1` / `9999001` fixture conventions from `seed-test-tickets.ts` and tags the dev row's `issue_description` with `[TEST]` for easy cleanup (`DELETE FROM submissions WHERE issue_description LIKE '[TEST]%'`).
+- **Usage.** `PROD_DATABASE_URL=... DEV_DATABASE_URL=... node scripts/seed-test-ticket-from-prod.mjs [SO]`.
+
 ### Restored — Service Order History tab (new Sears-hosted SHSAI) (2026-05-20)
 - **Background.** On 2026-05-09 the upstream SHSAI service at `ais.tellurideplatform.com` (Telluride UAT) started returning 403 on every request. The Service Order History tab was hidden, the auto-fetch was disabled, and a notice banner was added telling agents a new source was being located (commit `307f514`).
 - **New host discovered.** Tyler was given `https://shsai-routing-ui.prod.nextgen.shs.com/` as the new UI. Inspecting that UI's JS bundle revealed the new API host: `https://shsai-routing-assist.prod.nextgen.shs.com/tell/api/hs/routing/v1`. Path structure (`/init`, `/sse/assist`, `/prompt`, …) is unchanged from the old Telluride API — only the host moved.
