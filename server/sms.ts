@@ -328,11 +328,11 @@ export async function buildAuthCodeMessage(
 
   let msg: string;
   if (hasAuth && hasRgc) {
-    msg = `VRS Authorization for SO#${serviceOrder}\nAuthorization Code: ${authCode}\nRGC Code: ${rgcCode}\nEnter both codes in TechHub to complete the job.`;
+    msg = `VRS Authorization for SO#${serviceOrder}\nStatus: APPROVED TO REPAIR\nAuthorization Code: ${authCode}\nRGC Code: ${rgcCode}\nEnter both codes in TechHub to complete the job.`;
   } else if (hasRgc) {
-    msg = `VRS Authorization for SO#${serviceOrder}\nYour RGC/Auth Code: ${rgcCode}\nEnter this code in TechHub to complete the job.`;
+    msg = `VRS Authorization for SO#${serviceOrder}\nStatus: APPROVED TO REPAIR\nYour RGC/Auth Code: ${rgcCode}\nEnter this code in TechHub to complete the job.`;
   } else {
-    msg = `VRS Authorization Code: Your auth code for SO# ${serviceOrder} is: ${authCode}. Please use this code to proceed with the repair.`;
+    msg = `VRS Authorization for SO# ${serviceOrder}\nStatus: APPROVED TO REPAIR\nAuth Code: ${authCode}\nUse this code to proceed with the repair.`;
   }
   if (agentMessage) {
     msg += `\n\n${agentMessage}`;

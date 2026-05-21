@@ -3658,7 +3658,7 @@ export default function AgentDashboard() {
                                     <Square className="w-8 h-8 text-muted-foreground" />
                                   )}
                                   <span className={`text-sm font-medium ${selectedAction === "approve" || selectedAction === "approve_submission" ? "text-green-700 dark:text-green-400" : ""}`}>
-                                    {isTwoStageWarranty(selectedSubmission) ? "Approve Submission" : "Approve"}
+                                    {isTwoStageWarranty(selectedSubmission) ? "Approve Submission" : "Approved to Repair"}
                                   </span>
                                 </button>
                                 <button
@@ -4601,7 +4601,7 @@ export default function AgentDashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle data-testid="text-confirm-title">
-              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approve Ticket" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
+              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
@@ -4666,7 +4666,7 @@ export default function AgentDashboard() {
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >
-              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approve & Notify" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
+              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

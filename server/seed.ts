@@ -1,7 +1,7 @@
 import bcryptjs from "bcryptjs";
 import { storage, db } from "./storage";
-import { technicians, users, submissions, smsNotifications, communicationSendAudit } from "@shared/schema";
-import { sql, isNull, isNotNull } from "drizzle-orm";
+import { technicians, users, submissions, smsNotifications, communicationSendAudit, communicationTemplates } from "@shared/schema";
+import { sql, isNull, isNotNull, and, eq } from "drizzle-orm";
 
 const SEED_USERS = [
   {
@@ -170,6 +170,8 @@ export async function seedDatabase() {
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
   await seedDefaultCommunicationTemplates();
+  try { await ensureApprovedToRepairStatusLine(); }
+  catch (e: any) { console.warn(`[approved-to-repair] migration failed: ${e?.message || e}`); }
 }
 
 // Tyler 2026-05-12 (perf sweep): Submissions table in prod had only the primary
@@ -444,7 +446,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "ticket_approved.with_auth_and_rgc",
     name: "Final approval — auth code + RGC code",
-    body: `VRS Authorization for SO#{serviceOrder}\nAuthorization Code: {authCode}\nRGC Code: {rgcCode}\nEnter both codes in TechHub to complete the job.{agentMessageLine}`,
+    body: `VRS Authorization for SO#{serviceOrder}\nStatus: APPROVED TO REPAIR\nAuthorization Code: {authCode}\nRGC Code: {rgcCode}\nEnter both codes in TechHub to complete the job.{agentMessageLine}`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "authCode", required: true, sample: "AUTH-9988" },
@@ -457,7 +459,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "ticket_approved.rgc_only",
     name: "Final approval — RGC code only",
-    body: `VRS Authorization for SO#{serviceOrder}\nYour RGC/Auth Code: {rgcCode}\nEnter this code in TechHub to complete the job.{agentMessageLine}`,
+    body: `VRS Authorization for SO#{serviceOrder}\nStatus: APPROVED TO REPAIR\nYour RGC/Auth Code: {rgcCode}\nEnter this code in TechHub to complete the job.{agentMessageLine}`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "rgcCode", required: true, sample: "RGC-4421" },
@@ -469,7 +471,7 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     channel: "sms",
     actionKey: "ticket_approved.auth_only",
     name: "Final approval — auth code only",
-    body: `VRS Authorization Code: Your auth code for SO# {serviceOrder} is: {authCode}. Please use this code to proceed with the repair.{agentMessageLine}`,
+    body: `VRS Authorization for SO# {serviceOrder}\nStatus: APPROVED TO REPAIR\nAuth Code: {authCode}\nUse this code to proceed with the repair.{agentMessageLine}`,
     variables: [
       { name: "serviceOrder", required: true, sample: "12345678" },
       { name: "authCode", required: true, sample: "AUTH-9988" },
@@ -644,6 +646,68 @@ const DEFAULT_COMMUNICATION_TEMPLATES: SeedTemplate[] = [
     ],
   },
 ];
+
+// Tyler 2026-05-21 — One-time migration: existing DB rows for the three
+// final-approval SMS templates were seeded before the "Status: APPROVED TO
+// REPAIR" line was added (per VRS rename of the Approve action). The
+// default-template seeder above skips rows that already exist, so we have
+// to forcibly upgrade them once. Idempotent via flag row.
+async function ensureApprovedToRepairStatusLine() {
+  const FLAG_RAC = "__approved_to_repair_status_line_v1_done__";
+  const flagUser = await storage.getUserByRacId(FLAG_RAC);
+  if (flagUser) return;
+
+  const UPDATES: Array<{ key: string; newBody: string }> = [
+    {
+      key: "ticket_approved.with_auth_and_rgc",
+      newBody: `VRS Authorization for SO#{serviceOrder}\nStatus: APPROVED TO REPAIR\nAuthorization Code: {authCode}\nRGC Code: {rgcCode}\nEnter both codes in TechHub to complete the job.{agentMessageLine}`,
+    },
+    {
+      key: "ticket_approved.rgc_only",
+      newBody: `VRS Authorization for SO#{serviceOrder}\nStatus: APPROVED TO REPAIR\nYour RGC/Auth Code: {rgcCode}\nEnter this code in TechHub to complete the job.{agentMessageLine}`,
+    },
+    {
+      key: "ticket_approved.auth_only",
+      newBody: `VRS Authorization for SO# {serviceOrder}\nStatus: APPROVED TO REPAIR\nAuth Code: {authCode}\nUse this code to proceed with the repair.{agentMessageLine}`,
+    },
+  ];
+
+  let upgraded = 0;
+  let skipped = 0;
+  let adminEditedSkipped = 0;
+  for (const u of UPDATES) {
+    const existing = await storage.getCommunicationTemplate("sms", u.key);
+    if (!existing) { skipped += 1; continue; }
+    if (existing.body.includes("APPROVED TO REPAIR")) { skipped += 1; continue; }
+    // Respect admin edits: only force-update pristine default rows. If an
+    // admin has customised the template, log it loudly so the rename can be
+    // applied by hand through the admin UI.
+    if (!existing.isDefault || (existing.currentVersion ?? 1) > 1) {
+      console.warn(`[approved-to-repair] admin-edited template '${u.key}' left untouched — apply the new wording from the Communication Templates admin page`);
+      adminEditedSkipped += 1;
+      continue;
+    }
+    await db.update(communicationTemplates)
+      .set({ body: u.newBody, updatedAt: new Date() })
+      .where(and(
+        eq(communicationTemplates.channel, "sms"),
+        eq(communicationTemplates.actionKey, u.key),
+      ));
+    upgraded += 1;
+  }
+
+  await db.insert(users).values({
+    email: null,
+    password: "flag",
+    name: "Approved-to-Repair Status-Line Flag",
+    role: "technician",
+    phone: null,
+    racId: FLAG_RAC,
+    isActive: false,
+    isSystemAccount: true,
+  });
+  console.log(`[approved-to-repair] migration done: upgraded ${upgraded}, skipped ${skipped}, admin-edited (manual update needed) ${adminEditedSkipped}`);
+}
 
 async function seedDefaultCommunicationTemplates() {
   let inserted = 0;

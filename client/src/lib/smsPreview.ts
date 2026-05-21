@@ -61,11 +61,11 @@ export function buildSmsPreview(ctx: SmsPreviewContext): string {
       const hasAuth = !!(ctx.authCode && ctx.authCode.trim());
       const hasRgc = !!(ctx.rgcCode && ctx.rgcCode.trim());
       if (hasAuth && hasRgc) {
-        m = `VRS Authorization for SO#${so}\nAuthorization Code: ${ctx.authCode}\nRGC Code: ${ctx.rgcCode}\nEnter both codes in TechHub to complete the job.`;
+        m = `VRS Authorization for SO#${so}\nStatus: APPROVED TO REPAIR\nAuthorization Code: ${ctx.authCode}\nRGC Code: ${ctx.rgcCode}\nEnter both codes in TechHub to complete the job.`;
       } else if (hasRgc) {
-        m = `VRS Authorization for SO#${so}\nYour RGC/Auth Code: ${ctx.rgcCode}\nEnter this code in TechHub to complete the job.`;
+        m = `VRS Authorization for SO#${so}\nStatus: APPROVED TO REPAIR\nYour RGC/Auth Code: ${ctx.rgcCode}\nEnter this code in TechHub to complete the job.`;
       } else {
-        m = `VRS Authorization Code: Your auth code for SO# ${so} is: ${ctx.authCode || "______"}. Please use this code to proceed with the repair.`;
+        m = `VRS Authorization for SO# ${so}\nStatus: APPROVED TO REPAIR\nAuth Code: ${ctx.authCode || "______"}\nUse this code to proceed with the repair.`;
       }
       if (msg) m += `\n\n${msg}`;
       return m;
