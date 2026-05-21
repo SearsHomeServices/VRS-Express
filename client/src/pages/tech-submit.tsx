@@ -931,6 +931,12 @@ export default function TechSubmitPage() {
   }
 
   const watchedRequestType = form.watch("requestType");
+  const watchedApplianceType = form.watch("applianceType");
+  useEffect(() => {
+    if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
+      form.setValue("applianceType", undefined as any, { shouldValidate: false });
+    }
+  }, [watchedRequestType, watchedApplianceType, form]);
   const watchedValues = form.watch();
   const descriptionLength = watchedValues.issueDescription?.length || 0;
   const aiButtonDisabled = descriptionLength < 20 || aiEnhanceMutation.isPending;
@@ -1363,14 +1369,21 @@ export default function TechSubmitPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Appliance Type *</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select
+                        onValueChange={(v) => {
+                          field.onChange(v);
+                        }}
+                        value={field.value}
+                      >
                         <FormControl>
                           <SelectTrigger data-testid="select-appliance-type">
                             <SelectValue placeholder="Select appliance type" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {APPLIANCE_TYPES.map((type) => (
+                          {APPLIANCE_TYPES.filter(
+                            (type) => !(watchedRequestType === "parts_nla" && type.value === "hvac")
+                          ).map((type) => (
                             <SelectItem key={type.value} value={type.value} data-testid={`option-${type.value}`}>
                               {type.label}
                             </SelectItem>

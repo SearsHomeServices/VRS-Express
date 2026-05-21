@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -102,6 +102,14 @@ export default function TechResubmitPage() {
       appealNotes: "",
     },
   });
+
+  const watchedRequestType = form.watch("requestType");
+  const watchedApplianceType = form.watch("applianceType");
+  useEffect(() => {
+    if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
+      form.setValue("applianceType", undefined as any, { shouldValidate: false });
+    }
+  }, [watchedRequestType, watchedApplianceType, form]);
 
   const { data, isLoading, error } = useQuery<{ submission: Submission }>({
     queryKey: ["/api/submissions", originalId],
@@ -650,7 +658,9 @@ export default function TechResubmitPage() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {APPLIANCE_TYPES.map((type) => (
+                            {APPLIANCE_TYPES.filter(
+                              (type) => !(watchedRequestType === "parts_nla" && type.value === "hvac")
+                            ).map((type) => (
                               <SelectItem key={type.value} value={type.value}>
                                 {type.label}
                               </SelectItem>
