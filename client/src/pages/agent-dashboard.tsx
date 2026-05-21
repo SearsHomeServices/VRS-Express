@@ -4601,7 +4601,7 @@ export default function AgentDashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle data-testid="text-confirm-title">
-              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
+              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
@@ -4609,6 +4609,9 @@ export default function AgentDashboard() {
               )}
               {selectedAction === "approve" && (
                 <>The technician will be notified via SMS with the authorization code. This action completes the ticket.</>
+              )}
+              {selectedAction === "approve_replacement_review" && (
+                <>The technician will be notified via SMS with the Replacement Code and standard Replacement Review instructions. This action completes the ticket in VRS; the warranty company handles the replacement.</>
               )}
               {selectedAction === "reject" && (
                 <>The ticket will be returned to the queue and the technician will be notified via SMS with the rejection reasons.</>
@@ -4647,9 +4650,9 @@ export default function AgentDashboard() {
               <p className="text-sm text-orange-700 dark:text-orange-400">&bull; {rejectCloseReason === "Other" && rejectCloseCustomReason.trim() ? `Other: ${rejectCloseCustomReason.trim()}` : rejectCloseReason}</p>
             </div>
           )}
-          {((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "reject" || selectedAction === "reject_and_close") && technicianMessage || selectedAction === "invalid" && invalidMessage) && (
+          {((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" || selectedAction === "reject" || selectedAction === "reject_and_close") && technicianMessage || selectedAction === "invalid" && invalidMessage) && (
             <div className="px-6 pb-2">
-              <p className="text-xs font-medium text-muted-foreground mb-1">{selectedAction === "approve" || selectedAction === "approve_submission" ? "Approval Notes to Technician:" : "Message to Technician:"}</p>
+              <p className="text-xs font-medium text-muted-foreground mb-1">{selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" ? "Notes to Technician:" : "Message to Technician:"}</p>
               <p className="text-sm">{selectedAction === "invalid" ? invalidMessage : technicianMessage}</p>
             </div>
           )}
@@ -4666,7 +4669,7 @@ export default function AgentDashboard() {
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >
-              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
+              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
