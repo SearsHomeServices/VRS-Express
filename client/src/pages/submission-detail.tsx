@@ -147,6 +147,19 @@ export default function SubmissionDetailPage() {
         subtitle: `Service Order #${sub.serviceOrder}`,
       };
     }
+    // Tyler 2026-05-20 (afternoon) — Replacement Review takes precedence
+    // over both completed branches below so the tech sees a distinct purple
+    // screen (and "Replacement Code" labels) instead of the normal green
+    // "Authorization Ready" screen. Without this branch sitting first, the
+    // tech could mistake this for a repair approval.
+    if ((sub as any).replacementReviewRecommended && (status === "completed" || sub.stage1Status === "approved")) {
+      return {
+        bgClass: "bg-purple-700 text-white",
+        icon: <CheckCircle className="w-10 h-10 mx-auto mb-2" />,
+        title: "Placed Into Replacement Review",
+        subtitle: `Service Order #${sub.serviceOrder}`,
+      };
+    }
     if ((status === "completed" || sub.stage1Status === "approved") && (hasAuthCode || hasRgcCode)) {
       return {
         bgClass: "bg-green-700 text-white",
@@ -226,9 +239,14 @@ export default function SubmissionDetailPage() {
                 Your submission has been approved! VRS is now obtaining your authorization code. You can pack up and tidy your workspace while you wait.
               </p>
             )}
-            {(status === "completed" || status === "approved") && !hasAuthCode && (
+            {(status === "completed" || status === "approved") && !hasAuthCode && !(sub as any).replacementReviewRecommended && (
               <p className="text-sm opacity-80 mt-1">
                 You're Clear to Go! Your authorization code will arrive via SMS.
+              </p>
+            )}
+            {(sub as any).replacementReviewRecommended && (status === "completed" || status === "approved") && (
+              <p className="text-sm opacity-80 mt-1" data-testid="text-replacement-review-instructions">
+                Placed into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call.
               </p>
             )}
             {status === "rejected" && (
@@ -264,16 +282,16 @@ export default function SubmissionDetailPage() {
               {hasAuthCode && (
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-                    {hasBothCodes ? "AHS Authorization Code" : "Authorization Code"}
+                    {(sub as any).replacementReviewRecommended ? "Replacement Code" : hasBothCodes ? "AHS Authorization Code" : "Authorization Code"}
                   </p>
-                  <div className="bg-primary text-primary-foreground rounded-md py-4 px-6 mb-3">
+                  <div className={`${(sub as any).replacementReviewRecommended ? "bg-purple-700 text-white" : "bg-primary text-primary-foreground"} rounded-md py-4 px-6 mb-3`}>
                     <p className="text-2xl font-mono font-bold tracking-wider" data-testid="text-auth-code">
                       {sub.authCode}
                     </p>
                   </div>
                   <Button onClick={copyAuthCode} className="w-full" data-testid="button-copy-code">
                     <Copy className="w-4 h-4 mr-2" />
-                    Copy {hasBothCodes ? "AHS Code" : "Code to Clipboard"}
+                    Copy {(sub as any).replacementReviewRecommended ? "Replacement Code" : hasBothCodes ? "AHS Code" : "Code to Clipboard"}
                   </Button>
                 </div>
               )}

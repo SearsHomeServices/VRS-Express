@@ -1443,6 +1443,14 @@ function TicketOverviewSection() {
                                 NLA
                               </span>
                             )}
+                            {(ticket as any).replacementReviewRecommended && (
+                              <span
+                                className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 border border-purple-300 dark:border-purple-700"
+                                data-testid={`badge-replacement-review-${ticket.id}`}
+                              >
+                                REPLACEMENT REVIEW
+                              </span>
+                            )}
                             {isUrgent && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-500 text-white">
                                 URGENT
@@ -2651,6 +2659,11 @@ export default function AdminDashboard() {
     const unsub9 = subscribe("ticket_updated", () => {
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      // Tyler 2026-05-20 (afternoon) — Replacement Review analytics card
+      // is sourced from a separate endpoint; invalidate alongside the main
+      // analytics so the Today/Week tiles update in real time as agents
+      // process tickets.
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/replacement-review-analytics"] });
     });
 
     return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
@@ -2747,6 +2760,10 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeView === "analytics",
+  });
+
+  const { data: replacementReviewAnalytics } = useQuery<{ today: number; week: number; month: number; allTime: number }>({
+    queryKey: ["/api/admin/replacement-review-analytics"],
   });
 
   const { data: nlaAnalytics } = useQuery<{ today: number; week: number; month: number; allTime: number }>({
@@ -4073,6 +4090,37 @@ export default function AdminDashboard() {
                         </CardContent>
                       </Card>
                     </div>
+
+                    {replacementReviewAnalytics && (
+                      <Card data-testid="card-replacement-review-analytics">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-purple-600" />
+                            <CardTitle className="text-base">Replacement Review Outcomes</CardTitle>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div className="rounded-lg border p-3 bg-purple-50 dark:bg-purple-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-replacement-review-today">{replacementReviewAnalytics.today}</p>
+                              <p className="text-xs text-muted-foreground">Today</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-purple-50 dark:bg-purple-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-replacement-review-week">{replacementReviewAnalytics.week}</p>
+                              <p className="text-xs text-muted-foreground">This Week</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-purple-50 dark:bg-purple-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-replacement-review-month">{replacementReviewAnalytics.month}</p>
+                              <p className="text-xs text-muted-foreground">This Month</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-purple-50 dark:bg-purple-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-replacement-review-alltime">{replacementReviewAnalytics.allTime}</p>
+                              <p className="text-xs text-muted-foreground">All Time</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
 
                     {nlaAnalytics && (
                       <Card data-testid="card-nla-analytics">

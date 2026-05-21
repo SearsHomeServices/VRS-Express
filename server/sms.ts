@@ -340,6 +340,39 @@ export async function buildAuthCodeMessage(
   return msg;
 }
 
+// Tyler 2026-05-20 (afternoon) — Replacement Review SMS. Distinct status
+// line ("PLACED INTO REPLACEMENT REVIEW") and exact body copy specified by
+// VRS so the tech cannot mistake this for a repair approval. Falls back to a
+// hard-coded template if the admin template row hasn't been seeded yet.
+export async function buildReplacementReviewMessage(
+  serviceOrder: string,
+  authCode: string,
+  rgcCode?: string | null,
+  agentMessage?: string,
+): Promise<string> {
+  const hasAuth = !!(authCode && authCode.trim());
+  const hasRgc = !!(rgcCode && rgcCode.trim());
+  const codeLines: string[] = [];
+  if (hasAuth) codeLines.push(`Replacement Code: ${authCode}`);
+  if (hasRgc && rgcCode !== authCode) codeLines.push(`RGC Code: ${rgcCode}`);
+
+  const rendered = await renderTemplate("ticket_replacement_review", {
+    serviceOrder,
+    authCode: authCode ?? "",
+    rgcCode: rgcCode ?? "",
+    codeBlock: codeLines.length ? `\n${codeLines.join("\n")}` : "",
+    agentMessage: agentMessage ?? "",
+    agentMessageLine: agentMessage ? `\n\nFeedback from VRS: ${agentMessage}` : "",
+  });
+  if (rendered !== null) return rendered;
+
+  let msg = `VRS Update for SO#${serviceOrder}\n\nStatus: PLACED INTO REPLACEMENT REVIEW`;
+  if (codeLines.length) msg += `\n${codeLines.join("\n")}`;
+  msg += `\n\nPlaced into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call.`;
+  if (agentMessage) msg += `\n\nFeedback from VRS: ${agentMessage}`;
+  return msg;
+}
+
 export async function buildSubmissionReceivedMessage(
   serviceOrder: string,
   warrantyType?: string,

@@ -3,6 +3,7 @@ export type SmsPreviewContext = {
   action:
     | "approve"
     | "approve_submission"
+    | "approve_replacement_review"
     | "reject"
     | "reject_and_close"
     | "invalid"
@@ -67,6 +68,19 @@ export function buildSmsPreview(ctx: SmsPreviewContext): string {
         m = `VRS Authorization Code: Your auth code for SO# ${so} is: ${ctx.authCode || "______"}. Please use this code to proceed with the repair.`;
       }
       if (msg) m += `\n\n${msg}`;
+      return m;
+    }
+
+    case "approve_replacement_review": {
+      const hasAuth = !!(ctx.authCode && ctx.authCode.trim());
+      const hasRgc = !!(ctx.rgcCode && ctx.rgcCode.trim());
+      const codeLines: string[] = [];
+      if (hasAuth) codeLines.push(`Replacement Code: ${ctx.authCode}`);
+      if (hasRgc && ctx.rgcCode !== ctx.authCode) codeLines.push(`RGC Code: ${ctx.rgcCode}`);
+      let m = `VRS Update for SO#${so}\n\nStatus: PLACED INTO REPLACEMENT REVIEW`;
+      if (codeLines.length) m += `\n${codeLines.join("\n")}`;
+      m += `\n\nPlaced into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call.`;
+      if (msg) m += `\n\nFeedback from VRS: ${msg}`;
       return m;
     }
 

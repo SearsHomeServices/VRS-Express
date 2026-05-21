@@ -38,6 +38,7 @@ import {
   buildStage1RejectedMessage,
   buildStage1InvalidMessage,
   buildAuthCodeMessage,
+  buildReplacementReviewMessage,
   buildNlaApprovalMessage,
   buildRejectAndCloseMessage,
   buildSubmissionReceivedMessage,
@@ -761,6 +762,14 @@ export async function registerRoutes(
         }
         if (originalSub.ticketStatus === "rejected_closed") {
           return res.status(400).json({ error: "This submission has been permanently closed and cannot be resubmitted. The repair was determined to not be covered under warranty." });
+        }
+        // Tyler 2026-05-20 (afternoon) — Replacement Review is terminal in
+        // this app. The warranty company handles the replacement process
+        // externally; resubmitting here would be confusing and re-open a
+        // ticket VRS already handed off. If the tech needs further action
+        // they call VRS or submit a brand-new ticket.
+        if ((originalSub as any).replacementReviewRecommended) {
+          return res.status(400).json({ error: "This ticket was placed into Replacement Review and cannot be resubmitted. The warranty company is handling the replacement. If you need further help, contact VRS or submit a new ticket." });
         }
         const MAX_RESUBMISSIONS = 3;
         let rootId = parsed.data.resubmissionOf;
@@ -1617,7 +1626,7 @@ export async function registerRoutes(
   // ========================================================================
 
   const processActionSchema = z.object({
-    action: z.enum(["approve", "reject", "reject_and_close", "invalid", "approve_submission"]),
+    action: z.enum(["approve", "approve_replacement_review", "reject", "reject_and_close", "invalid", "approve_submission"]),
     rejectionReasons: z.array(z.string()).optional(),
     rejectedMedia: z.object({
       photos: z.array(z.object({ url: z.string(), reason: z.string() })).optional(),
@@ -1662,6 +1671,15 @@ export async function registerRoutes(
 
       if (submission.submissionApproved && (action === "reject" || action === "reject_and_close" || action === "invalid" || action === "approve_submission")) {
         return res.status(400).json({ error: "Submission has already been approved. Only authorization (approve) is allowed at this stage." });
+      }
+
+      // Tyler 2026-05-20 (afternoon) — Replacement Review is only valid on
+      // the standard authorization path. NLA already has its own explicit
+      // replacement_submitted / replacement_tech_initiates actions on the
+      // /process-nla route — sending it through here would bypass NLA
+      // accounting and the parts-team handoff.
+      if (action === "approve_replacement_review" && submission.requestType === "parts_nla") {
+        return res.status(400).json({ error: "Replacement Review is not used on NLA tickets. Use the NLA Replacement Submitted or NLA Replacement (Tech Initiates) action instead." });
       }
 
       if (action === "invalid" && !invalidReason) {
@@ -1769,6 +1787,54 @@ export async function registerRoutes(
           smsMessage = await buildAuthCodeMessage(submission.serviceOrder, authDisplay, rgcCode, approvalNotes ?? undefined);
         }
         smsType = "ticket_approved";
+
+      } else if (action === "approve_replacement_review") {
+        // Tyler 2026-05-20 (afternoon) — Replacement Review path. Mirrors the
+        // standard `approve` flow (issues a code, marks ticket completed) but
+        // sets `replacementReviewRecommended=true` so admins/analytics can
+        // discriminate. SMS uses buildReplacementReviewMessage with the exact
+        // wording specified by VRS so the tech cannot mistake this for a
+        // repair approval. AHS/First American still requires an external auth
+        // code just like /approve does — same warranty-provider gate.
+        const todayStr = getEtDateString();
+        const todayRgcCode = await storage.getDailyRgcCode(todayStr);
+        if (!todayRgcCode) {
+          return res.status(400).json({ error: "No RGC code has been set for today. Please contact an administrator." });
+        }
+        const rgcCode = todayRgcCode.code;
+
+        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+        const needsExternalAuth = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
+        if (needsExternalAuth) {
+          if (!authCode || !authCode.trim()) {
+            return res.status(400).json({ error: "External authorization code is required for this warranty provider" });
+          }
+        } else {
+          authCode = rgcCode;
+        }
+
+        updateData.ticketStatus = "completed";
+        updateData.statusChangedAt = new Date();
+        updateData.authCode = authCode || null;
+        updateData.rgcCode = rgcCode;
+        updateData.stage1Status = "approved";
+        updateData.stage1ReviewedBy = authReq.user!.id;
+        updateData.stage1ReviewedAt = new Date();
+        updateData.stage2Status = "approved";
+        updateData.stage2Outcome = "approved";
+        updateData.stage2ReviewedBy = authReq.user!.id;
+        updateData.stage2ReviewedAt = new Date();
+        updateData.replacementReviewRecommended = true;
+        const replacementNotes = technicianMessage || (submission as any).technicianMessage || null;
+        updateData.technicianMessage = replacementNotes;
+
+        smsMessage = await buildReplacementReviewMessage(
+          submission.serviceOrder,
+          authCode || rgcCode,
+          rgcCode,
+          replacementNotes ?? undefined,
+        );
+        smsType = "ticket_replacement_review";
 
       } else if (action === "reject") {
         updateData.ticketStatus = "rejected";
@@ -4047,6 +4113,16 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/replacement-review-analytics", authenticateToken, requireRole("admin"), async (_req, res) => {
+    try {
+      const analytics = await storage.getReplacementReviewAnalytics();
+      return res.json(analytics);
+    } catch (error) {
+      console.error("Replacement Review analytics error:", error);
+      return res.status(500).json({ error: "Failed to fetch Replacement Review analytics" });
+    }
+  });
+
   app.get("/api/admin/export-xlsx", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
       const ExcelJS = (await import("exceljs")).default;
@@ -4130,7 +4206,8 @@ export async function registerRoutes(
         "Ticket Status", "Reviewed By", "Reviewed At", "Rejection Reasons",
         "Auth Code", "RGC Code", "Assigned To", "Claimed At",
         "Created At", "Updated At",
-        "Queue Wait", "Handle Time", "Total Time"
+        "Queue Wait", "Handle Time", "Total Time",
+        "Replacement Review",
       ];
 
       const authSheet = workbook.addWorksheet("Authorization Tickets");
@@ -4159,6 +4236,7 @@ export async function registerRoutes(
           s.createdAt ? new Date(s.createdAt).toISOString() : "",
           s.updatedAt ? new Date(s.updatedAt).toISOString() : "",
           t.queueWait, t.handleTime, t.totalTime,
+          (s as any).replacementReviewRecommended ? "YES" : "",
         ]);
       }
 

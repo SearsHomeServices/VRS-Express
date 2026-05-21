@@ -173,6 +173,7 @@ export interface IStorage {
   getNlaPendingCount(agentId: number): Promise<number>;
   getNlaCompletedTodayCount(agentId?: number, divisions?: string[]): Promise<number>;
   getNlaAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }>;
+  getReplacementReviewAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }>;
 
   getStage2QueueCount(agentId?: number): Promise<number>;
   getWarrantyProviderCounts(assignedTo?: number): Promise<{ warrantyProvider: string; count: number }[]>;
@@ -915,6 +916,7 @@ export class DatabaseStorage implements IStorage {
           clientNm: submissions.clientNm,
           invalidReason: submissions.invalidReason,
           declineReason: submissions.declineReason,
+          replacementReviewRecommended: submissions.replacementReviewRecommended,
           // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no
           // photos"): URL-only media metadata. See SubmissionListItem
           // comment in shared/schema.ts for the full rationale. These are
@@ -1833,6 +1835,35 @@ export class DatabaseStorage implements IStorage {
     const [todayResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(nlaCondition, gte(submissions.createdAt, todayStart)));
     const [weekResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(nlaCondition, gte(submissions.createdAt, weekStart)));
     const [monthResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(nlaCondition, gte(submissions.createdAt, monthStart)));
+
+    return {
+      today: Number(todayResult?.count) || 0,
+      week: Number(weekResult?.count) || 0,
+      month: Number(monthResult?.count) || 0,
+      allTime: Number(allTimeResult?.count) || 0,
+    };
+  }
+
+  // Tyler 2026-05-20 (afternoon) — Replacement Review analytics. Mirrors
+  // getNlaAnalytics shape so the admin card and queryClient cache key
+  // patterns stay identical. Counts every ticket flagged
+  // `replacement_review_recommended` regardless of requestType (defensive —
+  // the /process route currently only allows authorization tickets, but the
+  // analytics shouldn't silently undercount if that ever changes).
+  async getReplacementReviewAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }> {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const flagCondition = eq(submissions.replacementReviewRecommended, true);
+
+    const [allTimeResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(flagCondition);
+    const [todayResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, todayStart)));
+    const [weekResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, weekStart)));
+    const [monthResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, monthStart)));
 
     return {
       today: Number(todayResult?.count) || 0,

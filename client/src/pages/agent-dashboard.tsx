@@ -241,7 +241,7 @@ export default function AgentDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showOriginalDesc, setShowOriginalDesc] = useState(false);
 
-  const [selectedAction, setSelectedAction] = useState<"approve" | "reject" | "reject_and_close" | "invalid" | "approve_submission" | null>(null);
+  const [selectedAction, setSelectedAction] = useState<"approve" | "approve_replacement_review" | "reject" | "reject_and_close" | "invalid" | "approve_submission" | null>(null);
   const [selectedRejectionReasons, setSelectedRejectionReasons] = useState<string[]>([]);
   const [rejectCloseReason, setRejectCloseReason] = useState("");
   const [rejectCloseCustomReason, setRejectCloseCustomReason] = useState("");
@@ -1236,8 +1236,8 @@ export default function AgentDashboard() {
         selectedSubmissionSnapshotRef.current = data.submission;
       }
 
-      const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? "Approved" : selectedAction === "reject" ? "Rejected" : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
-      const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : "Technician has been notified.";
+      const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? "Approved" : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "reject" ? "Rejected" : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
+      const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
       toast({ title: actionLabel, description: actionDesc });
 
       // Tyler 2026-04-28 (REQUIREMENT CHANGE — overrides prior post-Authorize-
@@ -1265,6 +1265,7 @@ export default function AgentDashboard() {
       // Close / Invalid decision lands.
       const justResolved =
         (selectedAction === "approve" ||
+          selectedAction === "approve_replacement_review" ||
           selectedAction === "reject" ||
           selectedAction === "reject_and_close" ||
           selectedAction === "invalid") &&
@@ -1528,10 +1529,10 @@ export default function AgentDashboard() {
       body.invalidReason = allInvalidReasons.join("; ");
       body.invalidInstructions = invalidMessage || undefined;
     }
-    if (selectedAction === "approve" && authCode) {
+    if ((selectedAction === "approve" || selectedAction === "approve_replacement_review") && authCode) {
       body.authCode = authCode;
     }
-    if ((selectedAction === "approve" || selectedAction === "approve_submission") && technicianMessage) {
+    if ((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review") && technicianMessage) {
       body.technicianMessage = technicianMessage;
     }
     processMutation.mutate({ submissionId: selectedSubmission.id, body });
@@ -3708,6 +3709,35 @@ export default function AgentDashboard() {
                                     Reject & Close
                                   </span>
                                 </button>
+                                {/* Tyler 2026-05-20 (afternoon) — Replacement
+                                    Review. Mirrors the Approve flow (issues a
+                                    code, marks ticket completed) but flags the
+                                    ticket so the warranty company can handle
+                                    replacement externally. Hidden on NLA — NLA
+                                    has its own replacement actions on /process-
+                                    nla and the server rejects this action with
+                                    requestType=parts_nla anyway. */}
+                                {selectedSubmission.requestType !== "parts_nla" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedAction(selectedAction === "approve_replacement_review" ? null : "approve_replacement_review")}
+                                    className={`flex flex-col items-center justify-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                                      selectedAction === "approve_replacement_review"
+                                        ? "border-purple-600 bg-purple-50 dark:bg-purple-950/30"
+                                        : "border-border hover:border-purple-300"
+                                    }`}
+                                    data-testid="action-approve-replacement-review"
+                                  >
+                                    {selectedAction === "approve_replacement_review" ? (
+                                      <CheckSquare className="w-8 h-8 text-purple-600" />
+                                    ) : (
+                                      <Square className="w-8 h-8 text-muted-foreground" />
+                                    )}
+                                    <span className={`text-sm font-medium ${selectedAction === "approve_replacement_review" ? "text-purple-700 dark:text-purple-400" : ""}`}>
+                                      Replacement Review
+                                    </span>
+                                  </button>
+                                )}
                               </div>
 
                               {selectedAction === "reject" && (
@@ -3999,9 +4029,9 @@ export default function AgentDashboard() {
                                 </div>
                               )}
 
-                              {selectedAction === "approve" && !isNonPartsRequest(selectedSubmission) && (
-                                <div className="space-y-3 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
-                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Authorization Code</p>
+                              {(selectedAction === "approve" || selectedAction === "approve_replacement_review") && !isNonPartsRequest(selectedSubmission) && (
+                                <div className={`space-y-3 border rounded-lg p-4 ${selectedAction === "approve_replacement_review" ? "bg-purple-50/50 dark:bg-purple-950/10" : "bg-green-50/50 dark:bg-green-950/10"}`}>
+                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{selectedAction === "approve_replacement_review" ? "Replacement Code" : "Authorization Code"}</p>
                                   {rgcMissing ? (
                                     <p className="text-sm text-destructive" data-testid="text-rgc-not-set">
                                       No RGC code set for today. Contact an administrator.
@@ -4034,18 +4064,20 @@ export default function AgentDashboard() {
                                 </div>
                               )}
 
-                              {(selectedAction === "approve" || selectedAction === "approve_submission") && (
+                              {(selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review") && (
                                 <>
-                                  <div className="space-y-2 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
+                                  <div className={`space-y-2 border rounded-lg p-4 ${selectedAction === "approve_replacement_review" ? "bg-purple-50/50 dark:bg-purple-950/10" : "bg-green-50/50 dark:bg-green-950/10"}`}>
                                     <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                                       <Send className="w-3 h-3" />
                                       Additional message (optional)
                                     </Label>
                                     <p className="text-xs text-muted-foreground">
-                                      The tech will already see the approval{selectedAction === "approve" ? " and auth code" : ""}. Add anything extra you want them to know — your text appears as an extra paragraph at the end of the SMS.
+                                      {selectedAction === "approve_replacement_review"
+                                        ? "The tech will already see the Replacement Code and the standard Replacement Review instructions. Add anything extra you want them to know — your text appears as an extra paragraph at the end of the SMS."
+                                        : `The tech will already see the approval${selectedAction === "approve" ? " and auth code" : ""}. Add anything extra you want them to know — your text appears as an extra paragraph at the end of the SMS.`}
                                     </p>
                                     <Textarea
-                                      placeholder="e.g., Looks great — auth code coming in ~10 min"
+                                      placeholder={selectedAction === "approve_replacement_review" ? "e.g., Warranty rep already aware — expect a call within 24h" : "e.g., Looks great — auth code coming in ~10 min"}
                                       value={technicianMessage}
                                       onChange={(e) => setTechnicianMessage(e.target.value)}
                                       className="resize-none"
@@ -4060,7 +4092,7 @@ export default function AgentDashboard() {
                                       action: selectedAction,
                                       message: technicianMessage,
                                       rgcCode: todaysRgcCode,
-                                      authCode: authCode,
+                                      authCode: authCode || (selectedAction === "approve_replacement_review" ? (todaysRgcCode || "") : ""),
                                     })}
                                   />
                                 </>
@@ -4093,6 +4125,7 @@ export default function AgentDashboard() {
                                 className="w-full"
                                 size="lg"
                                 variant={selectedAction === "reject" || selectedAction === "reject_and_close" ? "destructive" : selectedAction === "invalid" ? "outline" : "default"}
+                                style={selectedAction === "approve_replacement_review" ? { backgroundColor: "rgb(126 34 206)", color: "white" } : undefined}
                                 onClick={() => {
                                   if (!selectedAction) return;
                                   if (selectedAction === "reject" && selectedRejectionReasons.length === 0 && rejectedPhotos.length === 0 && !rejectedVideo.rejected && !rejectedVoiceNote.rejected) {
@@ -4139,11 +4172,11 @@ export default function AgentDashboard() {
                                     toast({ title: "Error", description: "Please specify the 'Other' reason for closing", variant: "destructive" });
                                     return;
                                   }
-                                  if (selectedAction === "approve" && !isNonPartsRequest(selectedSubmission) && needsExternalAuth(selectedSubmission) && !authCode.trim()) {
+                                  if ((selectedAction === "approve" || selectedAction === "approve_replacement_review") && !isNonPartsRequest(selectedSubmission) && needsExternalAuth(selectedSubmission) && !authCode.trim()) {
                                     toast({ title: "Error", description: `Enter the ${getProviderAuthLabel(selectedSubmission)}`, variant: "destructive" });
                                     return;
                                   }
-                                  if (selectedAction === "approve" && !isNonPartsRequest(selectedSubmission) && rgcMissing) {
+                                  if ((selectedAction === "approve" || selectedAction === "approve_replacement_review") && !isNonPartsRequest(selectedSubmission) && rgcMissing) {
                                     toast({ title: "Error", description: "RGC code not set for today", variant: "destructive" });
                                     return;
                                   }
@@ -4153,7 +4186,7 @@ export default function AgentDashboard() {
                                 data-testid="button-process-submit"
                               >
                                 <Send className="w-4 h-4 mr-2" />
-                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Process & Send"}
+                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : "Process & Send"}
                               </Button>
                             </>
                           )}

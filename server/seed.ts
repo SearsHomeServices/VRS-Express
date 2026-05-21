@@ -164,6 +164,8 @@ export async function seedDatabase() {
     catch (e: any) { console.warn(`[system-health-log] background ensure failed: ${e?.message || e}`); }
     try { await ensureAgentActivityLogTable(); }
     catch (e: any) { console.warn(`[agent-activity-log] background ensure failed: ${e?.message || e}`); }
+    try { await ensureReplacementReviewColumn(); }
+    catch (e: any) { console.warn(`[replacement-review] background ensure failed: ${e?.message || e}`); }
   })();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
@@ -260,6 +262,22 @@ async function ensureSystemHealthLogTable() {
     console.log("[system-health-log] Table + unique-open index + manual-clear columns ensured (FK ON DELETE SET NULL)");
   } catch (err: any) {
     console.warn(`[system-health-log] Failed to ensure table: ${err?.message || err}`);
+  }
+}
+
+// Tyler 2026-05-20 (afternoon) — Replacement Review column. One-shot
+// idempotent migration so prod gets the new boolean column on next boot
+// without a manual drizzle-kit push. Same pattern as the other ensure*
+// helpers in this file. Safe to re-run.
+async function ensureReplacementReviewColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS replacement_review_recommended BOOLEAN NOT NULL DEFAULT FALSE
+    `));
+    console.log("[replacement-review] submissions.replacement_review_recommended ensured (default false)");
+  } catch (err: any) {
+    console.warn(`[replacement-review] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

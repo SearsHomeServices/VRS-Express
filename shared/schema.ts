@@ -148,6 +148,13 @@ export const submissions = pgTable("submissions", {
   resubmissionOf: integer("resubmission_of"),
   procId: varchar("proc_id", { length: 50 }),
   clientNm: varchar("client_nm", { length: 150 }),
+  // Tyler 2026-05-20 (afternoon) — Replacement Review outcome. Set true when
+  // a standard /process action of `approve_replacement_review` is used so VRS
+  // can flag tickets where the warranty company is taking over replacement.
+  // Ticket is still ticketStatus="completed" so existing completed-list
+  // plumbing works; this is the admin/analytics discriminator. See replit.md
+  // "Replacement Review" section. Migrated idempotently in seed.ts.
+  replacementReviewRecommended: boolean("replacement_review_recommended").notNull().default(false),
   statusChangedAt: timestamp("status_changed_at").default(sql`now()`),
   createdAt: timestamp("created_at").default(sql`now()`),
   updatedAt: timestamp("updated_at").default(sql`now()`),
@@ -202,6 +209,7 @@ export type SubmissionListItem = Pick<Submission,
   | "phoneOverride" | "technicianLdapId"
   | "resubmissionOf" | "nlaEscalatedBy"
   | "procId" | "clientNm"
+  | "replacementReviewRecommended"
   | "invalidReason" | "declineReason"
   // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no photos"):
   // photos/videoUrl/voiceNoteUrl are URL-only metadata strings (a few
