@@ -2062,10 +2062,19 @@ export default function AgentDashboard() {
                               <span className="font-medium text-sm" data-testid={`text-so-${sub.id}`}>
                                 SO# {sub.serviceOrder}
                               </span>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Clock className="w-3 h-3" />
-                                <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt, profileForSub(sub))}</span>
-                              </div>
+                              {/* Tyler 2026-05-20 (afternoon) — Hide the
+                                  queue-age clock on completed cards. The
+                                  ticker was reused from Queue/MyTickets and
+                                  kept counting up post-completion, which read
+                                  as "handle time" and confused agents. The
+                                  admin overview is the source of truth for
+                                  Handle Time / Total Time on closed tickets. */}
+                              {activeView !== "completed" && activeView !== "nla_completed" && (
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Clock className="w-3 h-3" />
+                                  <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt, profileForSub(sub))}</span>
+                                </div>
+                              )}
                             </div>
                             <div className="flex items-center justify-between gap-2 mt-1 flex-wrap">
                               <span className="text-xs text-muted-foreground" data-testid={`text-tech-${sub.id}`}>
