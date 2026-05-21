@@ -84,6 +84,8 @@ import {
   Layers,
   Square,
   CheckSquare,
+  Circle,
+  CircleDot,
   Video,
   LifeBuoy,
   RotateCcw,
@@ -3882,32 +3884,40 @@ export default function AgentDashboard() {
                                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Reject & Close — Not Covered</p>
                                     <p className="text-xs text-muted-foreground">This permanently closes the ticket. The technician will be unable to resubmit or create new tickets for this service order. Use when the repair is not covered under warranty.</p>
                                     <div className="space-y-2">
-                                      <Label className="text-xs text-muted-foreground">Reason</Label>
-                                      <select
-                                        className="w-full text-sm border rounded-md px-3 py-2 bg-background"
-                                        value={rejectCloseReason}
-                                        onChange={(e) => {
-                                          setRejectCloseReason(e.target.value);
-                                          if (e.target.value !== "Other") setRejectCloseCustomReason("");
-                                        }}
-                                        data-testid="select-reject-close-reason"
-                                      >
-                                        <option value="">Select a reason...</option>
-                                        <option value="Customer abuse/neglect">Customer abuse/neglect</option>
-                                        <option value="Pre-existing damage not covered">Pre-existing damage not covered</option>
-                                        <option value="Cosmetic damage — not a functional failure">Cosmetic damage — not a functional failure</option>
-                                        <option value="Unauthorized modification by customer">Unauthorized modification by customer</option>
-                                        <option value="Commercial use of residential product">Commercial use of residential product</option>
-                                        <option value="Coverage expired or not active">Coverage expired or not active</option>
-                                        <option value="Product not listed on warranty contract">Product not listed on warranty contract</option>
-                                        <option value="Recall or manufacturer defect — contact manufacturer">Recall or manufacturer defect — contact manufacturer</option>
-                                        <option value="Infestation">Infestation</option>
-                                        <option value="Other">Other</option>
-                                      </select>
+                                      {[
+                                        "Customer abuse/neglect",
+                                        "Pre-existing damage not covered",
+                                        "Cosmetic damage — not a functional failure",
+                                        "Unauthorized modification by customer",
+                                        "Commercial use of residential product",
+                                        "Coverage expired or not active",
+                                        "Product not listed on warranty contract",
+                                        "Recall or manufacturer defect — contact manufacturer",
+                                        "Infestation",
+                                        "Other",
+                                      ].map((reason) => (
+                                        <button
+                                          key={reason}
+                                          type="button"
+                                          className="flex items-center gap-2 cursor-pointer w-full text-left"
+                                          onClick={() => {
+                                            setRejectCloseReason(reason);
+                                            if (reason !== "Other") setRejectCloseCustomReason("");
+                                          }}
+                                          data-testid={`radio-reject-close-${reason.replace(/\s+/g, '-').toLowerCase()}`}
+                                        >
+                                          {rejectCloseReason === reason ? (
+                                            <CircleDot className="w-5 h-5 text-orange-600 shrink-0" />
+                                          ) : (
+                                            <Circle className="w-5 h-5 text-muted-foreground shrink-0" />
+                                          )}
+                                          <span className="text-sm">{reason}</span>
+                                        </button>
+                                      ))}
                                       {rejectCloseReason === "Other" && (
                                         <input
                                           type="text"
-                                          className="w-full text-sm border rounded-md px-3 py-1.5 bg-background"
+                                          className="w-full ml-7 text-sm border rounded-md px-3 py-1.5 bg-background"
                                           placeholder="Specify other reason..."
                                           value={rejectCloseCustomReason}
                                           onChange={(e) => setRejectCloseCustomReason(e.target.value)}
