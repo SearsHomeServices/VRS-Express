@@ -4195,7 +4195,7 @@ export default function AgentDashboard() {
                                 data-testid="button-process-submit"
                               >
                                 <Send className="w-4 h-4 mr-2" />
-                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : "Process & Send"}
+                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Technician" : "Process & Send"}
                               </Button>
                             </>
                           )}
