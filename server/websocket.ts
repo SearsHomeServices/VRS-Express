@@ -305,10 +305,25 @@ export function broadcastToAgent(userId: number, event: WSEvent) {
   sendToUser(userId, event);
 }
 
+// Tyler 2026-05-26 — pick the freshest live session for filter eligibility,
+// not sessions[0]. The prior code consulted sessions[0] for role/status/
+// divisions, which silently dropped users whose first-opened tab had gone
+// stale (laptop slept, browser tab backgrounded long enough for the WS to
+// die before eviction) while a newer tab was active. We now prefer the
+// first session whose socket is still OPEN; the closed-socket session is
+// kept in the list until the connection close handler evicts it, but it
+// no longer gates delivery for the user's other live tabs.
+function pickLiveSession(sessions: ConnectedClient[]): ConnectedClient | null {
+  for (const s of sessions) {
+    if (s.ws.readyState === WebSocket.OPEN) return s;
+  }
+  return null;
+}
+
 export function broadcastToDivisionAgents(division: string, event: WSEvent, excludeUserId?: number) {
   for (const [userId, sessions] of clients) {
     if (excludeUserId && userId === excludeUserId) continue;
-    const primary = sessions[0];
+    const primary = pickLiveSession(sessions);
     if (!primary) continue;
 
     const isAgent = primary.role === "vrs_agent";
@@ -330,7 +345,7 @@ export function broadcastToDivisionAgents(division: string, event: WSEvent, excl
 export function broadcastToNlaDivisionAgents(applianceType: string, event: WSEvent, excludeUserId?: number) {
   for (const [userId, sessions] of clients) {
     if (excludeUserId && userId === excludeUserId) continue;
-    const primary = sessions[0];
+    const primary = pickLiveSession(sessions);
     if (!primary) continue;
 
     const isAgent = primary.role === "vrs_agent";
