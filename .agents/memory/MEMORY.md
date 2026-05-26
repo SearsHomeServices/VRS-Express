@@ -1,0 +1,1 @@
+- [Multi-tab idle-vote demotion gate](multi-tab-idle-vote.md) — auto-offline must use per-tab votes (not liveSessions skip); 6 invariants needed to close every false-demotion path.

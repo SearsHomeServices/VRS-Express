@@ -520,6 +520,22 @@ export function updateClientDivisions(userId: number, divisions: string[]) {
   }
 }
 
+// Tyler 2026-05-26 — count of live (readyState OPEN) WS sessions for a
+// user. Used by the auto-offline route to refuse to demote a user when
+// they have another active tab open — without this, Tab A backgrounding
+// for 30 min would offline them globally while Tab B is being actively
+// worked. The presence-stale safety net already handles "all tabs
+// gone" via its own multi-session check.
+export function getLiveSessionCount(userId: number): number {
+  const sessions = clients.get(userId);
+  if (!sessions) return 0;
+  let n = 0;
+  for (const s of sessions) {
+    if (s.ws.readyState === WebSocket.OPEN) n++;
+  }
+  return n;
+}
+
 export function getOnlineAgentCount(): number {
   let count = 0;
   for (const [, sessions] of clients) {

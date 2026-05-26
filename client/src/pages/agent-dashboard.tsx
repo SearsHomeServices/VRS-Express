@@ -660,9 +660,47 @@ export default function AgentDashboard() {
       : 60 * 1000;
     let lastActivity = Date.now();
     let firing = false;
+    // Tyler 2026-05-26 — track whether this tab has an outstanding
+    // server-side idle vote. Persisted to sessionStorage (per-tab) so
+    // the flag survives page reloads / effect remounts. Without
+    // persistence, a lost /auto-offline response followed by a reload
+    // would make the client forget about the server-side vote, and the
+    // stale vote could cooperate with another tab's fresh vote to
+    // demote a user who's actively working (architect 2026-05-26).
+    const VOTE_FLAG_KEY = "vrs-tab-idle-vote-outstanding";
+    const getVoteFlag = (): boolean => sessionStorage.getItem(VOTE_FLAG_KEY) === "1";
+    const setVoteFlag = (v: boolean) => {
+      if (v) sessionStorage.setItem(VOTE_FLAG_KEY, "1");
+      else sessionStorage.removeItem(VOTE_FLAG_KEY);
+    };
+    let clearInFlight = false;
+
+    // Tyler 2026-05-26 — on mount, if a vote was outstanding from a
+    // prior load, attempt to clear it immediately so the just-mounted
+    // (active) tab doesn't keep a stale idle vote on the server.
+    const initialTabId = sessionStorage.getItem("vrs-tab-id");
+    if (getVoteFlag() && initialTabId) {
+      clearInFlight = true;
+      apiRequest("POST", "/api/agent/idle-vote-clear", { tabId: initialTabId })
+        .then((r) => { if (r.ok) setVoteFlag(false); })
+        .catch(() => {})
+        .finally(() => { clearInFlight = false; });
+    }
 
     const onActivity = () => {
       lastActivity = Date.now();
+      if (!getVoteFlag() || clearInFlight) return;
+      const tabId = sessionStorage.getItem("vrs-tab-id");
+      if (!tabId) return;
+      clearInFlight = true;
+      apiRequest("POST", "/api/agent/idle-vote-clear", { tabId })
+        .then((r) => {
+          if (r.ok) setVoteFlag(false);
+        })
+        .catch(() => {})
+        .finally(() => {
+          clearInFlight = false;
+        });
     };
     const events: Array<keyof WindowEventMap> = [
       "mousemove",
@@ -678,26 +716,57 @@ export default function AgentDashboard() {
       if (firing) return;
       if (Date.now() - lastActivity < INACTIVITY_MS) return;
       firing = true;
+      // Tyler 2026-05-26 — optimistically assume a vote WILL be recorded
+      // server-side. If the response is lost (network drop after the
+      // server processed the POST), `hasOutstandingVote` is still true
+      // so future activity will issue an explicit clear. We only flip
+      // it back to false on responses that prove no vote was recorded
+      // (pre-vote skips: not_online / pending_ticket) or that the vote
+      // was already cleared by the demotion path (agentStatus=offline).
+      setVoteFlag(true);
       try {
         const idleMs = Date.now() - lastActivity;
-        const res = await apiRequest("POST", "/api/agent/auto-offline", { idleMs });
+        // Tyler 2026-05-26 — stable per-tab id (sessionStorage) so the
+        // server-side idle-vote tally can distinguish votes from
+        // different tabs of the same user.
+        let tabId = sessionStorage.getItem("vrs-tab-id");
+        if (!tabId) {
+          tabId = (crypto as any)?.randomUUID?.() || `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          sessionStorage.setItem("vrs-tab-id", tabId);
+        }
+        const res = await apiRequest("POST", "/api/agent/auto-offline", { idleMs, tabId });
         const data = await res.json();
         if (data?.agentStatus === "offline") {
           setAutoOfflinedAt(data.autoOfflinedAt || new Date().toISOString());
           applyAgentStatus("offline", "inactivity-timer");
           setShowStatusPopup(true);
+          // Server cleared all votes for this user on demotion.
+          setVoteFlag(false);
           // Only reset the idle clock when we actually succeeded —
           // otherwise (network blip, 5xx) we'd defer the retry by
           // another full 30 minutes. Architect 2026-05-20.
           lastActivity = Date.now();
+        } else if (data?.skipped && data?.reason === "multi_tab_pending_votes") {
+          // Vote WAS recorded; keep `hasOutstandingVote=true` so the
+          // next activity in this tab issues an explicit clear.
+          // Don't reset lastActivity — re-attempt next interval so the
+          // vote is refreshed (TTL 35 min) and demotion fires promptly
+          // once the last tab also goes idle.
+        } else if (data?.skipped && (data?.reason === "not_online" || data?.reason === "pending_ticket")) {
+          // Server short-circuited BEFORE recordIdleVote — no stale
+          // vote to clear.
+          setVoteFlag(false);
+          lastActivity = Date.now();
         } else if (data?.skipped) {
-          // Server skipped (pending ticket or already offline). Reset
-          // so we don't hammer once a minute.
+          // Unknown skip reason: be conservative — assume vote may
+          // have been recorded; keep hasOutstandingVote=true.
           lastActivity = Date.now();
         }
         // On failure: leave lastActivity alone; next interval will retry.
       } catch {
-        // network blip — retry next tick (lastActivity intentionally not reset)
+        // Network blip — keep hasOutstandingVote=true (vote may or
+        // may not have been recorded server-side); next activity will
+        // attempt an explicit clear regardless.
       } finally {
         firing = false;
       }

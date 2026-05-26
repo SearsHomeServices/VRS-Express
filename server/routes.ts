@@ -62,7 +62,7 @@ import {
 import { enhanceDescription, checkRateLimit } from "./services/openai";
 import { queryServiceOrder, sendFollowup } from "./services/shsai";
 import { ObjectStorageService } from "./replit_integrations/object_storage/objectStorage";
-import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel } from "./websocket";
+import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel, getLiveSessionCount } from "./websocket";
 
 const execFileAsync = promisify(execFile);
 
@@ -133,6 +133,58 @@ async function safeLogActivity(userId: number, eventType: string, details?: Reco
   } catch (err) {
     console.error(`[activity-log] failed to write ${eventType} for user ${userId}:`, err);
   }
+}
+
+// Tyler 2026-05-26 — multi-tab idle-vote tally. Per-user map of
+// tabId → vote-expires-at. Each tab posts independently to
+// /api/agent/auto-offline; we only demote once every live WS session
+// has voted within IDLE_VOTE_TTL_MS. In-memory is fine — votes are
+// strictly transient and a server restart just forces another idle
+// cycle (≤30 min) before demotion, which is acceptable.
+const IDLE_VOTE_TTL_MS = 35 * 60 * 1000;
+const idleVotes = new Map<number, Map<string, number>>();
+function recordIdleVote(userId: number, tabId: string): { votes: number } {
+  const now = Date.now();
+  let userVotes = idleVotes.get(userId);
+  if (!userVotes) {
+    userVotes = new Map();
+    idleVotes.set(userId, userVotes);
+  }
+  for (const [t, exp] of Array.from(userVotes.entries())) {
+    if (exp < now) userVotes.delete(t);
+  }
+  userVotes.set(tabId, now + IDLE_VOTE_TTL_MS);
+  return { votes: userVotes.size };
+}
+function clearIdleVotes(userId: number) {
+  idleVotes.delete(userId);
+}
+function clearIdleVoteForTab(userId: number, tabId: string) {
+  const userVotes = idleVotes.get(userId);
+  if (!userVotes) return;
+  userVotes.delete(tabId);
+  if (userVotes.size === 0) idleVotes.delete(userId);
+}
+
+// Tyler 2026-05-26 — telemetry write-amplification guard. During a
+// broad outage every connected client can churn its WS in a tight
+// loop (capped at 30s backoff). Without dedup that's a write per
+// client every 30s into agent_activity_log. We coalesce repeated
+// events from the same (user, event) inside a short window.
+const TELEMETRY_DEDUP_MS = 30 * 1000;
+const telemetryLastSeen = new Map<string, number>();
+function shouldEmitTelemetry(userId: number, event: string): boolean {
+  const key = `${userId}:${event}`;
+  const now = Date.now();
+  const last = telemetryLastSeen.get(key) ?? 0;
+  if (now - last < TELEMETRY_DEDUP_MS) return false;
+  telemetryLastSeen.set(key, now);
+  if (telemetryLastSeen.size > 5000) {
+    for (const [k, t] of Array.from(telemetryLastSeen.entries())) {
+      if (now - t > TELEMETRY_DEDUP_MS * 4) telemetryLastSeen.delete(k);
+    }
+  }
+  return true;
 }
 
 async function broadcastVrsAvailability() {
@@ -2546,9 +2598,29 @@ export async function registerRoutes(
         return res.status(200).json({ skipped: true, reason: "pending_ticket" });
       }
 
+      // Tyler 2026-05-26 — multi-tab safety via per-tab idle votes.
+      // Each tab generates a stable tabId (sessionStorage) and posts it
+      // here when its 30-min idle clock fires. A single backgrounded
+      // tab cannot demote the user; we only demote once EVERY live WS
+      // session has independently voted idle within IDLE_VOTE_TTL_MS.
+      // If only one live session exists, the vote-set comparison still
+      // works (one vote ≥ one session) and the single-tab path behaves
+      // exactly as before. Votes expire so a tab that became active
+      // again automatically loses its vote.
+      const liveSessions = getLiveSessionCount(userId);
+      const tabId = typeof req.body?.tabId === "string" && req.body.tabId.length > 0 && req.body.tabId.length <= 64
+        ? req.body.tabId
+        : `legacy-${source.ip || "x"}`;
+      const { votes } = recordIdleVote(userId, tabId);
+      if (votes < liveSessions) {
+        await safeLogActivity(userId, "auto_offline_skipped_multitab", { liveSessions, votes, source });
+        return res.status(200).json({ skipped: true, reason: "multi_tab_pending_votes", liveSessions, votes });
+      }
+      clearIdleVotes(userId);
+
       const now = new Date();
       await storage.updateUser(userId, { agentStatus: "offline", autoOfflinedAt: now, updatedAt: now } as any);
-      await safeLogActivity(userId, "auto_offline_fired", { autoOfflinedAt: now.toISOString(), source });
+      await safeLogActivity(userId, "auto_offline_fired", { autoOfflinedAt: now.toISOString(), liveSessions, source });
       updateClientStatus(userId, "offline");
       broadcastToAdmins({
         type: "agent_status_changed",
@@ -2563,6 +2635,67 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Auto-offline error:", error);
       return res.status(500).json({ error: "Failed to auto-offline" });
+    }
+  });
+
+  // Tyler 2026-05-26 — explicit idle-vote unvote. Called by the client
+  // when a previously-idle tab becomes active again, so a stale vote
+  // can't cooperate with another tab's fresh vote to falsely demote a
+  // user who's actively working. Best-effort: no body validation
+  // beyond the tabId string check, never throws.
+  app.post("/api/agent/idle-vote-clear", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const tabId = req.body?.tabId;
+      if (typeof tabId !== "string" || tabId.length === 0 || tabId.length > 64) {
+        return res.status(400).json({ error: "tabId required" });
+      }
+      clearIdleVoteForTab(authReq.user!.id, tabId);
+      return res.status(204).end();
+    } catch (error) {
+      console.error("Idle vote clear error:", error);
+      return res.status(500).json({ error: "Failed to clear idle vote" });
+    }
+  });
+
+  // Tyler 2026-05-26 — WS reconnect telemetry. The HTTP path stays alive
+  // even when WebSocket is zombied, so the client can self-report dead
+  // sockets / reconnects via this endpoint. Three accepted event types:
+  //   - ws_zombie_detected: keepalive saw no inbound > threshold or send threw
+  //   - ws_reconnect_success: WS opened after one or more failed attempts
+  //   - ws_unexpected_close: onclose with a non-clean code (not user logout)
+  // Anything else is silently dropped (we don't want this to become a
+  // generic client-log shovel). Details payload is bounded — we only
+  // persist a small, vetted subset of fields.
+  app.post("/api/agent/ws-telemetry", authenticateToken, requireRole("vrs_agent", "admin", "super_admin", "technician"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const schema = z.object({
+        event: z.enum(["ws_zombie_detected", "ws_reconnect_success", "ws_unexpected_close"]),
+        details: z.object({
+          reason: z.string().max(120).optional(),
+          attempts: z.number().int().min(0).max(10000).optional(),
+          downtimeMs: z.number().int().min(0).max(86_400_000).optional(),
+          idleMs: z.number().int().min(0).max(86_400_000).optional(),
+          code: z.number().int().min(0).max(5000).optional(),
+        }).strict().default({}),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid telemetry payload" });
+      }
+      if (!shouldEmitTelemetry(authReq.user!.id, parsed.data.event)) {
+        return res.status(204).end();
+      }
+      const source = {
+        ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() || req.ip,
+        ua: (req.headers["user-agent"] as string || "").slice(0, 200),
+      };
+      await safeLogActivity(authReq.user!.id, parsed.data.event, { ...parsed.data.details, source });
+      return res.status(204).end();
+    } catch (error) {
+      console.error("WS telemetry error:", error);
+      return res.status(500).json({ error: "Failed to log telemetry" });
     }
   });
 

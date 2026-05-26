@@ -32,6 +32,26 @@ const KEEPALIVE_INTERVAL_MS = 20000;
 let lastInboundAt = Date.now();
 let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
+// Tyler 2026-05-26 — WS telemetry. Posts to HTTP (not WS, since the
+// whole point is to phone home when the WS is broken). Fire-and-forget,
+// best-effort — telemetry failure never blocks reconnect logic.
+let lastDisconnectAt = 0;
+function postTelemetry(event: string, details: Record<string, unknown>) {
+  const token = getToken();
+  if (!token) return;
+  try {
+    fetch("/api/agent/ws-telemetry", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ event, details }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
 function isZombieSocket(): boolean {
   if (!ws) return false;
   return Date.now() - lastInboundAt > ZOMBIE_INBOUND_TIMEOUT_MS;
@@ -39,6 +59,11 @@ function isZombieSocket(): boolean {
 
 function killZombieAndReconnect(reason: string) {
   console.warn(`[ws] Reconnecting — ${reason}`);
+  postTelemetry("ws_zombie_detected", {
+    reason: reason.slice(0, 120),
+    idleMs: Date.now() - lastInboundAt,
+  });
+  if (!lastDisconnectAt) lastDisconnectAt = Date.now();
   // Stop keepalive BEFORE we null out ws so the next tick doesn't fire
   // against a stale reference. The replaced socket's late onclose is
   // already guarded by the `ws !== socket` check inside connect().
@@ -107,6 +132,15 @@ function connect() {
 
     socket.onopen = () => {
       if (ws !== socket) return;
+      // If this open follows a disconnect, emit reconnect telemetry so
+      // we can see in admin tooling who's churning their WS often.
+      if (reconnectAttempts > 0 || lastDisconnectAt > 0) {
+        postTelemetry("ws_reconnect_success", {
+          attempts: reconnectAttempts,
+          downtimeMs: lastDisconnectAt ? Date.now() - lastDisconnectAt : 0,
+        });
+      }
+      lastDisconnectAt = 0;
       reconnectAttempts = 0;
       lastInboundAt = Date.now();
       startKeepalive();
@@ -136,7 +170,16 @@ function connect() {
       if (ws !== socket) return;
       ws = null;
       stopKeepalive();
-      if (event.code !== 4000 && event.code !== 4001 && event.code !== 4002 && event.code !== 4003) {
+      lastDisconnectAt = Date.now();
+      // Auth-related close codes (4000-4003) are clean: 4000 = user
+      // logout, 4001/4002/4003 = auth failure. 1000/1001 are clean
+      // browser close. Anything else is unexpected and worth telemetry.
+      const isAuthClose = event.code === 4000 || event.code === 4001 || event.code === 4002 || event.code === 4003;
+      const isCleanClose = event.code === 1000 || event.code === 1001;
+      if (!isAuthClose && !isCleanClose) {
+        postTelemetry("ws_unexpected_close", { code: event.code });
+      }
+      if (!isAuthClose) {
         scheduleReconnect();
       }
     };
