@@ -320,54 +320,127 @@ function pickLiveSession(sessions: ConnectedClient[]): ConnectedClient | null {
   return null;
 }
 
+// Tyler 2026-05-26 — broadcast audit log. Emits one [broadcast] line per
+// new_ticket fan-out so we can prove which users were eligible, which were
+// skipped, and which sessions actually received the event. Only logs for
+// `new_ticket` to avoid spamming on every status/heartbeat event.
+type BroadcastDecision = {
+  userId: number;
+  name: string;
+  role: string;
+  status: string;
+  divisions: string[];
+  liveSessions: number;
+  totalSessions: number;
+  delivered: boolean;
+  skipReason?: string;
+};
+
+function logBroadcast(channel: string, target: string, eventType: string, submissionId: unknown, decisions: BroadcastDecision[]) {
+  if (eventType !== "new_ticket") return;
+  const delivered = decisions.filter(d => d.delivered);
+  const skipped = decisions.filter(d => !d.delivered);
+  const summary = {
+    channel,
+    target,
+    submissionId: submissionId ?? null,
+    deliveredCount: delivered.length,
+    skippedCount: skipped.length,
+    delivered: delivered.map(d => `${d.name}(${d.role}/${d.status}/${d.liveSessions}of${d.totalSessions})`),
+    skipped: skipped.map(d => `${d.name}(${d.role}/${d.status}):${d.skipReason}`),
+  };
+  log(`[broadcast] ${JSON.stringify(summary)}`, "ws");
+}
+
 export function broadcastToDivisionAgents(division: string, event: WSEvent, excludeUserId?: number) {
+  const decisions: BroadcastDecision[] = [];
   for (const [userId, sessions] of clients) {
     if (excludeUserId && userId === excludeUserId) continue;
     const primary = pickLiveSession(sessions);
-    if (!primary) continue;
+    const liveCount = sessions.filter(s => s.ws.readyState === WebSocket.OPEN).length;
+    const baseRecord = (skipReason: string, delivered = false): BroadcastDecision => ({
+      userId,
+      name: primary?.name ?? sessions[0]?.name ?? `user_${userId}`,
+      role: primary?.role ?? sessions[0]?.role ?? "?",
+      status: primary?.agentStatus ?? sessions[0]?.agentStatus ?? "?",
+      divisions: primary?.divisions ?? sessions[0]?.divisions ?? [],
+      liveSessions: liveCount,
+      totalSessions: sessions.length,
+      delivered,
+      skipReason: delivered ? undefined : skipReason,
+    });
+
+    if (!primary) { decisions.push(baseRecord("no_live_session")); continue; }
 
     const isAgent = primary.role === "vrs_agent";
     const isAdmin = primary.role === "admin" || primary.role === "super_admin";
-    if (!isAgent && !isAdmin) continue;
+    if (!isAgent && !isAdmin) { decisions.push(baseRecord("not_agent_or_admin")); continue; }
 
-    if (isAgent && primary.agentStatus !== "online" && primary.agentStatus !== "working") continue;
+    if (isAgent && primary.agentStatus !== "online" && primary.agentStatus !== "working") {
+      decisions.push(baseRecord(`agent_status_${primary.agentStatus}`)); continue;
+    }
 
     const isGeneralist = primary.divisions.includes("generalist") ||
       primary.divisions.length >= Object.keys(DIVISION_LABELS).length;
-    if (isGeneralist || primary.divisions.includes(division)) {
-      for (const c of sessions) {
-        sendToClient(c.ws, event);
-      }
+    if (!(isGeneralist || primary.divisions.includes(division))) {
+      decisions.push(baseRecord(`division_mismatch(${division})`)); continue;
     }
+
+    for (const c of sessions) {
+      sendToClient(c.ws, event);
+    }
+    decisions.push(baseRecord("", true));
   }
+  logBroadcast("division", division, (event as any).type, (event as any)?.payload?.submissionId, decisions);
 }
 
 export function broadcastToNlaDivisionAgents(applianceType: string, event: WSEvent, excludeUserId?: number) {
+  const decisions: BroadcastDecision[] = [];
   for (const [userId, sessions] of clients) {
     if (excludeUserId && userId === excludeUserId) continue;
     const primary = pickLiveSession(sessions);
-    if (!primary) continue;
+    const liveCount = sessions.filter(s => s.ws.readyState === WebSocket.OPEN).length;
+    const baseRecord = (skipReason: string, delivered = false): BroadcastDecision => ({
+      userId,
+      name: primary?.name ?? sessions[0]?.name ?? `user_${userId}`,
+      role: primary?.role ?? sessions[0]?.role ?? "?",
+      status: primary?.agentStatus ?? sessions[0]?.agentStatus ?? "?",
+      divisions: primary?.divisions ?? sessions[0]?.divisions ?? [],
+      liveSessions: liveCount,
+      totalSessions: sessions.length,
+      delivered,
+      skipReason: delivered ? undefined : skipReason,
+    });
+
+    if (!primary) { decisions.push(baseRecord("no_live_session")); continue; }
 
     const isAgent = primary.role === "vrs_agent";
     const isAdmin = primary.role === "admin" || primary.role === "super_admin";
-    if (!isAgent && !isAdmin) continue;
+    if (!isAgent && !isAdmin) { decisions.push(baseRecord("not_agent_or_admin")); continue; }
 
-    if (isAgent && primary.agentStatus !== "online" && primary.agentStatus !== "working") continue;
+    if (isAgent && primary.agentStatus !== "online" && primary.agentStatus !== "working") {
+      decisions.push(baseRecord(`agent_status_${primary.agentStatus}`)); continue;
+    }
 
-    const hasNla = primary.divisions.includes("nla");
-    if (!hasNla) continue;
+    if (!primary.divisions.includes("nla")) {
+      decisions.push(baseRecord("no_nla_division")); continue;
+    }
 
     const allApplianceDivisions = Object.keys(DIVISION_LABELS).filter(k => k !== "nla");
     const agentApplianceDivisions = primary.divisions.filter((d: string) => d !== "nla" && d !== "generalist");
     const isApplianceGeneralist = agentApplianceDivisions.length >= allApplianceDivisions.length ||
       primary.divisions.includes("generalist");
 
-    if (isApplianceGeneralist || agentApplianceDivisions.includes(applianceType)) {
-      for (const c of sessions) {
-        sendToClient(c.ws, event);
-      }
+    if (!(isApplianceGeneralist || agentApplianceDivisions.includes(applianceType))) {
+      decisions.push(baseRecord(`nla_appliance_mismatch(${applianceType})`)); continue;
     }
+
+    for (const c of sessions) {
+      sendToClient(c.ws, event);
+    }
+    decisions.push(baseRecord("", true));
   }
+  logBroadcast("nla", applianceType, (event as any).type, (event as any)?.payload?.submissionId, decisions);
 }
 
 export function broadcastToAdmins(event: WSEvent) {
