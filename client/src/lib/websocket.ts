@@ -9,6 +9,77 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 30000;
 
+// Tyler 2026-05-26 — zombie WebSocket detection. Jeff Van Ness (and
+// likely others behind corporate proxies) hit a class of failure where
+// the underlying TCP connection dies WITHOUT the browser ever firing
+// `onclose`. The browser keeps `readyState === OPEN` while no data
+// flows. Server-side the 25s heartbeat terminates the dead socket and
+// 60 min later fires `presence_stale_cleanup` — flipping the agent to
+// offline even though the dashboard still shows "Available". Real-time
+// alerts silently stop flowing the whole time.
+//
+// Three defenses, all needed:
+//   1) Track inbound activity. If nothing arrives for > ZOMBIE_TIMEOUT
+//      (45s, > server's 25s heartbeat), the socket is dead regardless
+//      of what readyState says.
+//   2) Send our own app-level ping every 20s. The SEND itself exercises
+//      the outbound path — a zombie socket throws synchronously on
+//      ws.send(), which we catch and treat as dead.
+//   3) Update forceReconnectIfDead() to consult the inbound timestamp
+//      instead of trusting readyState alone.
+const ZOMBIE_INBOUND_TIMEOUT_MS = 45000;
+const KEEPALIVE_INTERVAL_MS = 20000;
+let lastInboundAt = Date.now();
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function isZombieSocket(): boolean {
+  if (!ws) return false;
+  return Date.now() - lastInboundAt > ZOMBIE_INBOUND_TIMEOUT_MS;
+}
+
+function killZombieAndReconnect(reason: string) {
+  console.warn(`[ws] Reconnecting — ${reason}`);
+  // Stop keepalive BEFORE we null out ws so the next tick doesn't fire
+  // against a stale reference. The replaced socket's late onclose is
+  // already guarded by the `ws !== socket` check inside connect().
+  stopKeepalive();
+  if (ws) {
+    const dead = ws;
+    ws = null;
+    try { dead.close(); } catch {}
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  connect();
+}
+
+function startKeepalive() {
+  if (keepaliveTimer) return;
+  keepaliveTimer = setInterval(() => {
+    if (!ws) return;
+    if (isZombieSocket()) {
+      killZombieAndReconnect(`no inbound for ${Math.round((Date.now() - lastInboundAt) / 1000)}s`);
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      } catch (e) {
+        killZombieAndReconnect(`ping send threw: ${e}`);
+      }
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+}
+
+function stopKeepalive() {
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
+
 function getWsUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const token = getToken();
@@ -24,16 +95,30 @@ function connect() {
   }
 
   try {
-    ws = new WebSocket(getWsUrl());
+    // Tyler 2026-05-26 — capture the socket instance so handlers can
+    // verify they're still the active socket. Without this, a late
+    // `onclose` from a socket we already replaced (e.g. in
+    // killZombieAndReconnect) clobbers the new socket's global state:
+    // sets `ws=null`, stops keepalive on the live socket, and schedules
+    // an extra reconnect on top of the new connection. Each handler
+    // early-returns if it isn't the current ws.
+    const socket = new WebSocket(getWsUrl());
+    ws = socket;
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (ws !== socket) return;
       reconnectAttempts = 0;
+      lastInboundAt = Date.now();
+      startKeepalive();
       console.log("[ws] Connected");
     };
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (ws !== socket) return;
+      lastInboundAt = Date.now();
       try {
         const data = JSON.parse(event.data);
+        if (data.type === "pong") return;
         if (data.type) {
           const typeHandlers = handlers.get(data.type);
           if (typeHandlers) {
@@ -43,17 +128,22 @@ function connect() {
       } catch {}
     };
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      // Stale onclose from a socket we already replaced — ignore it
+      // entirely. killZombieAndReconnect() already handled cleanup
+      // and started a new connect; we must not stop keepalive or
+      // schedule a duplicate reconnect on the live socket's behalf.
+      if (ws !== socket) return;
       ws = null;
+      stopKeepalive();
       if (event.code !== 4000 && event.code !== 4001 && event.code !== 4002 && event.code !== 4003) {
         scheduleReconnect();
       }
     };
 
-    ws.onerror = () => {
-      if (ws) {
-        ws.close();
-      }
+    socket.onerror = () => {
+      if (ws !== socket) return;
+      try { socket.close(); } catch {}
     };
   } catch {}
 }
@@ -81,6 +171,13 @@ function scheduleReconnect() {
 function forceReconnectIfDead() {
   const token = getToken();
   if (!token) return;
+  // Zombie check first — a socket with readyState OPEN may still be dead
+  // if no inbound traffic has flowed past our zombie threshold. Trusting
+  // readyState alone is exactly what let Jeff's case slip through.
+  if (ws && isZombieSocket()) {
+    killZombieAndReconnect("forceReconnect detected zombie");
+    return;
+  }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
@@ -109,6 +206,7 @@ export function disconnectWs() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  stopKeepalive();
   reconnectAttempts = 0;
   if (ws) {
     ws.close(4000, "User logout");

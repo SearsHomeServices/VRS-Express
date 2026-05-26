@@ -168,6 +168,43 @@ export function setupWebSocket(server: Server) {
       clients.set(decoded.id, existing);
       log(`WebSocket connected: ${client.name} (${client.role}, id=${client.userId}, sessions=${existing.length})`, "ws");
 
+      // Tyler 2026-05-26 — app-level ping/pong, attached AFTER auth so
+      // unauthenticated traffic during the close handshake is never
+      // parsed. Pairs with the client's 20s keepalive — gives the
+      // client deterministic inbound activity (so quiet days don't
+      // trigger false-positive zombie detection) while letting us
+      // detect a dead outbound socket via send() throwing.
+      //
+      // Rate-limited per connection: client sends every 20s, so a sane
+      // client sees ~3 pings/min. We allow 60/min (a 20x burst) and
+      // terminate on abuse to keep this from becoming a DoS surface.
+      const PING_WINDOW_MS = 60_000;
+      const PING_MAX_PER_WINDOW = 60;
+      const MAX_PING_BYTES = 256;
+      let pingWindowStart = Date.now();
+      let pingsInWindow = 0;
+      ws.on("message", (raw) => {
+        const buf = raw as Buffer;
+        if (buf.length > MAX_PING_BYTES) return;
+        const now = Date.now();
+        if (now - pingWindowStart > PING_WINDOW_MS) {
+          pingWindowStart = now;
+          pingsInWindow = 0;
+        }
+        pingsInWindow++;
+        if (pingsInWindow > PING_MAX_PER_WINDOW) {
+          log(`WS ping flood from ${client.name} (id=${client.userId}) — terminating`, "ws");
+          try { ws.terminate(); } catch {}
+          return;
+        }
+        try {
+          const msg = JSON.parse(buf.toString());
+          if (msg && msg.type === "ping") {
+            try { ws.send(JSON.stringify({ type: "pong", t: msg.t })); } catch {}
+          }
+        } catch {}
+      });
+
       ws.on("close", async () => {
         const sessions = clients.get(decoded.id);
         if (sessions) {
