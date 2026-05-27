@@ -519,10 +519,11 @@ export class DatabaseStorage implements IStorage {
       // tech's row to this tech).
       if (!submission.resubmissionOf) {
         // Tyler 2026-05-27 (premortem) — must compare "same calendar day"
-        // in America/Chicago, not the server's UTC. See matching comment
-        // in hasActiveSubmissionForServiceOrder above. Pre-filter widely
-        // (last 36h covers any CT day across DST gaps) then do the exact
-        // Chicago-day comparison in SQL.
+        // in America/New_York, not the server's UTC. VRS techs operate on
+        // Eastern Time, 8am-8pm ET. See matching comment in
+        // hasActiveSubmissionForServiceOrder below. Pre-filter widely
+        // (last 36h covers any ET day across DST gaps) then do the exact
+        // Eastern-day comparison in SQL.
         const activeStatuses = ["queued", "pending", "completed"];
         const wideCutoff = new Date(Date.now() - 36 * 60 * 60 * 1000);
         const conflict = await tx
@@ -535,12 +536,12 @@ export class DatabaseStorage implements IStorage {
               gte(submissions.createdAt, wideCutoff),
               // Tyler 2026-05-27 (architect catch) — `submissions.created_at`
               // is `timestamp WITHOUT time zone`. Postgres semantics:
-              // `(ts_no_tz AT TIME ZONE 'America/Chicago')` interprets the
-              // value as Chicago-local and returns timestamptz — WRONG
+              // `(ts_no_tz AT TIME ZONE 'America/New_York')` interprets the
+              // value as Eastern-local and returns timestamptz — WRONG
               // direction (we store UTC-naive). Must first attach UTC, then
-              // convert to Chicago. Verified: '2026-05-27 02:00' raw →
+              // convert to Eastern. Verified: '2026-05-27 03:00' raw →
               // naive form = '2026-05-27' (wrong), correct form = '2026-05-26'.
-              sql`((${submissions.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago')::date = (NOW() AT TIME ZONE 'America/Chicago')::date`,
+              sql`((${submissions.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'America/New_York')::date = (NOW() AT TIME ZONE 'America/New_York')::date`,
             )
           )
           .orderBy(desc(submissions.createdAt))
@@ -1266,16 +1267,16 @@ export class DatabaseStorage implements IStorage {
       // double-pending incident.
       return { exists: true, status: prior.ticketStatus, technicianId: prior.technicianId, sameTech: callerTechnicianId !== undefined && prior.technicianId === callerTechnicianId };
     }
-    // Tyler 2026-05-27 (premortem) — server runs UTC but VRS/Sears techs
-    // operate on US Central Time. JS `getFullYear/getMonth/getDate` reads
-    // the host TZ (UTC here), so a tech submitting at 9pm CT (2am UTC
-    // next day) and another at 6pm CT same day (11pm UTC) would appear
-    // on different "days" and the second would slip past — re-opening
-    // the exact Eric Green / Veaceslav Versigora bug class for the
-    // 5+ hours after midnight UTC. Compare in America/Chicago instead.
+    // Tyler 2026-05-27 (premortem) — server runs UTC but VRS techs run
+    // 8am–8pm Eastern Time. JS `getFullYear/getMonth/getDate` reads the
+    // host TZ (UTC here), so e.g. a tech submitting at 7pm ET (11pm UTC)
+    // and another at 8pm ET same day (12am UTC next day) would appear on
+    // different "days" and the second would slip past — re-opening the
+    // exact Eric Green / Veaceslav Versigora bug class for the ~4h after
+    // midnight UTC (8pm ET shift overlap). Compare in America/New_York.
     const now = new Date();
     const priorCreated = new Date(prior.createdAt);
-    const tzDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const tzDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     const sameCalendarDay = tzDay(priorCreated) === tzDay(now);
     if (sameCalendarDay) {
       return { exists: true, status: prior.ticketStatus, technicianId: prior.technicianId, sameTech: callerTechnicianId !== undefined && prior.technicianId === callerTechnicianId };
