@@ -786,15 +786,28 @@ export async function registerRoutes(
       }
 
       if (!parsed.data.resubmissionOf) {
+        // Tyler 2026-05-27 — pass callerTechnicianId so the error message
+        // can distinguish "you already submitted this" from "another tech
+        // already submitted this same SO today". Per VRS: one ticket per
+        // service order per calendar day regardless of which tech submits.
         const activeCheck = await storage.hasActiveSubmissionForServiceOrder(parsed.data.serviceOrder, user.id);
         if (activeCheck.exists) {
           const statusLabels: Record<string, string> = {
             queued: "in the queue waiting for an agent",
             pending: "currently being reviewed by an agent",
-            completed: "already approved",
+            completed: "already approved today",
           };
           const statusMsg = statusLabels[activeCheck.status || ""] || "already active";
-          return res.status(409).json({ error: `You already have a submission for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Duplicate submissions are not allowed.` });
+          const whoMsg = activeCheck.sameTech
+            ? "You already have a submission"
+            : "Another technician already has a submission";
+          console.warn(
+            `[duplicate-block] POST /api/submissions: tech=${user.id} blocked on SO=${parsed.data.serviceOrder} ` +
+            `(existing tech=${activeCheck.technicianId} status=${activeCheck.status} sameTech=${activeCheck.sameTech})`
+          );
+          return res.status(409).json({
+            error: `${whoMsg} for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Only one ticket per service order per day is allowed. If the prior ticket was rejected, use the Resubmit flow on that ticket.`,
+          });
         }
       }
 
@@ -822,6 +835,18 @@ export async function registerRoutes(
         // they call VRS or submit a brand-new ticket.
         if ((originalSub as any).replacementReviewRecommended) {
           return res.status(400).json({ error: "This ticket was placed into Replacement Review and cannot be resubmitted. The warranty company is handling the replacement. If you need further help, contact VRS or submit a new ticket." });
+        }
+        // Tyler 2026-05-27 — Enforce the stated invariant: the resubmit
+        // path is the ONLY same-day-same-SO exception, and it exists
+        // solely for rejected tickets. Without this guard a tech could
+        // pass `resubmissionOf` pointing at their own queued/pending/
+        // completed ticket and bypass the cross-tech same-day block
+        // (both pre-check and tx conflict check skip when
+        // resubmissionOf is set). Architect-flagged 2026-05-27.
+        if (originalSub.ticketStatus !== "rejected") {
+          return res.status(400).json({
+            error: `Only rejected tickets can be resubmitted (this one is "${originalSub.ticketStatus}"). If your prior ticket was not rejected, wait for the current ticket to be reviewed or contact VRS.`,
+          });
         }
         const MAX_RESUBMISSIONS = 3;
         let rootId = parsed.data.resubmissionOf;
@@ -941,7 +966,27 @@ export async function registerRoutes(
         procId: procIdResult.procId,
         clientNm: procIdResult.clientNm,
       }, 60);
-      const submission = idempResult.submission;
+      // Tyler 2026-05-27 — inside-tx cross-tech race-loser path. The
+      // pre-check at line ~796 catches sequential dupes; this fires only
+      // when a sibling request from another tech beat us through the
+      // pre-check before either committed. Return 409 with the same
+      // copy as the pre-check so the tech sees a consistent message.
+      if (idempResult.blockedByOther) {
+        console.warn(
+          `[duplicate-block-tx] POST /api/submissions: race-loss tech=${user.id} SO=${parsed.data.serviceOrder} ` +
+          `(winning tech=${idempResult.blockingTechnicianId} status=${idempResult.blockingStatus})`
+        );
+        const statusLabels: Record<string, string> = {
+          queued: "in the queue waiting for an agent",
+          pending: "currently being reviewed by an agent",
+          completed: "already approved today",
+        };
+        const statusMsg = statusLabels[idempResult.blockingStatus || ""] || "already active";
+        return res.status(409).json({
+          error: `Another technician already has a submission for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Only one ticket per service order per day is allowed. If the prior ticket was rejected, use the Resubmit flow on that ticket.`,
+        });
+      }
+      const submission = idempResult.submission!;
       if (idempResult.wasDuplicate) {
         console.warn(
           `[idempotency-tx] Race detected — returning existing submission ${submission.id} ` +

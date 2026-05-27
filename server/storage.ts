@@ -181,7 +181,7 @@ export interface IStorage {
   getResubmissionChain(rootId: number): Promise<Submission[]>;
   getSubmissionHistory(serviceOrder: string): Promise<Submission[]>;
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
-  hasActiveSubmissionForServiceOrder(serviceOrder: string, technicianId: number): Promise<{ exists: boolean; status?: string }>;
+  hasActiveSubmissionForServiceOrder(serviceOrder: string): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
   // Idempotency guard for double-submit / network-retry scenarios.
   // Returns the most recent submission by this tech for this SO# created
   // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
@@ -192,7 +192,7 @@ export interface IStorage {
   // (technicianId, hash(serviceOrder)), re-checks for a recent duplicate
   // inside the lock, and inserts only if no sibling request beat us to it.
   // See implementation comment for the rationale.
-  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number): Promise<{ submission: Submission; wasDuplicate: boolean }>;
+  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
 
   // SMS methods
   createSmsNotification(
@@ -490,18 +490,66 @@ export class DatabaseStorage implements IStorage {
   async createSubmissionWithIdempotency(
     submission: InsertSubmission,
     withinSeconds: number
-  ): Promise<{ submission: Submission; wasDuplicate: boolean }> {
+  ): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }> {
     return await db.transaction(async (tx) => {
-      // pg_advisory_xact_lock has a two-int4 overload; combine technicianId
-      // (small int4) with a hash of the SO# string (also int4). djb2-ish
-      // hash, signed-int32-truncated via `| 0` so the result fits int4.
+      // Tyler 2026-05-27 — SO-scoped advisory lock (previously was
+      // (technicianId, soHash), which let two DIFFERENT techs race past
+      // each other's pre-checks and both insert pending rows for the
+      // same SO# on the same day — VRS report on Eric Green
+      // 7435-13748939 and Veaceslav Versigora 8206-13757917). Now we
+      // lock on (NAMESPACE, soHash) so EVERY concurrent submitter of
+      // the same SO# serializes through this transaction.
+      const SO_LOCK_NAMESPACE = 0x53484F4D | 0; // 'SHOM' truncated to int4
       let soHash = 0;
       const so = submission.serviceOrder;
       for (let i = 0; i < so.length; i++) {
         soHash = ((soHash << 5) - soHash + so.charCodeAt(i)) | 0;
       }
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${submission.technicianId}, ${soHash})`);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${SO_LOCK_NAMESPACE}, ${soHash})`);
 
+      // 1) Cross-tech same-day conflict (skip for resubmissions — those
+      // are an explicit allowed exception and the route already vetted
+      // the original submission's status). Mirrors the rules in
+      // hasActiveSubmissionForServiceOrder. Same-tech hit here means
+      // the route-level pre-check lost a race against a sibling request
+      // from the SAME tech — treat that as idempotent replay and
+      // return the existing row. Different-tech hit means another tech
+      // beat us to this SO# today — return blockedByOther so the route
+      // can convert to a 409 (we deliberately don't surface another
+      // tech's row to this tech).
+      if (!submission.resubmissionOf) {
+        const activeStatuses = ["queued", "pending", "completed"];
+        const now = new Date();
+        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const conflict = await tx
+          .select()
+          .from(submissions)
+          .where(
+            and(
+              eq(submissions.serviceOrder, so),
+              inArray(submissions.ticketStatus, activeStatuses),
+              gte(submissions.createdAt, dayStart),
+            )
+          )
+          .orderBy(desc(submissions.createdAt))
+          .limit(1);
+        if (conflict[0]) {
+          const c = conflict[0];
+          if (c.technicianId === submission.technicianId) {
+            return { submission: c, wasDuplicate: true };
+          }
+          return {
+            wasDuplicate: true,
+            blockedByOther: true,
+            blockingTechnicianId: c.technicianId ?? undefined,
+            blockingStatus: c.ticketStatus,
+          };
+        }
+      }
+
+      // 2) Per-tech short-window replay window. Catches the
+      // network-drop-then-client-retry case for any submission
+      // (including resubmissions) within `withinSeconds`.
       const cutoff = new Date(Date.now() - withinSeconds * 1000);
       const dup = await tx
         .select()
@@ -1141,7 +1189,7 @@ export class DatabaseStorage implements IStorage {
     return results.length > 0;
   }
 
-  async hasActiveSubmissionForServiceOrder(serviceOrder: string, technicianId: number): Promise<{ exists: boolean; status?: string }> {
+  async hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }> {
     // Tyler 2026-05-06 (regression report): `"completed"` was previously in
     // this list, which blocked a tech from submitting a fresh ticket on the
     // same SO# any time after the prior one was approved — even days later.
@@ -1166,14 +1214,31 @@ export class DatabaseStorage implements IStorage {
     // `findRecentDuplicateSubmission` idempotency window above, this gives
     // us: < 60s = silent idempotent return; same calendar day = explicit
     // 409; different calendar day = pass through.
-    const activeStatuses = ["queued", "pending"];
+    //
+    // Tyler 2026-05-27 (VRS report — two techs working same SO): the
+    // technicianId filter let two different techs (or the same tech under
+    // two LDAP-resolved user rows) both submit the same SO# within the
+    // same day and both end up pending against different agents at the
+    // same time (Eric Green SO# 7435-13748939 claimed by Zorn Jones AND
+    // Tony Higginbotham; Veaceslav Versigora SO# 8206-13757917 claimed by
+    // Jeff Van Ness AND John Santana). Per VRS: one ticket per service
+    // order per calendar day, period — regardless of which tech submits.
+    // The only way to get a second same-day ticket for the same SO# is the
+    // resubmission path (originalSub.ticketStatus === "rejected"), which is
+    // handled in the `resubmissionOf` branch and bypasses this check.
+    // `completed` is included so a same-day approved ticket also blocks
+    // (otherwise a tech could submit, get approved, then submit again and
+    // burn a second auth slot the same day). Rejected / invalid / and the
+    // dedicated `rejected_closed` path are intentionally NOT blockers —
+    // rejected requires the resubmit flow, invalid means the prior never
+    // counted, and rejected_closed is handled by hasRejectedClosedForServiceOrder.
+    const activeStatuses = ["queued", "pending", "completed"];
     const results = await db
-      .select({ id: submissions.id, ticketStatus: submissions.ticketStatus, createdAt: submissions.createdAt })
+      .select({ id: submissions.id, ticketStatus: submissions.ticketStatus, createdAt: submissions.createdAt, technicianId: submissions.technicianId })
       .from(submissions)
       .where(
         and(
           eq(submissions.serviceOrder, serviceOrder),
-          eq(submissions.technicianId, technicianId),
           inArray(submissions.ticketStatus, activeStatuses)
         )
       )
@@ -1185,8 +1250,9 @@ export class DatabaseStorage implements IStorage {
     const prior = results[0];
     if (!prior.createdAt) {
       // Defensive: if we somehow have an active row with no createdAt,
-      // fall back to the prior behavior and block.
-      return { exists: true, status: prior.ticketStatus };
+      // fall back to blocking. Better a false positive than another
+      // double-pending incident.
+      return { exists: true, status: prior.ticketStatus, technicianId: prior.technicianId, sameTech: callerTechnicianId !== undefined && prior.technicianId === callerTechnicianId };
     }
     const now = new Date();
     const priorCreated = new Date(prior.createdAt);
@@ -1195,7 +1261,7 @@ export class DatabaseStorage implements IStorage {
       priorCreated.getMonth() === now.getMonth() &&
       priorCreated.getDate() === now.getDate();
     if (sameCalendarDay) {
-      return { exists: true, status: prior.ticketStatus };
+      return { exists: true, status: prior.ticketStatus, technicianId: prior.technicianId, sameTech: callerTechnicianId !== undefined && prior.technicianId === callerTechnicianId };
     }
     return { exists: false };
   }
