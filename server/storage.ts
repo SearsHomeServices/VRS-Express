@@ -53,6 +53,28 @@ import { getBusinessElapsedMs } from "@shared/business-hours";
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
 import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
 
+// External lookup payload row (used by API-key-protected
+// GET /api/external/service-order/:so/nla). Kept here so the IStorage
+// interface stays the single source of truth for callers.
+export type NlaLookupRow = {
+  id: number;
+  serviceOrder: string;
+  applianceType: string;
+  requestType: string;
+  ticketStatus: string;
+  technician: { id: number; name: string; racId: string | null; phone: string | null };
+  agent: { id: number; name: string } | null;
+  escalatedBy: { id: number; name: string } | null;
+  nlaResolution: string | null;
+  nlaFoundPartNumber: string | null;
+  partNumbers: string | null;
+  technicianMessage: string | null;
+  agentNotes: string | null;
+  createdAt: Date | null;
+  claimedAt: Date | null;
+  statusChangedAt: Date | null;
+};
+
 // Initialize database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -182,6 +204,7 @@ export interface IStorage {
   getSubmissionHistory(serviceOrder: string): Promise<Submission[]>;
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
   hasActiveSubmissionForServiceOrder(serviceOrder: string): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
+  getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]>;
   // Idempotency guard for double-submit / network-retry scenarios.
   // Returns the most recent submission by this tech for this SO# created
   // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
@@ -1282,6 +1305,76 @@ export class DatabaseStorage implements IStorage {
       return { exists: true, status: prior.ticketStatus, technicianId: prior.technicianId, sameTech: callerTechnicianId !== undefined && prior.technicianId === callerTechnicianId };
     }
     return { exists: false };
+  }
+
+  async getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]> {
+    // External NLA-lookup endpoint backing query. Returns every NLA submission
+    // (`request_type = 'parts_nla'`) for the SO, newest first, with joined
+    // technician + assigned-agent + escalated-by user names. Includes all
+    // statuses (queued, pending, completed, rejected, invalid) — the consumer
+    // wants to know whether a tech ever went through the VRS NLA flow, not
+    // just live tickets. Caller is authenticated by API key, not by user JWT.
+    const tech = alias(users, "tech");
+    const agent = alias(users, "agent");
+    const escalator = alias(users, "escalator");
+    const rows = await db
+      .select({
+        id: submissions.id,
+        serviceOrder: submissions.serviceOrder,
+        applianceType: submissions.applianceType,
+        requestType: submissions.requestType,
+        ticketStatus: submissions.ticketStatus,
+        techId: tech.id,
+        techName: tech.name,
+        techRacId: tech.racId,
+        techPhone: tech.phone,
+        agentId: agent.id,
+        agentName: agent.name,
+        escalatorId: escalator.id,
+        escalatorName: escalator.name,
+        nlaResolution: submissions.nlaResolution,
+        nlaFoundPartNumber: submissions.nlaFoundPartNumber,
+        partNumbers: submissions.partNumbers,
+        technicianMessage: submissions.technicianMessage,
+        agentNotes: submissions.agentNotes,
+        createdAt: submissions.createdAt,
+        claimedAt: submissions.claimedAt,
+        statusChangedAt: submissions.statusChangedAt,
+      })
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .leftJoin(agent, eq(agent.id, submissions.assignedTo))
+      .leftJoin(escalator, eq(escalator.id, submissions.nlaEscalatedBy))
+      .where(
+        and(
+          eq(submissions.serviceOrder, serviceOrder),
+          eq(submissions.requestType, "parts_nla"),
+        ),
+      )
+      .orderBy(desc(submissions.createdAt));
+    return rows.map((r) => ({
+      id: r.id,
+      serviceOrder: r.serviceOrder,
+      applianceType: r.applianceType,
+      requestType: r.requestType,
+      ticketStatus: r.ticketStatus,
+      technician: {
+        id: r.techId ?? 0,
+        name: r.techName ?? "unknown",
+        racId: r.techRacId ?? null,
+        phone: r.techPhone ?? null,
+      },
+      agent: r.agentId ? { id: r.agentId, name: r.agentName ?? "unknown" } : null,
+      escalatedBy: r.escalatorId ? { id: r.escalatorId, name: r.escalatorName ?? "unknown" } : null,
+      nlaResolution: r.nlaResolution,
+      nlaFoundPartNumber: r.nlaFoundPartNumber,
+      partNumbers: r.partNumbers,
+      technicianMessage: r.technicianMessage,
+      agentNotes: r.agentNotes,
+      createdAt: r.createdAt,
+      claimedAt: r.claimedAt,
+      statusChangedAt: r.statusChangedAt,
+    }));
   }
 
   // 2026-04-30 — Tyler request: server-side idempotency for double-submit /

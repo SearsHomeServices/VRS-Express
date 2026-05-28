@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -7,6 +7,7 @@ import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
+import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import {
@@ -210,6 +211,71 @@ export async function registerRoutes(
   // (Replit Scheduled Deployment / UptimeRobot / cron) so a hard-down VM gets
   // a page instead of being discovered by a tech failing to log in. Unauth'd
   // intentionally — the response body carries nothing sensitive.
+  // ============================================================================
+  // EXTERNAL API (API-KEY AUTH) — for cross-app lookups, e.g. another Replit
+  // app asking "did this SO go through the VRS NLA flow?"
+  // ----------------------------------------------------------------------------
+  // Authentication: every request must carry `x-api-key: <secret>` matching the
+  // `VRS_LOOKUP_API_KEY` environment secret. We deliberately do NOT route
+  // through `authenticateToken` — these calls are machine-to-machine, no JWT.
+  // The key is compared with `timingSafeEqual` over normalized buffers to
+  // avoid a length-based timing oracle, and we log the source IP + UA on any
+  // 401 for audit. Rotate by replacing the secret in Replit Secrets; clients
+  // pick up the new value on their next request (no restart needed on the
+  // caller side as long as they read the env per-request).
+  // ============================================================================
+  const requireExternalApiKey = (req: Request, res: Response, next: NextFunction) => {
+    const expected = process.env.VRS_LOOKUP_API_KEY;
+    if (!expected) {
+      console.error("[external-api] VRS_LOOKUP_API_KEY is not set — refusing all external requests");
+      return res.status(503).json({ error: "External API not configured" });
+    }
+    const presented = req.header("x-api-key") ?? "";
+    const a = Buffer.from(presented);
+    const b = Buffer.from(expected);
+    let ok = false;
+    if (a.length === b.length) {
+      try {
+        ok = timingSafeEqual(a, b);
+      } catch {
+        ok = false;
+      }
+    } else {
+      // Still run the compare against a same-length buffer to keep timing
+      // roughly constant — result is discarded.
+      try { timingSafeEqual(b, b); } catch {}
+      ok = false;
+    }
+    if (!ok) {
+      console.warn(
+        `[external-api] 401 unauthorized: ip=${req.ip} ua="${req.header("user-agent") ?? ""}" path=${req.path}`,
+      );
+      return res.status(401).json({ error: "Invalid or missing API key" });
+    }
+    next();
+  };
+
+  app.get("/api/external/service-order/:so/nla", requireExternalApiKey, async (req, res) => {
+    const so = req.params.so;
+    if (!/^\d{4}-\d{8}$/.test(so)) {
+      return res.status(400).json({
+        error: "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)",
+      });
+    }
+    try {
+      const rows = await storage.getNlaSubmissionsByServiceOrder(so);
+      return res.json({
+        serviceOrder: so,
+        followedNlaProcess: rows.length > 0,
+        nlaSubmissionCount: rows.length,
+        submissions: rows,
+      });
+    } catch (err) {
+      console.error(`[external-api] GET /api/external/service-order/${so}/nla failed:`, err);
+      return res.status(500).json({ error: "Lookup failed" });
+    }
+  });
+
   app.get("/api/healthz", async (_req, res) => {
     const start = Date.now();
     let dbOk = false;
