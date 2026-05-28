@@ -6,3 +6,9 @@ id = "Vpi3_avvCSNzESxQ6HLUf"
 uri = "file://.local/architecture-audit-parts-no-longer-available.md"
 type = "text"
 title = "Architecture Audit — Parts No Longer Available"
+
+[[outputs]]
+id = "F9wYM3JK6HpvwgVISIsLr"
+uri = "file://exports/vrs-nla-lookup-api.pdf"
+type = "pdf"
+title = "VRS NLA Lookup API — Integration Guide"
