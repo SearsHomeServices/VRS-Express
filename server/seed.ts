@@ -149,6 +149,8 @@ export async function seedDatabase() {
 
   await resetAllPasswords();
   await backfillClaimedAt();
+  try { await healStuckWorkingAgents(); }
+  catch (e: any) { console.warn(`[stuck-working-heal] failed: ${e?.message || e}`); }
   // Tyler 2026-05-12 — `CREATE INDEX CONCURRENTLY` waits for a snapshot on Neon
   // and can hang indefinitely if any session holds a long-running transaction
   // on the target table. `ADD CONSTRAINT` in ensureSystemHealthLogTable takes
@@ -802,6 +804,32 @@ async function backfillClaimedAt() {
   });
 
   console.log(`[claimedAt-backfill] Backfilled ${backfilledCount} submissions with claimedAt = createdAt`);
+}
+
+// Tyler 2026-05-29 — startup safety net for the "agent stuck on Working" bug.
+// When a claimed ticket is deleted (or otherwise vanishes) the claiming agent's
+// agent_status can stay pinned on "working" with no open ticket to release it —
+// their toggle locks and they can't go available or claim again. The delete
+// route now demotes the claimer (working→online) at delete time, but this heals
+// any agent already stranded before that fix shipped. Strictly scoped: only
+// touches vrs_agents on "working" who have ZERO assigned pending tickets
+// (standard or NLA), so legitimately-working agents are never disturbed.
+async function healStuckWorkingAgents() {
+  const result = await db.update(users)
+    .set({ agentStatus: "offline", updatedAt: new Date() })
+    .where(sql`
+      ${users.role} = 'vrs_agent'
+      AND ${users.agentStatus} = 'working'
+      AND ${users.id} NOT IN (
+        SELECT ${submissions.assignedTo} FROM ${submissions}
+        WHERE ${submissions.ticketStatus} = 'pending'
+          AND ${submissions.assignedTo} IS NOT NULL
+      )
+    `);
+  const healedCount = result.rowCount ?? 0;
+  if (healedCount > 0) {
+    console.log(`[stuck-working-heal] Reset ${healedCount} agent(s) stuck on "working" with no open ticket to "offline"`);
+  }
 }
 
 const TEST_SUBMISSION_RAC_IDS = ["testtech1", "tmorri1"];
