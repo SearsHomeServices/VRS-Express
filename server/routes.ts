@@ -2995,6 +2995,44 @@ export async function registerRoutes(
       const deleted = await storage.deleteSubmission(id);
       if (!deleted) return res.status(500).json({ message: "Failed to delete submission" });
 
+      // Tyler 2026-05-29 ("Zorn stuck Working" fix): deleting a ticket that
+      // an agent had CLAIMED used to leave that agent's agentStatus pinned
+      // on "working" forever — their toggle stayed locked and they couldn't
+      // go available or claim, even though they had no open ticket (the one
+      // they'd claimed no longer existed). Mirrors the status-restore pattern
+      // in /process, /process-nla and /send-to-nla. Best-effort: a failure
+      // here must NOT undo the already-committed delete. We only demote
+      // working→online when the claimer has no OTHER open pending ticket.
+      if (submission.assignedTo) {
+        try {
+          const claimer = await storage.getUser(submission.assignedTo);
+          if (claimer && claimer.role === "vrs_agent" && (claimer as any).agentStatus === "working") {
+            const [vrsPending, nlaPending] = await Promise.all([
+              storage.getPendingCount(claimer.id),
+              storage.getNlaPendingCount(claimer.id),
+            ]);
+            if (Number(vrsPending) + Number(nlaPending) === 0) {
+              await storage.updateUser(claimer.id, { agentStatus: "online", updatedAt: new Date() } as any);
+              await safeLogActivity(claimer.id, "status_change_ticket_flow", {
+                from: "working", to: "online", trigger: "submission_deleted", submissionId: id,
+              });
+              updateClientStatus(claimer.id, "online");
+              broadcastToAdmins({
+                type: "agent_status_changed",
+                payload: { userId: claimer.id, name: claimer.name, status: "online" },
+              });
+              broadcastToAgent(claimer.id, {
+                type: "own_status_changed",
+                payload: { status: "online" },
+              });
+              await broadcastVrsAvailability();
+            }
+          }
+        } catch (postErr) {
+          console.error(`[delete-submission] post-delete claimer status restore failed for submission ${id}:`, postErr);
+        }
+      }
+
       res.json({ message: "Submission deleted" });
     } catch (error) {
       console.error("Delete submission error:", error);

@@ -1168,7 +1168,7 @@ export class DatabaseStorage implements IStorage {
         eq(submissions.assignedTo, agentId),
         sql`${submissions.requestType} != 'parts_nla'`
       ));
-    return result[0]?.count || 0;
+    return Number(result[0]?.count) || 0;
   }
 
   async getWarrantyProviderCounts(assignedTo?: number): Promise<{ warrantyProvider: string; count: number }[]> {

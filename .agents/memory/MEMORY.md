@@ -1,1 +1,2 @@
 - [Multi-tab idle-vote demotion gate](multi-tab-idle-vote.md) — auto-offline must use per-tab votes (not liveSessions skip); 6 invariants needed to close every false-demotion path.
+- [Agent stuck on working](agent-status-stuck-working.md) — every path that removes a claimed ticket must restore working→online or the agent's toggle locks.
