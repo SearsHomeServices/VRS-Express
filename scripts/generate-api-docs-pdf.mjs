@@ -50,15 +50,19 @@ function muted(t) {
   doc.moveDown(0.2);
 }
 function code(block) {
-  const lines = block.split("\n");
-  doc.font("Courier").fontSize(8);
   const pad = 7;
-  const lh = doc.currentLineHeight();
-  const height = lines.length * lh + pad * 2;
+  const lineGap = 0.5;
+  const innerW = WIDTH - pad * 2;
+  doc.font("Courier").fontSize(8);
+  // Measure the ACTUAL rendered height (accounts for soft-wrapping of long
+  // lines), not just the newline count — otherwise the box is too short and
+  // following content overlaps the overflow.
+  const textH = doc.heightOfString(block, { width: innerW, lineGap });
+  const height = textH + pad * 2;
   if (doc.y + height > doc.page.height - 44) doc.addPage();
   const y0 = doc.y;
   doc.rect(LEFT, y0, WIDTH, height).fillColor(C.codeBg).fill();
-  doc.fillColor(C.code).text(block, LEFT + pad, y0 + pad, { width: WIDTH - pad * 2, lineGap: 0.5 });
+  doc.fillColor(C.code).text(block, LEFT + pad, y0 + pad, { width: innerW, lineGap });
   doc.y = y0 + height + 5;
   doc.fillColor(C.text);
 }
@@ -185,10 +189,10 @@ bullets([
 
 h2("Common gotchas");
 bullets([
-  "401 → values don't match; check for trailing spaces.",
-  "503 → secret not set on the VRS app; set it and redeploy.",
-  "400 → SO must be 4 digits, hyphen, 8 digits.",
-  "Network error → use the published deployment URL, not the dev preview.",
+  "401  -  values don't match; check for trailing spaces.",
+  "503  -  secret not set on the VRS app; set it and redeploy.",
+  "400  -  SO must be 4 digits, hyphen, 8 digits.",
+  "Network error  -  use the published deployment URL, not the dev preview.",
 ]);
 
 h2("Security note");
