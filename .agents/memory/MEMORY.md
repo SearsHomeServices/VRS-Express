@@ -1,2 +1,2 @@
-- [Multi-tab idle-vote demotion gate](multi-tab-idle-vote.md) — auto-offline must use per-tab votes (not liveSessions skip); 6 invariants needed to close every false-demotion path.
-- [Agent stuck on working](agent-status-stuck-working.md) — every path that removes a claimed ticket must restore working→online or the agent's toggle locks.
+- [Dev/prod separate DBs](dev-prod-separate-databases.md) — workspace DB ≠ deployed DB; query production read-only via the database skill, no direct writes.
+- [Tech login: two failure modes](technician-roster-two-failure-modes.md) — stray-char lookup miss (normalizeLdapId) vs Snowflake ACTIVE_IND='N' sync deactivation; different fixes.
