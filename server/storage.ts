@@ -51,6 +51,7 @@ import {
 } from "@shared/schema";
 import { getBusinessElapsedMs } from "@shared/business-hours";
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
+import { normalizeLdapId } from "@shared/ldap";
 import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
 
 // External lookup payload row (used by API-key-protected
@@ -1472,7 +1473,11 @@ export class DatabaseStorage implements IStorage {
 
   // Technician methods
   async getTechnicianByLdapId(ldapId: string): Promise<Technician | undefined> {
-    const result = await db.select().from(technicians).where(eq(technicians.ldapId, ldapId));
+    const normalized = normalizeLdapId(ldapId);
+    const result = await db
+      .select()
+      .from(technicians)
+      .where(sql`lower(${technicians.ldapId}) = ${normalized}`);
     return result[0];
   }
 

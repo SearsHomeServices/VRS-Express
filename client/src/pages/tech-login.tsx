@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
+import { normalizeLdapId } from "@shared/ldap";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 
 export default function TechLoginPage() {
@@ -48,7 +49,7 @@ export default function TechLoginPage() {
     setIsLoading(true);
     try {
       if (showPasswordField) {
-        const u = await login(ldapId.trim(), adminPassword);
+        const u = await login(normalizeLdapId(ldapId), adminPassword);
         if (u.role === "admin" || u.role === "super_admin") {
           setLocation("/tech");
           return;
@@ -56,14 +57,15 @@ export default function TechLoginPage() {
         setLocation("/tech");
         return;
       }
-      const result = await techLogin(ldapId.toLowerCase().trim());
+      const result = await techLogin(normalizeLdapId(ldapId));
       setTechInfo(result.technician);
     } catch (error: any) {
       if (!showPasswordField && error.message && error.message.includes("not found")) {
-        setShowPasswordField(true);
         toast({
-          title: "Not a Technician",
-          description: "Not found as technician. If you're an admin, enter your password below.",
+          title: "ID Not Found",
+          description:
+            "We couldn't find that LDAP ID. Double-check it — no spaces, and type it in rather than pasting — then try again.",
+          variant: "destructive",
         });
       } else {
         toast({
@@ -205,7 +207,7 @@ export default function TechLoginPage() {
                     required
                     data-testid="input-tech-admin-password"
                   />
-                  <p className="text-xs text-muted-foreground">Not found as technician. If you're an admin, enter your password above.</p>
+                  <p className="text-xs text-muted-foreground">Admin password sign in.</p>
                 </div>
               )}
               <Button type="submit" className="w-full h-11 text-base" disabled={isLoading || !ldapId.trim() || (showPasswordField && !adminPassword)} data-testid="button-tech-login">
@@ -219,6 +221,20 @@ export default function TechLoginPage() {
                 )}
               </Button>
             </form>
+
+            <div className="text-center mt-4">
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => {
+                  setShowPasswordField((v) => !v);
+                  setAdminPassword("");
+                }}
+                data-testid="link-admin-password-toggle"
+              >
+                {showPasswordField ? "Back to technician sign in" : "Admin? Sign in with password"}
+              </button>
+            </div>
           </CardContent>
         </Card>
 

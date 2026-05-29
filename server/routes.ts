@@ -10,6 +10,7 @@ import { authenticateToken, requireRole, type AuthenticatedRequest } from "./mid
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { normalizeLdapId } from "@shared/ldap";
 import {
   INTAKE_FORM_GO_LIVE_UTC,
   isTerminalTicketStatusForIntake,
@@ -517,7 +518,7 @@ export async function registerRoutes(
   });
 
   const techLoginSchema = z.object({
-    ldapId: z.string().min(1, "LDAP ID is required").regex(/^[a-z][a-z0-9]*$/i, "Invalid LDAP ID format"),
+    ldapId: z.string().min(1, "LDAP ID is required"),
   });
 
   app.post("/api/auth/tech-login", async (req, res) => {
@@ -527,7 +528,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
 
-      const ldapId = parsed.data.ldapId.toLowerCase().trim();
+      const ldapId = normalizeLdapId(parsed.data.ldapId);
+      if (!/^[a-z][a-z0-9]*$/.test(ldapId)) {
+        return res.status(400).json({ error: "Invalid LDAP ID format" });
+      }
       const technician = await storage.getTechnicianByLdapId(ldapId);
 
       if (!technician) {
