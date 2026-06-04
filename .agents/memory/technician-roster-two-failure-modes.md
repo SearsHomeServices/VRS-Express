@@ -14,16 +14,27 @@ unrelated causes — diagnose which before "fixing":
    normalization, not inside the zod schema. The tech IS in the roster and
    active in this case.
 
-2. **Roster / Snowflake-sync deactivation** (data-layer). The roster
-   (`technicians` table) is synced from Snowflake `COMTTU_TECH_UN`, filtered to
-   `TECH_STS_CD='A' AND ACTIVE_IND='Y'`. A tech back from leave can have
-   `TECH_STS_CD='A'` but **`ACTIVE_IND='N'`** at the source — they get filtered
-   out and `deactivateTechniciansNotIn()` flips their local `is_active=false`
-   on the next sync, yielding "Account is inactive".
-   **Normalization does NOT fix this.** The permanent fix is HR flipping
-   `ACTIVE_IND` to 'Y' in Snowflake. A manual local `is_active=true` is only a
-   patch that the next sync will undo.
+2. **Roster / Snowflake-sync membership** (data-layer). The roster
+   (`technicians` table) is synced from Snowflake `COMTTU_TECH_UN` (admin-only
+   `POST /api/admin/sync-technicians` — NOT run on startup/schedule), filtered to
+   `TECH_STS_CD='A' AND ACTIVE_IND='Y' AND MBL_PH_NO` present. The sync upserts
+   every qualifying tech as `is_active=true` and `deactivateTechniciansNotIn()`
+   deactivates any roster tech with ZERO qualifying rows.
 
-**How to apply:** confirm the tech's row in `technicians` (active?) AND their
-raw Snowflake `ACTIVE_IND` before deciding which layer to fix. Clayton Robbins
-(crobbi2) hit both: stray-char miss at login, and `ACTIVE_IND='N'` at source.
+   **CRITICAL: `COMTTU_TECH_UN` has MANY rows per LDAP_ID** (one per assignment /
+   TECH_UN_NO — e.g. crobbi2 had 28 rows: 1 `A/Y`, the rest `A/N` or `T/N`).
+   Looking at a single row's `ACTIVE_IND` is MISLEADING. A tech qualifies if
+   **ANY** row is `A/Y` + phone. Always aggregate:
+   `... WHERE UPPER(LDAP_ID)='X' AND TECH_STS_CD='A' AND ACTIVE_IND='Y' AND MBL_PH_NO IS NOT NULL`.
+   Both crobbi2 (Clayton) and jsausal (Junny Sausal) each have exactly 1
+   qualifying row, so both are legitimately active — a sync ADDS them and does
+   NOT deactivate them. (Earlier worry that a sync would deactivate Clayton was
+   wrong; it was based on reading one non-qualifying row.)
+
+   A tech legitimately active at source but missing from the roster just means
+   the sync is stale — running Sync Technicians imports them. Normalization does
+   NOT fix a roster-membership miss.
+
+**How to apply:** confirm the tech's row in `technicians` (present? active?) AND
+aggregate their Snowflake rows for ANY qualifying `A/Y`+phone row before deciding
+which layer to fix.
