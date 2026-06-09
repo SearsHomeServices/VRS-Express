@@ -1,2 +1,1 @@
-- [Dev/prod separate DBs](dev-prod-separate-databases.md) — workspace DB ≠ deployed DB; query production read-only via the database skill, no direct writes.
-- [Tech login: two failure modes](technician-roster-two-failure-modes.md) — stray-char lookup miss (normalizeLdapId) vs Snowflake ACTIVE_IND='N' sync deactivation; different fixes.
+- [Flexed technician VRS access](flexed-technician-vrs-access.md) — granting a field tech agent access = flip users.role to vrs_agent; safe because field login forces a technician token. Guard against demoting admins.

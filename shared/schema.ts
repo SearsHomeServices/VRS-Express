@@ -689,6 +689,7 @@ export interface TechnicianUserView {
   district: string | null;
   techUnNo: string | null;
   managerName: string | null;
+  role: string;
   totalTickets: number;
   pendingCount: number;
   approvedCount: number;

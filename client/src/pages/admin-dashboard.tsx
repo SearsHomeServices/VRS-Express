@@ -133,6 +133,7 @@ import {
   Activity,
   AlertTriangle,
   GraduationCap,
+  Headset,
 } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
@@ -2566,6 +2567,8 @@ export default function AdminDashboard() {
   const [deactivateConfirm, setDeactivateConfirm] = useState<{ id: number; name: string; isActive: boolean } | null>(null);
   const [resetPwConfirm, setResetPwConfirm] = useState<{ id: number; name: string } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; name: string } | null>(null);
+  const [grantingTech, setGrantingTech] = useState(false);
+  const [revokeConfirm, setRevokeConfirm] = useState<{ id: number; name: string } | null>(null);
   const [rgcDate, setRgcDate] = useState(() => getEtDateString());
   const [rgcDigits, setRgcDigits] = useState("");
   const [adminStatus, setAdminStatus] = useState<string>((user as any)?.agentStatus || "offline");
@@ -2726,6 +2729,7 @@ export default function AdminDashboard() {
     queryKey: ["/api/admin/technician-users"],
     enabled: activeView === "users",
   });
+  const fieldTechIds = new Set((techUsersData?.technicians ?? []).map((t) => t.id));
 
   const { data: specData, isLoading: specLoading } = useQuery<{
     specializations: { id: number; userId: number; division: string }[];
@@ -2928,9 +2932,26 @@ export default function AdminDashboard() {
           toast({ title: "Warning", description: "User updated but division assignment failed.", variant: "destructive" });
         }
       }
-      toast({ title: "User Updated", description: "User has been updated successfully." });
+      toast({ title: grantingTech ? "VRS Access Granted" : "User Updated", description: grantingTech ? "Technician can now log in as a VRS agent." : "User has been updated successfully." });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/technician-users"] });
       closeDialog();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const revokeVrsMutation = useMutation({
+    mutationFn: async ({ id }: { id: number }) => {
+      await apiRequest("PATCH", `/api/admin/users/${id}`, { role: "technician" });
+      await apiRequest("PATCH", `/api/admin/users/${id}/specializations`, { divisions: [] });
+    },
+    onSuccess: () => {
+      toast({ title: "VRS Access Revoked", description: "Technician can no longer log in as a VRS agent." });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/technician-users"] });
+      setRevokeConfirm(null);
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -3095,9 +3116,28 @@ export default function AdminDashboard() {
   const closeDialog = () => {
     setDialogOpen(false);
     setEditingUser(null);
+    setGrantingTech(false);
+  };
+
+  const openGrantDialog = (t: TechnicianUserView) => {
+    setEditingUser({ id: t.id, name: t.name, email: "", role: "vrs_agent", phone: t.phone, racId: t.racId, canOrderParts: false } as unknown as SafeUser);
+    setGrantingTech(true);
+    setFormName(t.name);
+    setFormEmail("");
+    setFormPassword("");
+    setFormRole("vrs_agent");
+    setFormPhone(t.phone || "");
+    setFormRacId(t.racId || "");
+    setFormDivisions([]);
+    setFormCanOrderParts(false);
+    setDialogOpen(true);
   };
 
   const handleFormSubmit = () => {
+    if (grantingTech && (!formPassword || formPassword.length < 6)) {
+      toast({ title: "Password required", description: "Set a VRS login password (at least 6 characters) for this technician.", variant: "destructive" });
+      return;
+    }
     if (editingUser) {
       const data: Record<string, unknown> = {
         name: formName,
@@ -3527,6 +3567,11 @@ export default function AdminDashboard() {
                                       <CreditCard className="w-3 h-3 mr-0.5" />P-Card
                                     </Badge>
                                   )}
+                                  {u.role === "vrs_agent" && fieldTechIds.has(u.id) && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500 text-blue-700 dark:text-blue-400 no-default-hover-elevate no-default-active-elevate" data-testid={`badge-field-tech-${u.id}`}>
+                                      <Wrench className="w-3 h-3 mr-0.5" />Field Tech
+                                    </Badge>
+                                  )}
                                 </div>
                               </TableCell>
                               <TableCell className="hidden sm:table-cell" data-testid={`text-user-phone-${u.id}`}>{u.phone || "-"}</TableCell>
@@ -3676,6 +3721,7 @@ export default function AdminDashboard() {
                                   Rejected <ArrowUpDown className="w-3 h-3" />
                                 </button>
                               </TableHead>
+                              <TableHead>VRS Access</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -3731,6 +3777,34 @@ export default function AdminDashboard() {
                                         {t.totalTickets > 0 ? `${Math.round((t.rejectedCount / t.totalTickets) * 100)}%` : "—"}
                                       </span>
                                     </div>
+                                  </TableCell>
+                                  <TableCell data-testid={`cell-tech-vrs-${t.id}`}>
+                                    {t.role !== "technician" ? (
+                                      <div className="flex items-center gap-2">
+                                        <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 no-default-hover-elevate no-default-active-elevate" data-testid={`badge-vrs-enabled-${t.id}`}>
+                                          <Headset className="w-3 h-3 mr-0.5" />VRS-enabled
+                                        </Badge>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="text-red-600 dark:text-red-400 hover-elevate h-7 px-2 text-xs"
+                                          onClick={() => setRevokeConfirm({ id: t.id, name: t.name })}
+                                          data-testid={`button-revoke-vrs-${t.id}`}
+                                        >
+                                          Revoke
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-xs"
+                                        onClick={() => openGrantDialog(t)}
+                                        data-testid={`button-grant-vrs-${t.id}`}
+                                      >
+                                        <Headset className="w-3 h-3 mr-1" />Grant VRS access
+                                      </Button>
+                                    )}
                                   </TableCell>
                                 </TableRow>
                               ))}
@@ -4666,10 +4740,12 @@ export default function AdminDashboard() {
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-dialog-title">
-              {editingUser ? "Edit User" : "Create User"}
+              {grantingTech ? "Grant VRS Agent Access" : editingUser ? "Edit User" : "Create User"}
             </DialogTitle>
             <DialogDescription>
-              {editingUser ? "Update user details below." : "Fill in the details to create a new user."}
+              {grantingTech
+                ? "Set a VRS login password and divisions so this field technician can flex into VRS. Their field login is unchanged."
+                : editingUser ? "Update user details below." : "Fill in the details to create a new user."}
             </DialogDescription>
           </DialogHeader>
 
@@ -4687,21 +4763,21 @@ export default function AdminDashboard() {
 
             <div className="space-y-2">
               <Label htmlFor="user-password">
-                Password{editingUser ? " (leave blank to keep current)" : ""}
+                {grantingTech ? "VRS Login Password (required)" : `Password${editingUser ? " (leave blank to keep current)" : ""}`}
               </Label>
               <Input
                 id="user-password"
                 type="password"
                 value={formPassword}
                 onChange={(e) => setFormPassword(e.target.value)}
-                placeholder={editingUser ? "Leave blank to keep current" : "Password"}
+                placeholder={grantingTech ? "Set a password (min 6 characters)" : editingUser ? "Leave blank to keep current" : "Password"}
                 data-testid="input-user-password"
               />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="user-role">Role</Label>
-              <Select value={formRole} onValueChange={setFormRole}>
+              <Select value={formRole} onValueChange={setFormRole} disabled={grantingTech}>
                 <SelectTrigger data-testid="select-user-role">
                   <SelectValue />
                 </SelectTrigger>
@@ -4714,6 +4790,9 @@ export default function AdminDashboard() {
                   )}
                 </SelectContent>
               </Select>
+              {grantingTech && (
+                <p className="text-xs text-muted-foreground">This person stays a field technician — granting VRS access lets them also work tickets as a VRS agent.</p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -4894,6 +4973,30 @@ export default function AdminDashboard() {
               data-testid="button-confirm-delete"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={!!revokeConfirm} onOpenChange={(open) => !open && setRevokeConfirm(null)}>
+        <AlertDialogContent data-testid="dialog-revoke-vrs">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke VRS Access</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove VRS agent access from <strong>{revokeConfirm?.name}</strong>? They will revert to a field technician and can no longer log in to the VRS dashboard. Their field login is unaffected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (revokeConfirm) {
+                  revokeVrsMutation.mutate({ id: revokeConfirm.id });
+                }
+              }}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-revoke-vrs"
+            >
+              Revoke Access
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

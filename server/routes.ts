@@ -3774,6 +3774,9 @@ export async function registerRoutes(
       if (racId) {
         const existingByRacId = await storage.getUserByRacId(racId);
         if (existingByRacId) {
+          if (existingByRacId.role === "technician") {
+            return res.status(409).json({ error: 'This LDAP ID belongs to a field technician. Open the Technicians list and use "Grant VRS access" to let them flex into VRS.' });
+          }
           return res.status(409).json({ error: "LDAP ID already exists" });
         }
       }
@@ -3856,6 +3859,16 @@ export async function registerRoutes(
         }
         if (parsed.data.role !== undefined || parsed.data.isActive === false) {
           return res.status(403).json({ error: "Cannot change role or deactivate system accounts" });
+        }
+      }
+
+      if (parsed.data.role !== undefined && parsed.data.role !== user.role) {
+        const authReq = req as AuthenticatedRequest;
+        if (user.role === "super_admin") {
+          return res.status(403).json({ error: "Super admin role cannot be changed." });
+        }
+        if (user.role === "admin" && authReq.user?.role !== "super_admin") {
+          return res.status(403).json({ error: "Only a super admin can change an admin's role." });
         }
       }
 

@@ -1931,6 +1931,7 @@ export class DatabaseStorage implements IStorage {
         t.district,
         t.tech_un_no AS "techUnNo",
         t.manager_name AS "managerName",
+        u.role AS "role",
         COUNT(s.id)::int AS "totalTickets",
         COUNT(CASE WHEN s.ticket_status IN ('queued', 'pending') THEN 1 END)::int AS "pendingCount",
         COUNT(CASE WHEN s.ticket_status IN ('completed', 'approved') THEN 1 END)::int AS "approvedCount",
@@ -1938,8 +1939,8 @@ export class DatabaseStorage implements IStorage {
       FROM users u
       LEFT JOIN technicians t ON u.rac_id = t.ldap_id
       LEFT JOIN submissions s ON u.rac_id = s.technician_ldap_id
-      WHERE u.role = 'technician' AND u.is_system_account = false
-      GROUP BY u.id, u.name, u.rac_id, u.phone, t.district, t.tech_un_no, t.manager_name
+      WHERE (u.role = 'technician' OR (u.role = 'vrs_agent' AND t.ldap_id IS NOT NULL)) AND u.is_system_account = false
+      GROUP BY u.id, u.name, u.rac_id, u.phone, t.district, t.tech_un_no, t.manager_name, u.role
       ORDER BY u.name ASC
     `);
     return result.rows as TechnicianUserView[];
