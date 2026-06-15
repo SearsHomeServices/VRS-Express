@@ -2779,6 +2779,7 @@ export default function AdminDashboard() {
   const [exportStartDate, setExportStartDate] = useState("");
   const [exportEndDate, setExportEndDate] = useState("");
   const [exportTechLdap, setExportTechLdap] = useState("");
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   const setExportPreset = (preset: string) => {
     const now = new Date();
@@ -2865,6 +2866,89 @@ export default function AdminDashboard() {
       setExportingRange(null);
     }
   };
+
+  const exportControls = (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review.</p>
+      <div className="flex flex-wrap gap-2">
+        {[
+          { preset: "today", label: "Today" },
+          { preset: "week", label: "This Week" },
+          { preset: "month", label: "This Month" },
+          { preset: "all", label: "All Time" },
+        ].map(({ preset, label }) => (
+          <Button
+            key={preset}
+            variant="outline"
+            size="sm"
+            onClick={() => setExportPreset(preset)}
+            data-testid={`button-preset-${preset}`}
+          >
+            <Calendar className="w-3 h-3 mr-1" />
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <Label className="text-xs text-muted-foreground mb-1 block">Start Date</Label>
+          <Input
+            type="date"
+            value={exportStartDate}
+            onChange={(e) => setExportStartDate(e.target.value)}
+            data-testid="input-export-start-date"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground mb-1 block">End Date</Label>
+          <Input
+            type="date"
+            value={exportEndDate}
+            onChange={(e) => setExportEndDate(e.target.value)}
+            data-testid="input-export-end-date"
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground mb-1 block">Technician LDAP ID</Label>
+          <Input
+            type="text"
+            placeholder="e.g. tmorri1"
+            value={exportTechLdap}
+            onChange={(e) => setExportTechLdap(e.target.value)}
+            data-testid="input-export-tech-ldap"
+          />
+        </div>
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <Button
+          onClick={handleExportCsv}
+          disabled={exportingRange !== null}
+          variant="outline"
+          data-testid="button-export-csv"
+        >
+          {exportingRange === "exporting" ? (
+            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+          ) : (
+            <Download className="w-4 h-4 mr-2" />
+          )}
+          Export CSV
+        </Button>
+        <Button
+          onClick={handleExportXlsx}
+          disabled={exportingRange !== null}
+          data-testid="button-export-xlsx"
+        >
+          {exportingRange === "exporting_xlsx" ? (
+            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+          ) : (
+            <Download className="w-4 h-4 mr-2" />
+          )}
+          Export XLSX
+          <span className="ml-1 text-[10px] font-normal opacity-70">(2 sheets)</span>
+        </Button>
+      </div>
+    </div>
+  );
 
   const rgcQueryUrl = `/api/admin/rgc-code?date=${rgcDate}`;
   const { data: currentRgc, isLoading: rgcLoading } = useQuery<{
@@ -3413,27 +3497,37 @@ export default function AdminDashboard() {
                 {activeView === "health" && "System Health"}
               </h1>
             </div>
-            {activeView === "users" && userTab === "staff" && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  variant="secondary"
-                  onClick={() => importUsersMutation.mutate()}
-                  disabled={importUsersMutation.isPending}
-                  data-testid="button-import-users"
-                >
-                  {importUsersMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <FileText className="w-4 h-4 mr-2" />
-                  )}
-                  Import Users
-                </Button>
-                <Button onClick={openCreateDialog} data-testid="button-create-user">
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  Create User
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                onClick={() => setExportDialogOpen(true)}
+                data-testid="button-export-ticket-header"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Export Ticket
+              </Button>
+              {activeView === "users" && userTab === "staff" && (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => importUsersMutation.mutate()}
+                    disabled={importUsersMutation.isPending}
+                    data-testid="button-import-users"
+                  >
+                    {importUsersMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <FileText className="w-4 h-4 mr-2" />
+                    )}
+                    Import Users
+                  </Button>
+                  <Button onClick={openCreateDialog} data-testid="button-create-user">
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    Create User
+                  </Button>
+                </>
+              )}
+            </div>
           </header>
 
           <div className="flex-1 overflow-auto">
@@ -4118,6 +4212,18 @@ export default function AdminDashboard() {
                   </div>
                 ) : analyticsData ? (
                   <>
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <CardTitle className="text-base">Export Tickets</CardTitle>
+                          <Download className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {exportControls}
+                      </CardContent>
+                    </Card>
+
                     <div className="space-y-1">
                       <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Volume</h2>
                       <p className="text-xs text-muted-foreground">Submission counts across timeframes.</p>
@@ -4612,99 +4718,6 @@ export default function AdminDashboard() {
                       </Card>
                     )}
 
-                    <div className="space-y-1 pt-2">
-                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tools</h2>
-                      <p className="text-xs text-muted-foreground">Pull tickets out of the system for offline review or audit.</p>
-                    </div>
-
-                    <Card>
-                      <CardHeader>
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <CardTitle className="text-base">Export Tickets</CardTitle>
-                          <Download className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <p className="text-sm text-muted-foreground">Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review.</p>
-                        <div className="flex flex-wrap gap-2">
-                          {[
-                            { preset: "today", label: "Today" },
-                            { preset: "week", label: "This Week" },
-                            { preset: "month", label: "This Month" },
-                            { preset: "all", label: "All Time" },
-                          ].map(({ preset, label }) => (
-                            <Button
-                              key={preset}
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setExportPreset(preset)}
-                              data-testid={`button-preset-${preset}`}
-                            >
-                              <Calendar className="w-3 h-3 mr-1" />
-                              {label}
-                            </Button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">Start Date</Label>
-                            <Input
-                              type="date"
-                              value={exportStartDate}
-                              onChange={(e) => setExportStartDate(e.target.value)}
-                              data-testid="input-export-start-date"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">End Date</Label>
-                            <Input
-                              type="date"
-                              value={exportEndDate}
-                              onChange={(e) => setExportEndDate(e.target.value)}
-                              data-testid="input-export-end-date"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-muted-foreground mb-1 block">Technician LDAP ID</Label>
-                            <Input
-                              type="text"
-                              placeholder="e.g. tmorri1"
-                              value={exportTechLdap}
-                              onChange={(e) => setExportTechLdap(e.target.value)}
-                              data-testid="input-export-tech-ldap"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <Button
-                            onClick={handleExportCsv}
-                            disabled={exportingRange !== null}
-                            variant="outline"
-                            data-testid="button-export-csv"
-                          >
-                            {exportingRange === "exporting" ? (
-                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                            ) : (
-                              <Download className="w-4 h-4 mr-2" />
-                            )}
-                            Export CSV
-                          </Button>
-                          <Button
-                            onClick={handleExportXlsx}
-                            disabled={exportingRange !== null}
-                            data-testid="button-export-xlsx"
-                          >
-                            {exportingRange === "exporting_xlsx" ? (
-                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                            ) : (
-                              <Download className="w-4 h-4 mr-2" />
-                            )}
-                            Export XLSX
-                            <span className="ml-1 text-[10px] font-normal opacity-70">(2 sheets)</span>
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
                   </>
                 ) : (
                   <div className="flex items-center justify-center min-h-[400px]">
@@ -5006,6 +5019,20 @@ export default function AdminDashboard() {
         open={coachingDetailTicketId !== null}
         onClose={() => setCoachingDetailTicketId(null)}
       />
+      <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+        <DialogContent className="max-w-2xl" data-testid="dialog-export-tickets">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="w-4 h-4" />
+              Export Tickets
+            </DialogTitle>
+            <DialogDescription>
+              Download tickets as CSV or XLSX for offline review or audit.
+            </DialogDescription>
+          </DialogHeader>
+          {exportControls}
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   );
 }
