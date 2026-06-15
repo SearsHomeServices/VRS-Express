@@ -809,6 +809,17 @@ export default function TechSubmitPage() {
       setLocation(`/tech/submissions/${data.submission.id}`);
     },
     onError: (error: Error) => {
+      // Task — when the server blocks a normal submit because this SO already
+      // has a RESOLVED ticket today (a same-day completed one), it returns a
+      // 409 with `canRequestAdditional: true`. Surface the Additional Request
+      // confirmation dialog instead of the plain duplicate toast so the tech
+      // can deliberately create a separate authorization for a return visit.
+      const status = (error as any)?.status;
+      const body = (error as any)?.body;
+      if (status === 409 && body && body.canRequestAdditional) {
+        setAdditionalPromptOpen(true);
+        return;
+      }
       // Tyler 2026-05-14 — friendlyApiErrorMessage converts the raw Replit
       // edge-proxy HTML 403 / "Failed to fetch" / 5xx HTML blob into a short,
       // tech-readable "Connection issue — please tap Submit again." Real
@@ -834,6 +845,10 @@ export default function TechSubmitPage() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pendingPayload, setPendingPayload] = useState<any>(null);
   const [pendingData, setPendingData] = useState<SubmissionFormData | null>(null);
+  // Task — Additional Request confirmation. Opened when the server blocks a
+  // normal submit for a SO that already has a resolved (completed) ticket
+  // today; confirming re-sends the same payload with `additionalRequest: true`.
+  const [additionalPromptOpen, setAdditionalPromptOpen] = useState(false);
 
   function onSubmit(data: SubmissionFormData) {
     // Tyler 2026-04-29 (warranty × request-type matrix): hard gate. The UI
@@ -891,6 +906,16 @@ export default function TechSubmitPage() {
     if (!pendingPayload || mutation.isPending) return;
     setReviewOpen(false);
     mutation.mutate(pendingPayload as any);
+  }
+
+  // Task — re-send the last attempted payload as a deliberate Additional
+  // Request. The server re-validates and will still refuse if any ticket for
+  // the SO is currently active; it only succeeds when the prior ticket(s) are
+  // fully resolved.
+  function confirmAdditionalRequest() {
+    if (!pendingPayload || mutation.isPending) return;
+    setAdditionalPromptOpen(false);
+    mutation.mutate({ ...pendingPayload, additionalRequest: true } as any);
   }
 
   function getReviewWarnings(data: SubmissionFormData | null): string[] {
@@ -1169,6 +1194,34 @@ export default function TechSubmitPage() {
               data-testid="button-draft-prompt-resume"
             >
               Resume draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={additionalPromptOpen} onOpenChange={(open) => { if (!open) setAdditionalPromptOpen(false); }}>
+        <AlertDialogContent data-testid="dialog-additional-request">
+          <AlertDialogHeader>
+            <AlertDialogTitle data-testid="text-additional-request-title">
+              Submit an Additional Request?
+            </AlertDialogTitle>
+            <AlertDialogDescription data-testid="text-additional-request-detail">
+              This service order already has a ticket that was completed today.
+              If you are on a return visit and genuinely need a separate
+              authorization for this same service order, you can submit an
+              Additional Request. This creates a new, separate authorization
+              request — only do this if the prior request is fully resolved.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-additional-request-cancel">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmAdditionalRequest}
+              data-testid="button-additional-request-confirm"
+            >
+              Submit Additional Request
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

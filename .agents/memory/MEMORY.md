@@ -1,1 +1,2 @@
 - [Flexed technician VRS access](flexed-technician-vrs-access.md) — granting a field tech agent access = flip users.role to vrs_agent; safe because field login forces a technician token. Guard against demoting admins.
+- [Same-day duplicate prevention](same-day-duplicate-prevention.md) — one ticket per SO per ET day; resubmission & Additional Request block on active-only (queued/pending); enforced at route pre-check AND atomic tx.

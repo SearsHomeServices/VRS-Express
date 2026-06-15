@@ -26,12 +26,22 @@ async function throwIfResNotOk(res: Response) {
     }
     const text = (await res.text()) || res.statusText;
     let message = text;
+    let body: any = undefined;
     try {
       const parsed = JSON.parse(text);
+      body = parsed;
       if (parsed.error) message = parsed.error;
       else if (parsed.message) message = parsed.message;
     } catch {}
-    throw new Error(message);
+    // Attach the HTTP status and parsed JSON body to the error so callers
+    // can branch on structured server responses (e.g. a 409 duplicate-block
+    // that also tells us whether an explicit Additional Request is allowed)
+    // without re-parsing the message string. Purely additive — existing
+    // callers that only read `error.message` are unaffected.
+    const err = new Error(message) as Error & { status?: number; body?: any };
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
 }
 

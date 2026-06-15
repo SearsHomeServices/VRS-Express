@@ -733,6 +733,14 @@ export async function registerRoutes(
     phone: z.string().min(1, "Phone number is required"),
     appealNotes: z.string().optional(),
     resubmissionOf: z.number().optional(),
+    // Task — explicit "Additional Request" flag. When true, the tech has
+    // deliberately confirmed (via the Additional Request confirmation dialog)
+    // that they want a second same-day ticket for this service order on a
+    // return visit. This relaxes the normal same-day duplicate block for
+    // RESOLVED prior tickets, but still refuses while any ticket for the SO
+    // is currently ACTIVE and never overrides the permanent rejected_closed
+    // block. Transient request flag only — not persisted as a column.
+    additionalRequest: z.boolean().optional(),
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -855,29 +863,75 @@ export async function registerRoutes(
         return res.status(400).json({ error: "This service order has been permanently closed and cannot accept new submissions. The repair was determined to not be covered under warranty. Please offer the customer a cash call estimate instead." });
       }
 
+      // Task — explicit "Additional Request" flag. When the tech has
+      // deliberately confirmed they want a second same-day ticket for this
+      // SO (return visit / separate authorization), this is true. It relaxes
+      // the normal same-day duplicate block for RESOLVED prior tickets, but
+      // never overrides the permanent rejected_closed block above and still
+      // refuses while any ticket for the SO is currently ACTIVE.
+      const isAdditionalRequest = parsed.data.additionalRequest === true;
+
       if (!parsed.data.resubmissionOf) {
-        // Tyler 2026-05-27 — pass callerTechnicianId so the error message
-        // can distinguish "you already submitted this" from "another tech
-        // already submitted this same SO today". Per VRS: one ticket per
-        // service order per calendar day regardless of which tech submits.
-        const activeCheck = await storage.hasActiveSubmissionForServiceOrder(parsed.data.serviceOrder, user.id);
-        if (activeCheck.exists) {
-          const statusLabels: Record<string, string> = {
-            queued: "in the queue waiting for an agent",
-            pending: "currently being reviewed by an agent",
-            completed: "already approved today",
-          };
-          const statusMsg = statusLabels[activeCheck.status || ""] || "already active";
-          const whoMsg = activeCheck.sameTech
-            ? "You already have a submission"
-            : "Another technician already has a submission";
-          console.warn(
-            `[duplicate-block] POST /api/submissions: tech=${user.id} blocked on SO=${parsed.data.serviceOrder} ` +
-            `(existing tech=${activeCheck.technicianId} status=${activeCheck.status} sameTech=${activeCheck.sameTech})`
+        if (isAdditionalRequest) {
+          // Explicit Additional Request: allowed ONLY when nothing is
+          // currently active (queued / being reviewed / approved awaiting
+          // auth code). Completed & rejected prior tickets are "resolved" and
+          // intentionally do NOT block here — that is the whole purpose of
+          // this path. The rejected_closed permanent block above still applies.
+          const activeCheck = await storage.hasActiveSubmissionForServiceOrder(
+            parsed.data.serviceOrder,
+            user.id,
+            ["queued", "pending"],
           );
-          return res.status(409).json({
-            error: `${whoMsg} for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Only one ticket per service order per day is allowed. If the prior ticket was rejected, use the Resubmit flow on that ticket.`,
-          });
+          if (activeCheck.exists) {
+            const statusLabels: Record<string, string> = {
+              queued: "in the queue waiting for an agent",
+              pending: "currently being reviewed by an agent",
+            };
+            const statusMsg = statusLabels[activeCheck.status || ""] || "still active";
+            const whoMsg = activeCheck.sameTech
+              ? "You already have a submission"
+              : "Another technician already has a submission";
+            console.warn(
+              `[additional-request-block] POST /api/submissions: tech=${user.id} blocked on SO=${parsed.data.serviceOrder} ` +
+              `(existing tech=${activeCheck.technicianId} status=${activeCheck.status} sameTech=${activeCheck.sameTech})`
+            );
+            return res.status(409).json({
+              error: `${whoMsg} for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. An Additional Request can only be created once the current ticket is fully resolved.`,
+            });
+          }
+        } else {
+          // Normal new submission — unchanged. One ticket per service order
+          // per calendar day (queued / pending / completed all block).
+          // Tyler 2026-05-27 — pass callerTechnicianId so the error message
+          // can distinguish "you already submitted this" from "another tech
+          // already submitted this same SO today". Per VRS: one ticket per
+          // service order per calendar day regardless of which tech submits.
+          const activeCheck = await storage.hasActiveSubmissionForServiceOrder(parsed.data.serviceOrder, user.id);
+          if (activeCheck.exists) {
+            const statusLabels: Record<string, string> = {
+              queued: "in the queue waiting for an agent",
+              pending: "currently being reviewed by an agent",
+              completed: "already approved today",
+            };
+            const statusMsg = statusLabels[activeCheck.status || ""] || "already active";
+            const whoMsg = activeCheck.sameTech
+              ? "You already have a submission"
+              : "Another technician already has a submission";
+            console.warn(
+              `[duplicate-block] POST /api/submissions: tech=${user.id} blocked on SO=${parsed.data.serviceOrder} ` +
+              `(existing tech=${activeCheck.technicianId} status=${activeCheck.status} sameTech=${activeCheck.sameTech})`
+            );
+            // canRequestAdditional tells the client whether the explicit
+            // Additional Request path can clear this block. Only a RESOLVED
+            // prior ticket qualifies — here that's a same-day completed one
+            // (rejected isn't in this block's status set; it uses Resubmit).
+            // An active queued/pending ticket must be waited out instead.
+            return res.status(409).json({
+              error: `${whoMsg} for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Only one ticket per service order per day is allowed. If the prior ticket was rejected, use the Resubmit flow on that ticket.`,
+              canRequestAdditional: activeCheck.status === "completed",
+            });
+          }
         }
       }
 
@@ -916,6 +970,37 @@ export async function registerRoutes(
         if (originalSub.ticketStatus !== "rejected") {
           return res.status(400).json({
             error: `Only rejected tickets can be resubmitted (this one is "${originalSub.ticketStatus}"). If your prior ticket was not rejected, wait for the current ticket to be reviewed or contact VRS.`,
+          });
+        }
+        // Task — close the same-day duplicate gap on the resubmission path.
+        // Refuse the resubmission if any ticket for this SO is currently
+        // ACTIVE (queued / being reviewed / approved awaiting auth). The
+        // original being resubmitted is rejected (vetted just above) so it is
+        // never in the active set; this catches the case where a fresh
+        // submission for the same SO became active in parallel — the prod
+        // duplicate SO 7088-13792068 (rejected → fresh ticket active →
+        // resubmission, both worked & approved). Mirrors the atomic re-check
+        // inside createSubmissionWithIdempotency for the race window.
+        const resubActive = await storage.hasActiveSubmissionForServiceOrder(
+          parsed.data.serviceOrder,
+          user.id,
+          ["queued", "pending"],
+        );
+        if (resubActive.exists) {
+          const statusLabels: Record<string, string> = {
+            queued: "in the queue waiting for an agent",
+            pending: "currently being reviewed by an agent",
+          };
+          const statusMsg = statusLabels[resubActive.status || ""] || "still active";
+          const whoMsg = resubActive.sameTech
+            ? "You already have a submission"
+            : "Another technician already has a submission";
+          console.warn(
+            `[resubmit-duplicate-block] POST /api/submissions: tech=${user.id} blocked resubmission on SO=${parsed.data.serviceOrder} ` +
+            `(existing tech=${resubActive.technicianId} status=${resubActive.status} sameTech=${resubActive.sameTech})`
+          );
+          return res.status(409).json({
+            error: `${whoMsg} for SO# ${parsed.data.serviceOrder} that is ${statusMsg}. Only one ticket per service order can be active at a time — wait for it to be reviewed before resubmitting.`,
           });
         }
         const MAX_RESUBMISSIONS = 3;
@@ -1035,7 +1120,7 @@ export async function registerRoutes(
         resubmissionOf: parsed.data.resubmissionOf || null,
         procId: procIdResult.procId,
         clientNm: procIdResult.clientNm,
-      }, 60);
+      }, 60, { additionalRequest: isAdditionalRequest });
       // Tyler 2026-05-27 — inside-tx cross-tech race-loser path. The
       // pre-check at line ~796 catches sequential dupes; this fires only
       // when a sibling request from another tech beat us through the

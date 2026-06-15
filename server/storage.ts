@@ -204,7 +204,7 @@ export interface IStorage {
   getResubmissionChain(rootId: number): Promise<Submission[]>;
   getSubmissionHistory(serviceOrder: string): Promise<Submission[]>;
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
-  hasActiveSubmissionForServiceOrder(serviceOrder: string): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
+  hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
   getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]>;
   // Idempotency guard for double-submit / network-retry scenarios.
   // Returns the most recent submission by this tech for this SO# created
@@ -216,7 +216,7 @@ export interface IStorage {
   // (technicianId, hash(serviceOrder)), re-checks for a recent duplicate
   // inside the lock, and inserts only if no sibling request beat us to it.
   // See implementation comment for the rationale.
-  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
+  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number, options?: { additionalRequest?: boolean }): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
 
   // SMS methods
   createSmsNotification(
@@ -513,7 +513,8 @@ export class DatabaseStorage implements IStorage {
   // call. Auto-releases the lock at COMMIT/ROLLBACK.
   async createSubmissionWithIdempotency(
     submission: InsertSubmission,
-    withinSeconds: number
+    withinSeconds: number,
+    options?: { additionalRequest?: boolean }
   ): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }> {
     return await db.transaction(async (tx) => {
       // Tyler 2026-05-27 — SO-scoped advisory lock (previously was
@@ -531,24 +532,36 @@ export class DatabaseStorage implements IStorage {
       }
       await tx.execute(sql`SELECT pg_advisory_xact_lock(${SO_LOCK_NAMESPACE}, ${soHash})`);
 
-      // 1) Cross-tech same-day conflict (skip for resubmissions — those
-      // are an explicit allowed exception and the route already vetted
-      // the original submission's status). Mirrors the rules in
-      // hasActiveSubmissionForServiceOrder. Same-tech hit here means
-      // the route-level pre-check lost a race against a sibling request
-      // from the SAME tech — treat that as idempotent replay and
-      // return the existing row. Different-tech hit means another tech
-      // beat us to this SO# today — return blockedByOther so the route
-      // can convert to a 409 (we deliberately don't surface another
-      // tech's row to this tech).
-      if (!submission.resubmissionOf) {
+      // 1) Same-day parallel-ticket conflict. The status set that counts as
+      // a conflict depends on the kind of submission:
+      //   - normal new submission → queued/pending/completed (one ticket per
+      //     SO per calendar day; the long-standing rule).
+      //   - resubmission OR explicit Additional Request → ACTIVE only
+      //     (queued/pending). Resubmissions used to be SKIPPED entirely here,
+      //     which let a resubmission be created while a fresh ticket for the
+      //     same SO was already queued/being-worked — the same-day duplicate
+      //     (prod case SO 7088-13792068: rejected → fresh ticket active →
+      //     resubmission, both worked & approved). Additional Requests are the
+      //     deliberate same-day second ticket and must still serialize against
+      //     any still-active ticket here too. Completed/rejected prior tickets
+      //     are "resolved" and intentionally do NOT block these two paths.
+      // Mirrors the route-level rules in hasActiveSubmissionForServiceOrder.
+      // Same-tech hit here means the route-level pre-check lost a race against
+      // a sibling request from the SAME tech — treat that as idempotent replay
+      // and return the existing row. Different-tech hit means another tech beat
+      // us to this SO# today — return blockedByOther so the route can convert
+      // to a 409 (we deliberately don't surface another tech's row to this tech).
+      const isResubOrAdditional = !!submission.resubmissionOf || !!options?.additionalRequest;
+      {
         // Tyler 2026-05-27 (premortem) — must compare "same calendar day"
         // in America/New_York, not the server's UTC. VRS techs operate on
         // Eastern Time, 8am-8pm ET. See matching comment in
         // hasActiveSubmissionForServiceOrder below. Pre-filter widely
         // (last 36h covers any ET day across DST gaps) then do the exact
         // Eastern-day comparison in SQL.
-        const activeStatuses = ["queued", "pending", "completed"];
+        const activeStatuses = isResubOrAdditional
+          ? ["queued", "pending"]
+          : ["queued", "pending", "completed"];
         const wideCutoff = new Date(Date.now() - 36 * 60 * 60 * 1000);
         const conflict = await tx
           .select()
@@ -1226,7 +1239,7 @@ export class DatabaseStorage implements IStorage {
     return results.length > 0;
   }
 
-  async hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }> {
+  async hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }> {
     // Tyler 2026-05-06 (regression report): `"completed"` was previously in
     // this list, which blocked a tech from submitting a fresh ticket on the
     // same SO# any time after the prior one was approved — even days later.
@@ -1269,7 +1282,13 @@ export class DatabaseStorage implements IStorage {
     // dedicated `rejected_closed` path are intentionally NOT blockers —
     // rejected requires the resubmit flow, invalid means the prior never
     // counted, and rejected_closed is handled by hasRejectedClosedForServiceOrder.
-    const activeStatuses = ["queued", "pending", "completed"];
+    //
+    // The `statuses` param lets callers narrow what counts as "active". The
+    // resubmission and Additional Request paths pass ["queued","pending"]
+    // (ACTIVE only) so a same-day completed/rejected ticket does NOT block
+    // them — only a still-in-flight ticket does. New submissions use the
+    // default queued/pending/completed set.
+    const activeStatuses = statuses ?? ["queued", "pending", "completed"];
     const results = await db
       .select({ id: submissions.id, ticketStatus: submissions.ticketStatus, createdAt: submissions.createdAt, technicianId: submissions.technicianId })
       .from(submissions)
