@@ -1,3 +1,1 @@
-- [Flexed technician VRS access](flexed-technician-vrs-access.md) — granting a field tech agent access = flip users.role to vrs_agent; safe because field login forces a technician token. Guard against demoting admins.
-- [Same-day duplicate prevention](same-day-duplicate-prevention.md) — one ticket per SO per ET day; resubmission & Additional Request block on active-only (queued/pending); enforced at route pre-check AND atomic tx.
-- [Terminal completion outcomes](terminal-completion-outcomes.md) — adding a "complete-but-special" Stage-2 outcome (e.g. B2B Approved Replacement) touches a fixed 9-layer checklist; miss one and it vanishes in part of the UI/exports.
+- [Test fixtures & login quirks](testing-fixtures.md) — dev seed purges tmorri1/testtech1 submissions on restart; all passwords reset to VRS2026!; tech form needs photos so test duplicate logic via API.
