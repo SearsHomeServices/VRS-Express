@@ -168,6 +168,8 @@ export async function seedDatabase() {
     catch (e: any) { console.warn(`[agent-activity-log] background ensure failed: ${e?.message || e}`); }
     try { await ensureReplacementReviewColumn(); }
     catch (e: any) { console.warn(`[replacement-review] background ensure failed: ${e?.message || e}`); }
+    try { await ensureB2bApprovedReplacementColumn(); }
+    catch (e: any) { console.warn(`[b2b-approved-replacement] background ensure failed: ${e?.message || e}`); }
   })();
   await purgeTestSubmissionsProdOneTime();
   await cleanupTestSubmissions();
@@ -282,6 +284,22 @@ async function ensureReplacementReviewColumn() {
     console.log("[replacement-review] submissions.replacement_review_recommended ensured (default false)");
   } catch (err: any) {
     console.warn(`[replacement-review] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// Task #12 — B2B Approved Replacement column. Same one-shot idempotent
+// migration pattern as ensureReplacementReviewColumn so prod gets the new
+// boolean column on next boot without a manual drizzle-kit push. Safe to
+// re-run.
+async function ensureB2bApprovedReplacementColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS b2b_approved_replacement BOOLEAN NOT NULL DEFAULT FALSE
+    `));
+    console.log("[b2b-approved-replacement] submissions.b2b_approved_replacement ensured (default false)");
+  } catch (err: any) {
+    console.warn(`[b2b-approved-replacement] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

@@ -197,6 +197,7 @@ export interface IStorage {
   getNlaCompletedTodayCount(agentId?: number, divisions?: string[]): Promise<number>;
   getNlaAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }>;
   getReplacementReviewAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }>;
+  getB2bReplacementAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }>;
 
   getStage2QueueCount(agentId?: number): Promise<number>;
   getWarrantyProviderCounts(assignedTo?: number): Promise<{ warrantyProvider: string; count: number }[]>;
@@ -1015,6 +1016,7 @@ export class DatabaseStorage implements IStorage {
           invalidReason: submissions.invalidReason,
           declineReason: submissions.declineReason,
           replacementReviewRecommended: submissions.replacementReviewRecommended,
+          b2bApprovedReplacement: submissions.b2bApprovedReplacement,
           // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no
           // photos"): URL-only media metadata. See SubmissionListItem
           // comment in shared/schema.ts for the full rationale. These are
@@ -2061,6 +2063,33 @@ export class DatabaseStorage implements IStorage {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const flagCondition = eq(submissions.replacementReviewRecommended, true);
+
+    const [allTimeResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(flagCondition);
+    const [todayResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, todayStart)));
+    const [weekResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, weekStart)));
+    const [monthResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, monthStart)));
+
+    return {
+      today: Number(todayResult?.count) || 0,
+      week: Number(weekResult?.count) || 0,
+      month: Number(monthResult?.count) || 0,
+      allTime: Number(allTimeResult?.count) || 0,
+    };
+  }
+
+  // Task #12 — B2B Approved Replacement analytics. Same shape/pattern as
+  // getReplacementReviewAnalytics but counts tickets flagged
+  // `b2b_approved_replacement` so the admin card can track this outcome
+  // separately from Sears Protect Replacement Review.
+  async getB2bReplacementAnalytics(): Promise<{ today: number; week: number; month: number; allTime: number }> {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const flagCondition = eq(submissions.b2bApprovedReplacement, true);
 
     const [allTimeResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(flagCondition);
     const [todayResult] = await db.select({ count: sql<number>`count(*)` }).from(submissions).where(and(flagCondition, gte(submissions.statusChangedAt, todayStart)));

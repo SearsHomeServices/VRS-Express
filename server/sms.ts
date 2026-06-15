@@ -373,6 +373,28 @@ export async function buildReplacementReviewMessage(
   return msg;
 }
 
+// Task #12 — B2B Approved Replacement SMS. For AHS / First American (B2B)
+// tickets where the warranty company decides on replacement instead of repair
+// at the Stage 2 authorization step. No auth/RGC code is included — it is a
+// replacement-only outcome. Distinct status line so the tech cannot mistake it
+// for a repair approval. Falls back to hard-coded copy if no admin template
+// row has been seeded.
+export async function buildB2bReplacementMessage(
+  serviceOrder: string,
+  agentMessage?: string,
+): Promise<string> {
+  const rendered = await renderTemplate("ticket_b2b_replacement", {
+    serviceOrder,
+    agentMessage: agentMessage ?? "",
+    agentMessageLine: agentMessage ? `\n\nFeedback from VRS: ${agentMessage}` : "",
+  });
+  if (rendered !== null) return rendered;
+
+  let msg = `VRS Update for SO#${serviceOrder}\n\nStatus: B2B APPROVED REPLACEMENT\n\nThe warranty company has placed the unit under replacement review. Please remove all parts from the order, select the appropriate labor code, and close the call. The member will be contacted directly by the warranty company regarding next steps.`;
+  if (agentMessage) msg += `\n\nFeedback from VRS: ${agentMessage}`;
+  return msg;
+}
+
 export async function buildSubmissionReceivedMessage(
   serviceOrder: string,
   warrantyType?: string,

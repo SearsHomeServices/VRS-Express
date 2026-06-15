@@ -160,6 +160,17 @@ export default function SubmissionDetailPage() {
         subtitle: `Service Order #${sub.serviceOrder}`,
       };
     }
+    // Task #12 — B2B Approved Replacement. Distinct indigo screen so the tech
+    // sees this is a replacement outcome (no auth code), not a repair approval.
+    // Sits before the green completed branches like Replacement Review does.
+    if ((sub as any).b2bApprovedReplacement && (status === "completed" || sub.stage1Status === "approved")) {
+      return {
+        bgClass: "bg-indigo-700 text-white",
+        icon: <CheckCircle className="w-10 h-10 mx-auto mb-2" />,
+        title: "B2B Approved Replacement",
+        subtitle: `Service Order #${sub.serviceOrder}`,
+      };
+    }
     if ((status === "completed" || sub.stage1Status === "approved") && (hasAuthCode || hasRgcCode)) {
       return {
         bgClass: "bg-green-700 text-white",
@@ -239,7 +250,7 @@ export default function SubmissionDetailPage() {
                 Your submission has been approved! VRS is now obtaining your authorization code. You can pack up and tidy your workspace while you wait.
               </p>
             )}
-            {(status === "completed" || status === "approved") && !hasAuthCode && !(sub as any).replacementReviewRecommended && (
+            {(status === "completed" || status === "approved") && !hasAuthCode && !(sub as any).replacementReviewRecommended && !(sub as any).b2bApprovedReplacement && (
               <p className="text-sm opacity-80 mt-1">
                 You're Clear to Go! Your authorization code will arrive via SMS.
               </p>
@@ -247,6 +258,11 @@ export default function SubmissionDetailPage() {
             {(sub as any).replacementReviewRecommended && (status === "completed" || status === "approved") && (
               <p className="text-sm opacity-80 mt-1" data-testid="text-replacement-review-instructions">
                 Placed into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call.
+              </p>
+            )}
+            {(sub as any).b2bApprovedReplacement && (status === "completed" || status === "approved") && (
+              <p className="text-sm opacity-80 mt-1" data-testid="text-b2b-replacement-instructions">
+                The warranty company has placed the unit under replacement review. Remove all parts from the order, select the appropriate labor code, and close the call. The member will be contacted directly by the warranty company regarding next steps.
               </p>
             )}
             {status === "rejected" && (

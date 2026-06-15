@@ -41,6 +41,7 @@ import {
   buildStage1InvalidMessage,
   buildAuthCodeMessage,
   buildReplacementReviewMessage,
+  buildB2bReplacementMessage,
   buildNlaApprovalMessage,
   buildRejectAndCloseMessage,
   buildSubmissionReceivedMessage,
@@ -960,6 +961,12 @@ export async function registerRoutes(
         if ((originalSub as any).replacementReviewRecommended) {
           return res.status(400).json({ error: "This ticket was placed into Replacement Review and cannot be resubmitted. The warranty company is handling the replacement. If you need further help, contact VRS or submit a new ticket." });
         }
+        // Task #12 — B2B Approved Replacement is terminal for the same reason
+        // as Replacement Review: the warranty company is handling the
+        // replacement externally, so re-opening this ticket would be confusing.
+        if ((originalSub as any).b2bApprovedReplacement) {
+          return res.status(400).json({ error: "This ticket was finalized as a B2B Approved Replacement and cannot be resubmitted. The warranty company is handling the replacement. If you need further help, contact VRS or submit a new ticket." });
+        }
         // Tyler 2026-05-27 — Enforce the stated invariant: the resubmit
         // path is the ONLY same-day-same-SO exception, and it exists
         // solely for rejected tickets. Without this guard a tech could
@@ -1878,7 +1885,7 @@ export async function registerRoutes(
   // ========================================================================
 
   const processActionSchema = z.object({
-    action: z.enum(["approve", "approve_replacement_review", "reject", "reject_and_close", "invalid", "approve_submission"]),
+    action: z.enum(["approve", "approve_replacement_review", "b2b_approved_replacement", "reject", "reject_and_close", "invalid", "approve_submission"]),
     rejectionReasons: z.array(z.string()).optional(),
     rejectedMedia: z.object({
       photos: z.array(z.object({ url: z.string(), reason: z.string() })).optional(),
@@ -1932,6 +1939,24 @@ export async function registerRoutes(
       // accounting and the parts-team handoff.
       if (action === "approve_replacement_review" && submission.requestType === "parts_nla") {
         return res.status(400).json({ error: "Replacement Review is not used on NLA tickets. Use the NLA Replacement Submitted or NLA Replacement (Tech Initiates) action instead." });
+      }
+
+      // Task #12 — B2B Approved Replacement is only valid on AHS / First
+      // American (two-stage) authorization tickets at the Stage 2 step
+      // (submission already approved). It is NOT used on NLA tickets and not
+      // before Stage 1 approval. Guard both so the action can't be misrouted.
+      if (action === "b2b_approved_replacement") {
+        if (submission.requestType === "parts_nla") {
+          return res.status(400).json({ error: "B2B Approved Replacement is not used on NLA tickets." });
+        }
+        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+        const isB2bWarranty = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
+        if (!isB2bWarranty) {
+          return res.status(400).json({ error: "B2B Approved Replacement is only available on AHS / First American tickets." });
+        }
+        if (!submission.submissionApproved) {
+          return res.status(400).json({ error: "B2B Approved Replacement is only available at the authorization stage, after the submission has been approved." });
+        }
       }
 
       if (action === "invalid" && !invalidReason) {
@@ -2087,6 +2112,36 @@ export async function registerRoutes(
           replacementNotes ?? undefined,
         );
         smsType = "ticket_replacement_review";
+
+      } else if (action === "b2b_approved_replacement") {
+        // Task #12 — B2B Approved Replacement. For AHS / First American tickets
+        // at the Stage 2 authorization step where the warranty company decides
+        // on replacement instead of repair. UNLIKE approve / Replacement
+        // Review, NO auth or RGC code is issued — it is a replacement-only
+        // outcome (the tech removes all parts, selects the replacement labor
+        // code, and closes the call). Completes the ticket, marks both stages
+        // approved, and sets `b2bApprovedReplacement=true` so reporting can
+        // distinguish it from Sears Protect Replacement Review. Terminal — the
+        // resubmit route blocks any ticket carrying this flag.
+        updateData.ticketStatus = "completed";
+        updateData.statusChangedAt = new Date();
+        updateData.authCode = null;
+        updateData.stage1Status = "approved";
+        updateData.stage1ReviewedBy = authReq.user!.id;
+        updateData.stage1ReviewedAt = new Date();
+        updateData.stage2Status = "approved";
+        updateData.stage2Outcome = "approved";
+        updateData.stage2ReviewedBy = authReq.user!.id;
+        updateData.stage2ReviewedAt = new Date();
+        updateData.b2bApprovedReplacement = true;
+        const b2bNotes = technicianMessage || (submission as any).technicianMessage || null;
+        updateData.technicianMessage = b2bNotes;
+
+        smsMessage = await buildB2bReplacementMessage(
+          submission.serviceOrder,
+          b2bNotes ?? undefined,
+        );
+        smsType = "ticket_b2b_replacement";
 
       } else if (action === "reject") {
         updateData.ticketStatus = "rejected";
@@ -4420,7 +4475,8 @@ export async function registerRoutes(
         "Issue Description", "Estimate Amount",
         "Ticket Status", "Reviewed By", "Reviewed At", "Rejection Reasons",
         "Auth Code", "RGC Code", "Assigned To", "Claimed At",
-        "Created At", "Updated At"
+        "Created At", "Updated At",
+        "Replacement Review", "B2B Approved Replacement"
       ];
 
       const escCsv = (val: any): string => {
@@ -4470,6 +4526,8 @@ export async function registerRoutes(
           s.claimedAt ? new Date(s.claimedAt).toISOString() : "",
           s.createdAt ? new Date(s.createdAt).toISOString() : "",
           s.updatedAt ? new Date(s.updatedAt).toISOString() : "",
+          (s as any).replacementReviewRecommended ? "YES" : "",
+          (s as any).b2bApprovedReplacement ? "YES" : "",
         ].join(","));
       }
 
@@ -4504,6 +4562,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Replacement Review analytics error:", error);
       return res.status(500).json({ error: "Failed to fetch Replacement Review analytics" });
+    }
+  });
+
+  app.get("/api/admin/b2b-replacement-analytics", authenticateToken, requireRole("admin"), async (_req, res) => {
+    try {
+      const analytics = await storage.getB2bReplacementAnalytics();
+      return res.json(analytics);
+    } catch (error) {
+      console.error("B2B Replacement analytics error:", error);
+      return res.status(500).json({ error: "Failed to fetch B2B Replacement analytics" });
     }
   });
 
@@ -4591,7 +4659,7 @@ export async function registerRoutes(
         "Auth Code", "RGC Code", "Assigned To", "Claimed At",
         "Created At", "Updated At",
         "Queue Wait", "Handle Time", "Total Time",
-        "Replacement Review",
+        "Replacement Review", "B2B Approved Replacement",
       ];
 
       const authSheet = workbook.addWorksheet("Authorization Tickets");
@@ -4621,6 +4689,7 @@ export async function registerRoutes(
           s.updatedAt ? new Date(s.updatedAt).toISOString() : "",
           t.queueWait, t.handleTime, t.totalTime,
           (s as any).replacementReviewRecommended ? "YES" : "",
+          (s as any).b2bApprovedReplacement ? "YES" : "",
         ]);
       }
 

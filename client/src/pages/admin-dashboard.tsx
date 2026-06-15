@@ -1452,6 +1452,14 @@ function TicketOverviewSection() {
                                 REPLACEMENT REVIEW
                               </span>
                             )}
+                            {(ticket as any).b2bApprovedReplacement && (
+                              <span
+                                className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-700"
+                                data-testid={`badge-b2b-replacement-${ticket.id}`}
+                              >
+                                B2B REPLACEMENT
+                              </span>
+                            )}
                             {isUrgent && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-500 text-white">
                                 URGENT
@@ -2667,6 +2675,7 @@ export default function AdminDashboard() {
       // analytics so the Today/Week tiles update in real time as agents
       // process tickets.
       queryClient.invalidateQueries({ queryKey: ["/api/admin/replacement-review-analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/b2b-replacement-analytics"] });
     });
 
     return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
@@ -2764,6 +2773,10 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeView === "analytics",
+  });
+
+  const { data: b2bReplacementAnalytics } = useQuery<{ today: number; week: number; month: number; allTime: number }>({
+    queryKey: ["/api/admin/b2b-replacement-analytics"],
   });
 
   const { data: replacementReviewAnalytics } = useQuery<{ today: number; week: number; month: number; allTime: number }>({
@@ -4295,6 +4308,37 @@ export default function AdminDashboard() {
                             </div>
                             <div className="rounded-lg border p-3 bg-purple-50 dark:bg-purple-950/20">
                               <p className="text-2xl font-bold" data-testid="text-replacement-review-alltime">{replacementReviewAnalytics.allTime}</p>
+                              <p className="text-xs text-muted-foreground">All Time</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {b2bReplacementAnalytics && (
+                      <Card data-testid="card-b2b-replacement-analytics">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-indigo-600" />
+                            <CardTitle className="text-base">B2B Approved Replacement Outcomes</CardTitle>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div className="rounded-lg border p-3 bg-indigo-50 dark:bg-indigo-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-b2b-replacement-today">{b2bReplacementAnalytics.today}</p>
+                              <p className="text-xs text-muted-foreground">Today</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-indigo-50 dark:bg-indigo-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-b2b-replacement-week">{b2bReplacementAnalytics.week}</p>
+                              <p className="text-xs text-muted-foreground">This Week</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-indigo-50 dark:bg-indigo-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-b2b-replacement-month">{b2bReplacementAnalytics.month}</p>
+                              <p className="text-xs text-muted-foreground">This Month</p>
+                            </div>
+                            <div className="rounded-lg border p-3 bg-indigo-50 dark:bg-indigo-950/20">
+                              <p className="text-2xl font-bold" data-testid="text-b2b-replacement-alltime">{b2bReplacementAnalytics.allTime}</p>
                               <p className="text-xs text-muted-foreground">All Time</p>
                             </div>
                           </div>

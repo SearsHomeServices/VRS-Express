@@ -4,6 +4,7 @@ export type SmsPreviewContext = {
     | "approve"
     | "approve_submission"
     | "approve_replacement_review"
+    | "b2b_approved_replacement"
     | "reject"
     | "reject_and_close"
     | "invalid"
@@ -80,6 +81,12 @@ export function buildSmsPreview(ctx: SmsPreviewContext): string {
       let m = `VRS Update for SO#${so}\n\nStatus: PLACED INTO REPLACEMENT REVIEW`;
       if (codeLines.length) m += `\n${codeLines.join("\n")}`;
       m += `\n\nPlaced into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call.`;
+      if (msg) m += `\n\nFeedback from VRS: ${msg}`;
+      return m;
+    }
+
+    case "b2b_approved_replacement": {
+      let m = `VRS Update for SO#${so}\n\nStatus: B2B APPROVED REPLACEMENT\n\nThe warranty company has placed the unit under replacement review. Please remove all parts from the order, select the appropriate labor code, and close the call. The member will be contacted directly by the warranty company regarding next steps.`;
       if (msg) m += `\n\nFeedback from VRS: ${msg}`;
       return m;
     }

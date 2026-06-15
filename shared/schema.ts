@@ -155,6 +155,13 @@ export const submissions = pgTable("submissions", {
   // plumbing works; this is the admin/analytics discriminator. See replit.md
   // "Replacement Review" section. Migrated idempotently in seed.ts.
   replacementReviewRecommended: boolean("replacement_review_recommended").notNull().default(false),
+  // Task #12 — B2B Approved Replacement outcome. Set true when a standard
+  // /process action of `b2b_approved_replacement` is used on an AHS / First
+  // American (two-stage) ticket at the Stage 2 authorization step. Distinct
+  // from `replacementReviewRecommended` (Sears Protect Replacement Review) so
+  // reporting can tell the two replacement outcomes apart. No auth/RGC code is
+  // issued for this outcome. Migrated idempotently in seed.ts.
+  b2bApprovedReplacement: boolean("b2b_approved_replacement").notNull().default(false),
   statusChangedAt: timestamp("status_changed_at").default(sql`now()`),
   createdAt: timestamp("created_at").default(sql`now()`),
   updatedAt: timestamp("updated_at").default(sql`now()`),
@@ -209,7 +216,7 @@ export type SubmissionListItem = Pick<Submission,
   | "phoneOverride" | "technicianLdapId"
   | "resubmissionOf" | "nlaEscalatedBy"
   | "procId" | "clientNm"
-  | "replacementReviewRecommended"
+  | "replacementReviewRecommended" | "b2bApprovedReplacement"
   | "invalidReason" | "declineReason"
   // Tyler 2026-05-07 (prod fire — VRS rejecting tickets as "no photos"):
   // photos/videoUrl/voiceNoteUrl are URL-only metadata strings (a few

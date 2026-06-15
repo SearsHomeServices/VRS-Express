@@ -243,7 +243,7 @@ export default function AgentDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showOriginalDesc, setShowOriginalDesc] = useState(false);
 
-  const [selectedAction, setSelectedAction] = useState<"approve" | "approve_replacement_review" | "reject" | "reject_and_close" | "invalid" | "approve_submission" | null>(null);
+  const [selectedAction, setSelectedAction] = useState<"approve" | "approve_replacement_review" | "b2b_approved_replacement" | "reject" | "reject_and_close" | "invalid" | "approve_submission" | null>(null);
   const [selectedRejectionReasons, setSelectedRejectionReasons] = useState<string[]>([]);
   const [rejectCloseReason, setRejectCloseReason] = useState("");
   const [rejectCloseCustomReason, setRejectCloseCustomReason] = useState("");
@@ -1307,8 +1307,8 @@ export default function AgentDashboard() {
         selectedSubmissionSnapshotRef.current = data.submission;
       }
 
-      const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? "Approved" : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "reject" ? "Rejected" : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
-      const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
+      const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? "Approved" : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? "Rejected" : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
+      const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : selectedAction === "b2b_approved_replacement" ? "Technician has been notified. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
       toast({ title: actionLabel, description: actionDesc });
 
       // Tyler 2026-04-28 (REQUIREMENT CHANGE — overrides prior post-Authorize-
@@ -1337,6 +1337,7 @@ export default function AgentDashboard() {
       const justResolved =
         (selectedAction === "approve" ||
           selectedAction === "approve_replacement_review" ||
+          selectedAction === "b2b_approved_replacement" ||
           selectedAction === "reject" ||
           selectedAction === "reject_and_close" ||
           selectedAction === "invalid") &&
@@ -1603,7 +1604,7 @@ export default function AgentDashboard() {
     if ((selectedAction === "approve" || selectedAction === "approve_replacement_review") && authCode) {
       body.authCode = authCode;
     }
-    if ((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review") && technicianMessage) {
+    if ((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" || selectedAction === "b2b_approved_replacement") && technicianMessage) {
       body.technicianMessage = technicianMessage;
     }
     processMutation.mutate({ submissionId: selectedSubmission.id, body });
@@ -3703,6 +3704,55 @@ export default function AgentDashboard() {
                                 <Send className="w-4 h-4 mr-2" />
                                 {processMutation.isPending ? "Processing..." : "Authorize & Send"}
                               </Button>
+
+                              {/* Task #12 — B2B Approved Replacement. AHS / First
+                                  American only, at the Stage 2 authorization
+                                  step. Used when the warranty company decides
+                                  on replacement instead of repair. No auth code
+                                  is needed; the tech is told to remove all
+                                  parts, select the replacement labor code, and
+                                  close the call. Distinct from Sears Protect
+                                  Replacement Review (purple) — uses indigo. */}
+                              <div className="relative">
+                                <div className="absolute inset-0 flex items-center">
+                                  <span className="w-full border-t border-border" />
+                                </div>
+                                <div className="relative flex justify-center text-xs uppercase">
+                                  <span className="bg-card px-2 text-muted-foreground">or</span>
+                                </div>
+                              </div>
+
+                              <div className="space-y-3 border rounded-lg p-4 border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/10">
+                                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                                  <RefreshCw className="w-3 h-3" />
+                                  B2B Approved Replacement
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  If the warranty company approved a replacement instead of a repair, finalize this ticket as a B2B Approved Replacement. No authorization code is needed — the tech is instructed to remove all parts, select the appropriate labor code, and close the call. This completes the ticket and cannot be resubmitted. Your optional message above is included at the end of the SMS.
+                                </p>
+                                <SmsPreview
+                                  testId="preview-b2b-replacement-stage2"
+                                  text={buildSmsPreview({
+                                    serviceOrder: selectedSubmission.serviceOrder,
+                                    action: "b2b_approved_replacement",
+                                    message: technicianMessage,
+                                  })}
+                                />
+                                <Button
+                                  className="w-full"
+                                  size="lg"
+                                  style={{ backgroundColor: "rgb(67 56 202)", color: "white" }}
+                                  onClick={() => {
+                                    setSelectedAction("b2b_approved_replacement");
+                                    setConfirmOpen(true);
+                                  }}
+                                  disabled={processMutation.isPending}
+                                  data-testid="button-b2b-replacement-submit"
+                                >
+                                  <RefreshCw className="w-4 h-4 mr-2" />
+                                  {processMutation.isPending ? "Processing..." : "B2B Approved Replacement"}
+                                </Button>
+                              </div>
                             </>
                           ) : (
                             <>
@@ -4680,7 +4730,7 @@ export default function AgentDashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle data-testid="text-confirm-title">
-              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
+              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
@@ -4691,6 +4741,9 @@ export default function AgentDashboard() {
               )}
               {selectedAction === "approve_replacement_review" && (
                 <>The technician will be notified via SMS with the Replacement Code and standard Replacement Review instructions. This action completes the ticket in VRS; the warranty company handles the replacement.</>
+              )}
+              {selectedAction === "b2b_approved_replacement" && (
+                <>The technician will be notified via SMS to remove all parts, select the appropriate labor code, and close the call. No authorization code is sent. This action completes the ticket in VRS and cannot be resubmitted; the warranty company handles the replacement.</>
               )}
               {selectedAction === "reject" && (
                 <>The ticket will be returned to the queue and the technician will be notified via SMS with the rejection reasons.</>
@@ -4729,9 +4782,9 @@ export default function AgentDashboard() {
               <p className="text-sm text-orange-700 dark:text-orange-400">&bull; {rejectCloseReason === "Other" && rejectCloseCustomReason.trim() ? `Other: ${rejectCloseCustomReason.trim()}` : rejectCloseReason}</p>
             </div>
           )}
-          {((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" || selectedAction === "reject" || selectedAction === "reject_and_close") && technicianMessage || selectedAction === "invalid" && invalidMessage) && (
+          {((selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" || selectedAction === "b2b_approved_replacement" || selectedAction === "reject" || selectedAction === "reject_and_close") && technicianMessage || selectedAction === "invalid" && invalidMessage) && (
             <div className="px-6 pb-2">
-              <p className="text-xs font-medium text-muted-foreground mb-1">{selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" ? "Notes to Technician:" : "Message to Technician:"}</p>
+              <p className="text-xs font-medium text-muted-foreground mb-1">{selectedAction === "approve" || selectedAction === "approve_submission" || selectedAction === "approve_replacement_review" || selectedAction === "b2b_approved_replacement" ? "Notes to Technician:" : "Message to Technician:"}</p>
               <p className="text-sm">{selectedAction === "invalid" ? invalidMessage : technicianMessage}</p>
             </div>
           )}
@@ -4748,7 +4801,7 @@ export default function AgentDashboard() {
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >
-              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
+              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "Send to Technician" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
