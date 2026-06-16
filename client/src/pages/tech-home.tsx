@@ -39,7 +39,7 @@ export default function TechHomePage() {
                 <h1 className="text-lg font-bold" data-testid="text-welcome">
                   Welcome, {user?.name?.split(" ")[0]}
                 </h1>
-                <p className="text-sm opacity-80">{user?.racId || "Technician"}</p>
+                <p className="text-sm opacity-80">{user?.role === "provider_1099" ? (user?.companyName || "1099 Provider") : (user?.racId || "Technician")}</p>
               </div>
             </div>
             <div className="flex items-center gap-1">

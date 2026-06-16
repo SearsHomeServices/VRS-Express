@@ -10,6 +10,7 @@ import { authenticateToken, requireRole, type AuthenticatedRequest } from "./mid
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { isValidProvider1099Company } from "@shared/provider1099";
 import { normalizeLdapId } from "@shared/ldap";
 import {
   INTAKE_FORM_GO_LIVE_UTC,
@@ -214,9 +215,10 @@ const registerSchema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   password: z.string().min(6),
   name: z.string().min(1),
-  role: z.enum(["technician", "vrs_agent", "admin", "super_admin"]),
+  role: z.enum(["technician", "vrs_agent", "admin", "super_admin", "provider_1099"]),
   phone: z.string().optional(),
-  racId: z.string().regex(/^[a-zA-Z]+[a-zA-Z0-9]*$/, "LDAP ID must be letters and numbers only (e.g., MTHOMA2)").optional().or(z.literal("")),
+  racId: z.string().regex(/^[a-zA-Z]+[a-zA-Z0-9]*$/, "LDAP ID / username must be letters and numbers only (e.g., MTHOMA2)").optional().or(z.literal("")),
+  companyName: z.string().max(120).optional().nullable().or(z.literal("")),
 });
 
 const loginSchema = z.object({
@@ -336,6 +338,22 @@ async function broadcastVrsAvailability() {
     type: 'vrs_availability',
     payload: { onlineAgents, queuedTickets }
   });
+}
+
+// 1099 provider portal: providers must NEVER see internal warranty details.
+// The UI hides them, but the raw API payload must be redacted server-side too.
+// Strips warrantyType/warrantyProvider from any submission-shaped object (or
+// array of them) before it is returned to a provider_1099-authenticated client.
+function redactWarrantyForProvider<T extends Record<string, any>>(role: string, payload: T): T {
+  if (role !== "provider_1099" || payload == null) return payload;
+  const strip = (row: any) => {
+    if (row && typeof row === "object") {
+      const { warrantyType, warrantyProvider, ...rest } = row;
+      return rest;
+    }
+    return row;
+  };
+  return (Array.isArray(payload) ? payload.map(strip) : strip(payload)) as T;
 }
 
 export async function registerRoutes(
@@ -902,7 +920,7 @@ export async function registerRoutes(
     next();
   });
 
-  app.post("/api/submissions", authenticateToken, requireRole("technician"), async (req, res) => {
+  app.post("/api/submissions", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const parsed = createSubmissionSchema.safeParse(req.body);
@@ -913,6 +931,15 @@ export async function registerRoutes(
       const user = await storage.getUser(authReq.user!.id);
       if (!user) {
         return res.status(404).json({ error: "User not found" });
+      }
+
+      // 1099 provider portal restriction: providers handle non-Sears
+      // (AHS / First American) warranty work only and never NLA. NLA Parts
+      // requests are not available to providers — reject server-side even if
+      // the (hidden-in-UI) option somehow slipped through.
+      const isProvider1099 = user.role === "provider_1099";
+      if (isProvider1099 && parsed.data.requestType === "parts_nla") {
+        return res.status(400).json({ error: "NLA Parts requests are not available through the 1099 provider portal." });
       }
 
       // 2026-04-30 — Tyler request: server-side idempotency guard.
@@ -938,7 +965,7 @@ export async function registerRoutes(
         // not the raw row, and the tech-submit / tech-resubmit clients
         // dereference `data.submission.id` / `.serviceOrder`. Match that
         // shape exactly so the idempotent-hit path doesn't crash the client.
-        return res.status(200).json({ submission: recentDup });
+        return res.status(200).json({ submission: redactWarrantyForProvider(user.role, recentDup) });
       }
 
       // Tier 2 (2026-04-28 hotfix): identity-mismatch detection.
@@ -1185,6 +1212,20 @@ export async function registerRoutes(
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
 
       const derivedWarranty = deriveWarrantyFromProcId(procIdResult.procId, procIdResult.clientNm);
+
+      // 1099 provider portal: warranty is ALWAYS derived server-side for
+      // providers (they never see or pick it). Providers may only submit
+      // non-Sears (AHS / First American) calls, so we require a successful
+      // non-Sears derivation. Sears-family (sears_protect) calls and service
+      // orders we cannot positively classify are rejected with a generic
+      // message — this both excludes Sears-family work and guarantees no
+      // warranty detail leaks back to the provider.
+      if (isProvider1099) {
+        if (!derivedWarranty || derivedWarranty.warrantyType === "sears_protect") {
+          return res.status(400).json({ error: "This service order isn't eligible for submission through the 1099 provider portal. Please verify the service order number." });
+        }
+      }
+
       const finalWarrantyType = derivedWarranty ? derivedWarranty.warrantyType : parsed.data.warrantyType;
       const finalWarrantyProvider = derivedWarranty ? derivedWarranty.warrantyProvider : (parsed.data.warrantyProvider || null);
       if (derivedWarranty && derivedWarranty.warrantyType !== parsed.data.warrantyType) {
@@ -1293,7 +1334,7 @@ export async function registerRoutes(
           `[idempotency-tx] Race detected — returning existing submission ${submission.id} ` +
           `for tech=${user.id} SO=${parsed.data.serviceOrder}. Skipping SMS / broadcast / Smartsheet.`
         );
-        return res.status(200).json({ submission });
+        return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
       }
 
       const submissionReceivedPhone = submission.phoneOverride || submission.phone;
@@ -1363,7 +1404,7 @@ export async function registerRoutes(
 
       await broadcastVrsAvailability();
 
-      return res.status(201).json({ submission });
+      return res.status(201).json({ submission: redactWarrantyForProvider(user.role, submission) });
     } catch (error) {
       console.error("Create submission error:", error);
       return res.status(500).json({ error: "Failed to create submission" });
@@ -1396,7 +1437,9 @@ export async function registerRoutes(
         createdAfter?: Date;
       } = {};
 
-      if (user.role === "technician") {
+      if (user.role === "technician" || user.role === "provider_1099") {
+        // 1099 providers see only their own (company) submissions — same
+        // ownership scoping as a field technician.
         filters.technicianId = user.id;
       } else if (user.role === "vrs_agent") {
         const isCompletedToday = req.query.completedToday === "true";
@@ -1501,7 +1544,7 @@ export async function registerRoutes(
         );
       }
 
-      return res.status(200).json({ submissions: techResult });
+      return res.status(200).json({ submissions: redactWarrantyForProvider(user.role, techResult) });
     } catch (error) {
       console.error("Get submissions error:", error);
       return res.status(500).json({ error: "Failed to get submissions" });
@@ -1522,7 +1565,7 @@ export async function registerRoutes(
       }
 
       const user = authReq.user!;
-      if (user.role === "technician" && submission.technicianId !== user.id) {
+      if ((user.role === "technician" || user.role === "provider_1099") && submission.technicianId !== user.id) {
         return res.status(403).json({ error: "Access denied" });
       }
       if (user.role === "vrs_agent") {
@@ -1551,7 +1594,7 @@ export async function registerRoutes(
         }
       }
 
-      return res.status(200).json({ submission });
+      return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
     } catch (error) {
       console.error("Get submission error:", error);
       return res.status(500).json({ error: "Failed to get submission" });
@@ -1576,7 +1619,7 @@ export async function registerRoutes(
       }
 
       const user = authReq.user!;
-      if (user.role === "technician" && submission.technicianId !== user.id) {
+      if ((user.role === "technician" || user.role === "provider_1099") && submission.technicianId !== user.id) {
         return res.status(403).json({ error: "Access denied" });
       }
       // Tyler 2026-05-09 (architect review of Hamed's "show agentNotes to
@@ -1629,7 +1672,7 @@ export async function registerRoutes(
       const maxResubmissions = 3;
 
       return res.status(200).json({
-        history: chain,
+        history: redactWarrantyForProvider(user.role, chain),
         reviewerNames,
         technicianName: techName,
         resubmissionCount,
@@ -1656,7 +1699,7 @@ export async function registerRoutes(
         if (!sub) return res.status(404).json({ error: "Submission not found" });
 
         const user = (req as any).user;
-        if (user.role === "technician" && sub.technicianId !== user.id) {
+        if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
           return res.status(403).json({ error: "Not your submission" });
         }
 
@@ -1692,7 +1735,7 @@ export async function registerRoutes(
         const sub = await storage.getSubmission(id);
         if (!sub) return res.status(404).json({ error: "Submission not found" });
         const user = (req as any).user;
-        if (user.role === "technician" && sub.technicianId !== user.id) {
+        if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
           return res.status(403).json({ error: "Access denied" });
         }
         const notes = await storage.getSubmissionNotes(id);
@@ -4048,7 +4091,7 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
-      const { email, password, name, role, phone, racId } = parsed.data;
+      const { email, password, name, role, phone, racId, companyName } = parsed.data;
 
       if (racId) {
         const existingByRacId = await storage.getUserByRacId(racId);
@@ -4060,6 +4103,19 @@ export async function registerRoutes(
         }
       }
 
+      // 1099 provider portal: a provider account is identified by its login
+      // username (stored in racId) + an assigned company name from the preset
+      // list. Both are required so the restricted submission view has a
+      // company to show and the portal login works.
+      if (role === "provider_1099") {
+        if (!racId) {
+          return res.status(400).json({ error: "A username is required for 1099 provider accounts." });
+        }
+        if (!isValidProvider1099Company(companyName || null)) {
+          return res.status(400).json({ error: "Select a valid 1099 Company Name for this provider account." });
+        }
+      }
+
       const hashedPassword = await bcryptjs.hash(password, 10);
       const user = await storage.createUser({
         email: email || null,
@@ -4068,6 +4124,7 @@ export async function registerRoutes(
         role,
         phone: phone || null,
         racId: racId || null,
+        companyName: role === "provider_1099" ? (companyName || null) : null,
       });
 
       if (role === "admin" || role === "super_admin") {
@@ -4106,12 +4163,13 @@ export async function registerRoutes(
     name: z.string().min(1).optional(),
     email: z.string().email().optional().nullable(),
     phone: z.string().optional().nullable(),
-    racId: z.string().regex(/^[a-zA-Z]+[a-zA-Z0-9]*$/, "LDAP ID must be letters and numbers only (e.g., MTHOMA2)").optional().nullable().or(z.literal("")),
-    role: z.enum(["technician", "vrs_agent", "admin", "super_admin"]).optional(),
+    racId: z.string().regex(/^[a-zA-Z]+[a-zA-Z0-9]*$/, "LDAP ID / username must be letters and numbers only (e.g., MTHOMA2)").optional().nullable().or(z.literal("")),
+    role: z.enum(["technician", "vrs_agent", "admin", "super_admin", "provider_1099"]).optional(),
     isActive: z.boolean().optional(),
     password: z.string().min(6).optional(),
     resetPassword: z.boolean().optional(),
     canOrderParts: z.boolean().optional(),
+    companyName: z.string().max(120).optional().nullable().or(z.literal("")),
   });
 
   app.patch("/api/admin/users/:id", authenticateToken, requireRole("admin"), async (req, res) => {
@@ -4177,6 +4235,22 @@ export async function registerRoutes(
       }
       if (parsed.data.canOrderParts !== undefined) {
         updateData.canOrderParts = parsed.data.canOrderParts;
+      }
+      // 1099 provider portal: keep companyName in sync. When the resulting
+      // role is provider_1099 the company must be a valid preset entry;
+      // otherwise the company is cleared so non-providers never carry one.
+      const resultingRole = parsed.data.role ?? user.role;
+      if (resultingRole === "provider_1099") {
+        if (parsed.data.companyName !== undefined) {
+          if (!isValidProvider1099Company(parsed.data.companyName || null)) {
+            return res.status(400).json({ error: "Select a valid 1099 Company Name for this provider account." });
+          }
+          updateData.companyName = parsed.data.companyName || null;
+        } else if (parsed.data.role === "provider_1099" && !user.companyName) {
+          return res.status(400).json({ error: "Select a valid 1099 Company Name for this provider account." });
+        }
+      } else if (parsed.data.role !== undefined && parsed.data.role !== "provider_1099") {
+        updateData.companyName = null;
       }
       if (parsed.data.resetPassword === true) {
         const authReq = req as AuthenticatedRequest;
@@ -4973,6 +5047,12 @@ export async function registerRoutes(
 
   app.get("/api/tech/lookup-warranty", authenticateToken, async (req, res) => {
     try {
+      // 1099 provider portal: warranty is never surfaced to providers. The
+      // provider submission view doesn't call this endpoint, but block it
+      // server-side too so warranty detail can never leak to a provider token.
+      if ((req as AuthenticatedRequest).user?.role === "provider_1099") {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const so = String(req.query.serviceOrder || "").trim();
       if (!/^\d{4}-\d{8}$/.test(so)) {
         return res.status(400).json({ error: "Invalid service order format" });

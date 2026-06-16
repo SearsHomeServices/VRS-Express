@@ -81,6 +81,11 @@ const SEED_USERS = [
 ] as const;
 
 export async function seedDatabase() {
+  // 1099 provider portal: users.company_name is referenced by the Drizzle
+  // schema, so it must exist BEFORE any user query (the seed loop below calls
+  // getUserByRacId which selects all columns). Run this awaited migration
+  // first — idempotent (ADD COLUMN IF NOT EXISTS).
+  await ensureProviderCompanyColumn();
   for (const seedUser of SEED_USERS) {
     let user = seedUser.racId ? await storage.getUserByRacId(seedUser.racId) : null;
 
@@ -284,6 +289,22 @@ async function ensureReplacementReviewColumn() {
     console.log("[replacement-review] submissions.replacement_review_recommended ensured (default false)");
   } catch (err: any) {
     console.warn(`[replacement-review] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// 1099 provider portal — nullable company-name column on users. One-shot
+// idempotent migration so prod gets the new column on next boot without a
+// manual drizzle-kit push. Same pattern as the other ensure* helpers. Safe
+// to re-run; ADD COLUMN IF NOT EXISTS makes it a no-op when present.
+async function ensureProviderCompanyColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS company_name VARCHAR(120)
+    `));
+    console.log("[provider-1099] users.company_name ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[provider-1099] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

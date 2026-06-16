@@ -23,6 +23,7 @@ import {
   Package,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Submission } from "@shared/schema";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
@@ -32,7 +33,10 @@ export default function SubmissionDetailPage() {
   const [, params] = useRoute("/tech/submissions/:id");
   const id = params?.id;
   const { toast } = useToast();
+  const { user } = useAuth();
   const [, navigate] = useLocation();
+  // 1099 provider portal: providers never see warranty detail.
+  const isProvider1099 = user?.role === "provider_1099";
 
   const { data, isLoading, error } = useQuery<{ submission: Submission }>({
     queryKey: ["/api/submissions", id],
@@ -435,7 +439,7 @@ export default function SubmissionDetailPage() {
             <DetailRow label="Service Order" value={`#${sub.serviceOrder}`} testId="text-detail-so" />
             <DetailRow label="Appliance" value={sub.applianceType.charAt(0).toUpperCase() + sub.applianceType.slice(1)} testId="text-detail-appliance" />
             <DetailRow label="Request Type" value={sub.requestType === "authorization" ? "Authorization" : sub.requestType === "parts_nla" ? "Parts — No Longer Available (NLA)" : "Infestation / Non-Accessible"} testId="text-detail-request-type" />
-            {sub.warrantyType && (
+            {sub.warrantyType && !isProvider1099 && (
               <DetailRow label="Warranty" value={sub.warrantyType === "sears_protect" ? "Sears Protect" : sub.warrantyType === "home_warranty" ? "Sears Home Warranty" : sub.warrantyType.charAt(0).toUpperCase() + sub.warrantyType.slice(1)} testId="text-detail-warranty" />
             )}
             {sub.estimateAmount != null && (

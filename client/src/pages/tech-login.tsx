@@ -19,6 +19,7 @@ export default function TechLoginPage() {
   const [phoneChanged, setPhoneChanged] = useState(false);
   const [newPhone, setNewPhone] = useState("");
   const [showPasswordField, setShowPasswordField] = useState(false);
+  const [providerMode, setProviderMode] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const { user, isLoading: authLoading, techLogin, login, logout } = useAuth();
   const [, setLocation] = useLocation();
@@ -42,18 +43,18 @@ export default function TechLoginPage() {
   }
 
   if (user && user.role === "technician") return <Redirect to="/tech" />;
+  if (user && user.role === "provider_1099") return <Redirect to="/tech" />;
   if (user && (user.role === "admin" || user.role === "super_admin")) return <Redirect to="/tech" />;
 
   async function handleTechSubmit(e: React.FormEvent) {
     e.preventDefault();
     setIsLoading(true);
     try {
-      if (showPasswordField) {
-        const u = await login(normalizeLdapId(ldapId), adminPassword);
-        if (u.role === "admin" || u.role === "super_admin") {
-          setLocation("/tech");
-          return;
-        }
+      // Admin password sign-in AND 1099 provider sign-in both use the
+      // username + password /api/auth/login flow; providers are routed into
+      // the restricted /tech experience by their role.
+      if (showPasswordField || providerMode) {
+        await login(normalizeLdapId(ldapId), adminPassword);
         setLocation("/tech");
         return;
       }
@@ -176,12 +177,12 @@ export default function TechLoginPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Technician Sign In</CardTitle>
+            <CardTitle className="text-lg">{providerMode ? "VRS Auth — 1099 Provider Sign In" : "Technician Sign In"}</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleTechSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="ldap-id">LDAP ID</Label>
+                <Label htmlFor="ldap-id">{providerMode ? "Username" : "LDAP ID"}</Label>
                 <Input
                   id="ldap-id"
                   type="text"
@@ -194,27 +195,34 @@ export default function TechLoginPage() {
                   className="h-11 text-base"
                   data-testid="input-ldap-id"
                 />
-                <p className="text-xs text-muted-foreground">Enter your LDAP ID to sign in. No password required.</p>
+                {!providerMode && (
+                  <p className="text-xs text-muted-foreground">Enter your LDAP ID to sign in. No password required.</p>
+                )}
+                {providerMode && (
+                  <p className="text-xs text-muted-foreground">Enter your 1099 provider username and password.</p>
+                )}
               </div>
-              {showPasswordField && (
+              {(showPasswordField || providerMode) && (
                 <div className="space-y-2">
                   <Label htmlFor="admin-password">Password</Label>
                   <PasswordInput
                     id="admin-password"
-                    placeholder="Enter admin password"
+                    placeholder={providerMode ? "Enter your password" : "Enter admin password"}
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
                     required
                     data-testid="input-tech-admin-password"
                   />
-                  <p className="text-xs text-muted-foreground">Admin password sign in.</p>
+                  {!providerMode && (
+                    <p className="text-xs text-muted-foreground">Admin password sign in.</p>
+                  )}
                 </div>
               )}
-              <Button type="submit" className="w-full h-11 text-base" disabled={isLoading || !ldapId.trim() || (showPasswordField && !adminPassword)} data-testid="button-tech-login">
+              <Button type="submit" className="w-full h-11 text-base" disabled={isLoading || !ldapId.trim() || ((showPasswordField || providerMode) && !adminPassword)} data-testid="button-tech-login">
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Looking up...
+                    {providerMode ? "Signing in..." : "Looking up..."}
                   </>
                 ) : (
                   "Sign In"
@@ -222,18 +230,32 @@ export default function TechLoginPage() {
               </Button>
             </form>
 
-            <div className="text-center mt-4">
+            <div className="text-center mt-4 space-y-2">
               <button
                 type="button"
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="block w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => {
-                  setShowPasswordField((v) => !v);
+                  setProviderMode((v) => !v);
+                  setShowPasswordField(false);
                   setAdminPassword("");
                 }}
-                data-testid="link-admin-password-toggle"
+                data-testid="link-provider-1099-toggle"
               >
-                {showPasswordField ? "Back to technician sign in" : "Admin? Sign in with password"}
+                {providerMode ? "Back to technician sign in" : "VRS Auth — 1099 Provider? Sign in"}
               </button>
+              {!providerMode && (
+                <button
+                  type="button"
+                  className="block w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    setShowPasswordField((v) => !v);
+                    setAdminPassword("");
+                  }}
+                  data-testid="link-admin-password-toggle"
+                >
+                  {showPasswordField ? "Back to technician sign in" : "Admin? Sign in with password"}
+                </button>
+              )}
             </div>
           </CardContent>
         </Card>

@@ -99,6 +99,9 @@ type SubmissionFormData = z.infer<typeof submissionFormSchema>;
 
 export default function TechSubmitPage() {
   const { user } = useAuth();
+  // 1099 provider portal: restricted submission experience (no District,
+  // no warranty section, no parts_nla, RAC → 1099 Company Name).
+  const isProvider1099 = user?.role === "provider_1099";
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   // Tyler 2026-04-30: multi-video. Up to 3 videos per ticket, each 30 sec
@@ -766,7 +769,7 @@ export default function TechSubmitPage() {
     derived: { warrantyType: "sears_protect" | "american_home_shield" | "first_american"; warrantyProvider: string; source: "client_nm" | "proc_id" } | null;
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
-    enabled: isValidSo,
+    enabled: isValidSo && !isProvider1099,
     staleTime: 5 * 60 * 1000,
   });
   const derivedWarranty = warrantyLookup.data?.derived || null;
@@ -878,7 +881,7 @@ export default function TechSubmitPage() {
     // change slipped through — block submission with a clear toast pointing
     // the tech at the fix.
     const allowedWarranties = REQUEST_TYPE_WARRANTY_MATRIX[data.requestType as RequestTypeValue] ?? [];
-    if (allowedWarranties.length > 0 && !allowedWarranties.includes(data.warrantyType as WarrantyValue)) {
+    if (!isProvider1099 && allowedWarranties.length > 0 && !allowedWarranties.includes(data.warrantyType as WarrantyValue)) {
       const requestLabel = formatRequestTypeLabel(data.requestType);
       toast({
         title: "Warranty / Request Type Mismatch",
@@ -1307,9 +1310,15 @@ export default function TechSubmitPage() {
                       // (mirrors the parts_nla pattern at line ~1028 — UI-side gate;
                       // request-type enum value `infestation_non_accessible` unchanged
                       // so historical rows + downstream Smartsheet routing still match).
-                      { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible (FA & AHS Only)", desc: "Unable to service due to infestation, missing model tag, or access limitations. American Home Shield and First American calls only." },
+                      //
+                      // 1099 provider portal: providers never see warranty info, so the
+                      // FA/AHS-specific copy is stripped for them; parts_nla is excluded
+                      // from the provider experience entirely (filtered out below).
+                      isProvider1099
+                        ? { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible", desc: "Unable to service due to infestation, missing model tag, or access limitations." }
+                        : { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible (FA & AHS Only)", desc: "Unable to service due to infestation, missing model tag, or access limitations. American Home Shield and First American calls only." },
                       { value: "parts_nla", label: "Parts — No Longer Available (NLA)", desc: "Part is unavailable in TechHub. Submit for VRS parts team research. Sears Protect, Sears PA, and Sears Home Warranty (Cinch) calls only." },
-                    ].map((opt) => (
+                    ].filter((opt) => !(isProvider1099 && opt.value === "parts_nla")).map((opt) => (
                       <button
                         key={opt.value}
                         type="button"
@@ -1358,9 +1367,9 @@ export default function TechSubmitPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Technician Info</p>
                 <div className="space-y-3">
                   <div>
-                    <label className="text-sm font-medium">RAC ID</label>
+                    <label className="text-sm font-medium">{isProvider1099 ? "1099 Company Name" : "RAC ID"}</label>
                     <Input
-                      value={user?.racId || ""}
+                      value={isProvider1099 ? (user?.companyName || "") : (user?.racId || "")}
                       disabled
                       className="mt-1"
                       data-testid="input-rac-id"
@@ -1396,42 +1405,60 @@ export default function TechSubmitPage() {
                     return (
                       <FormItem>
                         <FormLabel>Service Order *</FormLabel>
-                        <div className="flex items-center gap-2">
-                          <div className="space-y-1">
-                            <p className="text-xs text-muted-foreground">District</p>
-                            <Input
-                              placeholder=""
-                              value={district}
-                              inputMode="numeric"
-                              maxLength={4}
-                              className="w-20 text-center"
-                              data-testid="input-district"
+                        {isProvider1099 ? (
+                          // 1099 provider portal: District is hidden. Providers
+                          // enter the full service order (DDDD-SSSSSSSS) in a
+                          // single field; we auto-format the dash as they type.
+                          <Input
+                            placeholder="e.g., 8175-12345678"
+                            value={field.value || ""}
+                            inputMode="numeric"
+                            data-testid="input-service-order"
                             onChange={(e) => {
-                              const val = e.target.value.replace(/\D/g, "").slice(0, 4);
-                              field.onChange(val + "-" + soNumber);
-                              if (val.length === 4) {
-                                soNumberRef.current?.focus();
-                              }
+                              const digits = e.target.value.replace(/\D/g, "").slice(0, 12);
+                              const d = digits.slice(0, 4);
+                              const s = digits.slice(4);
+                              field.onChange(s ? `${d}-${s}` : d);
                             }}
                           />
-                          </div>
-                          <span className="text-lg font-medium text-muted-foreground mt-5">-</span>
-                          <div className="space-y-1 flex-1">
-                            <p className="text-xs text-muted-foreground">Service Order #</p>
-                            <Input
-                              ref={soNumberRef}
-                              placeholder=""
-                              value={soNumber}
-                              inputMode="numeric"
-                              maxLength={8}
-                              data-testid="input-service-order"
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div className="space-y-1">
+                              <p className="text-xs text-muted-foreground">District</p>
+                              <Input
+                                placeholder=""
+                                value={district}
+                                inputMode="numeric"
+                                maxLength={4}
+                                className="w-20 text-center"
+                                data-testid="input-district"
                               onChange={(e) => {
-                                const val = e.target.value.replace(/\D/g, "").slice(0, 8);
-                                field.onChange(district + "-" + val);
+                                const val = e.target.value.replace(/\D/g, "").slice(0, 4);
+                                field.onChange(val + "-" + soNumber);
+                                if (val.length === 4) {
+                                  soNumberRef.current?.focus();
+                                }
                               }}
                             />
+                            </div>
+                            <span className="text-lg font-medium text-muted-foreground mt-5">-</span>
+                            <div className="space-y-1 flex-1">
+                              <p className="text-xs text-muted-foreground">Service Order #</p>
+                              <Input
+                                ref={soNumberRef}
+                                placeholder=""
+                                value={soNumber}
+                                inputMode="numeric"
+                                maxLength={8}
+                                data-testid="input-service-order"
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/\D/g, "").slice(0, 8);
+                                  field.onChange(district + "-" + val);
+                                }}
+                              />
+                            </div>
                           </div>
-                        </div>
+                        )}
                         <FormMessage />
                       </FormItem>
                     );
@@ -1478,6 +1505,7 @@ export default function TechSubmitPage() {
                     selectable option. Same gray-out logic also restricts
                     Sears Protect under Infestation / No Model Tag /
                     Non-Accessible. */}
+                {!isProvider1099 && (
                 <div>
                   <div className="flex items-center gap-1.5">
                     <label className="text-sm font-medium">Warranty Provider</label>
@@ -1578,6 +1606,7 @@ export default function TechSubmitPage() {
                     })}
                   </div>
                 </div>
+                )}
               </CardContent>
             </Card>
 

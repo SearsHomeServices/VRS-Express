@@ -1,6 +1,7 @@
 import { useLocation, Link } from "wouter";
 import { Home, FileText, Clock, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 const navItems = [
   { path: "/tech", label: "Home", icon: Home },
@@ -11,11 +12,18 @@ const navItems = [
 
 export default function BottomNav() {
   const [location] = useLocation();
+  const { user } = useAuth();
+
+  // 1099 provider portal: Help is not part of the restricted provider
+  // experience — hide it from the bottom nav for providers only.
+  const items = user?.role === "provider_1099"
+    ? navItems.filter((item) => item.path !== "/tech/help")
+    : navItems;
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} data-testid="nav-bottom">
       <div className="flex items-center justify-around h-14 max-w-lg mx-auto">
-        {navItems.map((item) => {
+        {items.map((item) => {
           const isActive = location === item.path || (item.path !== "/tech" && location.startsWith(item.path));
           return (
             <Link key={item.path} href={item.path}>

@@ -20,6 +20,7 @@ import BusinessHoursSection from "@/components/business-hours-section";
 import { useWebSocket, loadNotificationSettings, playNotificationDing, showBrowserNotification } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
 import type { User, TechnicianUserView, SubmissionListItemWithTech } from "@shared/schema";
+import { PROVIDER_1099_COMPANIES } from "@shared/provider1099";
 import { deriveIntakeFormStatus } from "@shared/intake-form-config";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
@@ -241,6 +242,7 @@ const ROLE_LABELS: Record<string, string> = {
   vrs_agent: "VRS Agent",
   admin: "Admin",
   super_admin: "Super Admin",
+  provider_1099: "1099 Provider",
 };
 
 type AgentStatusInfo = {
@@ -2658,6 +2660,7 @@ export default function AdminDashboard() {
   const [formRole, setFormRole] = useState("technician");
   const [formPhone, setFormPhone] = useState("");
   const [formRacId, setFormRacId] = useState("");
+  const [formCompanyName, setFormCompanyName] = useState("");
   const [formDivisions, setFormDivisions] = useState<string[]>([]);
   const [formCanOrderParts, setFormCanOrderParts] = useState(false);
   const [selectedAgentIds, setSelectedAgentIds] = useState<number[]>([]);
@@ -3082,11 +3085,12 @@ export default function AdminDashboard() {
   const createUserMutation = useMutation({
     mutationFn: async (data: {
       name: string;
-      email: string;
+      email?: string;
       password: string;
       role: string;
       phone?: string;
       racId?: string;
+      companyName?: string;
     }) => {
       const res = await apiRequest("POST", "/api/admin/users", data);
       return res.json();
@@ -3268,6 +3272,7 @@ export default function AdminDashboard() {
     setFormRole("technician");
     setFormPhone("");
     setFormRacId("");
+    setFormCompanyName("");
     setFormDivisions([]);
     setFormCanOrderParts(false);
     setDialogOpen(true);
@@ -3281,6 +3286,7 @@ export default function AdminDashboard() {
     setFormRole(u.role);
     setFormPhone(u.phone || "");
     setFormRacId(u.racId || "");
+    setFormCompanyName(u.companyName || "");
     setFormCanOrderParts(u.canOrderParts || false);
     if (u.role === "vrs_agent") {
       try {
@@ -3317,6 +3323,7 @@ export default function AdminDashboard() {
     setFormRole("vrs_agent");
     setFormPhone(t.phone || "");
     setFormRacId(t.racId || "");
+    setFormCompanyName("");
     setFormDivisions([]);
     setFormCanOrderParts(false);
     setDialogOpen(true);
@@ -3327,12 +3334,19 @@ export default function AdminDashboard() {
       toast({ title: "Password required", description: "Set a VRS login password (at least 6 characters) for this technician.", variant: "destructive" });
       return;
     }
+    // 1099 provider portal: company name is required (must be one of the
+    // preset companies) when the role is provider_1099.
+    if (formRole === "provider_1099" && !formCompanyName) {
+      toast({ title: "Company required", description: "Select the 1099 company for this provider account.", variant: "destructive" });
+      return;
+    }
     if (editingUser) {
       const data: Record<string, unknown> = {
         name: formName,
         role: formRole,
         phone: formPhone || null,
         racId: formRacId || null,
+        companyName: formRole === "provider_1099" ? formCompanyName : null,
         canOrderParts: formCanOrderParts,
       };
       if (formPassword) {
@@ -3346,6 +3360,7 @@ export default function AdminDashboard() {
         role: formRole,
         phone: formPhone || undefined,
         racId: formRacId || undefined,
+        companyName: formRole === "provider_1099" ? formCompanyName : undefined,
       });
     }
   };
@@ -3769,6 +3784,11 @@ export default function AdminDashboard() {
                                   {u.role === "vrs_agent" && fieldTechIds.has(u.id) && (
                                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500 text-blue-700 dark:text-blue-400 no-default-hover-elevate no-default-active-elevate" data-testid={`badge-field-tech-${u.id}`}>
                                       <Wrench className="w-3 h-3 mr-0.5" />Field Tech
+                                    </Badge>
+                                  )}
+                                  {u.role === "provider_1099" && u.companyName && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-purple-500 text-purple-700 dark:text-purple-400 no-default-hover-elevate no-default-active-elevate" data-testid={`badge-company-${u.id}`}>
+                                      {u.companyName}
                                     </Badge>
                                   )}
                                 </div>
@@ -4934,6 +4954,7 @@ export default function AdminDashboard() {
                   <SelectItem value="technician">Technician</SelectItem>
                   <SelectItem value="vrs_agent">VRS Agent</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="provider_1099">1099 Provider</SelectItem>
                   {user?.role === "super_admin" && (
                     <SelectItem value="super_admin">Super Admin</SelectItem>
                   )}
@@ -4943,6 +4964,24 @@ export default function AdminDashboard() {
                 <p className="text-xs text-muted-foreground">This person stays a field technician — granting VRS access lets them also work tickets as a VRS agent.</p>
               )}
             </div>
+
+            {formRole === "provider_1099" && (
+              <div className="space-y-2">
+                <Label htmlFor="user-company">1099 Company Name</Label>
+                <Select value={formCompanyName} onValueChange={setFormCompanyName}>
+                  <SelectTrigger data-testid="select-user-company">
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROVIDER_1099_COMPANIES.map((company) => (
+                      <SelectItem key={company} value={company} data-testid={`option-company-${company}`}>
+                        {company}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="user-phone">Phone</Label>
@@ -4956,12 +4995,12 @@ export default function AdminDashboard() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="user-racid">LDAP ID</Label>
+              <Label htmlFor="user-racid">{formRole === "provider_1099" ? "Username" : "LDAP ID"}</Label>
               <Input
                 id="user-racid"
                 value={formRacId}
                 onChange={(e) => setFormRacId(e.target.value.replace(/[^a-zA-Z0-9]/g, ''))}
-                placeholder="MTHOMA2"
+                placeholder={formRole === "provider_1099" ? "providerlogin" : "MTHOMA2"}
                 data-testid="input-user-racid"
               />
             </div>

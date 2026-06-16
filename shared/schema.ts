@@ -26,9 +26,13 @@ export const users = pgTable("users", {
   email: varchar("email", { length: 255 }),
   password: varchar("password", { length: 255 }).notNull(),
   name: varchar("name", { length: 255 }).notNull(),
-  role: text("role").notNull(), // 'technician', 'vrs_agent', 'admin', 'super_admin'
+  role: text("role").notNull(), // 'technician', 'vrs_agent', 'admin', 'super_admin', 'provider_1099'
   phone: varchar("phone", { length: 20 }),
   racId: varchar("rac_id", { length: 50 }),
+  // 1099 provider portal: the provider's assigned "1099 Company Name" (chosen
+  // from shared/provider1099.ts). Null for every non-provider account. Shown
+  // read-only to the provider in place of the RAC ID field.
+  companyName: varchar("company_name", { length: 120 }),
   isActive: boolean("is_active").notNull().default(true),
   firstLogin: boolean("first_login").notNull().default(true),
   lastSeenVersion: varchar("last_seen_version", { length: 50 }),

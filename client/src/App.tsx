@@ -132,6 +132,10 @@ function OnboardingManager() {
   });
 
   if (!user) return null;
+  // 1099 provider portal: providers use a restricted experience and do not
+  // get the technician onboarding wizard / "What's New" modals (which can
+  // reference warranty workflows). Suppress them entirely for providers.
+  if (user.role === "provider_1099") return null;
 
   const appVersion = import.meta.env.VITE_APP_VERSION || "1.0.0";
   const showOnboarding = !dismissed && user.firstLogin === true;
