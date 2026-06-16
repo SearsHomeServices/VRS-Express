@@ -5,7 +5,7 @@ import { useLocation } from "wouter";
 import { useAuth, getToken } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { safeDate, formatDate, formatDateShort } from "@/lib/utils";
+import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
   getBusinessElapsedMs,
   formatBusinessElapsed,
@@ -135,7 +135,22 @@ import {
   AlertTriangle,
   GraduationCap,
   Headset,
+  Check,
+  ChevronsUpDown,
 } from "lucide-react";
+import {
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
 import { parseVideoUrls } from "@/lib/videoUrls";
@@ -2661,6 +2676,7 @@ export default function AdminDashboard() {
   const [formPhone, setFormPhone] = useState("");
   const [formRacId, setFormRacId] = useState("");
   const [formCompanyName, setFormCompanyName] = useState("");
+  const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
   const [formDivisions, setFormDivisions] = useState<string[]>([]);
   const [formCanOrderParts, setFormCanOrderParts] = useState(false);
   const [selectedAgentIds, setSelectedAgentIds] = useState<number[]>([]);
@@ -4968,18 +4984,52 @@ export default function AdminDashboard() {
             {formRole === "provider_1099" && (
               <div className="space-y-2">
                 <Label htmlFor="user-company">1099 Company Name</Label>
-                <Select value={formCompanyName} onValueChange={setFormCompanyName}>
-                  <SelectTrigger data-testid="select-user-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PROVIDER_1099_COMPANIES.map((company) => (
-                      <SelectItem key={company} value={company} data-testid={`option-company-${company}`}>
-                        {company}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={companyPickerOpen} onOpenChange={setCompanyPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={companyPickerOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="select-user-company"
+                    >
+                      <span className={cn("truncate", !formCompanyName && "text-muted-foreground")}>
+                        {formCompanyName || "Select company"}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search company..." data-testid="input-company-search" />
+                      <CommandList>
+                        <CommandEmpty>No company found.</CommandEmpty>
+                        <CommandGroup>
+                          {PROVIDER_1099_COMPANIES.map((company) => (
+                            <CommandItem
+                              key={company}
+                              value={company}
+                              onSelect={() => {
+                                setFormCompanyName(company === formCompanyName ? "" : company);
+                                setCompanyPickerOpen(false);
+                              }}
+                              data-testid={`option-company-${company}`}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  formCompanyName === company ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {company}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
             )}
 
