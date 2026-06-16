@@ -69,6 +69,145 @@ import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdm
 
 const execFileAsync = promisify(execFile);
 
+// ---------------------------------------------------------------------------
+// Video conversion helpers (Task: fix admin video playback for failed iPhone
+// conversions).
+//
+// iPhone HEVC/H.265 .mov files (often fragmented MOV with spatial-audio
+// tracks, and frequently 10-bit HDR) were failing BOTH ffmpeg passes in
+// production. ffmpeg itself pointed at the cause: it could not probe the
+// stream with the default "analyzeduration (0) and probesize (5000000)".
+// When both passes failed the route stored the ORIGINAL unplayable .mov,
+// which Chrome/Edge on Windows cannot decode — that is the "agents can't
+// watch some videos" bug.
+//
+// The hardening below:
+//   - large -analyzeduration / -probesize BEFORE -i so ffmpeg can fully
+//     probe fragmented/HEVC MOV files
+//   - -fflags +genpts to rebuild missing timestamps on fragmented MOV
+//   - -pix_fmt yuv420p so 10-bit HEVC HDR is downconverted to 8-bit H.264
+//     High@4.0-compatible output that desktop browsers can actually decode
+//     (without this, libx264 keeps 10-bit -> High 10 profile -> unplayable)
+//   - keeps the audio-stripped retry as a last resort
+// ---------------------------------------------------------------------------
+const VIDEO_PROBE_FLAGS = [
+  "-analyzeduration", "200M",
+  "-probesize", "200M",
+  "-fflags", "+genpts",
+];
+
+type VideoConversionResult =
+  | { ok: true; mode: "primary" | "audio_stripped" }
+  | { ok: false; mode: "failed"; primaryError?: string; fallbackError?: string };
+
+async function convertVideoToPlayableMp4(
+  inputPath: string,
+  outputPath: string,
+): Promise<VideoConversionResult> {
+  // Primary pass: keep the first video + first audio stream, transcode to
+  // browser-friendly H.264/AAC with an 8-bit pixel format.
+  try {
+    await execFileAsync("ffmpeg", [
+      ...VIDEO_PROBE_FLAGS,
+      "-i", inputPath,
+      "-map", "0:v:0",
+      "-map", "0:a:0?",
+      "-ignore_unknown",
+      "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-ac", "2",
+      "-movflags", "+faststart",
+      "-preset", "fast",
+      "-crf", "23",
+      "-y",
+      outputPath,
+    ], { timeout: 180000 });
+    return { ok: true, mode: "primary" };
+  } catch (firstErr: any) {
+    const primaryError = firstErr?.message || String(firstErr);
+    console.warn("Video conversion: first pass failed, retrying without audio:", primaryError);
+    // Last-resort fallback: drop audio entirely (e.g. the only audio track is
+    // Apple spatial-audio / apac that ffmpeg 6.1.1 cannot decode).
+    try {
+      await execFileAsync("ffmpeg", [
+        ...VIDEO_PROBE_FLAGS,
+        "-i", inputPath,
+        "-map", "0:v:0",
+        "-an",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-preset", "fast",
+        "-crf", "23",
+        "-y",
+        outputPath,
+      ], { timeout: 180000 });
+      return { ok: true, mode: "audio_stripped" };
+    } catch (secondErr: any) {
+      const fallbackError = secondErr?.message || String(secondErr);
+      return { ok: false, mode: "failed", primaryError, fallbackError };
+    }
+  }
+}
+
+// Probe the first video stream's codec + pixel format. Used by the one-time
+// recovery endpoint to decide whether an already-stored video needs to be
+// re-encoded (anything that isn't 8-bit H.264 is treated as suspect).
+async function probeVideoStream(
+  inputPath: string,
+): Promise<{ codec?: string; pixFmt?: string }> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name,pix_fmt",
+      "-of", "json",
+      inputPath,
+    ], { timeout: 60000 });
+    const parsed = JSON.parse(stdout);
+    const stream = parsed?.streams?.[0] || {};
+    return { codec: stream.codec_name, pixFmt: stream.pix_fmt };
+  } catch {
+    return {};
+  }
+}
+
+// A video is "browser playable" only if it is 8-bit H.264. HEVC/H.265,
+// 10-bit pixel formats (yuv420p10le etc.), and anything we can't probe are
+// considered unplayable on the Windows Chrome/Edge desktops VRS staff use.
+function isBrowserPlayableVideo(codec?: string, pixFmt?: string): boolean {
+  if (codec !== "h264") return false;
+  if (pixFmt && pixFmt.includes("10")) return false;
+  return true;
+}
+
+// Lightweight server-side mirror of client/src/lib/videoUrls.ts. The
+// submissions.video_url column holds either a single legacy URL string or a
+// JSON-encoded array of object-storage paths.
+function parseVideoUrlsServer(value: string | null | undefined): string[] {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((v): v is string => typeof v === "string" && v.length > 0);
+      }
+    } catch {
+      // fall through to legacy single-URL handling
+    }
+  }
+  return [trimmed];
+}
+
+function serializeVideoUrlsServer(urls: string[]): string | null {
+  const cleaned = urls.filter((u) => typeof u === "string" && u.trim().length > 0);
+  if (cleaned.length === 0) return null;
+  return JSON.stringify(cleaned);
+}
+
 const JWT_SECRET = process.env.SESSION_SECRET!;
 
 const registerSchema = z.object({
@@ -5170,40 +5309,26 @@ export async function registerRoutes(
       const writeStream = createWriteStream(inputPath);
       await pipeline(readStream, writeStream);
 
-      // iPhone .mov files often include an extra Apple Positional Audio
-      // (apac / spatial audio) stream that ffmpeg 6.1.1 cannot decode,
-      // which causes the whole conversion to fail. Map only the first
-      // video and first AAC audio stream explicitly, ignoring unknown
-      // codecs. If that still fails (e.g. the only audio track is apac),
-      // retry with audio stripped so the tech still gets a playable MP4.
-      try {
-        await execFileAsync("ffmpeg", [
-          "-i", inputPath,
-          "-map", "0:v:0",
-          "-map", "0:a:0?",
-          "-ignore_unknown",
-          "-c:v", "libx264",
-          "-c:a", "aac",
-          "-ac", "2",
-          "-movflags", "+faststart",
-          "-preset", "fast",
-          "-crf", "23",
-          "-y",
-          outputPath,
-        ], { timeout: 120000 });
-      } catch (firstErr: any) {
-        console.warn("Video conversion: first pass failed, retrying without audio:", firstErr?.message);
-        await execFileAsync("ffmpeg", [
-          "-i", inputPath,
-          "-map", "0:v:0",
-          "-an",
-          "-c:v", "libx264",
-          "-movflags", "+faststart",
-          "-preset", "fast",
-          "-crf", "23",
-          "-y",
-          outputPath,
-        ], { timeout: 120000 });
+      // Hardened conversion (see convertVideoToPlayableMp4 above). Handles
+      // iPhone HEVC/fragmented-MOV/10-bit files that previously failed both
+      // passes and got stored as unplayable originals.
+      const conversion = await convertVideoToPlayableMp4(inputPath, outputPath);
+
+      if (!conversion.ok) {
+        // BOTH passes failed. Do NOT pretend success with the unplayable
+        // original — the technician's UI now rejects this so they can retry.
+        console.error(
+          "Video conversion failed (both passes) for", objectPath,
+          "| primary:", conversion.primaryError,
+          "| fallback:", conversion.fallbackError,
+        );
+        try { await unlink(inputPath); } catch {}
+        try { await unlink(outputPath); } catch {}
+        return res.status(200).json({
+          converted: false,
+          failed: true,
+          error: "Video could not be converted to a playable format.",
+        });
       }
 
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
@@ -5231,12 +5356,169 @@ export async function registerRoutes(
       try { await unlink(inputPath); } catch {}
       try { await unlink(outputPath); } catch {}
 
+      console.log(
+        `Video conversion: success (mode=${conversion.mode}) ${objectPath} -> ${newObjectPath} (${outputStat.size} bytes)`,
+      );
       return res.status(200).json({ objectPath: newObjectPath, converted: true });
     } catch (error: any) {
       console.error("Video conversion error:", error);
       try { await unlink(inputPath); } catch {}
       try { await unlink(outputPath); } catch {}
-      return res.status(200).json({ objectPath, converted: false, error: error.message || "Conversion failed" });
+      // Infrastructure error (download/upload/etc), not necessarily an
+      // unconvertible file. Still surface failure so we don't store an
+      // unplayable original silently.
+      return res.status(200).json({ converted: false, failed: true, error: error.message || "Conversion failed" });
+    }
+  });
+
+  // ========================================================================
+  // ONE-TIME VIDEO RECOVERY ROUTE
+  //
+  // Recovers already-stored videos that are in an unplayable codec (iPhone
+  // HEVC/H.265 or 10-bit) because the old conversion silently failed. This
+  // is the lowest-risk recovery option chosen over convert-on-demand at
+  // serve time: it does NOT touch the (working) object-storage serving
+  // route, transcodes each affected video exactly once, and replaces the
+  // stored path in-place so existing <video src> bindings keep working. The
+  // original objects are left in storage (only the DB path is repointed), so
+  // the operation is reversible if needed.
+  //
+  // Admin-triggered, scoped to recent tickets (default 30 days). Supports a
+  // dryRun mode that probes + reports without re-encoding.
+  // ========================================================================
+  const reconvertVideosSchema = z.object({
+    sinceHours: z.number().int().positive().max(24 * 365).optional(),
+    submissionId: z.number().int().positive().optional(),
+    dryRun: z.boolean().optional(),
+  });
+
+  app.post("/api/admin/reconvert-videos", authenticateToken, requireRole("admin"), async (req, res) => {
+    const parsed = reconvertVideosSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request body" });
+    }
+    const { submissionId, dryRun } = parsed.data;
+    const sinceHours = parsed.data.sinceHours ?? 24 * 30;
+
+    const objectStorageService = new ObjectStorageService();
+
+    type VideoReport = {
+      submissionId: number;
+      objectPath: string;
+      codec?: string;
+      pixFmt?: string;
+      playable: boolean;
+      action: "kept" | "reconverted" | "would_reconvert" | "error";
+      newObjectPath?: string;
+      error?: string;
+    };
+    const reports: VideoReport[] = [];
+
+    try {
+      let targets: { id: number; videoUrl: string | null }[];
+      if (submissionId) {
+        const sub = await storage.getSubmission(submissionId);
+        targets = sub ? [{ id: sub.id, videoUrl: sub.videoUrl }] : [];
+      } else {
+        const since = new Date(Date.now() - sinceHours * 3600000);
+        const all = await storage.getAllSubmissions(since, null, null);
+        targets = all.map((s) => ({ id: s.id, videoUrl: s.videoUrl }));
+      }
+
+      let scannedVideos = 0;
+      let reconverted = 0;
+      let wouldReconvert = 0;
+
+      for (const target of targets) {
+        const urls = parseVideoUrlsServer(target.videoUrl);
+        if (urls.length === 0) continue;
+
+        let changed = false;
+        const nextUrls = [...urls];
+
+        for (let i = 0; i < urls.length; i++) {
+          const objectPath = urls[i];
+          scannedVideos++;
+          const inputPath = `/tmp/recover-input-${randomUUID()}`;
+          const outputPath = `/tmp/recover-output-${randomUUID()}.mp4`;
+          try {
+            const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+            await pipeline(objectFile.createReadStream(), createWriteStream(inputPath));
+
+            const { codec, pixFmt } = await probeVideoStream(inputPath);
+            const playable = isBrowserPlayableVideo(codec, pixFmt);
+
+            if (playable) {
+              reports.push({ submissionId: target.id, objectPath, codec, pixFmt, playable, action: "kept" });
+              try { await unlink(inputPath); } catch {}
+              continue;
+            }
+
+            if (dryRun) {
+              wouldReconvert++;
+              reports.push({ submissionId: target.id, objectPath, codec, pixFmt, playable, action: "would_reconvert" });
+              try { await unlink(inputPath); } catch {}
+              continue;
+            }
+
+            const conversion = await convertVideoToPlayableMp4(inputPath, outputPath);
+            if (!conversion.ok) {
+              reports.push({
+                submissionId: target.id, objectPath, codec, pixFmt, playable,
+                action: "error",
+                error: conversion.fallbackError || conversion.primaryError || "conversion failed",
+              });
+              try { await unlink(inputPath); } catch {}
+              try { await unlink(outputPath); } catch {}
+              continue;
+            }
+
+            const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+            const newObjectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+            const outputStat = fs.statSync(outputPath);
+            const uploadRes = await fetch(uploadURL, {
+              method: "PUT",
+              headers: { "Content-Type": "video/mp4", "Content-Length": String(outputStat.size) },
+              body: Readable.toWeb(fs.createReadStream(outputPath)) as any,
+              duplex: "half",
+            } as any);
+            if (!uploadRes.ok) {
+              throw new Error(`Upload failed with status ${uploadRes.status}`);
+            }
+
+            nextUrls[i] = newObjectPath;
+            changed = true;
+            reconverted++;
+            console.log(
+              `Video recovery: submission #${target.id} ${objectPath} (codec=${codec} pix=${pixFmt}) -> ${newObjectPath} (mode=${conversion.mode})`,
+            );
+            reports.push({ submissionId: target.id, objectPath, codec, pixFmt, playable, action: "reconverted", newObjectPath });
+
+            try { await unlink(inputPath); } catch {}
+            try { await unlink(outputPath); } catch {}
+          } catch (err: any) {
+            reports.push({ submissionId: target.id, objectPath, playable: false, action: "error", error: err?.message || String(err) });
+            try { await unlink(inputPath); } catch {}
+            try { await unlink(outputPath); } catch {}
+          }
+        }
+
+        if (changed) {
+          await storage.updateSubmission(target.id, { videoUrl: serializeVideoUrlsServer(nextUrls) ?? undefined });
+        }
+      }
+
+      return res.status(200).json({
+        dryRun: Boolean(dryRun),
+        scannedSubmissions: targets.length,
+        scannedVideos,
+        reconverted,
+        wouldReconvert,
+        reports,
+      });
+    } catch (error: any) {
+      console.error("Video recovery error:", error);
+      return res.status(500).json({ error: error?.message || "Video recovery failed", reports });
     }
   });
 

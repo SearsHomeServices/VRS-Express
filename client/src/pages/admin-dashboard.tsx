@@ -2210,6 +2210,40 @@ function HealthSection() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/health/incidents"] });
   };
 
+  // One-time video recovery. Re-encodes already-stored iPhone HEVC/10-bit
+  // videos that the old conversion silently failed on, so admins/agents can
+  // play them in ticket detail again.
+  const [recoverResult, setRecoverResult] = useState<{
+    dryRun: boolean;
+    scannedSubmissions: number;
+    scannedVideos: number;
+    reconverted: number;
+    wouldReconvert: number;
+  } | null>(null);
+  const recoverMutation = useMutation({
+    mutationFn: async (dryRun: boolean) => {
+      const res = await apiRequest("POST", "/api/admin/reconvert-videos", { dryRun, sinceHours: 24 * 30 });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setRecoverResult(data);
+      if (data.dryRun) {
+        toast({
+          title: "Scan complete",
+          description: `${data.wouldReconvert} of ${data.scannedVideos} video(s) need recovery across ${data.scannedSubmissions} ticket(s).`,
+        });
+      } else {
+        toast({
+          title: "Recovery complete",
+          description: `${data.reconverted} video(s) re-encoded and now playable.`,
+        });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Video recovery failed", description: err?.message || "Unknown error", variant: "destructive" });
+    },
+  });
+
   const data = checkQuery.data;
   const isError = checkQuery.isError;
   const errorMessage = checkQuery.error instanceof Error ? checkQuery.error.message : "Failed to load health checks";
@@ -2290,6 +2324,64 @@ function HealthSection() {
               </div>
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      {/* One-time video recovery */}
+      <Card data-testid="card-video-recovery">
+        <CardHeader>
+          <CardTitle data-testid="text-video-recovery-title">Recover Unplayable Videos</CardTitle>
+          <CardDescription>
+            Re-encode iPhone videos already stored in an unplayable format (HEVC / 10-bit) so they
+            play again in ticket detail. Scans tickets from the last 30 days. Run a scan first to
+            see how many are affected, then recover.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => recoverMutation.mutate(true)}
+              disabled={recoverMutation.isPending}
+              data-testid="button-video-recovery-scan"
+            >
+              {recoverMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Search className="w-4 h-4 mr-2" />
+              )}
+              Scan
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => recoverMutation.mutate(false)}
+              disabled={recoverMutation.isPending}
+              data-testid="button-video-recovery-run"
+            >
+              {recoverMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Video className="w-4 h-4 mr-2" />
+              )}
+              Recover Now
+            </Button>
+          </div>
+          {recoverResult && (
+            <div className="mt-4 text-sm text-muted-foreground" data-testid="text-video-recovery-result">
+              {recoverResult.dryRun ? (
+                <span>
+                  Scanned {recoverResult.scannedVideos} video(s) across {recoverResult.scannedSubmissions} ticket(s):{" "}
+                  <span className="font-semibold text-foreground">{recoverResult.wouldReconvert}</span> need recovery.
+                </span>
+              ) : (
+                <span>
+                  Recovered <span className="font-semibold text-foreground">{recoverResult.reconverted}</span> video(s)
+                  out of {recoverResult.scannedVideos} scanned across {recoverResult.scannedSubmissions} ticket(s).
+                </span>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

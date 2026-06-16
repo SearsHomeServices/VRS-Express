@@ -508,18 +508,33 @@ export default function TechSubmitPage() {
     videoEl.src = URL.createObjectURL(file);
   }
 
-  async function convertVideo(objectPath: string): Promise<string> {
+  // Returns the converted (playable MP4) object path, or null when the video
+  // could not be converted. On failure we deliberately do NOT fall back to the
+  // original file — an unconverted iPhone HEVC .mov cannot play on the desktop
+  // browsers VRS agents/admins use, so storing it would silently produce a
+  // broken player. Returning null lets the caller reject the upload and prompt
+  // the tech to retry.
+  async function convertVideo(objectPath: string): Promise<string | null> {
     setIsConverting(true);
     try {
       const res = await apiRequest("POST", "/api/uploads/convert-video", { objectPath });
       const data = await res.json();
       if (data.converted === false) {
-        toast({ title: "Video Format Notice", description: "Video could not be converted to MP4. It may not play on all devices.", variant: "destructive" });
+        toast({
+          title: "Video Couldn't Be Processed",
+          description: "This video couldn't be converted to a playable format and was not attached. Please try recording or uploading it again.",
+          variant: "destructive",
+        });
+        return null;
       }
       return data.objectPath;
     } catch {
-      toast({ title: "Video Format Notice", description: "Video conversion failed. The original file will be used.", variant: "destructive" });
-      return objectPath;
+      toast({
+        title: "Video Couldn't Be Processed",
+        description: "Video conversion failed and the video was not attached. Please try again.",
+        variant: "destructive",
+      });
+      return null;
     } finally {
       setIsConverting(false);
     }
@@ -573,7 +588,13 @@ export default function TechSubmitPage() {
             const convertedPath = await convertVideo(objectPath);
             // Tyler 2026-04-30: append, don't replace. Each upload adds
             // to the array; the per-slot remove button handles deletion.
-            setVideoUrls((prev) => [...prev, convertedPath]);
+            // Only append when conversion produced a playable MP4 — a null
+            // result means the video could not be processed and the tech
+            // has already been told to retry, so we don't attach an
+            // unplayable original.
+            if (convertedPath) {
+              setVideoUrls((prev) => [...prev, convertedPath]);
+            }
           } else {
             setIsUploading(false);
             setVideoUrls((prev) => [...prev, objectPath]);
