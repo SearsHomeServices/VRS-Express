@@ -6,7 +6,7 @@ import { z } from "zod";
 import { storage, db } from "./storage";
 import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
-import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
+import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions } from "@shared/schema";
@@ -68,7 +68,7 @@ import {
 import { enhanceDescription, checkRateLimit } from "./services/openai";
 import { queryServiceOrder, sendFollowup } from "./services/shsai";
 import { ObjectStorageService } from "./replit_integrations/object_storage/objectStorage";
-import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel, getLiveSessionCount } from "./websocket";
+import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel, getLiveSessionCount, forceDisconnectUser } from "./websocket";
 
 const execFileAsync = promisify(execFile);
 
@@ -480,40 +480,12 @@ export async function registerRoutes(
     res.status(dbOk ? 200 : 503).json(body);
   });
 
-  app.post("/api/auth/register", async (req, res) => {
-    try {
-      const parsed = registerSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.errors[0].message });
-      }
-      const { email, password, name, role, phone, racId } = parsed.data;
-
-      if (role !== "technician") {
-        return res.status(403).json({ error: "Only technician self-registration is allowed" });
-      }
-
-      if (racId) {
-        const existingByRacId = await storage.getUserByRacId(racId);
-        if (existingByRacId) {
-          return res.status(409).json({ error: "LDAP ID already exists" });
-        }
-      }
-
-      const hashedPassword = await bcryptjs.hash(password, 10);
-      const user = await storage.createUser({
-        email: email || null,
-        password: hashedPassword,
-        name,
-        role,
-        phone: phone || null,
-        racId: racId || null,
-      });
-
-      return res.status(201).json({ user: sanitizeUser(user), token: signToken(user) });
-    } catch (error) {
-      console.error("Registration error:", error);
-      return res.status(500).json({ error: "Registration failed" });
-    }
+  // Self-registration is disabled. Technicians authenticate via the two-step
+  // OTP flow at POST /api/auth/tech-login + POST /api/auth/tech-login/verify,
+  // which verifies identity against the managed technicians directory and
+  // requires proof of phone ownership before issuing any token.
+  app.post("/api/auth/register", (_req, res) => {
+    return res.status(403).json({ error: "Self-registration is not available. Technicians sign in via LDAP ID + phone verification." });
   });
 
   // Public runtime config — lets the client hide feature-flagged affordances
@@ -701,12 +673,59 @@ export async function registerRoutes(
     }
   });
 
+  // Simple in-memory rate limiter for tech-login to mitigate brute-force
+  // enumeration of LDAP IDs. Keyed by IP: max 10 attempts per 15 minutes.
+  const techLoginAttempts = new Map<string, { count: number; windowStart: number }>();
+  const TECH_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const TECH_LOGIN_MAX_ATTEMPTS = 10;
+
+  function checkTechLoginRateLimit(ip: string): boolean {
+    const now = Date.now();
+    const entry = techLoginAttempts.get(ip);
+    if (!entry || now - entry.windowStart > TECH_LOGIN_WINDOW_MS) {
+      techLoginAttempts.set(ip, { count: 1, windowStart: now });
+      return true;
+    }
+    entry.count++;
+    if (entry.count > TECH_LOGIN_MAX_ATTEMPTS) {
+      return false;
+    }
+    return true;
+  }
+
   const techLoginSchema = z.object({
     ldapId: z.string().min(1, "LDAP ID is required"),
   });
 
+  // Server-side OTP store for technician identity verification.
+  // Keyed by normalized ldapId. OTPs expire after 10 minutes and are
+  // invalidated after 3 failed attempts to prevent brute-force.
+  interface TechOtpEntry {
+    otp: string;
+    expiresAt: number;
+    attempts: number;
+  }
+  const techOtpStore = new Map<string, TechOtpEntry>();
+  const OTP_TTL_MS = 10 * 60 * 1000;
+  const OTP_MAX_ATTEMPTS = 3;
+
+  function generateOtp(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  function maskPhone(phone: string | null): string {
+    if (!phone || phone.length < 4) return "***-****";
+    return "***-***-" + phone.replace(/\D/g, "").slice(-4);
+  }
+
+  // Step 1: Submit LDAP ID → generates OTP, sends SMS, returns requiresOtp signal.
   app.post("/api/auth/tech-login", async (req, res) => {
     try {
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+      if (!checkTechLoginRateLimit(clientIp)) {
+        return res.status(429).json({ error: "Too many login attempts. Please try again in 15 minutes." });
+      }
+
       const parsed = techLoginSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
@@ -726,6 +745,82 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Account is inactive. Please contact your manager." });
       }
 
+      if (!technician.phone) {
+        return res.status(400).json({ error: "No phone number on file. Please contact your manager to update your contact information." });
+      }
+
+      const otp = generateOtp();
+      techOtpStore.set(ldapId, { otp, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
+
+      const smsSent = await (await import("./sms")).sendSmsMessage(
+        technician.phone,
+        `Your VRS verification code is: ${otp}. It expires in 10 minutes. Do not share this code.`
+      );
+
+      if (!smsSent.success) {
+        techOtpStore.delete(ldapId);
+        return res.status(500).json({ error: "Failed to send verification code. Please try again." });
+      }
+
+      return res.status(200).json({
+        requiresOtp: true,
+        maskedPhone: maskPhone(technician.phone),
+        technicianName: technician.name || ldapId,
+      });
+    } catch (error) {
+      console.error("Tech login error:", error);
+      return res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // Step 2: Verify OTP → validates identity and issues JWT.
+  const techLoginVerifySchema = z.object({
+    ldapId: z.string().min(1, "LDAP ID is required"),
+    otp: z.string().length(6, "Verification code must be 6 digits").regex(/^\d+$/, "Verification code must be numeric"),
+  });
+
+  app.post("/api/auth/tech-login/verify", async (req, res) => {
+    try {
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+      if (!checkTechLoginRateLimit(clientIp)) {
+        return res.status(429).json({ error: "Too many login attempts. Please try again in 15 minutes." });
+      }
+
+      const parsed = techLoginVerifySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+
+      const ldapId = normalizeLdapId(parsed.data.ldapId);
+      const entry = techOtpStore.get(ldapId);
+
+      if (!entry) {
+        return res.status(400).json({ error: "No pending verification. Please start over." });
+      }
+
+      if (Date.now() > entry.expiresAt) {
+        techOtpStore.delete(ldapId);
+        return res.status(400).json({ error: "Verification code has expired. Please start over." });
+      }
+
+      entry.attempts++;
+      if (entry.attempts > OTP_MAX_ATTEMPTS) {
+        techOtpStore.delete(ldapId);
+        return res.status(429).json({ error: "Too many incorrect attempts. Please start over." });
+      }
+
+      if (parsed.data.otp !== entry.otp) {
+        const remaining = OTP_MAX_ATTEMPTS - entry.attempts + 1;
+        return res.status(400).json({ error: `Incorrect code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.` });
+      }
+
+      techOtpStore.delete(ldapId);
+
+      const technician = await storage.getTechnicianByLdapId(ldapId);
+      if (!technician || !technician.isActive) {
+        return res.status(403).json({ error: "Account is inactive. Please contact your manager." });
+      }
+
       const techUser = await storage.getOrCreateTechUser(
         technician.ldapId,
         technician.name || ldapId,
@@ -742,7 +837,7 @@ export async function registerRoutes(
           isTechnician: true,
         },
         JWT_SECRET,
-        { expiresIn: "7d" }
+        { expiresIn: "24h" }
       );
 
       const safeUser = {
@@ -764,8 +859,8 @@ export async function registerRoutes(
 
       return res.status(200).json({ user: safeUser, token, technician });
     } catch (error) {
-      console.error("Tech login error:", error);
-      return res.status(500).json({ error: "Login failed" });
+      console.error("Tech login verify error:", error);
+      return res.status(500).json({ error: "Verification failed" });
     }
   });
 
@@ -4353,6 +4448,14 @@ export async function registerRoutes(
 
       if (parsed.data.role && (parsed.data.role === "admin" || parsed.data.role === "super_admin")) {
         await storage.setSpecializations(id, ALL_DIVISIONS);
+      }
+
+      // Invalidate the 30-second status cache and force-disconnect any live
+      // WebSocket sessions so the user loses access immediately rather than
+      // retaining privileged real-time events until their next reconnect.
+      if (parsed.data.role !== undefined || parsed.data.isActive !== undefined) {
+        invalidateUserStatusCache(id);
+        forceDisconnectUser(id);
       }
 
       return res.status(200).json({ user: sanitizeUser(updatedUser) });

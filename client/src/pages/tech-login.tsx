@@ -13,16 +13,22 @@ import { normalizeLdapId } from "@shared/ldap";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 
+type LoginStep =
+  | { type: "ldap" }
+  | { type: "otp"; ldapId: string; maskedPhone: string; technicianName: string }
+  | { type: "welcome"; technician: any };
+
 export default function TechLoginPage() {
   const [ldapId, setLdapId] = useState("");
+  const [otp, setOtp] = useState("");
+  const [step, setStep] = useState<LoginStep>({ type: "ldap" });
   const [isLoading, setIsLoading] = useState(false);
-  const [techInfo, setTechInfo] = useState<any>(null);
   const [phoneChanged, setPhoneChanged] = useState(false);
   const [newPhone, setNewPhone] = useState("");
   const [showPasswordField, setShowPasswordField] = useState(false);
   const [providerMode, setProviderMode] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
-  const { user, isLoading: authLoading, techLogin, login, logout } = useAuth();
+  const { user, isLoading: authLoading, techLogin, techLoginVerify, login, logout } = useAuth();
   const portal1099Enabled = usePortal1099Enabled();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -52,16 +58,13 @@ export default function TechLoginPage() {
     e.preventDefault();
     setIsLoading(true);
     try {
-      // Admin password sign-in AND 1099 provider sign-in both use the
-      // username + password /api/auth/login flow; providers are routed into
-      // the restricted /tech experience by their role.
       if (showPasswordField || providerMode) {
         await login(normalizeLdapId(ldapId), adminPassword);
         setLocation("/tech");
         return;
       }
       const result = await techLogin(normalizeLdapId(ldapId));
-      setTechInfo(result.technician);
+      setStep({ type: "otp", ldapId: normalizeLdapId(ldapId), maskedPhone: result.maskedPhone, technicianName: result.technicianName });
     } catch (error: any) {
       if (!showPasswordField && error.message && error.message.includes("not found")) {
         toast({
@@ -82,6 +85,26 @@ export default function TechLoginPage() {
     }
   }
 
+  async function handleOtpSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (step.type !== "otp") return;
+    setIsLoading(true);
+    try {
+      const result = await techLoginVerify(step.ldapId, otp.trim());
+      setStep({ type: "welcome", technician: result.technician });
+    } catch (error: any) {
+      toast({
+        title: "Verification Failed",
+        description: error.message || "Invalid or expired code",
+        variant: "destructive",
+      });
+      // Clear OTP input on failure so the user can try again.
+      setOtp("");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   function handleTechContinue() {
     if (phoneChanged && newPhone.trim()) {
       localStorage.setItem("vrs_phone_override", newPhone.trim());
@@ -91,12 +114,81 @@ export default function TechLoginPage() {
     setLocation("/tech");
   }
 
-  function maskPhone(phone: string | null): string {
-    if (!phone || phone.length < 4) return "***-****";
-    return "***-***-" + phone.slice(-4);
+  // OTP verification step
+  if (step.type === "otp") {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-background">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <img src={searsLogo} alt="Sears Home Services" className="h-10 mx-auto mb-3" data-testid="img-logo" />
+            <h1 className="text-2xl font-bold" data-testid="text-otp-title">Verify Your Identity</h1>
+            <p className="text-sm text-muted-foreground mt-1">Welcome, {step.technicianName}</p>
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Enter Verification Code</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleOtpSubmit} className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  A 6-digit verification code was sent to your phone on file ending in <strong>{step.maskedPhone.slice(-4)}</strong>. Enter it below to sign in.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="otp-code">Verification Code</Label>
+                  <Input
+                    id="otp-code"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="\d{6}"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+                    required
+                    autoComplete="one-time-code"
+                    className="h-11 text-base text-center tracking-widest"
+                    data-testid="input-otp-code"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full h-11 text-base"
+                  disabled={isLoading || otp.trim().length !== 6}
+                  data-testid="button-otp-submit"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Verifying...
+                    </>
+                  ) : (
+                    "Verify & Sign In"
+                  )}
+                </Button>
+              </form>
+              <div className="text-center mt-4">
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    setStep({ type: "ldap" });
+                    setOtp("");
+                  }}
+                  data-testid="link-otp-back"
+                >
+                  Back — use a different LDAP ID
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
   }
 
-  if (techInfo) {
+  // Welcome / profile confirmation step
+  if (step.type === "welcome") {
+    const techInfo = step.technician;
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-background">
         <div className="w-full max-w-sm">
@@ -120,7 +212,7 @@ export default function TechLoginPage() {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm text-muted-foreground">Phone on File</span>
-                  <span className="text-sm font-medium" data-testid="text-tech-phone">{maskPhone(techInfo.phone)}</span>
+                  <span className="text-sm font-medium" data-testid="text-tech-phone">{techInfo.phone ? "***-***-" + String(techInfo.phone).replace(/\D/g, "").slice(-4) : "***-****"}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -168,6 +260,7 @@ export default function TechLoginPage() {
     );
   }
 
+  // LDAP ID entry step (default)
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <div className="w-full max-w-sm">
@@ -198,7 +291,7 @@ export default function TechLoginPage() {
                   data-testid="input-ldap-id"
                 />
                 {!providerMode && (
-                  <p className="text-xs text-muted-foreground">Enter your LDAP ID to sign in. No password required.</p>
+                  <p className="text-xs text-muted-foreground">Enter your LDAP ID. A verification code will be sent to your phone on file.</p>
                 )}
                 {providerMode && (
                   <p className="text-xs text-muted-foreground">Enter your 1099 provider username and password.</p>
@@ -224,10 +317,10 @@ export default function TechLoginPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {providerMode ? "Signing in..." : "Looking up..."}
+                    {providerMode ? "Signing in..." : "Sending code..."}
                   </>
                 ) : (
-                  "Sign In"
+                  providerMode ? "Sign In" : "Send Verification Code"
                 )}
               </Button>
             </form>

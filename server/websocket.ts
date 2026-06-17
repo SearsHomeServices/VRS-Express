@@ -11,6 +11,7 @@ interface ConnectedClient {
   role: string;
   divisions: string[];
   agentStatus: string;
+  ldapId?: string;
 }
 
 interface WSEvent {
@@ -153,6 +154,7 @@ export function setupWebSocket(server: Server) {
         role: user.role,
         divisions,
         agentStatus: (user as any).agentStatus || "offline",
+        ldapId: (decoded as any).ldapId,
       };
 
       // Agent reconnected within the presence-stale window — cancel any
@@ -556,3 +558,59 @@ export function broadcastToTechnicians(event: WSEvent) {
     }
   }
 }
+
+// Force-close all WebSocket sessions for a user. Called immediately when a
+// user is deactivated or has their role changed so they cannot continue
+// receiving privileged real-time events for the remainder of their connection.
+export function forceDisconnectUser(userId: number): void {
+  const sessions = clients.get(userId);
+  if (!sessions) return;
+  for (const c of sessions) {
+    try { c.ws.close(4010, "Session revoked"); } catch {}
+  }
+  clients.delete(userId);
+  log(`Force-disconnected WebSocket sessions for user ${userId} (revocation)`, "ws");
+}
+
+// Periodic background revalidation — every 5 minutes check every connected
+// client against the DB to catch deactivations/demotions that happened while
+// the socket was alive. This is a safety net; `forceDisconnectUser` handles
+// the immediate case when the admin UI makes the change.
+const WS_REVALIDATION_INTERVAL_MS = 5 * 60 * 1000;
+async function revalidateConnectedClients(): Promise<void> {
+  for (const [userId, sessions] of clients) {
+    const primary = pickLiveSession(sessions);
+    if (!primary) continue;
+    try {
+      if (primary.ldapId) {
+        // Technician: check both the users row and the technicians directory.
+        // Also disconnect if role has changed away from technician.
+        const [techUser, technician] = await Promise.all([
+          storage.getUser(userId),
+          storage.getTechnicianByLdapId(primary.ldapId),
+        ]);
+        if (!techUser || !techUser.isActive || !technician || !technician.isActive) {
+          forceDisconnectUser(userId);
+        } else if (techUser.role !== primary.role) {
+          // Role changed (e.g., promoted from technician to vrs_agent) — disconnect
+          // so the client re-authenticates with a fresh token carrying the new role.
+          forceDisconnectUser(userId);
+        }
+      } else {
+        // Non-technician: check isActive and role in the users table.
+        const user = await storage.getUser(userId);
+        if (!user || !user.isActive || user.role !== primary.role) {
+          forceDisconnectUser(userId);
+        }
+      }
+    } catch {
+      // Ignore transient DB errors — the next tick will retry.
+    }
+  }
+}
+
+setInterval(() => {
+  revalidateConnectedClients().catch((err) =>
+    log(`WS revalidation error: ${err}`, "ws")
+  );
+}, WS_REVALIDATION_INTERVAL_MS);
