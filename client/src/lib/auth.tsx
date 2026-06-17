@@ -134,6 +134,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllTechSubmitDrafts(localStorage);
     } catch {}
     localStorage.removeItem("vrs_token");
+    // Clear the scoped media token cache on logout so the next user
+    // doesn't inherit a stale cache from a prior session.
+    mediaTokenCache.clear();
     setToken(null);
     setUser(null);
     queryClient.clear();
@@ -154,4 +157,96 @@ export function useAuth() {
 
 export function getToken(): string | null {
   return localStorage.getItem("vrs_token");
+}
+
+// ---------------------------------------------------------------------------
+// Scoped media token cache + helpers
+//
+// GET /api/media-token?path=<objectPath> issues a short-lived (5 min),
+// path-bound JWT with { type:"media", path } that is accepted by
+// GET/HEAD /objects/* instead of the full session JWT.  This prevents
+// leaked /objects/ URLs from exposing full account credentials.
+//
+// Tokens are cached client-side for 4 minutes (slightly under the server's
+// 5 min TTL) so repeated renders of the same image don't hammer the endpoint.
+// The cache is keyed by objectPath and cleared on logout.
+// ---------------------------------------------------------------------------
+
+interface CachedMediaToken {
+  token: string;
+  exp: number; // ms timestamp — token is considered valid until this point
+}
+
+const CACHE_TTL_MS = 4 * 60 * 1000; // 4 min (server TTL is 5 min)
+
+export const mediaTokenCache = new Map<string, CachedMediaToken>();
+
+export async function getMediaToken(objectPath: string): Promise<string> {
+  const now = Date.now();
+  const cached = mediaTokenCache.get(objectPath);
+  if (cached && cached.exp > now + 10_000) {
+    return cached.token;
+  }
+
+  const sessionToken = getToken();
+  if (!sessionToken) throw new Error("Not authenticated");
+
+  const res = await fetch(
+    `/api/media-token?path=${encodeURIComponent(objectPath)}`,
+    { headers: { Authorization: `Bearer ${sessionToken}` } }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Media token fetch failed: ${res.status}`);
+  }
+
+  const data = await res.json();
+  mediaTokenCache.set(objectPath, { token: data.token, exp: now + CACHE_TTL_MS });
+  return data.token;
+}
+
+// Build a tokenized URL for use in src/href attributes.
+// Returns a promise so callers that need it synchronously can await it.
+export async function buildMediaUrl(url: string | null | undefined): Promise<string> {
+  if (!url) return "";
+  if (!url.startsWith("/objects/")) return url;
+  try {
+    const token = await getMediaToken(url);
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  } catch {
+    return "";
+  }
+}
+
+// Tokenize an array of /objects/ URLs in parallel (for lightboxes, galleries).
+// Non-/objects/ URLs pass through unchanged.
+export async function buildMediaUrls(urls: string[]): Promise<string[]> {
+  return Promise.all(urls.map(buildMediaUrl));
+}
+
+// React hook: returns a tokenized URL, initially "" until the async token
+// fetch resolves.  Handles null/undefined src and non-/objects/ URLs.
+export function useMediaUrl(url: string | null | undefined): string {
+  const [tokenizedUrl, setTokenizedUrl] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!url) {
+      setTokenizedUrl("");
+      return;
+    }
+    if (!url.startsWith("/objects/")) {
+      setTokenizedUrl(url);
+      return;
+    }
+    buildMediaUrl(url).then((result) => {
+      if (!cancelled) setTokenizedUrl(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  return tokenizedUrl;
 }

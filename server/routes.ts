@@ -7,6 +7,8 @@ import { storage, db } from "./storage";
 import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
+import { verifyUploadOwnership } from "./lib/uploadTokens";
+import { issueMediaToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions } from "@shared/schema";
@@ -5541,6 +5543,66 @@ export async function registerRoutes(
   });
 
   // ========================================================================
+  // SCOPED MEDIA TOKEN ENDPOINT
+  // ========================================================================
+  //
+  // Issues a short-lived (5 min), path-bound JWT with { type:"media", path }
+  // for GET/HEAD /objects/* serving.  The full session JWT is NOT accepted on
+  // the media-serving route; only these narrow-claim tokens are, so a leaked
+  // /objects/ URL never exposes full account credentials.
+  //
+  // Per-object authorization is enforced here at issuance time:
+  //   • Agents, admins, super_admins → may access any stored object.
+  //   • Technicians and 1099 providers → must own a submission that contains
+  //     this objectPath in its media fields (DB lookup).
+  //   • Feedback attachment paths for their own feedback are also allowed via
+  //     the same submission-owner check (they share the same /objects/ space).
+
+  app.get("/api/media-token", authenticateToken, async (req, res) => {
+    try {
+      const objectPath = typeof req.query.path === "string" ? req.query.path : null;
+
+      if (!objectPath || !objectPath.startsWith("/objects/")) {
+        return res.status(400).json({ error: "Invalid object path" });
+      }
+
+      const user = (req as AuthenticatedRequest).user!;
+      const userId = user.id;
+      const role = user.role;
+
+      // Trusted staff roles: can access any stored media
+      const staffRoles = ["vrs_agent", "admin", "super_admin"];
+      if (!staffRoles.includes(role)) {
+        // Technicians and 1099 providers: verify the path belongs to one of
+        // their submissions. LIKE on the text/JSON columns is fine here — the
+        // paths are UUIDs so false-positive substring matches are impossible.
+        const matchPath = `%${objectPath}%`;
+        const rows = await db.execute(sql`
+          SELECT id FROM submissions
+          WHERE technician_id = ${userId}
+          AND (
+            video_url = ${objectPath}
+            OR voice_note_url = ${objectPath}
+            OR photos::text LIKE ${matchPath}
+            OR rejected_media::text LIKE ${matchPath}
+          )
+          LIMIT 1
+        `);
+
+        if (!rows.rows || rows.rows.length === 0) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+
+      const token = issueMediaToken(objectPath);
+      return res.json({ token });
+    } catch (error) {
+      console.error("Media token error:", error);
+      return res.status(500).json({ error: "Failed to issue media token" });
+    }
+  });
+
+  // ========================================================================
   // VIDEO CONVERSION ROUTE
   // ========================================================================
 
@@ -5555,12 +5617,36 @@ export async function registerRoutes(
     }
 
     const { objectPath } = parsed.data;
+
+    // Ownership check: the objectPath must have been issued to this
+    // technician via POST /api/uploads/request-url in the current
+    // session.  This prevents one technician from triggering ffmpeg
+    // processing on another user's stored media.
+    const callerUserId = (req as AuthenticatedRequest).user?.id;
+    if (!callerUserId || !verifyUploadOwnership(objectPath, callerUserId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     const objectStorageService = new ObjectStorageService();
     const inputPath = `/tmp/audio-input-${randomUUID()}`;
     const outputPath = `/tmp/audio-output-${randomUUID()}.mp3`;
 
+    // Hard limit: refuse to transcode files larger than 200 MB.
+    const MAX_CONVERT_BYTES = 200 * 1024 * 1024;
+
     try {
       const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+
+      // Check the actual GCS object size BEFORE streaming to /tmp so
+      // we never write oversized bytes to disk or consume bandwidth on
+      // a file we will ultimately reject.  A client that lied about size
+      // at request-url time is caught here via the authoritative GCS metadata.
+      const [meta] = await objectFile.getMetadata();
+      const remoteSize = Number(meta.size ?? 0);
+      if (!remoteSize || remoteSize > MAX_CONVERT_BYTES) {
+        return res.status(413).json({ objectPath, converted: false, error: "File too large for conversion" });
+      }
+
       const readStream = objectFile.createReadStream();
       const writeStream = createWriteStream(inputPath);
       await pipeline(readStream, writeStream);
@@ -5613,12 +5699,32 @@ export async function registerRoutes(
     }
 
     const { objectPath } = parsed.data;
+
+    // Ownership check: the objectPath must have been issued to this
+    // technician via POST /api/uploads/request-url in the current session.
+    const callerUserId = (req as AuthenticatedRequest).user?.id;
+    if (!callerUserId || !verifyUploadOwnership(objectPath, callerUserId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     const objectStorageService = new ObjectStorageService();
     const inputPath = `/tmp/video-input-${randomUUID()}`;
     const outputPath = `/tmp/video-output-${randomUUID()}.mp4`;
 
+    // Hard limit: refuse to transcode files larger than 200 MB.
+    const MAX_CONVERT_BYTES = 200 * 1024 * 1024;
+
     try {
       const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+
+      // Check the actual GCS object size BEFORE streaming to /tmp.
+      // Catches clients that lied about size at upload-request time.
+      const [meta] = await objectFile.getMetadata();
+      const remoteSize = Number(meta.size ?? 0);
+      if (!remoteSize || remoteSize > MAX_CONVERT_BYTES) {
+        return res.status(413).json({ converted: false, failed: true, error: "File too large for conversion" });
+      }
+
       const readStream = objectFile.createReadStream();
       const writeStream = createWriteStream(inputPath);
       await pipeline(readStream, writeStream);

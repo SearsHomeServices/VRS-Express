@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { is1099PortalEnabled } from "../featureFlags";
 import { storage } from "../storage";
+import { verifyMediaToken } from "../lib/mediaTokens";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -141,6 +142,47 @@ export async function authenticateToken(
   }
 
   (req as AuthenticatedRequest).user = decoded;
+  next();
+}
+
+// Middleware for GET/HEAD /objects/* (media serving).
+//
+// Accepts ONLY a scoped media token — a short-lived, path-bound JWT with
+// { type:"media", path:"/objects/..." } — via the ?token= query param
+// OR the Authorization header.  The full session JWT is NOT accepted here;
+// only narrow-claim tokens issued by GET /api/media-token are valid.
+//
+// This design means a leaked /objects/ URL (browser history, copied link,
+// screenshot, proxy log) only exposes access to that single file for ≤5 min,
+// not the holder's full account credentials.
+//
+// Per-object authorization (ownership) is enforced at /api/media-token
+// issuance time; here we only verify the scoped token's validity and path
+// binding (token.path must equal the requested path).
+export function authenticateTokenForMedia(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const authHeader = req.headers["authorization"];
+  const headerToken = authHeader && authHeader.split(" ")[1];
+  const queryToken =
+    typeof (req.query as any).token === "string"
+      ? ((req.query as any).token as string)
+      : null;
+  const token = headerToken || queryToken;
+
+  if (!token) {
+    res.status(401).json({ error: "No token provided" });
+    return;
+  }
+
+  // req.path is the full path e.g. "/objects/.private/abc123.jpg"
+  if (!verifyMediaToken(token, req.path)) {
+    res.status(403).json({ error: "Invalid or expired media token" });
+    return;
+  }
+
   next();
 }
 

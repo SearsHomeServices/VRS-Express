@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Submission } from "@shared/schema";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
@@ -542,7 +543,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-issue-photos-detail">
                       {issuePhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <img src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-detail-${i}`} />
+                          <MediaImage src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-detail-${i}`} />
                         </div>
                       ))}
                     </div>
@@ -557,7 +558,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-estimate-photos-detail">
                       {estimatePhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <img src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-detail-${i}`} />
+                          <MediaImage src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-detail-${i}`} />
                         </div>
                       ))}
                     </div>
@@ -572,7 +573,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-photos-detail">
                       {legacyPhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <img src={url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-photo-detail-${i}`} />
+                          <MediaImage src={url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-photo-detail-${i}`} />
                         </div>
                       ))}
                     </div>
@@ -602,7 +603,7 @@ export default function SubmissionDetailPage() {
                       className="rounded-md overflow-hidden bg-muted"
                       data-testid={videoList.length === 1 ? "media-video-detail" : `media-video-detail-${vi}`}
                     >
-                      <video
+                      <MediaVideo
                         src={vurl}
                         controls
                         className="w-full max-h-[250px]"
@@ -623,7 +624,7 @@ export default function SubmissionDetailPage() {
                 <Mic className="w-3.5 h-3.5" />
                 Voice Note
               </p>
-              <audio src={sub.voiceNoteUrl} controls className="w-full" data-testid="audio-player-detail" />
+              <MediaAudio src={sub.voiceNoteUrl} controls className="w-full" data-testid="audio-player-detail" />
             </CardContent>
           </Card>
         )}

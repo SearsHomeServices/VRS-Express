@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useAuth, getToken } from "@/lib/auth";
+import { useAuth, getToken, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
+import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
@@ -853,10 +854,10 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                               <div
                                 key={i}
                                 className="relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group"
-                                onClick={() => openLightbox(allPhotos, offset + i)}
+                                onClick={async () => openLightbox(await buildMediaUrls(allPhotos), offset + i)}
                                 data-testid={`admin-${testIdPrefix}-photo-${i}`}
                               >
-                                <img
+                                <MediaImage
                                   src={url}
                                   alt={`${label} ${i + 1}`}
                                   decoding="async"
@@ -865,16 +866,13 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                   <ZoomIn className="w-6 h-6 text-white" />
                                 </div>
-                                <a
-                                  href={url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                <button
                                   className="absolute top-1 right-1 bg-black/60 rounded-md p-1 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80 z-10"
-                                  onClick={(e) => e.stopPropagation()}
+                                  onClick={async (e) => { e.stopPropagation(); const t = await buildMediaUrl(url); window.open(t, "_blank", "noopener,noreferrer"); }}
                                   data-testid={`admin-${testIdPrefix}-download-${i}`}
                                 >
                                   <Download className="w-3.5 h-3.5" />
-                                </a>
+                                </button>
                               </div>
                             ))}
                           </div>
@@ -932,7 +930,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                             className="rounded-md overflow-hidden bg-muted"
                             data-testid={videoList.length === 1 ? "admin-media-video" : `admin-media-video-${vi}`}
                           >
-                            <video
+                            <MediaVideo
                               src={vurl}
                               controls
                               preload="metadata"
@@ -955,7 +953,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                   </p>
                   {sub.voiceNoteUrl ? (
                     <div className="rounded-md overflow-hidden bg-muted p-3" data-testid="admin-media-voice">
-                      <audio
+                      <MediaAudio
                         src={sub.voiceNoteUrl}
                         controls
                         className="w-full"

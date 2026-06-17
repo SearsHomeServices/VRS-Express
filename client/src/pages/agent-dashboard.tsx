@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useAuth } from "@/lib/auth";
+import { useAuth, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
+import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
@@ -2623,10 +2624,10 @@ export default function AgentDashboard() {
                                       <div key={i} className="space-y-1">
                                         <div
                                           className={`relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group ${rejected ? "ring-2 ring-red-500" : ""}`}
-                                          onClick={() => selectedAction === "reject" ? togglePhotoRejection(url) : openLightbox(allPhotos, offset + i)}
+                                          onClick={async () => selectedAction === "reject" ? togglePhotoRejection(url) : openLightbox(await buildMediaUrls(allPhotos), offset + i)}
                                           data-testid={`${testIdPrefix}-photo-${i}`}
                                         >
-                                          <img
+                                          <MediaImage
                                             src={url}
                                             alt={`${label} ${i + 1}`}
                                             decoding="async"
@@ -2650,7 +2651,7 @@ export default function AgentDashboard() {
                                                 className="absolute top-1 right-1 bg-black/60 rounded-md p-1 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80 z-10"
                                                 onClick={(e) => {
                                                   e.stopPropagation();
-                                                  downloadPhotoUrl(url, `photo-${offset + i + 1}`);
+                                                  buildMediaUrl(url).then(t => downloadPhotoUrl(t, `photo-${offset + i + 1}`));
                                                 }}
                                                 data-testid={`${testIdPrefix}-download-${i}`}
                                               >
@@ -2722,7 +2723,7 @@ export default function AgentDashboard() {
                                   className={`rounded-md overflow-hidden bg-muted ${rejectedVideo.rejected ? "ring-2 ring-red-500" : ""}`}
                                   data-testid={videoList.length === 1 ? "media-video" : `media-video-${vi}`}
                                 >
-                                  <video
+                                  <MediaVideo
                                     src={vurl}
                                     controls
                                     className={`w-full max-h-[300px] ${rejectedVideo.rejected ? "opacity-40" : ""}`}
@@ -2781,7 +2782,7 @@ export default function AgentDashboard() {
                           </p>
                           {selectedSubmission.voiceNoteUrl ? (
                             <div className="space-y-2">
-                              <audio src={selectedSubmission.voiceNoteUrl} controls className={`w-full ${rejectedVoiceNote.rejected ? "opacity-40" : ""}`} data-testid="audio-player" />
+                              <MediaAudio src={selectedSubmission.voiceNoteUrl} controls className={`w-full ${rejectedVoiceNote.rejected ? "opacity-40" : ""}`} data-testid="audio-player" />
                               {selectedAction === "reject" && (
                                 <div className="flex items-center gap-2">
                                   <button
@@ -2855,10 +2856,10 @@ export default function AgentDashboard() {
                                 <div
                                   key={i}
                                   className="relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group ring-1 ring-blue-200 dark:ring-blue-900"
-                                  onClick={() => openLightbox(priorAll, baseOffset + i)}
+                                  onClick={async () => openLightbox(await buildMediaUrls(priorAll), baseOffset + i)}
                                   data-testid={`prior-${testIdPrefix}-photo-${i}`}
                                 >
-                                  <img
+                                  <MediaImage
                                     src={url}
                                     alt={`${label} ${i + 1}`}
                                     decoding="async"
@@ -2902,7 +2903,7 @@ export default function AgentDashboard() {
                                 </p>
                                 <div className="space-y-2">
                                   {priorVideos.map((url, i) => (
-                                    <video
+                                    <MediaVideo
                                       key={i}
                                       src={url}
                                       controls
@@ -2919,7 +2920,7 @@ export default function AgentDashboard() {
                                   <Mic className="w-3.5 h-3.5" />
                                   Voice Note
                                 </p>
-                                <audio
+                                <MediaAudio
                                   src={priorRejection.voiceNoteUrl}
                                   controls
                                   className="w-full"

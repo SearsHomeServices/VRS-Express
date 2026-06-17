@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useAuth, getToken } from "@/lib/auth";
+import { TechPhotoPreview, MediaVideo, MediaAudio } from "@/components/media";
 import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1879,12 +1880,13 @@ export default function TechSubmitPage() {
                   <div className="grid grid-cols-3 gap-2" data-testid="issue-photo-previews">
                     {issuePhotoUrls.map((url, i) => (
                       <div key={i} className="relative aspect-square bg-muted rounded-md overflow-visible">
-                        <img
-                          src={issuePhotoLocalPreviews[url] || url}
+                        <TechPhotoPreview
+                          src={url}
+                          localPreview={issuePhotoLocalPreviews[url] || null}
+                          fallbackText={`Photo ${i + 1}`}
                           alt={`Issue ${i + 1}`}
                           className="w-full h-full object-cover rounded-md"
                           data-testid={`img-issue-preview-${i}`}
-                          onError={(e) => { const t = e.currentTarget; if (t.src !== url) { t.src = url; } else { t.style.display = "none"; t.parentElement!.classList.add("flex", "items-center", "justify-center"); const s = document.createElement("span"); s.className = "text-xs text-muted-foreground"; s.textContent = `Photo ${i + 1}`; t.parentElement!.appendChild(s); } }}
                         />
                         <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = issuePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setIssuePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setIssuePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-issue-${i}`}>
                           <X className="w-3 h-3" />
@@ -1999,12 +2001,13 @@ export default function TechSubmitPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="estimate-photo-previews">
                       {estimatePhotoUrls.map((url, i) => (
                         <div key={i} className="relative aspect-square bg-muted rounded-md overflow-visible">
-                          <img
-                            src={estimatePhotoLocalPreviews[url] || url}
+                          <TechPhotoPreview
+                            src={url}
+                            localPreview={estimatePhotoLocalPreviews[url] || null}
+                            fallbackText={`Estimate ${i + 1}`}
                             alt={`Estimate ${i + 1}`}
                             className="w-full h-full object-cover rounded-md"
                             data-testid={`img-estimate-preview-${i}`}
-                            onError={(e) => { const t = e.currentTarget; if (t.src !== url) { t.src = url; } else { t.style.display = "none"; t.parentElement!.classList.add("flex", "items-center", "justify-center"); const s = document.createElement("span"); s.className = "text-xs text-muted-foreground"; s.textContent = `Estimate ${i + 1}`; t.parentElement!.appendChild(s); } }}
                           />
                           <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = estimatePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setEstimatePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setEstimatePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-estimate-${i}`}>
                             <X className="w-3 h-3" />
@@ -2101,7 +2104,7 @@ export default function TechSubmitPage() {
                   <div className="space-y-3">
                     {videoUrls.map((url, idx) => (
                       <div className="relative" key={`${url}-${idx}`} data-testid={`video-slot-${idx}`}>
-                        <video
+                        <MediaVideo
                           src={url}
                           controls
                           className="w-full rounded-md"
@@ -2216,7 +2219,7 @@ export default function TechSubmitPage() {
                 )}
                 {voiceNoteUrl && !audioUploading && (
                   <div className="space-y-2" data-testid="voice-note-preview">
-                    <audio src={voiceNoteUrl} controls className="w-full" data-testid="audio-player-preview" />
+                    <MediaAudio src={voiceNoteUrl} controls className="w-full" data-testid="audio-player-preview" />
                     <Button
                       type="button"
                       variant="outline"

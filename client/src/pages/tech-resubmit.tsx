@@ -7,6 +7,7 @@ import { useRoute, useLocation, Link } from "wouter";
 import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
 import { useAuth, getToken } from "@/lib/auth";
+import { MediaImage, MediaVideo } from "@/components/media";
 import { parseVideoUrls, MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -849,7 +850,7 @@ export default function TechResubmitPage() {
                   <div className="grid grid-cols-4 gap-2">
                     {issuePhotoUrls.map((url, i) => (
                       <div key={i} className="relative aspect-square bg-muted rounded-md overflow-hidden">
-                        <img src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-resubmit-${i}`} />
+                        <MediaImage src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-resubmit-${i}`} />
                         <button
                           type="button"
                           className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
@@ -894,7 +895,7 @@ export default function TechResubmitPage() {
                   <div className="grid grid-cols-4 gap-2">
                     {estimatePhotoUrls.map((url, i) => (
                       <div key={i} className="relative aspect-square bg-muted rounded-md overflow-hidden">
-                        <img src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-resubmit-${i}`} />
+                        <MediaImage src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-resubmit-${i}`} />
                         <button
                           type="button"
                           className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
@@ -944,7 +945,7 @@ export default function TechResubmitPage() {
                     <div className="space-y-3">
                       {videoUrls.map((url, idx) => (
                         <div className="relative rounded-md overflow-hidden bg-muted" key={`${url}-${idx}`} data-testid={`video-slot-resubmit-${idx}`}>
-                          <video
+                          <MediaVideo
                             src={url}
                             controls
                             className="w-full max-h-[200px]"
