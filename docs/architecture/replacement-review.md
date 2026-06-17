@@ -1,0 +1,9 @@
+# Replacement Review Outcome (2026-05-20)
+
+- **Action:** `approve_replacement_review` on the standard `/api/submissions/:id/process` route (NOT available on `/process-nla` — NLA has its own replacement actions).
+- **Schema:** `submissions.replacement_review_recommended` boolean (default false). Idempotent column-add in `server/seed.ts` (`ensureReplacementReviewColumn`).
+- **Behavior:** Mirrors `approve` — issues today's RGC code, captures external auth code for AHS / First American warranties, sets `ticketStatus='completed'` + `stage1Status='approved'` + `stage2Status='approved'` — but additionally sets `replacement_review_recommended=true` and sends a distinct SMS via `buildReplacementReviewMessage()` (`server/sms.ts`) using the exact copy: *"Placed into Replacement Review, remove all parts from the order and select the proper replacement labor code and close the call."*
+- **Terminal.** Resubmit route blocks resubmission of any ticket with `replacement_review_recommended=true`.
+- **Agent UI:** 5th purple button on the agent process panel (hidden on NLA tickets). Reuses the auth-code input — label flips to "Replacement Code". Validators extend external-auth-required + rgc-set-for-today gating to this action.
+- **Tech UI (`submission-detail.tsx`):** Purple `bg-purple-700` header "Placed Into Replacement Review" inserted BEFORE the green completed branches; auth-code card relabels to "Replacement Code" and switches to purple background; Copy button label "Copy Replacement Code".
+- **Admin:** Purple `REPLACEMENT REVIEW` badge next to ticket status pill in the queue. New "Replacement Review Outcomes" analytics card (Today/Week/Month/All Time) sourced from `GET /api/admin/replacement-review-analytics` → `storage.getReplacementReviewAnalytics()`. XLSX export's "Authorization Tickets" sheet has a new trailing "Replacement Review" column (`YES` or empty).

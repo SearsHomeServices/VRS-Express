@@ -1,0 +1,10 @@
+# Flexed Technicians (VRS Access)
+
+- Team leads (e.g. Billie Gambrell / LDAP `bgambre`) work in the field as technicians AND log in as VRS agents when "flexed". They have a single `users` row.
+- **Model (role-based, no DB migration):** granting VRS access flips that row's `role` from `technician` → `vrs_agent` plus a password + division assignments. "VRS-enabled" is derivable from `role` + roster (`technicians.ldap_id`) membership — no extra column.
+- **Why this is safe:** `authenticateToken` trusts the JWT's role (never re-fetches DB), `signToken` uses the stored `user.role`, and field tech-login (`/api/auth/tech-login`) is passwordless/roster-based and ALWAYS forces a `technician` token regardless of stored role. So flipping the stored role does NOT affect field login, but gives a native agent session on agent login. No auth special-casing needed.
+- **Grant/Revoke UI:** admin Technicians list shows a blue "VRS-enabled" badge + Grant/Revoke buttons. Grant reuses the user edit dialog (role locked to `vrs_agent`, password required min 6 chars). Revoke flips role back to `technician` and clears specializations (confirm dialog). Agents list shows a "Field Tech" badge for agents who also have a roster entry.
+- **Tech-list query:** `getTechnicianUsers()` includes `u.role='technician' OR (u.role='vrs_agent' AND t.ldap_id IS NOT NULL)` — deliberately EXCLUDES admin/super_admin so privileged users can never be demoted via the Technicians-list Revoke button.
+- **Demotion guard:** `PATCH /api/admin/users/:id` blocks changing a `super_admin` role at all, and only a super_admin may change an `admin`'s role.
+- **Create collision:** admin Create User returns a guided 409 ("belongs to a field technician … use Grant VRS access") when the LDAP already exists as a technician.
+- **Known limitation:** revoking does NOT immediately invalidate an already-issued agent JWT (valid until 7-day expiry). This matches existing platform behavior for deactivate/delete/role-edit — middleware trusts the JWT until expiry across the board.
