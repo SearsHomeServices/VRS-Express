@@ -1719,6 +1719,23 @@ export async function registerRoutes(
         if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
           return res.status(403).json({ error: "Not your submission" });
         }
+        if (user.role === "vrs_agent") {
+          const isAssignedToAgent = sub.assignedTo === user.id;
+          const isQueued = sub.ticketStatus === "queued";
+          const isReviewer = sub.reviewedBy === user.id;
+          if (!isAssignedToAgent && !isQueued && !isReviewer) {
+            return res.status(403).json({ error: "Access denied" });
+          }
+          if (isQueued) {
+            const specs = await storage.getSpecializations(user.id);
+            const divisions = specs.map((s: any) => s.division);
+            const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
+            const isNlaTicket = sub.requestType === "parts_nla";
+            if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(sub.applianceType))) {
+              return res.status(403).json({ error: "Access denied" });
+            }
+          }
+        }
 
         const noteSchema = z.object({
           body: z.string().min(1, "Note cannot be empty").max(2000, "Note must be 2000 characters or less"),
@@ -1754,6 +1771,23 @@ export async function registerRoutes(
         const user = (req as any).user;
         if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
           return res.status(403).json({ error: "Access denied" });
+        }
+        if (user.role === "vrs_agent") {
+          const isAssignedToAgent = sub.assignedTo === user.id;
+          const isQueued = sub.ticketStatus === "queued";
+          const isReviewer = sub.reviewedBy === user.id;
+          if (!isAssignedToAgent && !isQueued && !isReviewer) {
+            return res.status(403).json({ error: "Access denied" });
+          }
+          if (isQueued) {
+            const specs = await storage.getSpecializations(user.id);
+            const divisions = specs.map((s: any) => s.division);
+            const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
+            const isNlaTicket = sub.requestType === "parts_nla";
+            if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(sub.applianceType))) {
+              return res.status(403).json({ error: "Access denied" });
+            }
+          }
         }
         const notes = await storage.getSubmissionNotes(id);
         return res.status(200).json({ notes });
