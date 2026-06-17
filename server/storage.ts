@@ -1625,7 +1625,13 @@ export class DatabaseStorage implements IStorage {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     // Counts stay in SQL (cheap, no business-hours logic needed).
-    const countsResult = await db
+    // Tyler perf: counts, other-status breakdown, and the business-hours
+    // averages are three independent read-only queries. Run them concurrently
+    // (Promise.all) instead of as three sequential round-trips — output is
+    // identical, only the wall-clock latency drops.
+    const defaultProfile = getCachedBusinessHoursProfile("default");
+    const bh = this.businessHoursSqlParams(defaultProfile);
+    const countsPromise = db
       .select({
         submissionsToday: sql<number>`count(*) filter (where ${submissions.createdAt} >= ${startOfToday})`,
         submissionsThisWeek: sql<number>`count(*) filter (where ${submissions.createdAt} >= ${sevenDaysAgo})`,
@@ -1641,7 +1647,7 @@ export class DatabaseStorage implements IStorage {
     // rejected/pending so the Approval Rate card can render a row per
     // remaining bucket (Invalid, Not Reviewed/null, etc.) and the displayed
     // %s actually add up. Keeps the canonical 3 numerators unchanged.
-    const otherStatusRows = await db
+    const otherStatusPromise = db
       .select({
         status: sql<string | null>`${submissions.stage1Status}`,
         count: sql<number>`count(*)`,
@@ -1649,11 +1655,6 @@ export class DatabaseStorage implements IStorage {
       .from(submissions)
       .where(sql`${submissions.stage1Status} is null or ${submissions.stage1Status} not in ('approved', 'rejected', 'pending')`)
       .groupBy(submissions.stage1Status);
-    const otherStatusCounts: Record<string, number> = {};
-    for (const r of otherStatusRows) {
-      const key = r.status === null || r.status === "" ? "not_reviewed" : r.status;
-      otherStatusCounts[key] = Number(r.count) || 0;
-    }
 
     // Tyler 2026-04-30: averages are business-hours aware so overnight time
     // doesn't skew the headline numbers. Mirrors the row-timer logic in
@@ -1665,9 +1666,7 @@ export class DatabaseStorage implements IStorage {
     // bit-equivalent to the JS loop (ms-truncated to match Date parsing, then
     // floored to seconds by formatDuration on display). HVAC tickets remain
     // aggregated under the default profile, matching the prior behavior.
-    const defaultProfile = getCachedBusinessHoursProfile("default");
-    const bh = this.businessHoursSqlParams(defaultProfile);
-    const avgResult = await db.execute(sql`
+    const avgPromise = db.execute(sql`
       WITH params AS (
         SELECT ${bh.open}::time AS open_t, ${bh.close}::time AS close_t, ${sql.raw(bh.dowsLiteral)} AS open_dows
       ),
@@ -1726,6 +1725,19 @@ export class DatabaseStorage implements IStorage {
       SELECT (SELECT AVG(ms) FROM s1_pr) AS avg_stage1_ms,
              (SELECT AVG(ms) FROM s2_pr) AS avg_authcode_ms
     `);
+
+    const [countsResult, otherStatusRows, avgResult] = await Promise.all([
+      countsPromise,
+      otherStatusPromise,
+      avgPromise,
+    ]);
+
+    const otherStatusCounts: Record<string, number> = {};
+    for (const r of otherStatusRows) {
+      const key = r.status === null || r.status === "" ? "not_reviewed" : r.status;
+      otherStatusCounts[key] = Number(r.count) || 0;
+    }
+
     const avgRow = (avgResult.rows[0] ?? {}) as { avg_stage1_ms: string | null; avg_authcode_ms: string | null };
     const avgTimeToStage1Ms = avgRow.avg_stage1_ms != null ? Number(avgRow.avg_stage1_ms) : null;
     const avgTimeToAuthCodeMs = avgRow.avg_authcode_ms != null ? Number(avgRow.avg_authcode_ms) : null;
@@ -1887,8 +1899,12 @@ export class DatabaseStorage implements IStorage {
     completed: number;
     avgTimeToStage1Ms: number | null;
   }[]> {
-    // Counts stay in SQL.
-    const countRows = await db.execute(sql`
+    // Counts stay in SQL. Tyler perf: the count rollup and the business-hours
+    // average rollup are independent read-only queries — run them concurrently
+    // instead of sequentially. Output is unchanged.
+    const districtProfile = getCachedBusinessHoursProfile("default");
+    const bh = this.businessHoursSqlParams(districtProfile);
+    const countRowsPromise = db.execute(sql`
       select
         coalesce(district_code, 'Unknown') as "district",
         count(*) as "totalTickets",
@@ -1907,9 +1923,7 @@ export class DatabaseStorage implements IStorage {
     // streaming every reviewed row into Node. Districts merge null AND '' into
     // "Unknown" (COALESCE(NULLIF(...))) to match the prior `r.districtCode ||
     // "Unknown"` keying exactly. Verified equivalent to the JS loop.
-    const districtProfile = getCachedBusinessHoursProfile("default");
-    const bh = this.businessHoursSqlParams(districtProfile);
-    const avgRows = await db.execute(sql`
+    const avgRowsPromise = db.execute(sql`
       WITH params AS (
         SELECT ${bh.open}::time AS open_t, ${bh.close}::time AS close_t, ${sql.raw(bh.dowsLiteral)} AS open_dows
       ),
@@ -1942,6 +1956,9 @@ export class DatabaseStorage implements IStorage {
       )
       SELECT district, AVG(ms) AS avg_ms FROM d_pr GROUP BY district
     `);
+
+    const [countRows, avgRows] = await Promise.all([countRowsPromise, avgRowsPromise]);
+
     const avgByDistrict = new Map<string, number>();
     for (const r of avgRows.rows as any[]) {
       if (r.avg_ms != null) avgByDistrict.set(r.district, Number(r.avg_ms));

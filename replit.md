@@ -138,6 +138,7 @@ Key architectural patterns include:
 - `getAgentsWithStatus` uses a single joined+aggregated query (`array_agg(... order by id)`) instead of an N+1 per-agent specializations lookup. Division array order/contents preserved.
 - `ensurePerformanceIndexes` (server/seed.ts) now also covers `appliance_type`, `stage1_reviewed_at`, `stage2_reviewed_at`, `reviewed_at`, `reviewed_by` (CONCURRENTLY, idempotent). Declared in `shared/schema.ts` so drizzle-kit push won't drop them.
 - Note (drift): export/backfill row sets were deliberately NOT row-capped — truncating them would change downloaded/maintenance output. Their scans are bounded by indexes + existing date-scoping instead.
+- Concurrent independent reads: `getAnalytics` (counts + other-status + business-hours avg) and `getDistrictRollup` (count rollup + business-hours avg rollup) run their independent read-only queries via `Promise.all` instead of sequentially. `GET /api/agent/stats` likewise parallelizes its count queries (specializations resolve first to derive divisions, then the division-scoped + NLA counts run concurrently). Output is byte-identical — only wall-clock latency drops. `Promise.all` rejects on first failure, preserving the prior single try/catch 500 path.
 
 ## External Dependencies
 - **Twilio:** Used for sending SMS notifications to technicians.

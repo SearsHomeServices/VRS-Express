@@ -2950,28 +2950,42 @@ export async function registerRoutes(
       const userRole = authReq.user!.role;
 
       if (userRole === "vrs_agent") {
+        // Tyler perf: specializations gate the division-scoped counts, so it
+        // must resolve first; the remaining counts are independent and run
+        // concurrently (Promise.all) instead of as sequential round-trips.
         const specs = await storage.getSpecializations(authReq.user!.id);
         const divisions = specs.map(s => s.division);
-        const queueCount = await storage.getQueuedCount(divisions);
-        const pendingCount = await storage.getPendingCount(authReq.user!.id);
-        const completedToday = await storage.getCompletedTodayCount(authReq.user!.id);
+
+        const [queueCount, pendingCount, completedToday] = await Promise.all([
+          storage.getQueuedCount(divisions),
+          storage.getPendingCount(authReq.user!.id),
+          storage.getCompletedTodayCount(authReq.user!.id),
+        ]);
 
         let nlaQueueCount = 0;
         let nlaPendingCount = 0;
         let nlaCompletedToday = 0;
         if (divisions.includes("nla")) {
-          nlaQueueCount = await storage.getNlaQueuedCount(divisions);
-          nlaPendingCount = await storage.getNlaPendingCount(authReq.user!.id);
-          nlaCompletedToday = await storage.getNlaCompletedTodayCount(authReq.user!.id, divisions);
+          const nla = await Promise.all([
+            storage.getNlaQueuedCount(divisions),
+            storage.getNlaPendingCount(authReq.user!.id),
+            storage.getNlaCompletedTodayCount(authReq.user!.id, divisions),
+          ]);
+          nlaQueueCount = nla[0];
+          nlaPendingCount = nla[1];
+          nlaCompletedToday = nla[2];
         }
 
         return res.status(200).json({ queueCount, pendingCount, completedToday, nlaQueueCount, nlaPendingCount, nlaCompletedToday });
       }
 
-      const queueCount = await storage.getQueuedCount(ALL_DIVISIONS);
-      const completedToday = await storage.getCompletedTodayCount();
-      const nlaQueueCount = await storage.getNlaQueuedCount();
-      const nlaCompletedToday = await storage.getNlaCompletedTodayCount();
+      // Tyler perf: admin counts are all independent — run concurrently.
+      const [queueCount, completedToday, nlaQueueCount, nlaCompletedToday] = await Promise.all([
+        storage.getQueuedCount(ALL_DIVISIONS),
+        storage.getCompletedTodayCount(),
+        storage.getNlaQueuedCount(),
+        storage.getNlaCompletedTodayCount(),
+      ]);
 
       return res.status(200).json({ queueCount, pendingCount: 0, completedToday, nlaQueueCount, nlaPendingCount: 0, nlaCompletedToday });
     } catch (error) {
