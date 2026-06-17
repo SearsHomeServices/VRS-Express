@@ -68,6 +68,8 @@ integrations = ["javascript_object_storage:2.0.0", "javascript_openai:1.0.0"]
 [userenv.shared]
 VITE_APP_VERSION = "1.0.0"
 
+[userenv.development]
+
 [objectStorage]
 defaultBucketID = "replit-objstore-70466883-0558-4e18-a808-47d0ed26c418"
 

@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { normalizeLdapId } from "@shared/ldap";
+import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 
 export default function TechLoginPage() {
@@ -22,6 +23,7 @@ export default function TechLoginPage() {
   const [providerMode, setProviderMode] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const { user, isLoading: authLoading, techLogin, login, logout } = useAuth();
+  const portal1099Enabled = usePortal1099Enabled();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -231,18 +233,20 @@ export default function TechLoginPage() {
             </form>
 
             <div className="text-center mt-4 space-y-2">
-              <button
-                type="button"
-                className="block w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => {
-                  setProviderMode((v) => !v);
-                  setShowPasswordField(false);
-                  setAdminPassword("");
-                }}
-                data-testid="link-provider-1099-toggle"
-              >
-                {providerMode ? "Back to technician sign in" : "VRS Auth — 1099 Provider? Sign in"}
-              </button>
+              {portal1099Enabled && (
+                <button
+                  type="button"
+                  className="block w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    setProviderMode((v) => !v);
+                    setShowPasswordField(false);
+                    setAdminPassword("");
+                  }}
+                  data-testid="link-provider-1099-toggle"
+                >
+                  {providerMode ? "Back to technician sign in" : "VRS Auth — 1099 Provider? Sign in"}
+                </button>
+              )}
               {!providerMode && (
                 <button
                   type="button"

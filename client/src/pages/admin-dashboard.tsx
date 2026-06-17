@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { useAuth, getToken } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
   getBusinessElapsedMs,
@@ -2660,6 +2661,7 @@ function HealthSection() {
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
+  const portal1099Enabled = usePortal1099Enabled();
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const { theme, toggleTheme } = useTheme();
@@ -4970,7 +4972,9 @@ export default function AdminDashboard() {
                   <SelectItem value="technician">Technician</SelectItem>
                   <SelectItem value="vrs_agent">VRS Agent</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="provider_1099">1099 Provider</SelectItem>
+                  {portal1099Enabled && (
+                    <SelectItem value="provider_1099">1099 Provider</SelectItem>
+                  )}
                   {user?.role === "super_admin" && (
                     <SelectItem value="super_admin">Super Admin</SelectItem>
                   )}

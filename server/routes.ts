@@ -11,6 +11,7 @@ import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
+import { is1099PortalEnabled } from "./featureFlags";
 import { normalizeLdapId } from "@shared/ldap";
 import {
   INTAKE_FORM_GO_LIVE_UTC,
@@ -503,6 +504,12 @@ export async function registerRoutes(
     }
   });
 
+  // Public runtime config — lets the client hide feature-flagged affordances
+  // (e.g. the 1099 provider portal) without a rebuild.
+  app.get("/api/config", (_req, res) => {
+    res.json({ portal1099Enabled: is1099PortalEnabled() });
+  });
+
   app.post("/api/auth/login", async (req, res) => {
     try {
       const parsed = loginSchema.safeParse(req.body);
@@ -523,6 +530,13 @@ export async function registerRoutes(
 
       if (!user.isActive) {
         return res.status(403).json({ error: "Account is deactivated" });
+      }
+
+      // 1099 provider portal is feature-flagged. When disabled, provider
+      // accounts cannot authenticate (this gates every downstream provider
+      // route since no provider token can be issued).
+      if (user.role === "provider_1099" && !is1099PortalEnabled()) {
+        return res.status(403).json({ error: "Invalid credentials" });
       }
 
       return res.status(200).json({ user: sanitizeUser(user), token: signToken(user) });
@@ -938,6 +952,9 @@ export async function registerRoutes(
       // requests are not available to providers — reject server-side even if
       // the (hidden-in-UI) option somehow slipped through.
       const isProvider1099 = user.role === "provider_1099";
+      if (isProvider1099 && !is1099PortalEnabled()) {
+        return res.status(403).json({ error: "The 1099 Provider Portal is not enabled in this environment." });
+      }
       if (isProvider1099 && parsed.data.requestType === "parts_nla") {
         return res.status(400).json({ error: "NLA Parts requests are not available through the 1099 provider portal." });
       }
@@ -4108,6 +4125,9 @@ export async function registerRoutes(
       // list. Both are required so the restricted submission view has a
       // company to show and the portal login works.
       if (role === "provider_1099") {
+        if (!is1099PortalEnabled()) {
+          return res.status(403).json({ error: "The 1099 Provider Portal is not enabled in this environment." });
+        }
         if (!racId) {
           return res.status(400).json({ error: "A username is required for 1099 provider accounts." });
         }
@@ -4240,6 +4260,9 @@ export async function registerRoutes(
       // role is provider_1099 the company must be a valid preset entry;
       // otherwise the company is cleared so non-providers never carry one.
       const resultingRole = parsed.data.role ?? user.role;
+      if (resultingRole === "provider_1099" && !is1099PortalEnabled()) {
+        return res.status(403).json({ error: "The 1099 Provider Portal is not enabled in this environment." });
+      }
       if (resultingRole === "provider_1099") {
         if (parsed.data.companyName !== undefined) {
           if (!isValidProvider1099Company(parsed.data.companyName || null)) {

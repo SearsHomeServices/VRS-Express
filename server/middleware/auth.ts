@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { is1099PortalEnabled } from "../featureFlags";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -36,6 +37,12 @@ export function authenticateToken(
       ldapId?: string;
       isTechnician?: boolean;
     };
+    // 1099 provider portal feature flag: when disabled, reject any
+    // already-issued provider token so no provider-reachable route is usable.
+    if (decoded.role === "provider_1099" && !is1099PortalEnabled()) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
     (req as AuthenticatedRequest).user = decoded;
     next();
   } catch {
