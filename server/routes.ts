@@ -4,11 +4,12 @@ import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { storage, db } from "./storage";
-import { sql } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, type AuthenticatedRequest } from "./middleware/auth";
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
+import { submissions } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import { is1099PortalEnabled } from "./featureFlags";
@@ -70,6 +71,17 @@ import { ObjectStorageService } from "./replit_integrations/object_storage/objec
 import { broadcastToDivisionAgents, broadcastToNlaDivisionAgents, broadcastToAdmins, broadcastToAllAgents, broadcastToAgent, broadcastToTechnicians, updateClientStatus, updateClientDivisions, getWarrantyLabel, getDivisionLabel, getLiveSessionCount } from "./websocket";
 
 const execFileAsync = promisify(execFile);
+
+// ---------------------------------------------------------------------------
+// Warranty lookup rate limiter — secondary defense-in-depth cap on
+// Snowflake traffic from the /api/tech/lookup-warranty endpoint.
+// Primary authorization is an ownership check (existing submission).
+// This rate limit caps requests even for owned orders to prevent abuse.
+// Keyed by user ID; tracks timestamps of lookups within the rolling window.
+// ---------------------------------------------------------------------------
+const WARRANTY_LOOKUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const WARRANTY_LOOKUP_MAX_PER_WINDOW = 20;
+const warrantyLookupLog = new Map<number, number[]>(); // userId -> timestamps
 
 // ---------------------------------------------------------------------------
 // Video conversion helpers (Task: fix admin video playback for failed iPhone
@@ -5116,24 +5128,72 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tech/lookup-warranty", authenticateToken, async (req, res) => {
+  app.get("/api/tech/lookup-warranty", authenticateToken, requireRole("technician", "flexed_technician"), async (req, res) => {
+    // Three-layer authorization:
+    //
+    // 1. Role gate (requireRole above): only technician / flexed_technician.
+    //    All other roles (agents, admins, providers) receive 403 immediately.
+    //
+    // 2. Ownership check (primary authorization): the caller must have at
+    //    least one existing submission tied to this service order. If none
+    //    exists, the request is denied with 403 — no Snowflake call is made.
+    //    This scopes the lookup to service orders the technician has already
+    //    submitted through the platform.
+    //
+    // 3. Rate limiting (secondary defense-in-depth): caps Snowflake traffic
+    //    to WARRANTY_LOOKUP_MAX_PER_WINDOW calls per rolling hour per user
+    //    even for authorized lookups, limiting resubmission / refresh abuse.
+    //
+    // Response scoping: procId and clientNm (third-party Snowflake identifiers)
+    // are never returned to the client; only the derived warranty classification
+    // is returned. That is all the submission form requires.
     try {
-      // 1099 provider portal: warranty is never surfaced to providers. The
-      // provider submission view doesn't call this endpoint, but block it
-      // server-side too so warranty detail can never leak to a provider token.
-      if ((req as AuthenticatedRequest).user?.role === "provider_1099") {
-        return res.status(403).json({ error: "Access denied" });
-      }
+      const authReq = req as AuthenticatedRequest;
+      const callerUserId = authReq.user!.id;
+      const callerRacId = authReq.user!.racId;
+
       const so = String(req.query.serviceOrder || "").trim();
       if (!/^\d{4}-\d{8}$/.test(so)) {
         return res.status(400).json({ error: "Invalid service order format" });
       }
+
+      // Ownership check: the caller must have at least one submission for this
+      // service order. Returns 403 without touching Snowflake otherwise.
+      const ownedRows = await db
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(
+          and(
+            eq(submissions.technicianId, callerUserId),
+            eq(submissions.serviceOrder, so)
+          )
+        )
+        .limit(1);
+
+      if (ownedRows.length === 0) {
+        console.warn(`[lookup-warranty] denied (no submission): user=${callerRacId} (${callerUserId}) so=${so}`);
+        return res.status(403).json({ error: "Access denied: service order not associated with your submissions" });
+      }
+
+      // Secondary rate limit: cap Snowflake traffic even for owned orders.
+      const now = Date.now();
+      const cutoff = now - WARRANTY_LOOKUP_WINDOW_MS;
+      const recentTimestamps = (warrantyLookupLog.get(callerUserId) ?? []).filter(ts => ts > cutoff);
+      if (recentTimestamps.length >= WARRANTY_LOOKUP_MAX_PER_WINDOW) {
+        console.warn(`[lookup-warranty] rate-limit exceeded: user=${callerRacId} (${callerUserId}) so=${so} count=${recentTimestamps.length}`);
+        return res.status(429).json({ error: "Too many warranty lookups. Please try again later." });
+      }
+      recentTimestamps.push(now);
+      warrantyLookupLog.set(callerUserId, recentTimestamps);
+
+      console.info(`[lookup-warranty] allowed: user=${callerRacId} (${callerUserId}) so=${so}`);
+
       const result = await fetchProcIdForServiceOrder(so);
       const derived = deriveWarrantyFromProcId(result.procId, result.clientNm);
+
+      // Return only the derived warranty classification — not procId or clientNm.
       res.json({
         serviceOrder: so,
-        procId: result.procId,
-        clientNm: result.clientNm,
         derived,
       });
     } catch (err) {

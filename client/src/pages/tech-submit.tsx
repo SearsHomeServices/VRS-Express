@@ -764,8 +764,6 @@ export default function TechSubmitPage() {
   const isValidSo = /^\d{4}-\d{8}$/.test(watchedServiceOrder || "");
   const warrantyLookup = useQuery<{
     serviceOrder: string;
-    procId: string;
-    clientNm: string;
     derived: { warrantyType: "sears_protect" | "american_home_shield" | "first_american"; warrantyProvider: string; source: "client_nm" | "proc_id" } | null;
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
