@@ -179,6 +179,15 @@ export const submissions = pgTable("submissions", {
   serviceOrderIdx: index("idx_submissions_service_order").on(table.serviceOrder),
   technicianCreatedIdx: index("idx_submissions_technician_created").on(table.technicianId, sql`created_at DESC`),
   createdAtIdx: index("idx_submissions_created_at").on(table.createdAt),
+  // Tyler 2026-06-17 (perf — Task #26): runtime-created in seed.ts
+  // ensurePerformanceIndexes(). Declared here so drizzle-kit push doesn't try
+  // to drop them on schema sync. Order/columns must match the CREATE INDEX
+  // statements exactly.
+  applianceTypeIdx: index("idx_submissions_appliance_type").on(table.applianceType),
+  stage1ReviewedAtIdx: index("idx_submissions_stage1_reviewed_at").on(table.stage1ReviewedAt),
+  stage2ReviewedAtIdx: index("idx_submissions_stage2_reviewed_at").on(table.stage2ReviewedAt),
+  reviewedAtIdx: index("idx_submissions_reviewed_at").on(table.reviewedAt),
+  reviewedByIdx: index("idx_submissions_reviewed_by").on(table.reviewedBy),
 }));
 
 export const insertSubmissionSchema = createInsertSchema(submissions).omit({

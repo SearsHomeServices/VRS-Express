@@ -133,6 +133,12 @@ Key architectural patterns include:
 - **History scoping:** GET list + GET `:id` scope a `provider_1099` to ONLY their own submissions; warranty is never returned to providers.
 - **Drift / important behavior:** providers can submit ONLY service orders that successfully derive to an AHS / First American warranty via Snowflake. Service orders whose warranty can't be determined (e.g. Snowflake unavailable) are rejected with the same generic "isn't eligible … verify the service order number" message — by design, to avoid leaking warranty status.
 
+## Dashboard Query Performance (2026-06-17)
+- Admin analytics + district-rollup business-hours timing averages are computed in SQL (date_trunc + generate_series over ET days, DST-correct via `AT TIME ZONE`), not by streaming every reviewed row into Node. Verified bit-equivalent to the prior `getBusinessElapsedMs` JS loop. See `.agents/memory/business-hours-sql-port.md`.
+- `getAgentsWithStatus` uses a single joined+aggregated query (`array_agg(... order by id)`) instead of an N+1 per-agent specializations lookup. Division array order/contents preserved.
+- `ensurePerformanceIndexes` (server/seed.ts) now also covers `appliance_type`, `stage1_reviewed_at`, `stage2_reviewed_at`, `reviewed_at`, `reviewed_by` (CONCURRENTLY, idempotent). Declared in `shared/schema.ts` so drizzle-kit push won't drop them.
+- Note (drift): export/backfill row sets were deliberately NOT row-capped — truncating them would change downloaded/maintenance output. Their scans are bounded by indexes + existing date-scoping instead.
+
 ## External Dependencies
 - **Twilio:** Used for sending SMS notifications to technicians.
 - **Snowflake:** Integrates for synchronizing technician data into the platform's database. Also provides ProcID (CMB_THD_PTY_ID) and Client Name lookup per service order via `fetchProcIdForServiceOrder` in `server/services/snowflake.ts`, stored as `procId` and `clientNm` on the submissions table.

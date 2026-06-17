@@ -1,2 +1,3 @@
 - [Test fixtures & login quirks](testing-fixtures.md) — dev seed purges tmorri1/testtech1 submissions on restart; all passwords reset to VRS2026!; tech form needs photos so test duplicate logic via API.
 - [Seed column-migration ordering](seed-migration-ordering.md) — a new Drizzle column must be ensured before the first query on that table, or boot crashes (Drizzle selects all columns).
+- [Business-hours elapsed math JS↔SQL](business-hours-sql-port.md) — port getBusinessElapsedMs to SQL bit-equivalently (ms-trunc + generate_series over ET days + AT TIME ZONE); Node & PG both UTC.

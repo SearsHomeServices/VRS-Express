@@ -198,6 +198,16 @@ async function ensurePerformanceIndexes() {
     { name: "idx_submissions_service_order",       table: "submissions", cols: "(service_order)" },
     { name: "idx_submissions_technician_created",  table: "submissions", cols: "(technician_id, created_at DESC)" },
     { name: "idx_submissions_created_at",          table: "submissions", cols: "(created_at)" },
+    // Tyler 2026-06-17 (perf — Task #26): back the admin dashboard's analytics
+    // + district-rollup + list filters. appliance_type backs division filtering;
+    // stage1/stage2_reviewed_at back the business-hours average IS NOT NULL
+    // scans; reviewed_at/reviewed_by back the agent Completed-view + audit
+    // lookups. Same CONCURRENTLY, idempotent pattern as the rows above.
+    { name: "idx_submissions_appliance_type",      table: "submissions", cols: "(appliance_type)" },
+    { name: "idx_submissions_stage1_reviewed_at",  table: "submissions", cols: "(stage1_reviewed_at)" },
+    { name: "idx_submissions_stage2_reviewed_at",  table: "submissions", cols: "(stage2_reviewed_at)" },
+    { name: "idx_submissions_reviewed_at",         table: "submissions", cols: "(reviewed_at)" },
+    { name: "idx_submissions_reviewed_by",         table: "submissions", cols: "(reviewed_by)" },
     { name: "idx_users_rac_id",                    table: "users",       cols: "(rac_id)" },
   ];
   let createdCount = 0;

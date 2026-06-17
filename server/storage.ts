@@ -49,7 +49,6 @@ import {
   InsertAgentActivityLog,
   AgentActivityLog,
 } from "@shared/schema";
-import { getBusinessElapsedMs } from "@shared/business-hours";
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
 import { normalizeLdapId } from "@shared/ldap";
 import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
@@ -1560,29 +1559,47 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Tyler 2026-06-17 (perf — Task #26): translate the admin-configured business-
+  // hours profile into SQL literals so the per-row business-elapsed math can run
+  // in Postgres instead of fetching every reviewed row into Node. DayKey →
+  // ISODOW (Mon=1..Sun=7) mirrors getBusinessElapsedMs's getDay()-based weekday
+  // matching. The dows array is built from validated integers only, so it is
+  // safe to inline via sql.raw.
+  private businessHoursSqlParams(profile: { open: string; close: string; openDays: string[] }): { open: string; close: string; dowsLiteral: string } {
+    const dowMap: Record<string, number> = { Sun: 7, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const dows = Array.from(
+      new Set(profile.openDays.map(d => dowMap[d]).filter((n): n is number => typeof n === "number")),
+    ).sort((a, b) => a - b);
+    return { open: profile.open, close: profile.close, dowsLiteral: `ARRAY[${dows.join(",")}]::int[]` };
+  }
+
   async getAgentsWithStatus(): Promise<{ id: number; name: string; racId: string | null; agentStatus: string; divisions: string[]; updatedAt: Date | null }[]> {
-    const agents = await db
-      .select()
+    // Tyler 2026-06-17 (perf — Task #26): single joined+aggregated query
+    // replaces the prior N+1 (one specializations SELECT per agent). divisions
+    // are aggregated ORDER BY id to preserve the prior PK-order array shape.
+    const rows = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        racId: users.racId,
+        agentStatus: users.agentStatus,
+        updatedAt: users.updatedAt,
+        divisions: sql<string[]>`coalesce(array_agg(${vrsAgentSpecializations.division} order by ${vrsAgentSpecializations.id}) filter (where ${vrsAgentSpecializations.division} is not null), '{}')`,
+      })
       .from(users)
+      .leftJoin(vrsAgentSpecializations, eq(vrsAgentSpecializations.userId, users.id))
       .where(and(eq(users.role, "vrs_agent"), eq(users.isActive, true)))
+      .groupBy(users.id, users.name, users.racId, users.agentStatus, users.updatedAt)
       .orderBy(users.name);
 
-    const result = [];
-    for (const agent of agents) {
-      const specs = await db
-        .select()
-        .from(vrsAgentSpecializations)
-        .where(eq(vrsAgentSpecializations.userId, agent.id));
-      result.push({
-        id: agent.id,
-        name: agent.name,
-        racId: agent.racId,
-        agentStatus: agent.agentStatus,
-        divisions: specs.map(s => s.division),
-        updatedAt: agent.updatedAt,
-      });
-    }
-    return result;
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      racId: r.racId,
+      agentStatus: r.agentStatus,
+      divisions: (r.divisions as string[]) ?? [],
+      updatedAt: r.updatedAt,
+    }));
   }
 
   async getAnalytics(): Promise<{
@@ -1638,38 +1655,80 @@ export class DatabaseStorage implements IStorage {
       otherStatusCounts[key] = Number(r.count) || 0;
     }
 
-    // Tyler 2026-04-30: averages computed in JS using business-hours math
-    // so overnight time doesn't skew the headline numbers. Mirrors the
-    // row-timer logic in admin-dashboard.tsx via the shared
-    // `getBusinessElapsedMs` helper. 2026-05-01 — uses the admin-configured
-    // default profile (system_settings.vrs_business_hours). HVAC tickets
-    // are aggregated under the same default profile here; if Tyler wants
-    // per-category aggregations, fetch applianceType in the SELECT below
-    // and pick getCachedBusinessHoursProfile(category) per row.
+    // Tyler 2026-04-30: averages are business-hours aware so overnight time
+    // doesn't skew the headline numbers. Mirrors the row-timer logic in
+    // admin-dashboard.tsx via the shared `getBusinessElapsedMs` helper, using
+    // the admin-configured default profile (system_settings.vrs_business_hours).
+    // Tyler 2026-06-17 (perf — Task #26): the per-row business-elapsed math now
+    // runs in SQL (date_trunc + generate_series over ET days, DST-correct via
+    // AT TIME ZONE) instead of streaming every reviewed row into Node. Verified
+    // bit-equivalent to the JS loop (ms-truncated to match Date parsing, then
+    // floored to seconds by formatDuration on display). HVAC tickets remain
+    // aggregated under the default profile, matching the prior behavior.
     const defaultProfile = getCachedBusinessHoursProfile("default");
-    const timestampRows = await db
-      .select({
-        createdAt: submissions.createdAt,
-        stage1ReviewedAt: submissions.stage1ReviewedAt,
-        stage2ReviewedAt: submissions.stage2ReviewedAt,
-      })
-      .from(submissions)
-      .where(sql`${submissions.stage1ReviewedAt} is not null`);
-
-    let stage1Sum = 0;
-    let stage1Count = 0;
-    let authCodeSum = 0;
-    let authCodeCount = 0;
-    for (const r of timestampRows) {
-      if (r.createdAt && r.stage1ReviewedAt) {
-        stage1Sum += getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt, defaultProfile);
-        stage1Count++;
-        if (r.stage2ReviewedAt) {
-          authCodeSum += getBusinessElapsedMs(r.stage1ReviewedAt, r.stage2ReviewedAt, defaultProfile);
-          authCodeCount++;
-        }
-      }
-    }
+    const bh = this.businessHoursSqlParams(defaultProfile);
+    const avgResult = await db.execute(sql`
+      WITH params AS (
+        SELECT ${bh.open}::time AS open_t, ${bh.close}::time AS close_t, ${sql.raw(bh.dowsLiteral)} AS open_dows
+      ),
+      s1_base AS (
+        SELECT id,
+          date_trunc('milliseconds', created_at AT TIME ZONE 'UTC') AS s,
+          date_trunc('milliseconds', stage1_reviewed_at AT TIME ZONE 'UTC') AS e
+        FROM submissions
+        WHERE stage1_reviewed_at IS NOT NULL AND created_at IS NOT NULL
+      ),
+      s1_pr AS (
+        SELECT b.id, COALESCE(ROUND(SUM(
+          CASE WHEN g.d IS NULL THEN 0
+               WHEN EXTRACT(ISODOW FROM g.d)::int = ANY(p.open_dows)
+               THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                 LEAST(b.e, ((g.d::date + p.close_t) AT TIME ZONE 'America/New_York'))
+                 - GREATEST(b.s, ((g.d::date + p.open_t) AT TIME ZONE 'America/New_York'))
+               )))
+               ELSE 0 END
+        ) * 1000), 0)::bigint AS ms
+        FROM s1_base b
+        CROSS JOIN params p
+        LEFT JOIN LATERAL generate_series(
+          date_trunc('day', b.s AT TIME ZONE 'America/New_York'),
+          date_trunc('day', b.e AT TIME ZONE 'America/New_York'),
+          interval '1 day'
+        ) AS g(d) ON true
+        GROUP BY b.id
+      ),
+      s2_base AS (
+        SELECT id,
+          date_trunc('milliseconds', stage1_reviewed_at AT TIME ZONE 'UTC') AS s,
+          date_trunc('milliseconds', stage2_reviewed_at AT TIME ZONE 'UTC') AS e
+        FROM submissions
+        WHERE stage2_reviewed_at IS NOT NULL AND stage1_reviewed_at IS NOT NULL AND created_at IS NOT NULL
+      ),
+      s2_pr AS (
+        SELECT b.id, COALESCE(ROUND(SUM(
+          CASE WHEN g.d IS NULL THEN 0
+               WHEN EXTRACT(ISODOW FROM g.d)::int = ANY(p.open_dows)
+               THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                 LEAST(b.e, ((g.d::date + p.close_t) AT TIME ZONE 'America/New_York'))
+                 - GREATEST(b.s, ((g.d::date + p.open_t) AT TIME ZONE 'America/New_York'))
+               )))
+               ELSE 0 END
+        ) * 1000), 0)::bigint AS ms
+        FROM s2_base b
+        CROSS JOIN params p
+        LEFT JOIN LATERAL generate_series(
+          date_trunc('day', b.s AT TIME ZONE 'America/New_York'),
+          date_trunc('day', b.e AT TIME ZONE 'America/New_York'),
+          interval '1 day'
+        ) AS g(d) ON true
+        GROUP BY b.id
+      )
+      SELECT (SELECT AVG(ms) FROM s1_pr) AS avg_stage1_ms,
+             (SELECT AVG(ms) FROM s2_pr) AS avg_authcode_ms
+    `);
+    const avgRow = (avgResult.rows[0] ?? {}) as { avg_stage1_ms: string | null; avg_authcode_ms: string | null };
+    const avgTimeToStage1Ms = avgRow.avg_stage1_ms != null ? Number(avgRow.avg_stage1_ms) : null;
+    const avgTimeToAuthCodeMs = avgRow.avg_authcode_ms != null ? Number(avgRow.avg_authcode_ms) : null;
 
     const row = countsResult[0];
     return {
@@ -1681,8 +1740,8 @@ export class DatabaseStorage implements IStorage {
       rejectedCount: Number(row.rejectedCount) || 0,
       pendingCount: Number(row.pendingCount) || 0,
       otherStatusCounts,
-      avgTimeToStage1Ms: stage1Count > 0 ? stage1Sum / stage1Count : null,
-      avgTimeToAuthCodeMs: authCodeCount > 0 ? authCodeSum / authCodeCount : null,
+      avgTimeToStage1Ms,
+      avgTimeToAuthCodeMs,
     };
   }
 
@@ -1842,34 +1901,54 @@ export class DatabaseStorage implements IStorage {
       order by count(*) desc
     `);
 
-    // Tyler 2026-04-30: business-hours-aware avg per district. Fetch only
-    // the timestamps needed (small payload — two columns + district), group
-    // in JS, average via shared `getBusinessElapsedMs` helper. 2026-05-01
-    // uses the admin-configured default profile.
+    // Tyler 2026-04-30: business-hours-aware avg per district, using the
+    // admin-configured default profile. Tyler 2026-06-17 (perf — Task #26):
+    // the per-row business-elapsed math + grouping now runs in SQL instead of
+    // streaming every reviewed row into Node. Districts merge null AND '' into
+    // "Unknown" (COALESCE(NULLIF(...))) to match the prior `r.districtCode ||
+    // "Unknown"` keying exactly. Verified equivalent to the JS loop.
     const districtProfile = getCachedBusinessHoursProfile("default");
-    const timestampRows = await db
-      .select({
-        districtCode: submissions.districtCode,
-        createdAt: submissions.createdAt,
-        stage1ReviewedAt: submissions.stage1ReviewedAt,
-      })
-      .from(submissions)
-      .where(sql`${submissions.stage1ReviewedAt} is not null`);
-
-    const sumByDistrict = new Map<string, { sum: number; count: number }>();
-    for (const r of timestampRows) {
-      if (!r.createdAt || !r.stage1ReviewedAt) continue;
-      const key = r.districtCode || "Unknown";
-      const ms = getBusinessElapsedMs(r.createdAt, r.stage1ReviewedAt, districtProfile);
-      const cur = sumByDistrict.get(key) ?? { sum: 0, count: 0 };
-      cur.sum += ms;
-      cur.count += 1;
-      sumByDistrict.set(key, cur);
+    const bh = this.businessHoursSqlParams(districtProfile);
+    const avgRows = await db.execute(sql`
+      WITH params AS (
+        SELECT ${bh.open}::time AS open_t, ${bh.close}::time AS close_t, ${sql.raw(bh.dowsLiteral)} AS open_dows
+      ),
+      d_base AS (
+        SELECT id, district_code,
+          date_trunc('milliseconds', created_at AT TIME ZONE 'UTC') AS s,
+          date_trunc('milliseconds', stage1_reviewed_at AT TIME ZONE 'UTC') AS e
+        FROM submissions
+        WHERE stage1_reviewed_at IS NOT NULL AND created_at IS NOT NULL
+      ),
+      d_pr AS (
+        SELECT b.id, COALESCE(NULLIF(b.district_code, ''), 'Unknown') AS district,
+          COALESCE(ROUND(SUM(
+            CASE WHEN g.d IS NULL THEN 0
+                 WHEN EXTRACT(ISODOW FROM g.d)::int = ANY(p.open_dows)
+                 THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                   LEAST(b.e, ((g.d::date + p.close_t) AT TIME ZONE 'America/New_York'))
+                   - GREATEST(b.s, ((g.d::date + p.open_t) AT TIME ZONE 'America/New_York'))
+                 )))
+                 ELSE 0 END
+          ) * 1000), 0)::bigint AS ms
+        FROM d_base b
+        CROSS JOIN params p
+        LEFT JOIN LATERAL generate_series(
+          date_trunc('day', b.s AT TIME ZONE 'America/New_York'),
+          date_trunc('day', b.e AT TIME ZONE 'America/New_York'),
+          interval '1 day'
+        ) AS g(d) ON true
+        GROUP BY b.id, b.district_code
+      )
+      SELECT district, AVG(ms) AS avg_ms FROM d_pr GROUP BY district
+    `);
+    const avgByDistrict = new Map<string, number>();
+    for (const r of avgRows.rows as any[]) {
+      if (r.avg_ms != null) avgByDistrict.set(r.district, Number(r.avg_ms));
     }
 
     return (countRows.rows as any[]).map(r => {
       const districtKey = r.district || "Unknown";
-      const agg = sumByDistrict.get(districtKey);
       return {
         district: districtKey,
         totalTickets: Number(r.totalTickets) || 0,
@@ -1877,7 +1956,7 @@ export class DatabaseStorage implements IStorage {
         rejected: Number(r.rejected) || 0,
         pending: Number(r.pending) || 0,
         completed: Number(r.completed) || 0,
-        avgTimeToStage1Ms: agg && agg.count > 0 ? agg.sum / agg.count : null,
+        avgTimeToStage1Ms: avgByDistrict.has(districtKey) ? avgByDistrict.get(districtKey)! : null,
       };
     });
   }
