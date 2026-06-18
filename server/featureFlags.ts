@@ -14,10 +14,14 @@ export function is1099PortalEnabled(): boolean {
 // TechHub parts photos (read-only Snowflake lookup + CDN proxy). Default OFF
 // everywhere — the feature depends on production Snowflake credentials and an
 // external CDN (parts-images-pr-us-east-2 / d1kq8vno1fudyz.cloudfront.net) that
-// are only present/reachable in the deployed environment. Set the
-// `ENABLE_TECHHUB_PHOTOS` env var to "true" in production and republish to turn
-// it on. Keeping it explicit-opt-in avoids dev showing a permanently-empty
-// section (dev has no Snowflake creds).
+// are only present/reachable in the deployed environment.
+//
+// TEMPORARILY FORCE-DISABLED: the feature is hidden across the whole app while
+// the photo-source / network-access question is being worked out. This hard
+// `return false` overrides the env var so it stays off even if
+// `ENABLE_TECHHUB_PHOTOS=true` is still set in production. To re-enable, restore
+// the original body (`return process.env.ENABLE_TECHHUB_PHOTOS === "true";`) and
+// republish with `ENABLE_TECHHUB_PHOTOS=true`.
 export function isTechHubPhotosEnabled(): boolean {
-  return process.env.ENABLE_TECHHUB_PHOTOS === "true";
+  return false;
 }
