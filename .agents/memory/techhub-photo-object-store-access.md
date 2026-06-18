@@ -25,3 +25,12 @@ The VRS "Parts Photos (TechHub)" pipeline (Snowflake metadata query → `/api/su
 3. a TechHub-owned signed-URL API, or
 4. the object-store owner makes the `jobs/` prefix publicly readable via CloudFront (unlikely — customer-home imagery).
 No VRS-side code change fixes this; it is an access grant from whoever owns the TechHub object store.
+
+## Snowflake only carries ONE photo category — "parts used"
+A whole-schema scan of `IH_DATASCIENCE` shows the only photo-bearing columns are `PUBLIC.PARTS_USED.PHOTO_PATHS` and its staging mirror `STG_PARTS_USED.PHOTO_PATHS`. There is **no** diagnostic / appliance-nameplate / before-after / general job-photo table in Snowflake. So if a user sees photos in the **TechHub app** for an order but our card shows none, those are very likely a *different photo category* that TechHub never replicates to Snowflake — surfacing them would require a direct TechHub app/API feed, not the warehouse.
+
+**Timing mismatch:** parts-used photos only exist *after* a tech completes the job and logs the part. VRS authorization happens at *diagnosis*, before the repair — so at review time the photo usually does not exist yet. Freshly-dispatched TechHub jobs (status `available`/`assigned`) carry zero part photos.
+
+**Coverage is near-zero, not a bug:** of 2,868 unique VRS service orders, 412 (14%) match a TechHub JOB, only 5 have any parts-used row, and historically only **1** (`SO 13713743`) had a real parts photo. Sync is current (not lag). TechHub-wide, only 4,577 of 174,479 jobs (2.6%) have any part photo at all.
+
+**SO ↔ district mapping (verified):** VRS `service_order` is `DDDD-SSSSSSSS`; the `DDDD` district = TechHub `JOBS.SERVICE_UNIT_NUMBER` (zero-padded, e.g. district 8420 → `0008420`), and the 8-digit second segment = `JOBS.SO_NUMBER`. App keys photos on `SO_NUMBER` only (`fetchTechHubPartsPhotosForServiceOrder` splits on `-`).

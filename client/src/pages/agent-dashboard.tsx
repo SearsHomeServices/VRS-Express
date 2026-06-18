@@ -1129,8 +1129,8 @@ export default function AgentDashboard() {
   const stage3Required = !!intakeFormStatusQuery.data?.required;
   const stage3Recorded = !!intakeFormStatusQuery.data?.recorded;
 
-  // TechHub parts photos (feature-flagged). Surfaces the technician's
-  // TechHub-uploaded PART photos (sourced from Snowflake by service order) next
+  // TechHub photos (feature-flagged). Surfaces the technician's
+  // TechHub-uploaded photos (sourced from Snowflake by service order) next
   // to the VRS-native media on ANY ticket — NLA or regular authorization. Each
   // photo is a self-contained proxy URL carrying a 5-min scoped token, so it
   // loads via a plain <img> with no media-token round-trip. staleTime is kept
@@ -2854,10 +2854,10 @@ export default function AgentDashboard() {
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
                             <Package className="w-4 h-4" />
-                            Parts Photos (TechHub)
+                            TechHub Photos
                           </CardTitle>
                           <p className="text-xs text-muted-foreground">
-                            Technician part photos from TechHub for this service order, matched automatically.
+                            Technician photos from TechHub for this service order, matched automatically.
                           </p>
                         </CardHeader>
                         <CardContent>
@@ -2869,7 +2869,7 @@ export default function AgentDashboard() {
                             </div>
                           ) : (techHubPhotosQuery.data?.photos.length ?? 0) === 0 ? (
                             <p className="text-sm text-muted-foreground" data-testid="text-no-techhub-photos">
-                              No TechHub parts photos found for this service order.
+                              No TechHub photos found for this service order.
                             </p>
                           ) : (
                             <div className="grid grid-cols-3 gap-2" data-testid="media-techhub-photos">
@@ -2883,7 +2883,7 @@ export default function AgentDashboard() {
                                 >
                                   <img
                                     src={p.proxyPath}
-                                    alt={`TechHub part photo ${i + 1}`}
+                                    alt={`TechHub photo ${i + 1}`}
                                     decoding="async"
                                     loading="lazy"
                                     className="w-full h-full object-cover pointer-events-none"
