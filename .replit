@@ -70,6 +70,9 @@ VITE_APP_VERSION = "1.0.0"
 
 [userenv.development]
 
+[userenv.production]
+ENABLE_TECHHUB_PHOTOS = "true"
+
 [objectStorage]
 defaultBucketID = "replit-objstore-70466883-0558-4e18-a808-47d0ed26c418"
 
