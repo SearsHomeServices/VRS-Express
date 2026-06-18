@@ -14,7 +14,7 @@ description: How to build reliable e2e test data and log in during dev testing f
 - `resetAllPasswords()` (one-time, flag `__pw_reset_v2_done__`) set EVERY non-`VRS_MASTER` user's password to `VRS2026!`.
 - Test accounts (`TEST_RAC_IDS`: ZZTEST9, testagent1, TESTADMIN, testtech1, tmorri1, sysadmin) get `mustChangePassword=false`; all other accounts get `mustChangePassword=true` (forced change on login — avoid them for automated login).
 - So for UI tests log in as `sysadmin` (admin) / `ZZTEST9` (generalist agent) with `VRS2026!`. The original seed passwords (admin123/agent123) do NOT work.
-- ZZTEST9's stored password may drift from VRS2026! depending on seed order; if login 401s, set it deterministically via bcrypt + SQL UPDATE (it's a synthetic test account).
+- **CAVEAT — the reset is one-time/flag-gated, so accounts created AFTER it ran keep their own seed password, NOT `VRS2026!`.** Confirmed: `TESTADMIN` logs in with `TestAdmin2026!` (its seed value), not `VRS2026!`; `ZZTEST9` does use `VRS2026!`. Don't assume `VRS2026!` works for every test account — if it 401s, try the account's seed password from `SEED_USERS`, or set it deterministically via bcrypt + SQL UPDATE.
 
 ## Tech submission form is un-testable via UI (photo gate)
 - `client/src/pages/tech-submit.tsx` requires at least one issue photo AND one estimate screenshot client-side before the submit button enables; the testing subagent cannot upload files.
