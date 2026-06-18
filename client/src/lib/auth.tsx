@@ -9,8 +9,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (identifier: string, password: string) => Promise<SafeUser>;
-  techLogin: (ldapId: string) => Promise<{ requiresOtp: true; maskedPhone: string; technicianName: string }>;
-  techLoginVerify: (ldapId: string, otp: string) => Promise<{ technician: any }>;
+  techLogin: (ldapId: string) => Promise<{ technician: any }>;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -67,8 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return data.user;
   }, []);
 
-  // Step 1: Submit LDAP ID → server sends OTP SMS and returns a challenge token.
-  // Does NOT set user/token — call techLoginVerify to complete authentication.
+  // Passwordless technician login: submit LDAP ID → server issues JWT directly.
   const techLogin = useCallback(async (ldapId: string) => {
     const res = await fetch("/api/auth/tech-login", {
       method: "POST",
@@ -79,23 +77,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!res.ok) {
       const data = await res.json();
       throw new Error(data.error || "Login failed");
-    }
-
-    const data = await res.json();
-    return data as { requiresOtp: true; maskedPhone: string; technicianName: string };
-  }, []);
-
-  // Step 2: Submit OTP → server validates and issues JWT, completing login.
-  const techLoginVerify = useCallback(async (ldapId: string, otp: string) => {
-    const res = await fetch("/api/auth/tech-login/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ldapId, otp }),
-    });
-
-    if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.error || "Verification failed");
     }
 
     const data = await res.json();
@@ -143,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, techLogin, techLoginVerify, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, techLogin, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
