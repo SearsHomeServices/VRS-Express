@@ -1129,13 +1129,12 @@ export default function AgentDashboard() {
   const stage3Required = !!intakeFormStatusQuery.data?.required;
   const stage3Recorded = !!intakeFormStatusQuery.data?.recorded;
 
-  // TechHub parts photos (feature-flagged, NLA tickets only). Surfaces the
-  // technician's TechHub-uploaded PART photos (sourced from Snowflake) next to
-  // the VRS-native media. Each photo is a self-contained proxy URL carrying a
-  // 5-min scoped token, so it loads via a plain <img> with no media-token
-  // round-trip. staleTime is kept under the token TTL so cached proxy URLs
-  // refetch before their tokens expire.
-  const isNlaSelected = selectedSubmission?.requestType === "parts_nla";
+  // TechHub parts photos (feature-flagged). Surfaces the technician's
+  // TechHub-uploaded PART photos (sourced from Snowflake by service order) next
+  // to the VRS-native media on ANY ticket — NLA or regular authorization. Each
+  // photo is a self-contained proxy URL carrying a 5-min scoped token, so it
+  // loads via a plain <img> with no media-token round-trip. staleTime is kept
+  // under the token TTL so cached proxy URLs refetch before their tokens expire.
   const techHubPhotosQuery = useQuery<{
     enabled: boolean;
     photos: Array<{
@@ -1147,7 +1146,7 @@ export default function AgentDashboard() {
     }>;
   }>({
     queryKey: ["/api/submissions", selectedId, "techhub-photos"],
-    enabled: !!selectedId && isNlaSelected,
+    enabled: !!selectedId,
     staleTime: 4 * 60 * 1000,
   });
 
@@ -2850,7 +2849,7 @@ export default function AgentDashboard() {
                       </CardContent>
                     </Card>
 
-                    {isNlaSelected && techHubPhotosQuery.data?.enabled && (
+                    {techHubPhotosQuery.data?.enabled && (
                       <Card data-testid="card-techhub-photos">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
