@@ -234,6 +234,135 @@ export async function fetchProcIdForServiceOrder(rawServiceOrder: string): Promi
   }
 }
 
+// ===========================================================================
+// TechHub parts photos (read-only)
+// ===========================================================================
+//
+// Source: IH_DATASCIENCE.PUBLIC.PARTS_USED.PHOTO_PATHS (ARRAY), a Snowflake
+// replica of the TechHub app DB. Keyed to the 8-digit half of the VRS service
+// order via PARTS_USED -> JOB_ASSIGNMENTS -> JOBS.SO_NUMBER. PHOTO_PATHS holds
+// object-store REFERENCES (not bytes); the bytes live in the external store
+// below. See docs/discovery/techhub-photo-snowflake-discovery.md for the full
+// discovery. Only PART photos are cataloged in Snowflake.
+
+const TECHHUB_CDN_ORIGIN = "https://d1kq8vno1fudyz.cloudfront.net";
+
+// Hosts the VRS proxy is permitted to fetch from. Defense-in-depth: even though
+// proxy URLs are signed by us, the proxy re-validates the host against this list
+// before making any outbound request.
+export const TECHHUB_ALLOWED_HOSTS = new Set([
+  "d1kq8vno1fudyz.cloudfront.net",
+  "parts-images-pr-us-east-2.s3.us-east-2.amazonaws.com",
+]);
+
+export interface TechHubPartPhoto {
+  url: string;
+  partNumber: string | null;
+  brand: string | null;
+  partType: string | null;
+  createdAt: string | null;
+}
+
+// Normalizes one raw PHOTO_PATHS element into an absolute, fetchable URL, or
+// null if it can't be resolved. Handles the documented data wrinkles:
+//   • the ingested Postgres array literal leaves a leading `{` on the first
+//     element and a trailing `}` on the last
+//   • surrounding quotes/whitespace
+//   • a mix of absolute URLs and relative object keys
+function normalizeTechHubPhotoRef(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let s = raw.trim();
+  // strip the array-literal braces and any wrapping quotes left by ingestion
+  s = s.replace(/^\{+/, "").replace(/\}+$/, "").trim();
+  s = s.replace(/^["']+/, "").replace(/["']+$/, "").trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  // relative object key -> CDN origin
+  const key = s.replace(/^\/+/, "");
+  if (!key) return null;
+  return `${TECHHUB_CDN_ORIGIN}/${key}`;
+}
+
+const TECHHUB_PHOTOS_QUERY = `
+SELECT
+  PU.PART_NUMBER AS PART_NUMBER,
+  PU.BRAND       AS BRAND,
+  PU.PART_TYPE   AS PART_TYPE,
+  PU.CREATED_AT  AS CREATED_AT,
+  PU.PHOTO_PATHS AS PHOTO_PATHS
+FROM IH_DATASCIENCE.PUBLIC.PARTS_USED      PU
+JOIN IH_DATASCIENCE.PUBLIC.JOB_ASSIGNMENTS JA ON PU.JOB_ASSIGNMENT_ID = JA.ID
+JOIN IH_DATASCIENCE.PUBLIC.JOBS            J  ON JA.JOB_ID = J.ID
+WHERE J.SO_NUMBER = ?
+  AND ARRAY_SIZE(PU.PHOTO_PATHS) > 0
+ORDER BY PU.CREATED_AT DESC
+`;
+
+// Returns the normalized TechHub PART photos for a VRS service order. Never
+// throws — Snowflake/CDN being unavailable degrades to an empty list so the
+// caller can render a graceful empty state.
+export async function fetchTechHubPartsPhotosForServiceOrder(
+  rawServiceOrder: string,
+): Promise<TechHubPartPhoto[]> {
+  const so8 = rawServiceOrder.includes("-")
+    ? rawServiceOrder.split("-")[1]
+    : rawServiceOrder;
+  if (!so8 || !/^\d{6,9}$/.test(so8.trim())) return [];
+
+  try {
+    const connection = await getConnection();
+    try {
+      const rows: any[] = await new Promise((resolve, reject) => {
+        connection.execute({
+          sqlText: TECHHUB_PHOTOS_QUERY,
+          binds: [so8.trim()],
+          complete: (err: any, _stmt: any, rows: any) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+          },
+        });
+      });
+
+      const photos: TechHubPartPhoto[] = [];
+      for (const row of rows) {
+        // PHOTO_PATHS comes back as a JS array (snowflake-sdk parses ARRAY) but
+        // tolerate a stringified form too.
+        let paths: unknown[] = [];
+        const pp = row.PHOTO_PATHS;
+        if (Array.isArray(pp)) {
+          paths = pp;
+        } else if (typeof pp === "string") {
+          try {
+            const j = JSON.parse(pp);
+            paths = Array.isArray(j) ? j : [pp];
+          } catch {
+            paths = pp.split(",");
+          }
+        }
+        for (const ref of paths) {
+          const url = normalizeTechHubPhotoRef(ref);
+          if (!url) continue;
+          photos.push({
+            url,
+            partNumber: row.PART_NUMBER != null ? String(row.PART_NUMBER) : null,
+            brand: row.BRAND != null ? String(row.BRAND) : null,
+            partType: row.PART_TYPE != null ? String(row.PART_TYPE) : null,
+            createdAt: row.CREATED_AT != null ? String(row.CREATED_AT) : null,
+          });
+        }
+      }
+      return photos;
+    } finally {
+      connection.destroy((err: any) => {
+        if (err) console.error("Snowflake disconnect error:", err.message);
+      });
+    }
+  } catch (err) {
+    console.error("fetchTechHubPartsPhotosForServiceOrder error:", err);
+    return [];
+  }
+}
+
 export async function fetchTechniciansFromSnowflake(): Promise<SyncedTechnician[]> {
   const connection = await getConnection();
 

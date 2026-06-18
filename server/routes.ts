@@ -8,13 +8,14 @@ import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
-import { issueMediaToken } from "./lib/mediaTokens";
+import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
-import { is1099PortalEnabled } from "./featureFlags";
+import { is1099PortalEnabled, isTechHubPhotosEnabled } from "./featureFlags";
+import { fetchTechHubPartsPhotosForServiceOrder, TECHHUB_ALLOWED_HOSTS } from "./services/snowflake";
 import { normalizeLdapId } from "@shared/ldap";
 import {
   INTAKE_FORM_GO_LIVE_UTC,
@@ -493,7 +494,7 @@ export async function registerRoutes(
   // Public runtime config — lets the client hide feature-flagged affordances
   // (e.g. the 1099 provider portal) without a rebuild.
   app.get("/api/config", (_req, res) => {
-    res.json({ portal1099Enabled: is1099PortalEnabled() });
+    res.json({ portal1099Enabled: is1099PortalEnabled(), techHubPhotosEnabled: isTechHubPhotosEnabled() });
   });
 
   app.post("/api/auth/login", async (req, res) => {
@@ -5599,6 +5600,133 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Media token error:", error);
       return res.status(500).json({ error: "Failed to issue media token" });
+    }
+  });
+
+  // ========================================================================
+  // TECHHUB PARTS PHOTOS (read-only Snowflake lookup + CDN proxy)
+  // ========================================================================
+  //
+  // Surfaces technician-uploaded PART photos from the TechHub app (synced into
+  // Snowflake) alongside the VRS-native media on a ticket. Snowflake stores only
+  // references; the bytes live in an external CDN/S3 that VRS does not own, so we
+  // proxy them server-side (never expose raw bucket URLs) and gate every byte
+  // behind the same per-ticket authorization as the submission detail route.
+  //
+  // Flow:
+  //   1. GET /api/submissions/:id/techhub-photos  (session JWT + per-ticket guard)
+  //      -> queries Snowflake by the ticket's service order, normalizes the
+  //         refs, and returns one short-lived scoped token per photo.
+  //   2. GET /api/techhub-photo?token=...  (scoped token only, no session JWT)
+  //      -> verifies the token, re-checks the host allowlist, streams the bytes.
+
+  app.get("/api/submissions/:id/techhub-photos", authenticateToken, async (req, res) => {
+    try {
+      if (!isTechHubPhotosEnabled()) {
+        return res.status(200).json({ enabled: false, photos: [] });
+      }
+
+      const authReq = req as AuthenticatedRequest;
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid submission ID" });
+      }
+
+      const submission = await storage.getSubmission(id);
+      if (!submission) {
+        return res.status(404).json({ error: "Submission not found" });
+      }
+
+      // Per-ticket access guard — mirrors GET /api/submissions/:id exactly.
+      const user = authReq.user!;
+      if ((user.role === "technician" || user.role === "provider_1099") && submission.technicianId !== user.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (user.role === "vrs_agent") {
+        const isAssignedToAgent = submission.assignedTo === user.id;
+        const isQueued = submission.ticketStatus === "queued";
+        const isReviewer = submission.reviewedBy === user.id;
+        if (!isAssignedToAgent && !isQueued && !isReviewer) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+        if (isQueued) {
+          const specs = await storage.getSpecializations(user.id);
+          const divisions = specs.map(s => s.division);
+          const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
+          const isNlaTicket = submission.requestType === "parts_nla";
+          if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(submission.applianceType))) {
+            return res.status(403).json({ error: "Access denied" });
+          }
+        }
+      }
+
+      const found = await fetchTechHubPartsPhotosForServiceOrder(submission.serviceOrder);
+      const photos = found.map((p) => ({
+        proxyPath: `/api/techhub-photo?token=${encodeURIComponent(issueTechHubPhotoToken(p.url))}`,
+        partNumber: p.partNumber,
+        brand: p.brand,
+        partType: p.partType,
+        createdAt: p.createdAt,
+      }));
+
+      return res.status(200).json({ enabled: true, photos });
+    } catch (error) {
+      console.error("TechHub photos error:", error);
+      return res.status(500).json({ error: "Failed to load TechHub photos" });
+    }
+  });
+
+  // Scoped proxy: accepts ONLY a techhub_photo token (no session JWT), so a
+  // leaked proxy URL exposes a single image for <=5 min and nothing else. The
+  // token already encodes a URL we signed; we still re-validate the host against
+  // the allowlist before any outbound fetch (defense-in-depth vs. SSRF).
+  app.get("/api/techhub-photo", async (req, res) => {
+    try {
+      const token = typeof req.query.token === "string" ? req.query.token : null;
+      if (!token) {
+        return res.status(401).json({ error: "No token provided" });
+      }
+      const url = verifyTechHubPhotoToken(token);
+      if (!url) {
+        return res.status(403).json({ error: "Invalid or expired token" });
+      }
+
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        return res.status(400).json({ error: "Invalid photo URL" });
+      }
+      if (parsedUrl.protocol !== "https:") {
+        return res.status(403).json({ error: "Scheme not allowed" });
+      }
+      if (!TECHHUB_ALLOWED_HOSTS.has(parsedUrl.hostname)) {
+        return res.status(403).json({ error: "Host not allowed" });
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      let upstream: globalThis.Response;
+      try {
+        upstream = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!upstream.ok || !upstream.body) {
+        // 403 here most likely means the CDN requires signed URLs (the one open
+        // item from discovery) — surface it as a bad gateway, not a 500.
+        return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+      }
+
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "private, max-age=300");
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      return res.status(200).send(buf);
+    } catch (error) {
+      console.error("TechHub photo proxy error:", error);
+      return res.status(502).json({ error: "Failed to fetch photo" });
     }
   });
 

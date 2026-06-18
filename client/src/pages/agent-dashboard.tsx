@@ -1129,6 +1129,28 @@ export default function AgentDashboard() {
   const stage3Required = !!intakeFormStatusQuery.data?.required;
   const stage3Recorded = !!intakeFormStatusQuery.data?.recorded;
 
+  // TechHub parts photos (feature-flagged, NLA tickets only). Surfaces the
+  // technician's TechHub-uploaded PART photos (sourced from Snowflake) next to
+  // the VRS-native media. Each photo is a self-contained proxy URL carrying a
+  // 5-min scoped token, so it loads via a plain <img> with no media-token
+  // round-trip. staleTime is kept under the token TTL so cached proxy URLs
+  // refetch before their tokens expire.
+  const isNlaSelected = selectedSubmission?.requestType === "parts_nla";
+  const techHubPhotosQuery = useQuery<{
+    enabled: boolean;
+    photos: Array<{
+      proxyPath: string;
+      partNumber: string | null;
+      brand: string | null;
+      partType: string | null;
+      createdAt: string | null;
+    }>;
+  }>({
+    queryKey: ["/api/submissions", selectedId, "techhub-photos"],
+    enabled: !!selectedId && isNlaSelected,
+    staleTime: 4 * 60 * 1000,
+  });
+
   // Hamed feedback 2026-05-06: when a resubmission lands in queue, the agent
   // reviewing it needs to see WHAT was rejected previously and WHAT the prior
   // agent told the tech to fix — otherwise they re-evaluate blind. The history
@@ -2827,6 +2849,61 @@ export default function AgentDashboard() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    {isNlaSelected && techHubPhotosQuery.data?.enabled && (
+                      <Card data-testid="card-techhub-photos">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Package className="w-4 h-4" />
+                            Parts Photos (TechHub)
+                          </CardTitle>
+                          <p className="text-xs text-muted-foreground">
+                            Technician part photos from TechHub for this service order, matched automatically.
+                          </p>
+                        </CardHeader>
+                        <CardContent>
+                          {techHubPhotosQuery.isLoading ? (
+                            <div className="grid grid-cols-3 gap-2" data-testid="techhub-photos-loading">
+                              {[0, 1, 2].map((i) => (
+                                <div key={i} className="aspect-square bg-muted rounded-md animate-pulse" />
+                              ))}
+                            </div>
+                          ) : (techHubPhotosQuery.data?.photos.length ?? 0) === 0 ? (
+                            <p className="text-sm text-muted-foreground" data-testid="text-no-techhub-photos">
+                              No TechHub parts photos found for this service order.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-3 gap-2" data-testid="media-techhub-photos">
+                              {techHubPhotosQuery.data!.photos.map((p, i) => (
+                                <div
+                                  key={i}
+                                  className="relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group"
+                                  onClick={() => openLightbox(techHubPhotosQuery.data!.photos.map((x) => x.proxyPath), i)}
+                                  data-testid={`techhub-photo-${i}`}
+                                  title={[p.partNumber, p.brand].filter(Boolean).join(" \u2022 ")}
+                                >
+                                  <img
+                                    src={p.proxyPath}
+                                    alt={`TechHub part photo ${i + 1}`}
+                                    decoding="async"
+                                    loading="lazy"
+                                    className="w-full h-full object-cover pointer-events-none"
+                                  />
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <ZoomIn className="w-6 h-6 text-white" />
+                                  </div>
+                                  {p.partNumber && (
+                                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[10px] px-1 py-0.5 truncate pointer-events-none">
+                                      {p.partNumber}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
 
                     {priorRejection && (() => {
                       let parsedPrior: any = null;

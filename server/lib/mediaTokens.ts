@@ -37,3 +37,32 @@ export function verifyMediaToken(token: string, expectedPath: string): boolean {
     return false;
   }
 }
+
+// TechHub parts-photo tokens.
+//
+// Same narrow-claim design as media tokens, but bound to an absolute external
+// CDN/S3 URL (type:"techhub_photo", url:"https://...") rather than an internal
+// /objects/ path. Issued by GET /api/submissions/:id/techhub-photos AFTER the
+// per-ticket access guard passes, and accepted ONLY by the proxy route
+// GET /api/techhub-photo?token=. The session JWT is never accepted on the proxy,
+// and the signed URL can only be one we returned — so the proxy cannot be
+// pointed at an arbitrary host (SSRF) by the caller.
+export function issueTechHubPhotoToken(url: string): string {
+  return jwt.sign(
+    { type: "techhub_photo", url },
+    getSecret(),
+    { expiresIn: MEDIA_TOKEN_TTL_SEC }
+  );
+}
+
+export function verifyTechHubPhotoToken(token: string): string | null {
+  try {
+    const payload = jwt.verify(token, getSecret()) as any;
+    if (payload.type === "techhub_photo" && typeof payload.url === "string") {
+      return payload.url;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
