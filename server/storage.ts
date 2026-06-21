@@ -78,6 +78,16 @@ export type NlaLookupRow = {
 // Initialize database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  keepAlive: true,
+});
+
+// Prevent unhandled 'error' events on idle clients from crashing the process.
+// Postgres can terminate idle connections (maintenance, admin command, autosuspend);
+// pg emits an 'error' event on the affected idle client, and without a listener
+// Node treats it as an unhandled error and exits. The pool removes the broken
+// client automatically and creates a fresh one on the next query.
+pool.on("error", (err) => {
+  console.error("[db] Unexpected error on idle PostgreSQL client:", err.message);
 });
 
 // Create Drizzle instance
