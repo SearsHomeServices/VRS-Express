@@ -216,6 +216,10 @@ async function ensurePerformanceIndexes() {
     // 709-row window), which produced the occasional 1.2-2.2s queue-load
     // spikes. Indexing the FK turns each lookup into an index scan.
     { name: "idx_intake_forms_submission_id",      table: "intake_forms", cols: "(submission_id)" },
+    // Tyler 2026-06-23 (perf): getSubmissionNotes filters submission_notes by
+    // submission_id on every detail-view open; the table had only a PK index,
+    // so the lookup was a Seq Scan. Same FK-index pattern as intake_forms above.
+    { name: "idx_submission_notes_submission_id",  table: "submission_notes", cols: "(submission_id)" },
   ];
   let createdCount = 0;
   for (const idx of indexes) {

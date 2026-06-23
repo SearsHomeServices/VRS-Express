@@ -265,7 +265,12 @@ export const submissionNotes = pgTable("submission_notes", {
   authorRole: text("author_role").notNull(), // 'technician', 'vrs_agent', 'admin'
   body: text("body").notNull(),
   createdAt: timestamp("created_at").default(sql`now()`),
-});
+}, (table) => ({
+  // Tyler 2026-06-23 (perf): runtime-created in seed.ts ensurePerformanceIndexes().
+  // Backs getSubmissionNotes (filters by submission_id on every detail-view open).
+  // Declared here so drizzle-kit push doesn't try to drop it on schema sync.
+  submissionIdIdx: index("idx_submission_notes_submission_id").on(table.submissionId),
+}));
 
 export const insertSubmissionNoteSchema = createInsertSchema(submissionNotes).omit({
   id: true,
