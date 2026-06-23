@@ -220,6 +220,9 @@ async function ensurePerformanceIndexes() {
     // submission_id on every detail-view open; the table had only a PK index,
     // so the lookup was a Seq Scan. Same FK-index pattern as intake_forms above.
     { name: "idx_submission_notes_submission_id",  table: "submission_notes", cols: "(submission_id)" },
+    // Tyler 2026-06-23 (perf): sms_notifications is read + cascade-deleted by
+    // submission_id (storage.ts ~1452, ~436, ~759) and had only a PK index.
+    { name: "idx_sms_notifications_submission_id",  table: "sms_notifications", cols: "(submission_id)" },
   ];
   let createdCount = 0;
   for (const idx of indexes) {

@@ -293,7 +293,12 @@ export const smsNotifications = pgTable("sms_notifications", {
   messageBody: text("message_body").notNull(),
   twilioSid: varchar("twilio_sid", { length: 100 }),
   sentAt: timestamp("sent_at").default(sql`now()`),
-});
+}, (table) => ({
+  // Tyler 2026-06-23 (perf): runtime-created in seed.ts ensurePerformanceIndexes().
+  // Backs reads + cascade deletes that filter sms_notifications by submission_id.
+  // Declared here so drizzle-kit push doesn't try to drop it on schema sync.
+  submissionIdIdx: index("idx_sms_notifications_submission_id").on(table.submissionId),
+}));
 
 export const insertSmsNotificationSchema = createInsertSchema(
   smsNotifications
