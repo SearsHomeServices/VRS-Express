@@ -209,6 +209,13 @@ async function ensurePerformanceIndexes() {
     { name: "idx_submissions_reviewed_at",         table: "submissions", cols: "(reviewed_at)" },
     { name: "idx_submissions_reviewed_by",         table: "submissions", cols: "(reviewed_by)" },
     { name: "idx_users_rac_id",                    table: "users",       cols: "(rac_id)" },
+    // Tyler 2026-06-23 (perf): the submission list view runs a correlated
+    // subquery `SELECT MAX(agent_confirmed_at) FROM intake_forms WHERE
+    // submission_id = s.id` once PER returned row. Without this index that was
+    // a full Seq Scan of intake_forms per row (~265k buffer hits / 355ms on a
+    // 709-row window), which produced the occasional 1.2-2.2s queue-load
+    // spikes. Indexing the FK turns each lookup into an index scan.
+    { name: "idx_intake_forms_submission_id",      table: "intake_forms", cols: "(submission_id)" },
   ];
   let createdCount = 0;
   for (const idx of indexes) {

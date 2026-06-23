@@ -492,7 +492,13 @@ export const intakeForms = pgTable("intake_forms", {
   smartsheetUrlSubmitted: text("smartsheet_url_submitted"), // the pre-filled URL the agent reviewed
   agentConfirmedAt: timestamp("agent_confirmed_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  // Tyler 2026-06-23 (perf): runtime-created in seed.ts ensurePerformanceIndexes().
+  // Backs the submission list view's per-row correlated subquery
+  // (MAX(agent_confirmed_at) WHERE submission_id = s.id). Declared here so
+  // drizzle-kit push doesn't try to drop it on schema sync.
+  submissionIdIdx: index("idx_intake_forms_submission_id").on(table.submissionId),
+}));
 
 export const insertIntakeFormSchema = createInsertSchema(intakeForms).omit({
   id: true,
