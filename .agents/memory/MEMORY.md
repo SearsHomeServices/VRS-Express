@@ -6,3 +6,4 @@
 - [Snowflake tech-photo sources](snowflake-tech-photo-sources.md) — 2 SO-keyed tech photo sources: PARTS_USED.PHOTO_PATHS (surfaced) + KAIROS model-tag URLs (TINA, not surfaced); SRDM never has photos; survey flag is noise.
 - [TechHub photo object-store access](techhub-photo-object-store-access.md) — VRS pipeline works but part-photo bytes are in a private S3 bucket VRS can't read; only ~4 legacy CloudFront /uploads/ URLs are public; needs an access grant, not code.
 - [Performance index pattern](perf-index-pattern.md) — perf indexes live in seed.ts ensurePerformanceIndexes (CONCURRENTLY, applied on boot/deploy) AND must be mirrored in schema.ts or drizzle-kit drops them; prod DDL is read-only; index child FK for any per-row correlated subquery in list views.
+- [Scalability watch](scalability-watch.md) — volume-growth risks ranked; #1 = agent_activity_log unbounded (208MB, +20k/day, no retention); #2 = admin /api/submissions all-time unbounded payload.
