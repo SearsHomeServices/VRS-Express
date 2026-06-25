@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { normalizeLdapId } from "@shared/ldap";
+import { friendlyApiErrorMessage } from "@/lib/queryClient";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 
@@ -74,7 +75,7 @@ export default function TechLoginPage() {
       } else {
         toast({
           title: "Login Failed",
-          description: error.message || "ID not found or inactive",
+          description: friendlyApiErrorMessage(error) || "ID not found or inactive",
           variant: "destructive",
         });
       }

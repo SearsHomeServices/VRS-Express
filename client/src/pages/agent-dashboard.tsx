@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
-import { apiRequest, apiRequestWithRetry, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
 import {
@@ -491,7 +491,7 @@ export default function AgentDashboard() {
     onError: (error: Error) => {
       toast({
         title: "Cannot Go Unavailable",
-        description: error.message,
+        description: friendlyApiErrorMessage(error),
         variant: "destructive",
         duration: 6000,
       });
@@ -1295,7 +1295,7 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 
@@ -1310,7 +1310,7 @@ export default function AgentDashboard() {
         "PATCH",
         `/api/submissions/${submissionId}/process`,
         body,
-        { logTag: "process-retry" },
+        { logTag: "process-retry", maxAttempts: 5 },
       );
       return res.json();
     },
@@ -1396,7 +1396,7 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 
@@ -1413,7 +1413,7 @@ export default function AgentDashboard() {
         "PATCH",
         `/api/submissions/${selectedId}/process-nla`,
         data,
-        { logTag: "process-nla-retry" },
+        { logTag: "process-nla-retry", maxAttempts: 5 },
       );
       return await res.json();
     },
@@ -1462,7 +1462,7 @@ export default function AgentDashboard() {
       toast({ title: "NLA Ticket Processed", description: "Resolution sent. Now log the Smartsheet intake form on the right." });
     },
     onError: (error: Error) => {
-      toast({ title: "Processing Failed", description: error.message, variant: "destructive" });
+      toast({ title: "Processing Failed", description: friendlyApiErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -1478,7 +1478,7 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 
@@ -1504,7 +1504,7 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 
@@ -1528,7 +1528,7 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 
@@ -1555,7 +1555,7 @@ export default function AgentDashboard() {
       setDivisionCorrectionConfirmOpen(false);
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
     },
   });
 

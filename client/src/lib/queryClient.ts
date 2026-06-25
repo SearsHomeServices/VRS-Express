@@ -91,6 +91,23 @@ export function isTransientApiError(msg: string): boolean {
   if (m.includes("<!doctype html") && m.includes("403")) return true;
   // Generic edge HTML for 502/503/504
   if (m.includes("<!doctype html") && /50\d/.test(m)) return true;
+  // Tyler 2026-06-25 — Replit deployment-not-found / boot-window HTML page.
+  // During a republish or the ~40s cold-boot window the edge returns a 404
+  // "This app isn't live yet" / "publish your app" HTML page (NOT our JSON)
+  // for in-flight POST/PATCHs. Agents working through a republish saw this
+  // raw HTML dumped into the "approve & notify" error toast (the red 404
+  // box — Efrain + a second report). Treat it as transient so the approve/
+  // notify + NLA flows retry across the deploy window instead of surfacing
+  // the page. Our own real 404s are JSON ({error:"..."}), so they never
+  // contain "<!doctype html" and are unaffected.
+  if (
+    m.includes("<!doctype html") &&
+    (m.includes("this app isn't live") ||
+      m.includes("this app isn&#39;t live") ||
+      m.includes("publish your app") ||
+      m.includes("404"))
+  )
+    return true;
   // fetch network failures
   if (m === "failed to fetch" || m.includes("networkerror")) return true;
   // Server 5xx surfaced as "internal server error" / similar
@@ -109,7 +126,7 @@ export function friendlyApiErrorMessage(err: unknown): string {
   const raw = (err instanceof Error ? err.message : String(err ?? "")).trim();
   if (!raw) return "Something went wrong. Please try again.";
   if (isTransientApiError(raw)) {
-    return "Connection issue — please tap Submit again.";
+    return "Connection issue — please try that again in a moment.";
   }
   // Strip any stray HTML if a non-transient HTML body somehow leaked through.
   if (raw.toLowerCase().includes("<!doctype html")) {
