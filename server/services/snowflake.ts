@@ -1,3 +1,5 @@
+import { createPrivateKey } from "node:crypto";
+
 let snowflake: any = null;
 
 // Tyler 2026-05-01 — production-environment Snowflake load failures were
@@ -115,34 +117,38 @@ WHERE p.primary_rank = 1
 ORDER BY p.LDAP_ID
 `;
 
+// Tyler 2026-06-25 — generalized to handle ANY "-----BEGIN <LABEL>PRIVATE KEY-----"
+// header (plain PKCS#8, "RSA PRIVATE KEY", and "ENCRYPTED PRIVATE KEY"). The prior
+// version only matched (RSA )?PRIVATE KEY, so an ENCRYPTED key fell through to the
+// "no header" branch and got re-wrapped with a plain header — corrupting it. We now
+// preserve the real header/footer label and rebuild the base64 body into 64-char
+// lines (Replit secrets often arrive with spaces instead of newlines).
 function normalizePrivateKey(key: string): string {
-  let normalized = key.trim();
-  normalized = normalized.replace(/\\n/g, "\n");
-
-  const headerRe = /-----BEGIN (RSA )?PRIVATE KEY-----/;
-  const footerRe = /-----END (RSA )?PRIVATE KEY-----/;
+  const normalized = key.trim().replace(/\\n/g, "\n");
+  const headerRe = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
+  const footerRe = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
   const headerMatch = normalized.match(headerRe);
   const footerMatch = normalized.match(footerRe);
 
   if (headerMatch && footerMatch) {
     const header = headerMatch[0];
     const footer = footerMatch[0];
-    let body = normalized
-      .replace(header, "")
-      .replace(footer, "")
+    const bodyStart = headerMatch.index! + header.length;
+    const body = normalized
+      .slice(bodyStart, footerMatch.index)
       .replace(/[\s\r\n]+/g, "");
     const lines = body.match(/.{1,64}/g) || [];
-    normalized = header + "\n" + lines.join("\n") + "\n" + footer + "\n";
-  } else if (!headerMatch) {
-    const body = normalized.replace(/[\s\r\n]+/g, "");
-    const lines = body.match(/.{1,64}/g) || [];
-    normalized =
-      "-----BEGIN PRIVATE KEY-----\n" +
-      lines.join("\n") +
-      "\n-----END PRIVATE KEY-----\n";
+    return header + "\n" + lines.join("\n") + "\n" + footer + "\n";
   }
 
-  return normalized;
+  // No PEM header at all — assume a bare base64 unencrypted PKCS#8 body.
+  const body = normalized.replace(/[\s\r\n]+/g, "");
+  const lines = body.match(/.{1,64}/g) || [];
+  return (
+    "-----BEGIN PRIVATE KEY-----\n" +
+    lines.join("\n") +
+    "\n-----END PRIVATE KEY-----\n"
+  );
 }
 
 function getConnection(): Promise<any> {
@@ -154,7 +160,32 @@ function getConnection(): Promise<any> {
     }
 
     const sdk = getSnowflakeSDK();
-    const privateKey = normalizePrivateKey(rawKey);
+    let privateKey = normalizePrivateKey(rawKey);
+
+    // Tyler 2026-06-25 — support an encrypted private key. If the PEM is an
+    // "ENCRYPTED PRIVATE KEY", decrypt it locally with the passphrase into an
+    // unencrypted PKCS#8 PEM (what the SDK's JWT path expects). The passphrase
+    // lives in its own secret (SNOWFLAKE_PRIVATE_KEY_PASSPHRASE) so the key can
+    // stay encrypted at rest.
+    if (privateKey.includes("ENCRYPTED PRIVATE KEY")) {
+      const passphrase = process.env.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE;
+      if (!passphrase) {
+        reject(
+          new Error(
+            "SNOWFLAKE_PRIVATE_KEY is encrypted but SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is not configured",
+          ),
+        );
+        return;
+      }
+      try {
+        privateKey = createPrivateKey({ key: privateKey, format: "pem", passphrase })
+          .export({ type: "pkcs8", format: "pem" })
+          .toString();
+      } catch (e: any) {
+        reject(new Error(`Failed to decrypt SNOWFLAKE_PRIVATE_KEY: ${e?.message || e}`));
+        return;
+      }
+    }
 
     const connection = sdk.createConnection({
       account: process.env.SNOWFLAKE_ACCOUNT!,
