@@ -58,6 +58,88 @@ const clients = new Map<number, ConnectedClient[]>();
 const PRESENCE_STALE_MS = 60 * 60 * 1000;
 const pendingPresenceTimers = new Map<number, NodeJS.Timeout>();
 
+// Tyler 2026-06-25 — last time we heard ANYTHING from a user across all of
+// their sockets (a new connection, an app-level keepalive ping, any inbound
+// frame). The 60-min presence-stale fallback below used to demote an agent
+// purely because the `clients` map read empty at the moment its timer fired.
+// Under heavy zombie/reconnect churn (a fresh socket registers behind two
+// awaits while an older one's close races it) that map can read empty for an
+// agent who is actively present and reconnecting every few minutes — which
+// flipped real, working agents to "Unavailable" mid-shift (Efrain Neives and
+// ~30 others, 2026-06-25). The cleanup now additionally requires genuine
+// silence for the full window before demoting, so socket churn alone can
+// never knock an agent offline.
+const lastSeenByUser = new Map<number, number>();
+function touchLastSeen(userId: number) {
+  lastSeenByUser.set(userId, Date.now());
+}
+
+// Arm (or re-arm) the long presence-stale cleanup for an agent whose last
+// socket just closed. The timer self-reschedules if we've heard from the
+// agent within the window, so transient reconnect churn can never demote a
+// present agent — only a true 60-min absence (browser fully closed) does.
+function schedulePresenceCleanup(client: ConnectedClient) {
+  const prior = pendingPresenceTimers.get(client.userId);
+  if (prior) clearTimeout(prior);
+  const fire = async () => {
+    pendingPresenceTimers.delete(client.userId);
+    const live = clients.get(client.userId);
+    if (live && live.length > 0) return;
+    const sinceSeen = Date.now() - (lastSeenByUser.get(client.userId) ?? 0);
+    if (sinceSeen < PRESENCE_STALE_MS) {
+      // We heard from this user within the window (a reconnect or keepalive
+      // landed even though no socket is registered at this exact instant).
+      // Re-check when the window would actually elapse instead of demoting a
+      // present-but-churning agent.
+      const timer = setTimeout(fire, PRESENCE_STALE_MS - sinceSeen);
+      pendingPresenceTimers.set(client.userId, timer);
+      return;
+    }
+    try {
+      const fresh = await storage.getUser(client.userId);
+      if (!fresh || (fresh as any).agentStatus !== "online") return;
+      // Don't strand a pending ticket.
+      const pendingCount = await storage.getPendingCount(client.userId);
+      const nlaPendingCount = await storage.getNlaPendingCount(client.userId);
+      if (pendingCount > 0 || nlaPendingCount > 0) {
+        log(`Skipped presence cleanup for ${client.name} — open pending ticket`, "ws");
+        try {
+          await storage.logAgentActivity({
+            userId: client.userId,
+            eventType: "presence_stale_skipped_pending",
+            details: { pendingCount, nlaPendingCount, staleMinutes: PRESENCE_STALE_MS / 60000 } as any,
+          } as any);
+        } catch {}
+        return;
+      }
+      await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
+      lastSeenByUser.delete(client.userId);
+      try {
+        await storage.logAgentActivity({
+          userId: client.userId,
+          eventType: "presence_stale_cleanup",
+          details: { staleMinutes: PRESENCE_STALE_MS / 60000, reason: "no_active_ws_sessions" } as any,
+        } as any);
+      } catch {}
+      broadcastToAdmins({
+        type: "agent_status_changed",
+        payload: { userId: client.userId, name: client.name, status: "offline" },
+      });
+      const onlineCount = await storage.getOnlineAgentCount();
+      const queuedCount = await storage.getQueuedCountAll();
+      broadcastToTechnicians({
+        type: "vrs_availability",
+        payload: { onlineAgents: onlineCount, queuedTickets: queuedCount },
+      });
+      log(`Agent ${client.name} cleaned up after ${PRESENCE_STALE_MS / 60000}min of no sessions`, "ws");
+    } catch (err) {
+      log(`Presence cleanup failed for ${client.name}: ${err}`, "ws");
+    }
+  };
+  const timer = setTimeout(fire, PRESENCE_STALE_MS);
+  pendingPresenceTimers.set(client.userId, timer);
+}
+
 const WARRANTY_LABELS: Record<string, string> = {
   sears_protect: "SPHW",
   sears_pa: "Sears PA",
@@ -168,6 +250,7 @@ export function setupWebSocket(server: Server) {
       const existing = clients.get(decoded.id) || [];
       existing.push(client);
       clients.set(decoded.id, existing);
+      touchLastSeen(decoded.id);
       log(`WebSocket connected: ${client.name} (${client.role}, id=${client.userId}, sessions=${existing.length})`, "ws");
 
       // Tyler 2026-05-26 — app-level ping/pong, attached AFTER auth so
@@ -188,6 +271,9 @@ export function setupWebSocket(server: Server) {
       ws.on("message", (raw) => {
         const buf = raw as Buffer;
         if (buf.length > MAX_PING_BYTES) return;
+        // Any inbound frame (the client's 20s keepalive ping included) proves
+        // this user is still present — feeds the presence-stale guard.
+        touchLastSeen(client.userId);
         const now = Date.now();
         if (now - pingWindowStart > PING_WINDOW_MS) {
           pingWindowStart = now;
@@ -223,54 +309,13 @@ export function setupWebSocket(server: Server) {
             // tech-facing onlineAgents and admin visibility don't show
             // a ghost-online agent forever. Does NOT stamp autoOfflinedAt
             // (no modal — the browser is closed). Cancelled on reconnect.
+            // Only the agent-online path keeps lastSeen (the cleanup timer
+            // consumes it); everyone else's entry is dropped here so the
+            // map can't grow unbounded across the user base.
             if (client.role === "vrs_agent" && client.agentStatus !== "offline") {
-              const prior = pendingPresenceTimers.get(client.userId);
-              if (prior) clearTimeout(prior);
-              const timer = setTimeout(async () => {
-                pendingPresenceTimers.delete(client.userId);
-                const live = clients.get(client.userId);
-                if (live && live.length > 0) return;
-                try {
-                  const fresh = await storage.getUser(client.userId);
-                  if (!fresh || (fresh as any).agentStatus !== "online") return;
-                  // Don't strand a pending ticket.
-                  const pendingCount = await storage.getPendingCount(client.userId);
-                  const nlaPendingCount = await storage.getNlaPendingCount(client.userId);
-                  if (pendingCount > 0 || nlaPendingCount > 0) {
-                    log(`Skipped presence cleanup for ${client.name} — open pending ticket`, "ws");
-                    try {
-                      await storage.logAgentActivity({
-                        userId: client.userId,
-                        eventType: "presence_stale_skipped_pending",
-                        details: { pendingCount, nlaPendingCount, staleMinutes: PRESENCE_STALE_MS / 60000 } as any,
-                      } as any);
-                    } catch {}
-                    return;
-                  }
-                  await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
-                  try {
-                    await storage.logAgentActivity({
-                      userId: client.userId,
-                      eventType: "presence_stale_cleanup",
-                      details: { staleMinutes: PRESENCE_STALE_MS / 60000, reason: "no_active_ws_sessions" } as any,
-                    } as any);
-                  } catch {}
-                  broadcastToAdmins({
-                    type: "agent_status_changed",
-                    payload: { userId: client.userId, name: client.name, status: "offline" },
-                  });
-                  const onlineCount = await storage.getOnlineAgentCount();
-                  const queuedCount = await storage.getQueuedCountAll();
-                  broadcastToTechnicians({
-                    type: "vrs_availability",
-                    payload: { onlineAgents: onlineCount, queuedTickets: queuedCount },
-                  });
-                  log(`Agent ${client.name} cleaned up after ${PRESENCE_STALE_MS / 60000}min of no sessions`, "ws");
-                } catch (err) {
-                  log(`Presence cleanup failed for ${client.name}: ${err}`, "ws");
-                }
-              }, PRESENCE_STALE_MS);
-              pendingPresenceTimers.set(client.userId, timer);
+              schedulePresenceCleanup(client);
+            } else {
+              lastSeenByUser.delete(decoded.id);
             }
           }
         }
@@ -284,6 +329,10 @@ export function setupWebSocket(server: Server) {
             clients.set(decoded.id, remaining);
           } else {
             clients.delete(decoded.id);
+            // No presence timer is armed on the error path (the trailing
+            // close finds an empty session list), so nothing will consume
+            // lastSeen — drop it to keep the map bounded.
+            lastSeenByUser.delete(decoded.id);
           }
         }
       });
@@ -569,6 +618,12 @@ export function forceDisconnectUser(userId: number): void {
     try { c.ws.close(4010, "Session revoked"); } catch {}
   }
   clients.delete(userId);
+  const pending = pendingPresenceTimers.get(userId);
+  if (pending) {
+    clearTimeout(pending);
+    pendingPresenceTimers.delete(userId);
+  }
+  lastSeenByUser.delete(userId);
   log(`Force-disconnected WebSocket sessions for user ${userId} (revocation)`, "ws");
 }
 
