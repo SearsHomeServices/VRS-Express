@@ -58,6 +58,14 @@ const clients = new Map<number, ConnectedClient[]>();
 const PRESENCE_STALE_MS = 60 * 60 * 1000;
 const pendingPresenceTimers = new Map<number, NodeJS.Timeout>();
 
+// Tyler 2026-06-25 — authoritative record of agents WE demoted via the
+// presence-stale fallback (not a manual/admin toggle, not the 30-min idle
+// path). Populated only when the cleanup actually flips an agent offline, and
+// cleared by ANY explicit status change (updateClientStatus) or restore. It is
+// the sole gate for auto-restore-on-reconnect, so the decision never depends on
+// best-effort activity-log writes succeeding.
+const presenceDemotedUsers = new Set<number>();
+
 // Tyler 2026-06-25 — last time we heard ANYTHING from a user across all of
 // their sockets (a new connection, an app-level keepalive ping, any inbound
 // frame). The 60-min presence-stale fallback below used to demote an agent
@@ -114,6 +122,8 @@ function schedulePresenceCleanup(client: ConnectedClient) {
       }
       await storage.updateUser(client.userId, { agentStatus: "offline", updatedAt: new Date() } as any);
       lastSeenByUser.delete(client.userId);
+      // Mark this as a presence-stale demotion so a later reconnect can self-heal.
+      presenceDemotedUsers.add(client.userId);
       try {
         await storage.logAgentActivity({
           userId: client.userId,
@@ -138,6 +148,115 @@ function schedulePresenceCleanup(client: ConnectedClient) {
   };
   const timer = setTimeout(fire, PRESENCE_STALE_MS);
   pendingPresenceTimers.set(client.userId, timer);
+}
+
+// Tyler 2026-06-25 — self-healing reconnect restore. If our 60-min presence
+// fallback ever demotes an agent who is in fact still working, the moment their
+// browser reconnects we put them back online. Eligibility is authoritative on
+// OUR OWN action: `presenceDemotedUsers` is populated only by the cleanup path
+// when it actually demotes, and cleared by any explicit status change
+// (updateClientStatus) — so a later manual/admin offline always cancels
+// auto-restore, independent of whether best-effort activity-log writes
+// succeeded. We never touch the 30-min screen-idle path (autoOfflinedAt set),
+// which intentionally requires the agent to acknowledge the inactivity modal.
+// On a process restart the set is empty: the safe failure mode is "leave the
+// agent offline until they toggle", never "wrongly force them online". Returns
+// the effective status the reconnecting client should re-sync its UI to.
+async function maybeAutoRestoreAgent(client: ConnectedClient, user: any): Promise<string> {
+  const status = (user?.agentStatus as string) || "offline";
+  if (client.role !== "vrs_agent") return status;
+  if (status !== "offline") return status;
+  if (user?.autoOfflinedAt) return status; // 30-min idle path — needs manual ack
+  // Atomically claim eligibility: delete() returns true only for the first
+  // caller, so concurrent multi-tab reconnects can't double-restore and the
+  // token is consumed before any await yields the event loop.
+  if (!presenceDemotedUsers.delete(client.userId)) return status; // not our demotion
+  try {
+    await storage.updateUser(client.userId, { agentStatus: "online", updatedAt: new Date() } as any);
+    try {
+      await storage.logAgentActivity({
+        userId: client.userId,
+        eventType: "presence_auto_restored",
+        details: { reason: "reconnect_after_presence_stale", restoredFrom: "offline" } as any,
+      } as any);
+    } catch {}
+    broadcastToAdmins({
+      type: "agent_status_changed",
+      payload: { userId: client.userId, name: client.name, status: "online" },
+    });
+    const onlineCount = await storage.getOnlineAgentCount();
+    const queuedCount = await storage.getQueuedCountAll();
+    broadcastToTechnicians({
+      type: "vrs_availability",
+      payload: { onlineAgents: onlineCount, queuedTickets: queuedCount },
+    });
+    log(`Agent ${client.name} auto-restored to online on reconnect (was presence-stale offline)`, "ws");
+    return "online";
+  } catch (err) {
+    // Restore failed — re-arm eligibility so the next reconnect can retry.
+    presenceDemotedUsers.add(client.userId);
+    log(`Auto-restore failed for ${client.name}: ${err}`, "ws");
+    return status;
+  }
+}
+
+// Tyler 2026-06-25 — WS reconnect-storm watch. The disease behind the
+// false-offline incident was ~9,700 zombie reconnects/day caused by the
+// Autoscale deployment killing idle WebSockets ~every 60s. After moving to a
+// Reserved VM (always-on, single instance, no idle-kill) that churn should
+// collapse to genuine reconnects only. This records every accepted connection
+// in a rolling 5-min window; if the count crosses a threshold it opens a
+// `ws_reconnect_storm` incident in the System Health Regression Watch (and
+// clears it when churn returns to normal) so any regression surfaces on the
+// admin health view instead of silently flipping agents offline again.
+const CHURN_WINDOW_MS = 5 * 60 * 1000;
+const CHURN_ALERT_THRESHOLD = Number(process.env.WS_CHURN_ALERT_THRESHOLD) || 250;
+const CHURN_CHECK_NAME = "ws_reconnect_storm";
+const CHURN_EVAL_INTERVAL_MS = 60 * 1000;
+let connectionTimes: number[] = [];
+function recordConnectionForChurn() {
+  const now = Date.now();
+  connectionTimes.push(now);
+  if (connectionTimes.length > 10000) {
+    const cutoff = now - CHURN_WINDOW_MS;
+    connectionTimes = connectionTimes.filter((t) => t >= cutoff);
+  }
+}
+async function evaluateChurn() {
+  const now = Date.now();
+  const cutoff = now - CHURN_WINDOW_MS;
+  connectionTimes = connectionTimes.filter((t) => t >= cutoff);
+  const count = connectionTimes.length;
+  const perMin = Math.round(count / (CHURN_WINDOW_MS / 60000));
+  try {
+    const existing = await storage.findOpenHealthIncident(CHURN_CHECK_NAME, "system", 0);
+    if (count > CHURN_ALERT_THRESHOLD) {
+      log(`[ws] CHURN ALERT: ${count} connections in last 5min (~${perMin}/min, threshold ${CHURN_ALERT_THRESHOLD})`, "ws");
+      if (existing) {
+        await storage.touchHealthIncident(existing.id);
+      } else {
+        await storage.openHealthIncident({
+          checkName: CHURN_CHECK_NAME,
+          severity: "warning",
+          entityType: "system",
+          entityId: 0,
+          finding: { connectionsLast5Min: count, approxPerMin: perMin, threshold: CHURN_ALERT_THRESHOLD } as any,
+        } as any);
+        broadcastToAdmins({
+          type: "system_health_alert",
+          payload: { checkName: CHURN_CHECK_NAME, severity: "warning", connectionsLast5Min: count, approxPerMin: perMin },
+        });
+      }
+    } else if (existing) {
+      await storage.clearHealthIncident(existing.id, undefined, "ws reconnect rate returned to normal");
+      broadcastToAdmins({
+        type: "system_health_alert",
+        payload: { checkName: CHURN_CHECK_NAME, severity: "ok", connectionsLast5Min: count, approxPerMin: perMin, cleared: true },
+      });
+    }
+  } catch (err) {
+    log(`[ws] churn evaluation failed: ${err}`, "ws");
+  }
 }
 
 const WARRANTY_LABELS: Record<string, string> = {
@@ -253,6 +372,17 @@ export function setupWebSocket(server: Server) {
       touchLastSeen(decoded.id);
       log(`WebSocket connected: ${client.name} (${client.role}, id=${client.userId}, sessions=${existing.length})`, "ws");
 
+      // Count this accepted connection for the reconnect-storm watch.
+      recordConnectionForChurn();
+
+      // Self-heal: if this agent was demoted by the presence-stale fallback
+      // and is now reconnecting, put them back online. Returns the status the
+      // client UI should re-sync to (unchanged for everyone else).
+      const effectiveStatus = await maybeAutoRestoreAgent(client, user);
+      if (effectiveStatus !== client.agentStatus) {
+        updateClientStatus(decoded.id, effectiveStatus);
+      }
+
       // Tyler 2026-05-26 — app-level ping/pong, attached AFTER auth so
       // unauthenticated traffic during the close handshake is never
       // parsed. Pairs with the client's 20s keepalive — gives the
@@ -345,7 +475,7 @@ export function setupWebSocket(server: Server) {
         type: "connected",
         payload: {
           userId: decoded.id,
-          agentStatus: (user as any).agentStatus || "offline",
+          agentStatus: effectiveStatus,
           autoOfflinedAt: (user as any).autoOfflinedAt || null,
         },
       });
@@ -554,6 +684,10 @@ export function broadcastToAllAgents(event: WSEvent, excludeUserId?: number) {
 }
 
 export function updateClientStatus(userId: number, status: string) {
+  // Any explicit status change (self toggle, admin toggle, ticket-flow
+  // transition, or the client auto-offline route) cancels presence-stale
+  // auto-restore eligibility — even when the user has no live sessions.
+  presenceDemotedUsers.delete(userId);
   const sessions = clients.get(userId);
   if (sessions) {
     for (const c of sessions) {
@@ -624,6 +758,7 @@ export function forceDisconnectUser(userId: number): void {
     pendingPresenceTimers.delete(userId);
   }
   lastSeenByUser.delete(userId);
+  presenceDemotedUsers.delete(userId);
   log(`Force-disconnected WebSocket sessions for user ${userId} (revocation)`, "ws");
 }
 
@@ -669,3 +804,7 @@ setInterval(() => {
     log(`WS revalidation error: ${err}`, "ws")
   );
 }, WS_REVALIDATION_INTERVAL_MS);
+
+setInterval(() => {
+  evaluateChurn().catch((err) => log(`[ws] churn interval error: ${err}`, "ws"));
+}, CHURN_EVAL_INTERVAL_MS);

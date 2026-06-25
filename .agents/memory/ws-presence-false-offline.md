@@ -27,7 +27,34 @@ remainder (don't demote); else run cleanup. Only the agent-online path retains a
 (non-agent last-session close, error last-session branch, `forceDisconnectUser`,
 and inside cleanup after demotion) so the map stays bounded across the user base.
 
-**Deeper unfixed cause (follow-up):** the WS reconnect storm itself — clients see
-"no inbound for ~60s" repeatedly despite 25s server pings + 20s client app-pings,
-i.e. server→client frames stall ~60s (likely proxy/LB idle behavior in the
-deployment). This fix only stops the false offlines; it does not reduce churn.
+**Root cause of the churn (the disease) — FIXED:** the deployment was on
+**Autoscale** (`.replit` → `[deployment] deploymentTarget`). Autoscale is
+request-oriented (Cloud Run-style): it idle-kills long-lived WebSockets ~every
+60s and can run multiple stateless instances. That produced the ~60s "no
+inbound" gap and ~9,700 reconnects/day, and the in-memory `clients`/presence
+Maps fragment across instances. **Switched to Reserved VM (`vm`)** — always-on,
+single persistent instance, no idle-kill — via `deployConfig`. Needs a republish
+to take effect.
+
+**Why this matters as a rule:** any app here that relies on long-lived
+WebSockets + in-memory connection/presence state MUST deploy as `vm`, never
+`autoscale`. Autoscale will silently shred WS connections and split in-memory
+state across instances.
+
+**Self-healing safety net added (server/websocket.ts):**
+- *Auto-restore on reconnect* — a `vrs_agent` demoted by the presence fallback is
+  flipped back online the moment they reconnect. Eligibility is gated ONLY by an
+  in-memory `presenceDemotedUsers` Set (set in the cleanup demotion path; cleared
+  by `updateClientStatus` on any explicit toggle/ticket-flow/auto-offline, and by
+  `forceDisconnectUser`). Claim it atomically via `Set.delete()` (true only for
+  the first caller → no multi-tab double-restore); re-arm in the catch.
+  **Why not read agent_activity_log to infer intent:** those writes are
+  best-effort (`safeLogActivity` swallows failures), so a failed manual-offline
+  log would let a reconnect wrongly restore — the Set is authoritative on our own
+  action. Never overrides the 30-min idle path (guarded by `autoOfflinedAt`).
+- *Reconnect-storm watch* — every accepted WS connection is counted in a rolling
+  5-min window; over `WS_CHURN_ALERT_THRESHOLD` (default 250) it opens a
+  `ws_reconnect_storm` incident via the System Health Regression Watch
+  (`storage.openHealthIncident`, entityType `system`, entityId `0`) and clears it
+  when churn normalizes — so an Autoscale-style regression surfaces on the admin
+  health view instead of silently flipping agents offline again.

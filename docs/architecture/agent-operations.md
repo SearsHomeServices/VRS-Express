@@ -18,6 +18,7 @@
   - `status_toggle_admin` — PATCH /api/admin/users/:id/status; details include `adminUserId` + `adminName`
   - `presence_stale_cleanup` — server WS-disconnect 60-min fallback fired (browser closed)
   - `presence_stale_skipped_pending` — fallback declined due to open ticket
+  - `presence_auto_restored` — agent demoted by `presence_stale_cleanup` reconnected and was auto-flipped back online (self-heal; gated by the in-memory `presenceDemotedUsers` set in `server/websocket.ts`, never by a manual/admin offline or the 30-min idle path)
   - `status_change_ticket_flow` — auto-transition triggered by ticket flow; details `{from, to, trigger, submissionId, action?}` where trigger is one of `claim` (→working), `process` (→online), `process_nla` (→online), `send_to_nla` (→online), `correct_division_release` (→online)
 - **Endpoint:** `GET /api/admin/agent-activity?userId=&eventType=&sinceHours=&limit=` (admin/super_admin). sinceHours default 24, limit cap 1000. Returns `{events: [{id, userId, userName, eventType, details, createdAt}], filters}` DESC by createdAt.
 - **Client testing knob:** `/agent/dashboard?inactivityMs=N&checkMs=M` overrides the 30-min/60-s intervals. Both clamped to production maximum via `Math.min(N, prodDefault)` — cannot weaken a real deployment.
@@ -30,4 +31,5 @@
   - `send_to_nla_status_stuck` — VRS agents/admins on `agent_status='working'` with no open pending tickets and `updated_at > 10 min` ago. Watches Rob's bug class.
   - `escalate_audit_gap` — completed `parts_nla` rows where `nla_resolution='part_found_vrs_ordered'` and `nla_escalated_by IS NULL` (last 7 days). Watches Zorn's #985 footprint.
   - `stale_pending_nla` — `parts_nla` pending > 4 hours assigned to an offline agent. Catches abandoned escalates.
+  - `ws_reconnect_storm` — opened from `server/websocket.ts` (not the regression-check route) when accepted WebSocket connections exceed `WS_CHURN_ALERT_THRESHOLD` (default 250) in a rolling 5-min window; auto-cleared when churn normalizes. Watches for the Autoscale-style reconnect storm that drove the 2026-06-25 false-offline incident. entityType `system`, entityId `0`.
 - **Add new checks** by adding another `await runCheck(name, severity, async () => [...])` call inside the route handler — no schema changes needed.
