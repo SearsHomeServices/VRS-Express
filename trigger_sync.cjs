@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const SECRET = process.env.SESSION_SECRET;
-const BASE = "https://vrs-express.replit.app";
+const BASE = "https://vrs-auth-tool.replit.app";
 // Mint a token for prod super_admin (id 10 = System Administrator)
 const token = jwt.sign({ id: 10, email: "", name: "System Administrator", role: "super_admin" }, SECRET, { expiresIn: "10m" });
 
