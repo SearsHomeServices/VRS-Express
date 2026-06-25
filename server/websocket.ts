@@ -55,7 +55,19 @@ const clients = new Map<number, ConnectedClient[]>();
 // path is always the first to fire when a tab is still alive. This
 // fallback does NOT stamp autoOfflinedAt (no modal needed — the
 // agent's browser is gone).
-const PRESENCE_STALE_MS = 60 * 60 * 1000;
+// Dev-only knob (never weakens production): set PRESENCE_STALE_MS_DEV to a small
+// value to exercise the presence-cleanup → auto-restore path quickly in tests.
+// Strict allowlist — only an explicitly "development" runtime honors it. Any
+// other NODE_ENV (production, staging, test, or unset) always uses the real
+// 60-min value, so this testing knob can never weaken live presence behavior.
+const PRESENCE_STALE_MS = (() => {
+  const base = 60 * 60 * 1000;
+  if (process.env.NODE_ENV === "development" && process.env.PRESENCE_STALE_MS_DEV) {
+    const v = Number(process.env.PRESENCE_STALE_MS_DEV);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return base;
+})();
 const pendingPresenceTimers = new Map<number, NodeJS.Timeout>();
 
 // Tyler 2026-06-25 — authoritative record of agents WE demoted via the

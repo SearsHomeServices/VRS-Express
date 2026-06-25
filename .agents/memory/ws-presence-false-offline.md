@@ -41,6 +41,26 @@ WebSockets + in-memory connection/presence state MUST deploy as `vm`, never
 `autoscale`. Autoscale will silently shred WS connections and split in-memory
 state across instances.
 
+**Deployment NODE_ENV must be deterministic (caught during verification):** the VM
+deploy run command must explicitly set production mode (use `npm run start`, which
+is `NODE_ENV=production node dist/index.cjs`) — a bare `node ./dist/index.cjs`
+leaves `NODE_ENV` unset in the VM, which silently breaks every prod guard that
+keys off `NODE_ENV === "production"` (e.g. `server/seed.ts` test-data cleanup would
+run against prod). Any dev-only testing knob must gate on a strict
+`NODE_ENV === "development"` allowlist, never `!== "production"`, so an unset
+NODE_ENV can't accidentally enable it.
+**Why:** Replit does not guarantee `NODE_ENV=production` for a custom VM run
+command; only an explicit set is safe.
+
+**Verifying the auto-heal end-to-end:** set `PRESENCE_STALE_MS_DEV` (dev-only knob
+in `server/websocket.ts`) to a few seconds, boot a second server instance on a
+spare PORT against the shared dev DB, then drive real `ws` client
+connect/disconnect/reconnect cycles with a JWT minted from `SESSION_SECRET`
+(`{id,email,name,role}`). Assert on the `connected` payload's `agentStatus` plus
+`agent_activity_log` rows (`presence_stale_cleanup`, `presence_auto_restored`).
+Covers: demote-on-disconnect, restore-on-reconnect, no-restore-when-manually-offline,
+explicit-toggle-defeats-restore, and concurrent-two-tab-restores-exactly-once.
+
 **Self-healing safety net added (server/websocket.ts):**
 - *Auto-restore on reconnect* — a `vrs_agent` demoted by the presence fallback is
   flipped back online the moment they reconnect. Eligibility is gated ONLY by an
