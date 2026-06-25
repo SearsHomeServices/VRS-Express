@@ -41,6 +41,15 @@ WebSockets + in-memory connection/presence state MUST deploy as `vm`, never
 `autoscale`. Autoscale will silently shred WS connections and split in-memory
 state across instances.
 
+**Switching deploy type is NOT just `.replit` + Republish (verified 2026-06-25):**
+setting `deploymentTarget = "vm"` via `deployConfig` updates `.replit`, but
+clicking **Republish** on an existing Autoscale deployment keeps it Autoscale —
+`getDeploymentInfo().deploymentType` still returns `"autoscale"`. Autoscale and
+Reserved VM are separate deployment products; converting requires the user to
+explicitly pick **Reserved VM** in the Publish pane (often via creating the VM
+deployment), not a plain republish. **Always verify post-publish with
+`getDeploymentInfo()` — trust `deploymentType`, not the `.replit` file.**
+
 **Deployment NODE_ENV must be deterministic (caught during verification):** the VM
 deploy run command must explicitly set production mode (use `npm run start`, which
 is `NODE_ENV=production node dist/index.cjs`) — a bare `node ./dist/index.cjs`
