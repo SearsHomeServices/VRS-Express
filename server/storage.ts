@@ -75,10 +75,23 @@ export type NlaLookupRow = {
   statusChangedAt: Date | null;
 };
 
-// Initialize database connection
+// Initialize database connection.
+// IMPORTANT: pg's default pool max is 10. Under production daytime load (~40
+// concurrent agents polling /api/submissions, /api/agent/stats, /api/admin/users
+// every few seconds), 10 connections saturate and — with no acquisition timeout —
+// requests queue indefinitely, the event loop backs up, latency climbs to 5-18s,
+// queries fail, and the process HANGS. On a Reserved VM a hung (not exited)
+// process is never auto-restarted, so it serves 502 until a manual redeploy.
+// The timeouts below convert saturation into fast per-request failures (graceful
+// degradation) instead of a whole-process hang; statement_timeout releases any
+// connection stuck on a runaway query.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   keepAlive: true,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+  statement_timeout: 30000,
 });
 
 // Prevent unhandled 'error' events on idle clients from crashing the process.
