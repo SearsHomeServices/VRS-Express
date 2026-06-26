@@ -70,6 +70,15 @@ connect/disconnect/reconnect cycles with a JWT minted from `SESSION_SECRET`
 Covers: demote-on-disconnect, restore-on-reconnect, no-restore-when-manually-offline,
 explicit-toggle-defeats-restore, and concurrent-two-tab-restores-exactly-once.
 
+**Diagnostic signature for a false offline (prod read-only):** join each
+`presence_stale_cleanup` in `agent_activity_log` to that same user's *next*
+non-presence event; a gap `< 5 min` means the agent was actually present/working
+when demoted (false offline). A *legit* demotion has NO activity after (agent
+truly gone). Validated 2026-06-25: pre-fix window had 173/197 demotions with a
+<5min gap (false), post-fix window had 0 (the only post-fix demotions all had no
+activity after = genuinely absent). Use this PRE/POST split (boundary = first
+publish carrying the fix) to prove a presence fix actually took.
+
 **Self-healing safety net added (server/websocket.ts):**
 - *Auto-restore on reconnect* — a `vrs_agent` demoted by the presence fallback is
   flipped back online the moment they reconnect. Eligibility is gated ONLY by an
