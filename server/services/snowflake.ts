@@ -223,45 +223,128 @@ function executeQuery(connection: any, query: string): Promise<SnowflakeTechRow[
   });
 }
 
+// Tyler 2026-06-26 — Snowflake hardening. Every call now runs under an overall
+// deadline (connect + execute) and ALWAYS releases its connection, so a stalled
+// warehouse fails fast instead of hanging the request (and, on the synchronous
+// submit path, piling up concurrent submits). Hot service-order lookups are
+// additionally cache-served.
+const SNOWFLAKE_OP_TIMEOUT_MS = Number(process.env.SNOWFLAKE_OP_TIMEOUT_MS) || 15000;
+const SNOWFLAKE_SYNC_TIMEOUT_MS = Number(process.env.SNOWFLAKE_SYNC_TIMEOUT_MS) || 120000;
+
+class SnowflakeTimeoutError extends Error {}
+
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new SnowflakeTimeoutError(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+// Destroys a connection that may resolve LATER than our deadline. Passing the
+// (possibly still-pending) connection promise guarantees we release the socket
+// even when withTimeout already rejected and we stopped awaiting it.
+function releaseConnection(connPromise: Promise<any> | null) {
+  if (!connPromise) return;
+  Promise.resolve(connPromise)
+    .then((conn) => {
+      if (!conn) return;
+      try {
+        conn.destroy((err: any) => {
+          if (err) console.error("Snowflake disconnect error:", err.message);
+        });
+      } catch {}
+    })
+    .catch(() => {});
+}
+
+// Generic size-capped TTL cache (insertion-order / LRU-ish eviction).
+class TtlCache<T> {
+  private store = new Map<string, { value: T; expiresAt: number }>();
+  constructor(private maxEntries: number) {}
+  get(key: string): T | undefined {
+    const hit = this.store.get(key);
+    if (!hit) return undefined;
+    if (Date.now() > hit.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    this.store.delete(key);
+    this.store.set(key, hit);
+    return hit.value;
+  }
+  set(key: string, value: T, ttlMs: number) {
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    while (this.store.size > this.maxEntries) {
+      const oldest = this.store.keys().next().value;
+      if (oldest === undefined) break;
+      this.store.delete(oldest);
+    }
+  }
+}
+
 export interface ProcIdResult {
   procId: string;
   clientNm: string;
 }
+
+// 6h for a resolved lookup; 2min for "Not Found" / a transient failure (so a
+// Snowflake stall can't make every concurrent submit wait out the full timeout).
+const PROC_ID_POS_TTL_MS = 6 * 60 * 60 * 1000;
+const PROC_ID_NEG_TTL_MS = 2 * 60 * 1000;
+const procIdCache = new TtlCache<ProcIdResult>(5000);
 
 export async function fetchProcIdForServiceOrder(rawServiceOrder: string): Promise<ProcIdResult> {
   const soNumber = rawServiceOrder.includes("-")
     ? rawServiceOrder.split("-")[1]
     : rawServiceOrder;
 
-  try {
-    const connection = await getConnection();
-    try {
-      const rows: any[] = await new Promise((resolve, reject) => {
-        connection.execute({
-          sqlText: `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SO_NO = ? LIMIT 1`,
-          binds: [soNumber],
-          complete: (err: any, stmt: any, rows: any) => {
-            if (err) reject(err);
-            else resolve(rows || []);
-          },
-        });
-      });
+  const cached = procIdCache.get(soNumber);
+  if (cached) return cached;
 
-      if (rows.length > 0) {
-        return {
-          procId: String(rows[0].CMB_THD_PTY_ID ?? "").trim() || "Not Found",
-          clientNm: String(rows[0].CLIENT_NM ?? "").trim() || "Not Found",
-        };
-      }
-      return { procId: "Not Found", clientNm: "Not Found" };
-    } finally {
-      connection.destroy((err: any) => {
-        if (err) console.error("Snowflake disconnect error:", err.message);
-      });
-    }
+  let connPromise: Promise<any> | null = null;
+  try {
+    const result = await withTimeout(
+      (async () => {
+        connPromise = getConnection();
+        const connection = await connPromise;
+        const rows: any[] = await new Promise((resolve, reject) => {
+          connection.execute({
+            sqlText: `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SO_NO = ? LIMIT 1`,
+            binds: [soNumber],
+            complete: (err: any, _stmt: any, rows: any) => {
+              if (err) reject(err);
+              else resolve(rows || []);
+            },
+          });
+        });
+        if (rows.length > 0) {
+          return {
+            procId: String(rows[0].CMB_THD_PTY_ID ?? "").trim() || "Not Found",
+            clientNm: String(rows[0].CLIENT_NM ?? "").trim() || "Not Found",
+          };
+        }
+        return { procId: "Not Found", clientNm: "Not Found" };
+      })(),
+      SNOWFLAKE_OP_TIMEOUT_MS,
+      "fetchProcIdForServiceOrder",
+    );
+
+    const isFound = result.procId !== "Not Found" || result.clientNm !== "Not Found";
+    procIdCache.set(soNumber, result, isFound ? PROC_ID_POS_TTL_MS : PROC_ID_NEG_TTL_MS);
+    return result;
   } catch (err) {
     console.error("fetchProcIdForServiceOrder error:", err);
-    return { procId: "Not Found", clientNm: "Not Found" };
+    const fallback = { procId: "Not Found", clientNm: "Not Found" };
+    // Cache the failure briefly so a Snowflake stall doesn't make every
+    // concurrent submit wait out the full timeout (pile-up protection).
+    procIdCache.set(soNumber, fallback, PROC_ID_NEG_TTL_MS);
+    return fallback;
+  } finally {
+    releaseConnection(connPromise);
   }
 }
 
@@ -293,6 +376,10 @@ export interface TechHubPartPhoto {
   partType: string | null;
   createdAt: string | null;
 }
+
+// 5min — part photos are viewed repeatedly during a single ticket review.
+const TECHHUB_PHOTOS_TTL_MS = 5 * 60 * 1000;
+const techHubPhotosCache = new TtlCache<TechHubPartPhoto[]>(1000);
 
 // Normalizes one raw PHOTO_PATHS element into an absolute, fetchable URL, or
 // null if it can't be resolved. Handles the documented data wrinkles:
@@ -339,79 +426,96 @@ export async function fetchTechHubPartsPhotosForServiceOrder(
     ? rawServiceOrder.split("-")[1]
     : rawServiceOrder;
   if (!so8 || !/^\d{6,9}$/.test(so8.trim())) return [];
+  const key = so8.trim();
 
+  const cached = techHubPhotosCache.get(key);
+  if (cached) return cached;
+
+  let connPromise: Promise<any> | null = null;
   try {
-    const connection = await getConnection();
-    try {
-      const rows: any[] = await new Promise((resolve, reject) => {
-        connection.execute({
-          sqlText: TECHHUB_PHOTOS_QUERY,
-          binds: [so8.trim()],
-          complete: (err: any, _stmt: any, rows: any) => {
-            if (err) reject(err);
-            else resolve(rows || []);
-          },
+    const photos = await withTimeout(
+      (async () => {
+        connPromise = getConnection();
+        const connection = await connPromise;
+        const rows: any[] = await new Promise((resolve, reject) => {
+          connection.execute({
+            sqlText: TECHHUB_PHOTOS_QUERY,
+            binds: [key],
+            complete: (err: any, _stmt: any, rows: any) => {
+              if (err) reject(err);
+              else resolve(rows || []);
+            },
+          });
         });
-      });
 
-      const photos: TechHubPartPhoto[] = [];
-      for (const row of rows) {
-        // PHOTO_PATHS comes back as a JS array (snowflake-sdk parses ARRAY) but
-        // tolerate a stringified form too.
-        let paths: unknown[] = [];
-        const pp = row.PHOTO_PATHS;
-        if (Array.isArray(pp)) {
-          paths = pp;
-        } else if (typeof pp === "string") {
-          try {
-            const j = JSON.parse(pp);
-            paths = Array.isArray(j) ? j : [pp];
-          } catch {
-            paths = pp.split(",");
+        const out: TechHubPartPhoto[] = [];
+        for (const row of rows) {
+          // PHOTO_PATHS comes back as a JS array (snowflake-sdk parses ARRAY) but
+          // tolerate a stringified form too.
+          let paths: unknown[] = [];
+          const pp = row.PHOTO_PATHS;
+          if (Array.isArray(pp)) {
+            paths = pp;
+          } else if (typeof pp === "string") {
+            try {
+              const j = JSON.parse(pp);
+              paths = Array.isArray(j) ? j : [pp];
+            } catch {
+              paths = pp.split(",");
+            }
+          }
+          for (const ref of paths) {
+            const url = normalizeTechHubPhotoRef(ref);
+            if (!url) continue;
+            out.push({
+              url,
+              partNumber: row.PART_NUMBER != null ? String(row.PART_NUMBER) : null,
+              brand: row.BRAND != null ? String(row.BRAND) : null,
+              partType: row.PART_TYPE != null ? String(row.PART_TYPE) : null,
+              createdAt: row.CREATED_AT != null ? String(row.CREATED_AT) : null,
+            });
           }
         }
-        for (const ref of paths) {
-          const url = normalizeTechHubPhotoRef(ref);
-          if (!url) continue;
-          photos.push({
-            url,
-            partNumber: row.PART_NUMBER != null ? String(row.PART_NUMBER) : null,
-            brand: row.BRAND != null ? String(row.BRAND) : null,
-            partType: row.PART_TYPE != null ? String(row.PART_TYPE) : null,
-            createdAt: row.CREATED_AT != null ? String(row.CREATED_AT) : null,
-          });
-        }
-      }
-      return photos;
-    } finally {
-      connection.destroy((err: any) => {
-        if (err) console.error("Snowflake disconnect error:", err.message);
-      });
-    }
+        return out;
+      })(),
+      SNOWFLAKE_OP_TIMEOUT_MS,
+      "fetchTechHubPartsPhotosForServiceOrder",
+    );
+
+    techHubPhotosCache.set(key, photos, TECHHUB_PHOTOS_TTL_MS);
+    return photos;
   } catch (err) {
     console.error("fetchTechHubPartsPhotosForServiceOrder error:", err);
     return [];
+  } finally {
+    releaseConnection(connPromise);
   }
 }
 
 export async function fetchTechniciansFromSnowflake(): Promise<SyncedTechnician[]> {
-  const connection = await getConnection();
-
+  let connPromise: Promise<any> | null = null;
   try {
-    const rows = await executeQuery(connection, TECH_SYNC_QUERY);
-
-    return rows.map((row) => ({
-      ldapId: (row.TECH_ID || "").trim().toLowerCase(),
-      name: (row.TECH_NAME || "").trim(),
-      phone: (row.PHONE_NUMBER || "").trim(),
-      district: (row.DISTRICT_ID || "").trim(),
-      state: "",
-      managerName: (row.MGR_NM || "").trim(),
-      techUnNo: (row.TECH_UN_NO || "").trim(),
-    })).filter((t) => t.ldapId.length > 0);
+    return await withTimeout(
+      (async () => {
+        connPromise = getConnection();
+        const connection = await connPromise;
+        const rows = await executeQuery(connection, TECH_SYNC_QUERY);
+        return rows
+          .map((row) => ({
+            ldapId: (row.TECH_ID || "").trim().toLowerCase(),
+            name: (row.TECH_NAME || "").trim(),
+            phone: (row.PHONE_NUMBER || "").trim(),
+            district: (row.DISTRICT_ID || "").trim(),
+            state: "",
+            managerName: (row.MGR_NM || "").trim(),
+            techUnNo: (row.TECH_UN_NO || "").trim(),
+          }))
+          .filter((t) => t.ldapId.length > 0);
+      })(),
+      SNOWFLAKE_SYNC_TIMEOUT_MS,
+      "fetchTechniciansFromSnowflake",
+    );
   } finally {
-    connection.destroy((err) => {
-      if (err) console.error("Snowflake disconnect error:", err.message);
-    });
+    releaseConnection(connPromise);
   }
 }
