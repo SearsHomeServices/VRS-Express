@@ -1725,13 +1725,20 @@ export async function registerRoutes(
         if (s.stage2ReviewedBy) reviewerIds.add(s.stage2ReviewedBy);
       });
 
+      // Tyler perf: fetch the (handful of) reviewers + the technician in one
+      // bounded Promise.all instead of sequential per-reviewer getUser calls.
+      // This runs on every ticket-detail history load, so cutting the
+      // round-trips helps a hot path (set is small, so no pool pressure).
+      const reviewerIdList = [...reviewerIds];
+      const [techUser, ...reviewerUsers] = await Promise.all([
+        storage.getUser(submission.technicianId),
+        ...reviewerIdList.map(rid => storage.getUser(rid)),
+      ]);
       const reviewerNames: Record<number, string> = {};
-      for (const rid of reviewerIds) {
-        const u = await storage.getUser(rid);
+      reviewerIdList.forEach((rid, i) => {
+        const u = reviewerUsers[i];
         if (u) reviewerNames[rid] = u.name;
-      }
-
-      const techUser = await storage.getUser(submission.technicianId);
+      });
       const techName = techUser?.name || "Technician";
 
       const resubmissionCount = chain.filter(s => s.resubmissionOf != null && s.stage1Status !== "invalid").length;
@@ -3120,8 +3127,10 @@ export async function registerRoutes(
 
   app.get("/api/vrs-availability", authenticateToken, async (_req, res) => {
     try {
-      const onlineAgents = await storage.getOnlineAgentCount();
-      const queuedTickets = await storage.getQueuedCountAll();
+      const [onlineAgents, queuedTickets] = await Promise.all([
+        storage.getOnlineAgentCount(),
+        storage.getQueuedCountAll(),
+      ]);
       return res.status(200).json({ onlineAgents, queuedTickets });
     } catch (error) {
       console.error("VRS availability error:", error);
@@ -3183,8 +3192,10 @@ export async function registerRoutes(
       // Architect 2026-05-20: getPendingCount excludes NLA tickets, so we
       // must also check getNlaPendingCount or an agent with a claimed NLA
       // ticket could be auto-offlined and have the NLA work stranded.
-      const pendingCount = await storage.getPendingCount(userId);
-      const nlaPendingCount = await storage.getNlaPendingCount(userId);
+      const [pendingCount, nlaPendingCount] = await Promise.all([
+        storage.getPendingCount(userId),
+        storage.getNlaPendingCount(userId),
+      ]);
       if (pendingCount > 0 || nlaPendingCount > 0) {
         await safeLogActivity(userId, "auto_offline_skipped_pending", { pendingCount, nlaPendingCount, source });
         return res.status(200).json({ skipped: true, reason: "pending_ticket" });
@@ -4887,14 +4898,15 @@ export async function registerRoutes(
 
       const allSubmissions = await storage.getAllSubmissions(startDate, endDate, techLdap || null);
 
+      // Tyler perf: build the id->name map in ONE query instead of a per-row
+      // getUser N+1 (the row loop used to await storage.getUser for every
+      // tech/reviewer/assignee). getUserName stays async so call sites are
+      // unchanged; it's now just a map lookup with no DB round-trip.
+      const allUsers = await storage.getUsers();
       const userCache: Record<number, string> = {};
-      const getUserName = async (userId: number | null): Promise<string> => {
-        if (!userId) return "";
-        if (userCache[userId]) return userCache[userId];
-        const u = await storage.getUser(userId);
-        userCache[userId] = u?.name || "";
-        return userCache[userId];
-      };
+      for (const u of allUsers) userCache[u.id] = u.name || "";
+      const getUserName = async (userId: number | null): Promise<string> =>
+        userId ? (userCache[userId] || "") : "";
 
       const headers = [
         "ID", "Service Order", "Technician LDAP", "Technician Name", "Phone",
@@ -5064,14 +5076,13 @@ export async function registerRoutes(
 
       const allSubmissions = await storage.getAllSubmissions(startDate, endDate, techLdap || null);
 
+      // Tyler perf: same N+1 removal as the CSV export — one getUsers() query
+      // backs the name map for both the auth and NLA sheets below.
+      const allUsers = await storage.getUsers();
       const userCache: Record<number, string> = {};
-      const getUserName = async (userId: number | null): Promise<string> => {
-        if (!userId) return "";
-        if (userCache[userId]) return userCache[userId];
-        const u = await storage.getUser(userId);
-        userCache[userId] = u?.name || "";
-        return userCache[userId];
-      };
+      for (const u of allUsers) userCache[u.id] = u.name || "";
+      const getUserName = async (userId: number | null): Promise<string> =>
+        userId ? (userCache[userId] || "") : "";
 
       const authTickets = allSubmissions.filter(s => s.requestType !== "parts_nla");
       const nlaTickets = allSubmissions.filter(s => s.requestType === "parts_nla");

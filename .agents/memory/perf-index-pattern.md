@@ -28,3 +28,16 @@ occasional 1.2-2.2s agent queue-load spikes. Always index the child FK column an
 time a list/queue query carries a per-row correlated subquery or lateral join.
 Tiny dev tables won't show the regression (planner picks Seq Scan under ~hundreds
 of rows); profile on prod-sized data.
+
+# Fixing per-row name/lookup N+1s — batch, don't fan out
+When a list/export/detail handler resolves names per row (e.g. `getUser(id)` for
+tech/reviewer/assignee inside the row loop), fix it with ONE batched query feeding
+an id->name map — for users that's `storage.getUsers()` built into a `Record`.
+**Do NOT** "parallelize" by `Promise.all`-ing `getUser` over a large id set: the pg
+pool max is 10 (see reserved-vm-hang-pool-exhaustion), so a few hundred concurrent
+lookups just serialize on the pool and risk exhaustion. `Promise.all` is only for a
+*bounded handful* of independent reads (e.g. a ticket's ≤few reviewers + tech, or
+two count queries). Trick to avoid touching call sites: keep the helper `async`
+(returns `Promise<string>`) but resolve from the prebuilt map — existing
+`await getUserName(...)` sites stay unchanged. The two admin exports
+(export-csv/export-xlsx) and the ticket-history route were already converted this way.
