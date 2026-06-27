@@ -385,6 +385,12 @@ export interface IStorage {
     since?: Date;
     limit?: number;
   }): Promise<(AgentActivityLog & { userName?: string })[]>;
+  pruneAgentActivityLog(opts?: {
+    telemetryRetentionDays?: number;
+    auditRetentionDays?: number;
+    batchSize?: number;
+    maxBatches?: number;
+  }): Promise<{ deleted: number; batches: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -923,6 +929,10 @@ export class DatabaseStorage implements IStorage {
     divisionFilter?: string[];
     completedSince?: Date;
     createdAfter?: Date;
+    // Tyler 2026-06-27 (scalability) — optional hard row cap. Set only by the
+    // admin Ticket Overview so an all-time list can't return an unbounded
+    // payload as the table grows. Agent views leave it unset (already scoped).
+    limit?: number;
   }, completedToday?: boolean): Promise<SubmissionListItemWithTech[]> {
     const conditions: any[] = [];
 
@@ -992,7 +1002,7 @@ export class DatabaseStorage implements IStorage {
 
     const assignedAgent = alias(users, "assignedAgent");
 
-    const result = await db
+    const baseQuery = db
       .select({
         // Slim submissions columns — explicit, no spread of submissions.*.
         // See the IStorage interface comment above for the complete dropped-
@@ -1065,6 +1075,16 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(assignedAgent, eq(submissions.assignedTo, assignedAgent.id))
       .where(whereClause)
       .orderBy(filters?.ticketStatus === "queued" ? asc(submissions.createdAt) : desc(submissions.createdAt));
+
+    // Tyler 2026-06-27 (scalability) — optional hard row cap. Applied only for
+    // the admin all-time Ticket Overview so a growing table can't return an
+    // unbounded payload. The cap honors the ORDER BY above: createdAt DESC for
+    // the standard overview keeps the most recent rows, while a queued FIFO/ASC
+    // view would keep the front of the queue. Agent views leave filters.limit
+    // unset, so their queries are never capped.
+    const result = await (filters?.limit && filters.limit > 0
+      ? baseQuery.limit(filters.limit)
+      : baseQuery);
 
     return result.map((r) => ({
       ...r.s,
@@ -2694,6 +2714,65 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(agentActivityLog.createdAt))
       .limit(Math.min(opts.limit ?? 200, 1000));
     return rows as any;
+  }
+
+  // ==========================================================================
+  // Tyler 2026-06-27 (scalability) — agent_activity_log retention sweep.
+  // The table is append-only and was growing unbounded (~20k rows/day once
+  // WS telemetry started). Its two consumers have very different horizons:
+  // the admin agent-activity audit view wants months of history, while the
+  // WS reconnect-storm detector only inspects a rolling 5-min window. So we
+  // keep audit events for 6 months but expire the high-volume WS telemetry
+  // events after 14 days. Deletes in bounded batches so we never hold a long
+  // row-lock or bloat a single transaction on a large backlog. Both WHERE
+  // arms ride the existing (event_type, created_at) index.
+  // ==========================================================================
+  async pruneAgentActivityLog(opts?: {
+    telemetryRetentionDays?: number;
+    auditRetentionDays?: number;
+    batchSize?: number;
+    maxBatches?: number;
+  }): Promise<{ deleted: number; batches: number }> {
+    const telemetryRetentionDays = opts?.telemetryRetentionDays ?? 14;
+    const auditRetentionDays = opts?.auditRetentionDays ?? 180;
+    const batchSize = opts?.batchSize ?? 5000;
+    const maxBatches = opts?.maxBatches ?? 200;
+    // High-volume, low-audit-value events — must match the event names
+    // emitted by client/src/lib/websocket.ts postTelemetry().
+    const telemetryEvents = [
+      "ws_reconnect_success",
+      "ws_zombie_detected",
+      "ws_unexpected_close",
+    ];
+    const telemetryList = sql.join(
+      telemetryEvents.map((e) => sql`${e}`),
+      sql`, `,
+    );
+
+    let deleted = 0;
+    let batches = 0;
+    for (let i = 0; i < maxBatches; i++) {
+      const res: any = await db.execute(sql`
+        DELETE FROM agent_activity_log
+        WHERE id IN (
+          SELECT id FROM agent_activity_log
+          WHERE (
+                  event_type IN (${telemetryList})
+                  AND created_at < now() - make_interval(days => ${telemetryRetentionDays})
+                )
+             OR (
+                  event_type NOT IN (${telemetryList})
+                  AND created_at < now() - make_interval(days => ${auditRetentionDays})
+                )
+          LIMIT ${batchSize}
+        )
+      `);
+      const rowCount: number = res?.rowCount ?? 0;
+      deleted += rowCount;
+      batches++;
+      if (rowCount < batchSize) break;
+    }
+    return { deleted, batches };
   }
 }
 

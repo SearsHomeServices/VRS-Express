@@ -5,7 +5,11 @@ description: The tables/paths that get slow or costly as data grows, ranked. Che
 
 # Volume-growth risks (audited 2026-06-23, prod; updated 2026-06-26)
 
-## #1 agent_activity_log — unbounded, no retention
+## #1 agent_activity_log — unbounded growth (MITIGATED 2026-06-27)
+**MITIGATED:** a scheduled retention sweep (pruneAgentActivityLog) now batch-prunes
+WS telemetry events at 14d and all other audit events at 180d; runs ~60s post-boot
+and every 24h. Growth is now bounded. Original finding below for context.
+
 Largest table BY FAR: ~504k rows / 208 MB after ~1 month, +~20k rows/day
 (142k in 7 days). It logs every status change / auto-offline. There is NO
 pruning/retention anywhere in the codebase. Left alone it trends to multi-GB/yr
@@ -15,13 +19,22 @@ archive rows older than N days). The retention window is a BUSINESS decision
 Query access is fine (indexed on (user_id,created_at) and (event_type,created_at));
 the problem is pure growth, not query speed.
 
-## #2 Admin GET /api/submissions ticketStatus='all' — unbounded payload, 60s poll
+## #2 Admin GET /api/submissions ticketStatus='all' — unbounded payload, 60s poll (MITIGATED 2026-06-27)
+**MITIGATED:** the admin/super_admin branch now imposes a default date window + hard
+row cap (env-tunable) when no createdAfter is supplied; the cap honors the active
+ORDER BY. Agent views stay uncapped. Behavior unchanged at current volume. Original finding below.
+
 Route accepts createdAfter but does NOT enforce a window for admin all-time;
 returns the whole submissions table (500KB-1MB today) and the admin dashboard
 polls it every 60s. Cost scales linearly with the table. Fix = enforce a default
 date window + pagination.
 
-## #3 Snowflake — new connection + JWT auth on EVERY call, no pool/cache/timeout
+## #3 Snowflake — new connection + JWT auth on EVERY call, no pool/cache/timeout (PARTLY MITIGATED 2026-06-27)
+**PARTLY MITIGATED:** fetchProcIdForServiceOrder now has a bounded connect+execute
+timeout (fails fast, always destroys the connection) + an in-memory TTL cache keyed by
+service order, so repeats are instant and a stall returns within the timeout. Still
+per-call connect (no pool) and submit stays synchronous — left intentionally. Original finding below.
+
 `getConnection()` in services/snowflake.ts does createConnection+connect (full TCP+JWT
 handshake, ~4s observed) per request, destroyed in finally — no reuse/singleton, no
 result cache, NO timeout, no retry. Awaited synchronously in the request path, worst at

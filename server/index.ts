@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { setupWebSocket } from "./websocket";
 import { loadConfig as loadBusinessHoursConfig } from "./business-hours-config";
 import { probeSnowflakeSDK } from "./services/snowflake";
+import { storage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -110,6 +111,31 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
   setupWebSocket(httpServer);
+
+  // Tyler 2026-06-27 (scalability) — agent_activity_log retention sweep.
+  // Runs once ~60s after boot (past startup warmup, so it never competes with
+  // seeding / CONCURRENTLY index builds) and daily thereafter. Best-effort: a
+  // failed sweep logs and retries on the next tick — it must never crash the
+  // server. Skipped under test.
+  if (process.env.NODE_ENV !== "test") {
+    const ACTIVITY_LOG_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    const runActivityLogPrune = async () => {
+      try {
+        const { deleted, batches } = await storage.pruneAgentActivityLog();
+        if (deleted > 0) {
+          log(
+            `[retention] agent_activity_log: pruned ${deleted} row(s) in ${batches} batch(es)`,
+          );
+        }
+      } catch (err: any) {
+        log(
+          `[retention] agent_activity_log prune failed: ${err?.message || String(err)}`,
+        );
+      }
+    };
+    setTimeout(runActivityLogPrune, 60_000);
+    setInterval(runActivityLogPrune, ACTIVITY_LOG_PRUNE_INTERVAL_MS);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

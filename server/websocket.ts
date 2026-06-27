@@ -320,6 +320,22 @@ export function setupWebSocket(server: Server) {
       }
       tagged.isAlive = false;
       try { ws.ping(); } catch {}
+      // Tyler 2026-06-27 — application-level heartbeat (the churn fix). The
+      // protocol ping above is answered by the browser automatically and
+      // NEVER surfaces to the page's onmessage handler, so it does not
+      // refresh the client's inbound-activity clock. A backgrounded tab
+      // whose own keepalive setInterval the browser throttled to ~60s would
+      // therefore observe no inbound traffic and falsely tear the socket
+      // down as a "zombie" (~9k needless reconnects/day in prod). Pushing a
+      // real data frame every ~25s gives every client — foreground or
+      // background — deterministic inbound activity well under its zombie
+      // threshold, removing the false positive at the source. The client
+      // ignores `hb` (and `pong`) for dispatch; it only updates the clock.
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "hb", t: Date.now() }));
+        }
+      } catch {}
     });
   }, HEARTBEAT_INTERVAL_MS);
   wss.on("close", () => clearInterval(heartbeatInterval));

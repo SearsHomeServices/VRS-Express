@@ -685,6 +685,7 @@ export default function SubmissionDetailPage() {
                             <p className="text-xs font-medium text-destructive">
                               Rejected {formatDate(item.reviewedAt || item.stage1ReviewedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                               {(item.reviewedBy || item.stage1ReviewedBy) && reviewerNames[(item.reviewedBy || item.stage1ReviewedBy)!] ? ` by ${reviewerNames[(item.reviewedBy || item.stage1ReviewedBy)!]}` : ""}
+                              {item.stage2Outcome ? " · at authorization stage" : ""}
                             </p>
                             {(item.rejectionReasons || item.stage1RejectionReason) && (
                               <p className="text-xs text-muted-foreground">
@@ -701,6 +702,7 @@ export default function SubmissionDetailPage() {
                             <p className="text-xs font-medium text-gray-600">
                               Invalid {formatDate(item.reviewedAt || item.stage1ReviewedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                               {(item.reviewedBy || item.stage1ReviewedBy) && reviewerNames[(item.reviewedBy || item.stage1ReviewedBy)!] ? ` by ${reviewerNames[(item.reviewedBy || item.stage1ReviewedBy)!]}` : ""}
+                              {item.stage2Outcome ? " · at authorization stage" : ""}
                             </p>
                             {(item as any).invalidReason && (
                               <p className="text-xs text-muted-foreground">

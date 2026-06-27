@@ -9,27 +9,48 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 30000;
 
-// Tyler 2026-05-26 — zombie WebSocket detection. Jeff Van Ness (and
-// likely others behind corporate proxies) hit a class of failure where
-// the underlying TCP connection dies WITHOUT the browser ever firing
-// `onclose`. The browser keeps `readyState === OPEN` while no data
-// flows. Server-side the 25s heartbeat terminates the dead socket and
-// 60 min later fires `presence_stale_cleanup` — flipping the agent to
-// offline even though the dashboard still shows "Available". Real-time
-// alerts silently stop flowing the whole time.
+// Tyler 2026-05-26 / revised 2026-06-27 — zombie WebSocket detection.
+// Some users behind corporate proxies hit a failure where the underlying
+// TCP connection dies WITHOUT the browser ever firing `onclose`: the
+// browser keeps `readyState === OPEN` while no data flows. We must still
+// detect that and reconnect.
 //
-// Three defenses, all needed:
-//   1) Track inbound activity. If nothing arrives for > ZOMBIE_TIMEOUT
-//      (45s, > server's 25s heartbeat), the socket is dead regardless
-//      of what readyState says.
-//   2) Send our own app-level ping every 20s. The SEND itself exercises
-//      the outbound path — a zombie socket throws synchronously on
-//      ws.send(), which we catch and treat as dead.
-//   3) Update forceReconnectIfDead() to consult the inbound timestamp
-//      instead of trusting readyState alone.
-const ZOMBIE_INBOUND_TIMEOUT_MS = 45000;
+// BUT the original 45s threshold turned into a false-positive engine. Prod
+// telemetry showed ~9k reconnects/day, 99.96% desktop, reconnect < 3s —
+// i.e. healthy sockets being torn down, not dead ones. Root cause: a
+// backgrounded tab's keepalive setInterval is throttled by the browser to
+// ~60s, so the first tick after un-throttling measured ~59s of "idle" and
+// killed a perfectly healthy socket. Switching the prod VM could not fix
+// it because the bug is entirely client-side.
+//
+// The defenses below preserve genuine dead-socket detection while removing
+// the false positives:
+//   1) The server now pushes an app-level {type:"hb"} data frame every
+//      ~25s (server/websocket.ts), which DOES surface to onmessage and
+//      refreshes lastInboundAt — unlike a protocol ping. A live socket is
+//      therefore never idle longer than ~25-30s.
+//   2) Widened the idle threshold to 80s (tolerates two missed heartbeats)
+//      and require MAX_FAILED_PROBES consecutive over-threshold ticks
+//      before declaring death — one slow tick is noise.
+//   3) Skip the idle verdict entirely when the tab is hidden or the tick
+//      fired late (throttled timer): the measurement is an artifact then.
+//   4) On refocus, PROBE the socket instead of tearing it down, and
+//      rate-limit forced reconnects so event bursts can't storm.
+const ZOMBIE_INBOUND_TIMEOUT_MS = 80000;
 const KEEPALIVE_INTERVAL_MS = 20000;
+// A keepalive tick that fires more than this late means the browser
+// throttled our timer (backgrounded tab). The idle window measured on such
+// a tick is meaningless, so we treat it as a probe, not a death verdict.
+const LATE_TICK_GRACE_MS = KEEPALIVE_INTERVAL_MS * 2;
+// Require this many CONSECUTIVE over-threshold ticks before reconnecting.
+const MAX_FAILED_PROBES = 2;
+// Floor on how often visibility/focus/online events may force a reconnect,
+// so alt-tabbing can't create a connect storm.
+const MIN_FORCED_RECONNECT_INTERVAL_MS = 10000;
 let lastInboundAt = Date.now();
+let lastKeepaliveTickAt = Date.now();
+let failedProbes = 0;
+let lastForcedReconnectAt = 0;
 let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
 // Tyler 2026-05-26 — WS telemetry. Posts to HTTP (not WS, since the
@@ -82,15 +103,43 @@ function killZombieAndReconnect(reason: string) {
 
 function startKeepalive() {
   if (keepaliveTimer) return;
+  lastKeepaliveTickAt = Date.now();
+  failedProbes = 0;
   keepaliveTimer = setInterval(() => {
     if (!ws) return;
-    if (isZombieSocket()) {
-      killZombieAndReconnect(`no inbound for ${Math.round((Date.now() - lastInboundAt) / 1000)}s`);
-      return;
+    const now = Date.now();
+    const sinceLastTick = now - lastKeepaliveTickAt;
+    lastKeepaliveTickAt = now;
+
+    // If the tab is hidden OR this tick fired far later than scheduled, the
+    // browser throttled our timer. Any idle window measured now is an
+    // artifact, not evidence the socket died — skip the verdict, send a
+    // probe, and let the next un-throttled tick judge. This is the single
+    // biggest source of the false-positive reconnects we removed.
+    const throttled =
+      (typeof document !== "undefined" && document.hidden) ||
+      sinceLastTick > LATE_TICK_GRACE_MS;
+
+    if (!throttled) {
+      if (isZombieSocket()) {
+        failedProbes++;
+        if (failedProbes >= MAX_FAILED_PROBES) {
+          killZombieAndReconnect(
+            `no inbound for ${Math.round((now - lastInboundAt) / 1000)}s over ${failedProbes} probes`,
+          );
+          return;
+        }
+      } else {
+        failedProbes = 0;
+      }
     }
+
+    // Always exercise the outbound path while OPEN. The send doubles as our
+    // probe: a dead outbound socket throws synchronously here, which is an
+    // immediate, unambiguous death signal (no grace needed).
     if (ws.readyState === WebSocket.OPEN) {
       try {
-        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+        ws.send(JSON.stringify({ type: "ping", t: now }));
       } catch (e) {
         killZombieAndReconnect(`ping send threw: ${e}`);
       }
@@ -149,10 +198,16 @@ function connect() {
 
     socket.onmessage = (event) => {
       if (ws !== socket) return;
+      // Any inbound frame proves the socket is alive — refresh the clock and
+      // clear the failed-probe counter so a prior slow tick can't carry over.
       lastInboundAt = Date.now();
+      failedProbes = 0;
       try {
         const data = JSON.parse(event.data);
-        if (data.type === "pong") return;
+        // pong = reply to our keepalive ping; hb = server app-level
+        // heartbeat. Both exist only to keep the inbound clock fresh and are
+        // never dispatched to handlers.
+        if (data.type === "pong" || data.type === "hb") return;
         if (data.type) {
           const typeHandlers = handlers.get(data.type);
           if (typeHandlers) {
@@ -204,31 +259,53 @@ function scheduleReconnect() {
   }, delay);
 }
 
-// Tyler 2026-05-15 — when the tab regains focus, the network comes back,
-// or the browser unhides the tab, force an immediate reconnect instead
-// of waiting for the next backoff tick. Browsers throttle setTimeout to
-// ~1/min in background tabs, so a socket that died while backgrounded
-// could take minutes to retry on its own — long enough to trip the
-// server's auto-offline grace and flip the agent to offline. This
-// closes that gap.
+// Tyler 2026-05-15 / revised 2026-06-27 — when the tab regains focus, the
+// network comes back, or the browser unhides the tab, make sure we have a
+// live socket WITHOUT reflexively tearing down a healthy one. The old
+// version called killZombieAndReconnect on sight if the inbound clock
+// looked stale — but after a hidden stretch a perfectly healthy socket's
+// clock is legitimately stale, so that path was itself a churn source.
+// Now we PROBE an open socket (the server's pong/hb refreshes the clock)
+// and only reconnect when the socket is actually gone, rate-limited so a
+// burst of focus/visibility/online events can't create a connect storm.
 function forceReconnectIfDead() {
   const token = getToken();
   if (!token) return;
-  // Zombie check first — a socket with readyState OPEN may still be dead
-  // if no inbound traffic has flowed past our zombie threshold. Trusting
-  // readyState alone is exactly what let Jeff's case slip through.
-  if (ws && isZombieSocket()) {
-    killZombieAndReconnect("forceReconnect detected zombie");
-    return;
+
+  // A still-connecting socket just needs time — never disturb it.
+  if (ws && ws.readyState === WebSocket.CONNECTING) return;
+
+  // Open socket: probe, don't tear down. Reset the tick clock so the
+  // resumed keepalive interval isn't misread as a throttled late tick.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    lastKeepaliveTickAt = Date.now();
+    failedProbes = 0;
+    try {
+      ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      return; // alive — keep it, await the pong/next hb
+    } catch {
+      // send threw — the outbound socket is genuinely dead. Tear down and
+      // reconnect immediately (this is a real death, not a focus burst).
+      const dead = ws;
+      ws = null;
+      stopKeepalive();
+      try { dead.close(); } catch {}
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      connect();
+      return;
+    }
   }
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
-  // Cancel any pending backoff and try right now, but DO NOT reset
-  // reconnectAttempts — that's reset on successful ws.onopen. If the
-  // server is genuinely unreachable, the next failed attempt will fall
-  // back into the exponential backoff and we won't create a connect
-  // storm from repeated visibility/focus events.
+
+  // No usable socket (closed/closing/null). onclose has normally already
+  // armed a backoff reconnect; we just accelerate it. Rate-limit so a burst
+  // of visibility/focus/online events can't create a connect storm. We do
+  // NOT reset reconnectAttempts — that happens on a successful onopen.
+  const now = Date.now();
+  if (now - lastForcedReconnectAt < MIN_FORCED_RECONNECT_INTERVAL_MS) return;
+  lastForcedReconnectAt = now;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

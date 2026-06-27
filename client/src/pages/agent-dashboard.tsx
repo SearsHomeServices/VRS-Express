@@ -3685,159 +3685,16 @@ export default function AgentDashboard() {
                           )}
                         </CardHeader>
                         <CardContent className="space-y-5">
-                          {isTwoStageWarranty(selectedSubmission) && isSubmissionApprovedStage(selectedSubmission) ? (
-                            <>
-                              <div className="space-y-3 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
-                                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Authorization Code</p>
-                                {rgcMissing ? (
-                                  <p className="text-sm text-destructive" data-testid="text-rgc-not-set">
-                                    No RGC code set for today. Contact an administrator.
-                                  </p>
-                                ) : (
-                                  <div className="space-y-3">
-                                    <div>
-                                      <Label className="text-xs text-muted-foreground">Today's RGC Code</Label>
-                                      <Input
-                                        value={todaysRgcCode || ""}
-                                        readOnly
-                                        className="font-mono bg-muted mt-1"
-                                        data-testid="input-rgc-readonly"
-                                      />
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs text-muted-foreground">{getProviderAuthLabel(selectedSubmission)}</Label>
-                                      <Input
-                                        placeholder="Enter auth code from warranty provider..."
-                                        value={authCode}
-                                        onChange={(e) => setAuthCode(e.target.value)}
-                                        className="mt-1"
-                                        data-testid="input-auth-code"
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-
-                              <div className="space-y-2 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
-                                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                                  <Send className="w-3 h-3" />
-                                  Additional message (optional)
-                                </Label>
-                                <p className="text-xs text-muted-foreground">
-                                  The tech will already see the auth code and TechHub instructions. Add anything extra you want them to know — your text appears as an extra paragraph at the end of the SMS.
-                                </p>
-                                <Textarea
-                                  placeholder="e.g., Submit close-out by EOD please"
-                                  value={technicianMessage}
-                                  onChange={(e) => setTechnicianMessage(e.target.value)}
-                                  className="resize-none"
-                                  rows={3}
-                                  data-testid="input-approval-notes-stage2"
-                                />
-                              </div>
-                              <SmsPreview
-                                testId="preview-approve-stage2"
-                                text={buildSmsPreview({
-                                  serviceOrder: selectedSubmission.serviceOrder,
-                                  action: "approve",
-                                  message: technicianMessage,
-                                  rgcCode: todaysRgcCode,
-                                  authCode: authCode,
-                                })}
-                              />
-
-                              <div>
-                                <Label className="text-xs text-muted-foreground mb-1 block flex items-center gap-1.5">
-                                  Internal Agent Notes (not sent to technician)
-                                </Label>
-                                <Textarea
-                                  placeholder="Internal notes — saved to ticket history only..."
-                                  value={agentNotes}
-                                  onChange={(e) => setAgentNotes(e.target.value)}
-                                  className="resize-none"
-                                  rows={2}
-                                  data-testid="input-agent-notes"
-                                />
-                              </div>
-
-                              <Button
-                                className="w-full"
-                                size="lg"
-                                onClick={() => {
-                                  if (!authCode.trim()) {
-                                    toast({ title: "Error", description: `Enter the ${getProviderAuthLabel(selectedSubmission)}`, variant: "destructive" });
-                                    return;
-                                  }
-                                  if (rgcMissing) {
-                                    toast({ title: "Error", description: "RGC code not set for today", variant: "destructive" });
-                                    return;
-                                  }
-                                  setSelectedAction("approve");
-                                  setConfirmOpen(true);
-                                }}
-                                disabled={processMutation.isPending}
-                                data-testid="button-authorize-submit"
-                              >
-                                <Send className="w-4 h-4 mr-2" />
-                                {processMutation.isPending ? "Processing..." : "Authorize & Send"}
-                              </Button>
-
-                              {/* Task #12 — B2B Approved Replacement. AHS / First
-                                  American only, at the Stage 2 authorization
-                                  step. Used when the warranty company decides
-                                  on replacement instead of repair. No auth code
-                                  is needed; the tech is told to remove all
-                                  parts, select the replacement labor code, and
-                                  close the call. Distinct from Sears Protect
-                                  Replacement Review (purple) — uses indigo. */}
-                              <div className="relative">
-                                <div className="absolute inset-0 flex items-center">
-                                  <span className="w-full border-t border-border" />
-                                </div>
-                                <div className="relative flex justify-center text-xs uppercase">
-                                  <span className="bg-card px-2 text-muted-foreground">or</span>
-                                </div>
-                              </div>
-
-                              <div className="space-y-3 border rounded-lg p-4 border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/10">
-                                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                                  <RefreshCw className="w-3 h-3" />
-                                  B2B Approved Replacement
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  If the warranty company approved a replacement instead of a repair, finalize this ticket as a B2B Approved Replacement. No authorization code is needed — the tech is instructed to remove all parts, select the appropriate labor code, and close the call. This completes the ticket and cannot be resubmitted. Your optional message above is included at the end of the SMS.
-                                </p>
-                                <SmsPreview
-                                  testId="preview-b2b-replacement-stage2"
-                                  text={buildSmsPreview({
-                                    serviceOrder: selectedSubmission.serviceOrder,
-                                    action: "b2b_approved_replacement",
-                                    message: technicianMessage,
-                                  })}
-                                />
-                                <Button
-                                  className="w-full"
-                                  size="lg"
-                                  style={{ backgroundColor: "rgb(67 56 202)", color: "white" }}
-                                  onClick={() => {
-                                    setSelectedAction("b2b_approved_replacement");
-                                    setConfirmOpen(true);
-                                  }}
-                                  disabled={processMutation.isPending}
-                                  data-testid="button-b2b-replacement-submit"
-                                >
-                                  <RefreshCw className="w-4 h-4 mr-2" />
-                                  {processMutation.isPending ? "Processing..." : "B2B Approved Replacement"}
-                                </Button>
-                              </div>
-                            </>
-                          ) : (
+                          {(
                             <>
                               <div className={`grid ${isTwoStageWarranty(selectedSubmission) ? "grid-cols-3" : "grid-cols-3"} gap-3`}>
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (isTwoStageWarranty(selectedSubmission)) {
+                                    if (isSubmissionApprovedStage(selectedSubmission)) {
+                                      // Stage 2 — issue the auth code (Authorize & Send).
+                                      setSelectedAction(selectedAction === "approve" ? null : "approve");
+                                    } else if (isTwoStageWarranty(selectedSubmission)) {
                                       setSelectedAction(selectedAction === "approve_submission" ? null : "approve_submission");
                                     } else {
                                       setSelectedAction(selectedAction === "approve" ? null : "approve");
@@ -3856,7 +3713,7 @@ export default function AgentDashboard() {
                                     <Square className="w-8 h-8 text-muted-foreground" />
                                   )}
                                   <span className={`text-sm font-medium ${selectedAction === "approve" || selectedAction === "approve_submission" ? "text-green-700 dark:text-green-400" : ""}`}>
-                                    {isTwoStageWarranty(selectedSubmission) ? "Approve Submission" : "Approved to Repair"}
+                                    {isSubmissionApprovedStage(selectedSubmission) ? "Authorize & Send" : isTwoStageWarranty(selectedSubmission) ? "Approve Submission" : "Approved to Repair"}
                                   </span>
                                 </button>
                                 <button
@@ -3942,6 +3799,34 @@ export default function AgentDashboard() {
                                     )}
                                     <span className={`text-sm font-medium ${selectedAction === "approve_replacement_review" ? "text-purple-700 dark:text-purple-400" : ""}`}>
                                       Replacement Review
+                                    </span>
+                                  </button>
+                                )}
+                                {/* Tyler 2026-06-27 (Stage-2 six outcomes) — B2B
+                                    Approved Replacement now lives in the outcome
+                                    grid (was a separate panel below the fold).
+                                    Shown only at the Stage 2 authorization step
+                                    (submission already approved), non-NLA. Indigo
+                                    distinguishes it from Sears Protect Replacement
+                                    Review (purple). */}
+                                {isSubmissionApprovedStage(selectedSubmission) && selectedSubmission.requestType !== "parts_nla" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedAction(selectedAction === "b2b_approved_replacement" ? null : "b2b_approved_replacement")}
+                                    className={`flex flex-col items-center justify-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                                      selectedAction === "b2b_approved_replacement"
+                                        ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-950/30"
+                                        : "border-border hover:border-indigo-300"
+                                    }`}
+                                    data-testid="action-b2b-approved-replacement"
+                                  >
+                                    {selectedAction === "b2b_approved_replacement" ? (
+                                      <CheckSquare className="w-8 h-8 text-indigo-600" />
+                                    ) : (
+                                      <Square className="w-8 h-8 text-muted-foreground" />
+                                    )}
+                                    <span className={`text-sm font-medium ${selectedAction === "b2b_approved_replacement" ? "text-indigo-700 dark:text-indigo-400" : ""}`}>
+                                      B2B Approved Replacement
                                     </span>
                                   </button>
                                 )}
@@ -4322,6 +4207,37 @@ export default function AgentDashboard() {
                                 </div>
                               )}
 
+                              {selectedAction === "b2b_approved_replacement" && (
+                                <div className="space-y-3 border rounded-lg p-4 border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/10">
+                                  <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                                    <RefreshCw className="w-3 h-3" />
+                                    B2B Approved Replacement
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    If the warranty company approved a replacement instead of a repair, finalize this ticket as a B2B Approved Replacement. No authorization code is needed — the tech is instructed to remove all parts, select the appropriate labor code, and close the call. This completes the ticket and cannot be resubmitted. Your optional message below is included at the end of the SMS.
+                                  </p>
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">Additional message (optional)</Label>
+                                    <Textarea
+                                      placeholder="e.g., Warranty rep already aware — expect a call within 24h"
+                                      value={technicianMessage}
+                                      onChange={(e) => setTechnicianMessage(e.target.value)}
+                                      className="resize-none"
+                                      rows={3}
+                                      data-testid="input-b2b-message"
+                                    />
+                                  </div>
+                                  <SmsPreview
+                                    testId="preview-b2b-replacement"
+                                    text={buildSmsPreview({
+                                      serviceOrder: selectedSubmission.serviceOrder,
+                                      action: "b2b_approved_replacement",
+                                      message: technicianMessage,
+                                    })}
+                                  />
+                                </div>
+                              )}
+
                               <div>
                                 <Label className="text-xs text-muted-foreground mb-1 block flex items-center gap-1.5">
                                   Internal Agent Notes (not sent to technician)
@@ -4340,7 +4256,7 @@ export default function AgentDashboard() {
                                 className="w-full"
                                 size="lg"
                                 variant={selectedAction === "reject" || selectedAction === "reject_and_close" ? "destructive" : selectedAction === "invalid" ? "outline" : "default"}
-                                style={selectedAction === "approve_replacement_review" ? { backgroundColor: "rgb(126 34 206)", color: "white" } : undefined}
+                                style={selectedAction === "approve_replacement_review" ? { backgroundColor: "rgb(126 34 206)", color: "white" } : selectedAction === "b2b_approved_replacement" ? { backgroundColor: "rgb(67 56 202)", color: "white" } : undefined}
                                 onClick={() => {
                                   if (!selectedAction) return;
                                   if (selectedAction === "reject" && selectedRejectionReasons.length === 0 && rejectedPhotos.length === 0 && !rejectedVideo.rejected && !rejectedVoiceNote.rejected) {
@@ -4401,7 +4317,7 @@ export default function AgentDashboard() {
                                 data-testid="button-process-submit"
                               >
                                 <Send className="w-4 h-4 mr-2" />
-                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Technician" : "Process & Send"}
+                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "approve" && isSubmissionApprovedStage(selectedSubmission) ? "Authorize & Send" : "Process & Send"}
                               </Button>
                             </>
                           )}
@@ -4807,7 +4723,7 @@ export default function AgentDashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle data-testid="text-confirm-title">
-              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
+              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Authorize & Send" : "Approved to Repair") : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? "Reject Ticket" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
@@ -4878,7 +4794,7 @@ export default function AgentDashboard() {
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >
-              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "Send to Technician" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
+              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Authorize & Send" : "Approved to Repair & Notify") : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "Send to Technician" : selectedAction === "reject" ? "Reject & Notify" : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

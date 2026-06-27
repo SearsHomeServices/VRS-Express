@@ -1465,6 +1465,9 @@ export async function registerRoutes(
         // used by the admin Ticket Overview's last-N-days default.
         completedSince?: Date;
         createdAfter?: Date;
+        // Tyler 2026-06-27 (scalability) — hard row cap for the admin all-time
+        // Ticket Overview (set below). Agent views leave it unset.
+        limit?: number;
       } = {};
 
       if (user.role === "technician" || user.role === "provider_1099") {
@@ -1541,6 +1544,39 @@ export async function registerRoutes(
       const completedToday = req.query.completedToday === "true";
 
       if (user.role === "vrs_agent" || user.role === "admin" || user.role === "super_admin") {
+        // Tyler 2026-06-27 (scalability) — bound the admin Ticket Overview.
+        // Agents are always scoped by assignment/division/status above, so
+        // their queries are naturally small. Admin/super_admin, however, can
+        // request an all-time list (the dashboard's "all" window option sends
+        // no createdAfter), which would scan and serialize the entire
+        // submissions table and only worsens as data grows. When no explicit
+        // createdAfter window is supplied, impose (a) a generous absolute time
+        // floor and (b) a hard row cap. Both honor the list's active ORDER BY:
+        // the standard overview is createdAt DESC, so the cap keeps the most
+        // recent rows; a queued FIFO/ASC view would keep the front of the queue.
+        // Both bounds sit far above current volume, so observable behavior is
+        // unchanged today; they only engage at large scale. Tunable via env for ops.
+        if (user.role === "admin" || user.role === "super_admin") {
+          if (!filters.createdAfter) {
+            const windowDays = parseInt(
+              process.env.ADMIN_SUBMISSIONS_DEFAULT_WINDOW_DAYS || "1095",
+              10,
+            );
+            if (Number.isFinite(windowDays) && windowDays > 0) {
+              filters.createdAfter = new Date(
+                Date.now() - windowDays * 24 * 60 * 60 * 1000,
+              );
+            }
+          }
+          const maxRows = parseInt(
+            process.env.ADMIN_SUBMISSIONS_MAX_ROWS || "10000",
+            10,
+          );
+          if (Number.isFinite(maxRows) && maxRows > 0) {
+            filters.limit = maxRows;
+          }
+        }
+
         // Tyler 2026-05-06 (Task #4 perf): switched from
         // getSubmissionsWithTechnician to getSubmissionsListView. The slim
         // method drops every heavy text/JSON column the list table never
@@ -2174,8 +2210,19 @@ export async function registerRoutes(
       const { action, rejectionReasons, rejectedMedia, agentNotes, technicianMessage, invalidReason, invalidInstructions } = parsed.data;
       let { authCode } = parsed.data;
 
-      if (submission.submissionApproved && (action === "reject" || action === "reject_and_close" || action === "invalid" || action === "approve_submission")) {
-        return res.status(400).json({ error: "Submission has already been approved. Only authorization (approve) is allowed at this stage." });
+      // Tyler 2026-06-27 (Stage-2 six outcomes): previously, once a submission
+      // was approved at Stage 1, the ONLY action allowed at Stage 2 was
+      // `approve` (issue the auth code) — reject / reject_and_close / invalid
+      // were blocked. VRS asked for the full outcome set at the authorization
+      // step too, so an agent can decline / permanently close / invalidate a
+      // ticket the warranty company came back negative on AFTER the initial
+      // approval. Those three now fall through to their normal handlers below
+      // (back-to-tech with resubmit link / permanent close / invalid), exactly
+      // as at Stage 1. We still block re-running `approve_submission` on an
+      // already-approved ticket — it is the Stage 1→2 transition and re-running
+      // it would just re-stamp the Stage 1 fields with no valid effect.
+      if (submission.submissionApproved && action === "approve_submission") {
+        return res.status(400).json({ error: "This submission has already been approved at Stage 1." });
       }
 
       // Tyler 2026-05-20 (afternoon) — Replacement Review is only valid on
@@ -2401,6 +2448,22 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.stage1RejectionReason = rejectionReasons?.join(", ") || "More information needed";
 
+        // Tyler 2026-06-27 — Stage-2 audit stamp. When a negative outcome
+        // lands at the authorization stage (the submission was already
+        // Stage-1 approved), record WHO/WHEN of the Stage-2 decision in the
+        // dedicated stage2 columns WITHOUT disturbing stage1Status /
+        // stage1ReviewedAt / reviewedBy. The analytics layer treats
+        // stage1Status as the overall outcome (Approval-Rate card) and keys
+        // the Completed-Today tile off stage1ReviewedAt, so those must keep
+        // reflecting the final action. stage2Status is intentionally left
+        // as-is (not "declined") so the Submission-History timeline renders a
+        // single Rejected entry instead of double-rendering a Declined entry.
+        if (submission.submissionApproved) {
+          updateData.stage2Outcome = "reject";
+          updateData.stage2ReviewedBy = authReq.user!.id;
+          updateData.stage2ReviewedAt = new Date();
+        }
+
         // Tyler 2026-05-07 (post-fix audit): detect "wrongful no-photos
         // rejection" pattern in real time. Fires when an agent rejects with
         // a photo-related reason on a ticket whose `photos` column actually
@@ -2473,6 +2536,13 @@ export async function registerRoutes(
         updateData.technicianMessage = technicianMessage || null;
         updateData.stage1RejectionReason = rejectionReasons?.join(", ") || "Not covered under warranty";
 
+        // Tyler 2026-06-27 — Stage-2 audit stamp (see reject handler above).
+        if (submission.submissionApproved) {
+          updateData.stage2Outcome = "reject_and_close";
+          updateData.stage2ReviewedBy = authReq.user!.id;
+          updateData.stage2ReviewedAt = new Date();
+        }
+
         const reasonText = rejectionReasons && rejectionReasons.length > 0
           ? rejectionReasons.join(", ")
           : "Not covered under warranty";
@@ -2489,6 +2559,13 @@ export async function registerRoutes(
         updateData.stage2Status = "not_applicable";
         updateData.invalidReason = invalidReason;
         updateData.invalidInstructions = invalidInstructions || null;
+
+        // Tyler 2026-06-27 — Stage-2 audit stamp (see reject handler above).
+        if (submission.submissionApproved) {
+          updateData.stage2Outcome = "invalid";
+          updateData.stage2ReviewedBy = authReq.user!.id;
+          updateData.stage2ReviewedAt = new Date();
+        }
 
         smsMessage = await buildStage1InvalidMessage(submission.serviceOrder, invalidReason || "", invalidInstructions);
         smsType = "ticket_invalid";
@@ -3470,6 +3547,49 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Can only reassign queued or pending tickets" });
       }
 
+      // Tyler 2026-06-27 (reassign frees previous assignee): when an admin
+      // reassigns a ticket — to another agent or back to the queue — the agent
+      // who had it claimed used to stay pinned on "working" with no open ticket,
+      // the same stuck-toggle bug as the delete-ticket "Zorn stuck Working" fix
+      // above. Free them once the reassign has committed. Best-effort: a failure
+      // here must NOT 500 a reassign that already succeeded. Only demote
+      // working→online when they have no OTHER open pending ticket; because this
+      // runs AFTER the update, a self-reassign keeps the ticket in their count
+      // and is correctly left untouched. The RECEIVING agent is intentionally
+      // NOT set to "working" (Tyler 2026-06-27): "working" is driven by actively
+      // claiming/opening a ticket, not by an admin pre-assigning one.
+      const previousAssignee = submission.assignedTo;
+      const freePreviousAssignee = async () => {
+        if (!previousAssignee) return;
+        try {
+          const prior = await storage.getUser(previousAssignee);
+          if (prior && prior.role === "vrs_agent" && (prior as any).agentStatus === "working") {
+            const [vrsPending, nlaPending] = await Promise.all([
+              storage.getPendingCount(prior.id),
+              storage.getNlaPendingCount(prior.id),
+            ]);
+            if (Number(vrsPending) + Number(nlaPending) === 0) {
+              await storage.updateUser(prior.id, { agentStatus: "online", updatedAt: new Date() } as any);
+              await safeLogActivity(prior.id, "status_change_ticket_flow", {
+                from: "working", to: "online", trigger: "reassigned", submissionId: id,
+              });
+              updateClientStatus(prior.id, "online");
+              broadcastToAdmins({
+                type: "agent_status_changed",
+                payload: { userId: prior.id, name: prior.name, status: "online" },
+              });
+              broadcastToAgent(prior.id, {
+                type: "own_status_changed",
+                payload: { status: "online" },
+              });
+              await broadcastVrsAvailability();
+            }
+          }
+        } catch (postErr) {
+          console.error(`[reassign] previous-assignee status restore failed for submission ${id}:`, postErr);
+        }
+      };
+
       if (parsed.data.agentId) {
         const agent = await storage.getUser(parsed.data.agentId);
         if (!agent || (agent.role !== "vrs_agent" && agent.role !== "admin" && agent.role !== "super_admin")) {
@@ -3514,6 +3634,7 @@ export async function registerRoutes(
         // safety-net polling.
         broadcastToAdmins(assignedEvent);
 
+        await freePreviousAssignee();
         return res.status(200).json({ submission: updated });
       }
 
@@ -3559,6 +3680,7 @@ export async function registerRoutes(
         });
       }
 
+      await freePreviousAssignee();
       return res.status(200).json({ submission: updated });
     } catch (error) {
       console.error("Reassign submission error:", error);
