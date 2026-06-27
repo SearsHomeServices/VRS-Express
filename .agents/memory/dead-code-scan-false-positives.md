@@ -15,3 +15,5 @@ Automated dead-code analysis (explore subagent, and any "unused export" heuristi
 Also: dead/unused code does NOT make runtime slow (it's never executed). Real speed wins in this repo came from query parallelization (Promise.all) and SQL ports, not deletions. Don't conflate "remove dead code" with "make it faster."
 
 Confirmed genuinely-dead and removed once: `client/src/components/ObjectUploader.tsx` + `client/src/hooks/use-upload.ts` (orphaned Uppy object-storage scaffolding, only self-references in their own JSDoc).
+
+**attached_assets pruning gotcha:** files there are loaded two ways — `@assets/<name>` imports in client (static-scannable) AND by LITERAL filename in server code (`path.join(process.cwd(),'attached_assets','<name>.csv')` in server/routes.ts), which an `@assets` scan completely misses. Before deleting any attached_asset, grep its *basename* across server+client+shared+scripts, not just `@assets` import sites. In practice nearly all attached_assets are orphaned dev paste artifacts; only a tiny live set survives (the @assets-referenced logo + the server-loaded CSV). Same literal-filename risk applies to any `path.join(cwd, ...)` data file.
