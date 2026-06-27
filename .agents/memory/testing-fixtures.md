@@ -8,7 +8,8 @@ description: How to build reliable e2e test data and log in during dev testing f
 ## Seed purges test submissions on every dev startup
 - On dev startup, `server/seed.ts` runs `cleanupTestSubmissions` → `purgeTestSubmissions`, which DELETEs every `submissions` row whose `rac_id` is in `TEST_SUBMISSION_RAC_IDS` (currently `testtech1`, `tmorri1`).
 - **Consequence:** any precondition row you insert with one of those rac_ids vanishes the next time the app restarts (and the app does restart on its own / after edits), giving false-negative test results.
-- **How to apply:** for DB fixtures that must survive a restart, use a `rac_id` NOT in that list (e.g. `fieldtech9`). The duplicate-prevention check keys on `technician_id`/service_order, not `rac_id`, so a non-test rac_id still exercises the logic. Clean these up manually — they are not auto-purged.
+- **The `runTest` harness itself restarts the app**, so a fixture seeded with a test rac_id is already gone by the time the browser logs in — symptom is an empty list / "0 results" for data you just confirmed via API. Seen as a confusing e2e failure where API shows the row but the UI never surfaces it.
+- **How to apply:** for DB fixtures that must survive a restart, give them a `rac_id` NOT in that list. Easiest robust path: seed normally via API (tech-login as `testtech1` → POST/claim/process), then `UPDATE submissions SET rac_id='fieldtech9' WHERE id IN (...)` so the startup purge can't touch them. The duplicate-prevention check keys on `technician_id`/service_order, not `rac_id`, so a non-test rac_id still exercises the logic. Clean these up manually — they are not auto-purged.
 
 ## All seeded passwords were reset to a single generic value
 - `resetAllPasswords()` (one-time, flag `__pw_reset_v2_done__`) set EVERY non-`VRS_MASTER` user's password to `VRS2026!`.
