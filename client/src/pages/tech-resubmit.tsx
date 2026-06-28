@@ -268,13 +268,18 @@ export default function TechResubmitPage() {
     const filesToUpload = validFiles.slice(0, totalAllowed);
     setUploading(true);
     const newUrls: string[] = [];
+    let failedCount = 0;
     const maxConcurrent = 3;
     let cursor = 0;
     const runNext = async (): Promise<void> => {
       while (cursor < filesToUpload.length) {
         const idx = cursor++;
         const url = await uploadSingleFile(filesToUpload[idx]);
-        if (url) newUrls.push(url);
+        if (url) {
+          newUrls.push(url);
+        } else {
+          failedCount += 1;
+        }
       }
     };
     const workers = Array.from({ length: Math.min(maxConcurrent, filesToUpload.length) }, () => runNext());
@@ -282,6 +287,13 @@ export default function TechResubmitPage() {
     setUrls((prev) => [...prev, ...newUrls]);
     setUploading(false);
     if (inputRef.current) inputRef.current.value = "";
+    if (failedCount > 0) {
+      toast({
+        title: "Some photos didn't upload",
+        description: `${failedCount} photo(s) didn't upload — likely a weak connection. They are NOT attached. Tap to add them again before resubmitting.`,
+        variant: "destructive",
+      });
+    }
   }
 
   // Tyler 2026-04-30: aligned with initial submission limits — was 100MB
@@ -358,7 +370,7 @@ export default function TechResubmitPage() {
       setVideoUrls((prev) => [...prev, finalUrl]);
       toast({ title: "Video Uploaded", description: "Video uploaded successfully." });
     } else {
-      toast({ title: "Upload Failed", description: "Failed to upload video.", variant: "destructive" });
+      toast({ title: "Video didn't upload", description: "Your connection may have dropped — the video was NOT attached. Check your signal and add it again before resubmitting.", variant: "destructive" });
     }
     setVideoUploading(false);
     if (videoInputRef.current) videoInputRef.current.value = "";

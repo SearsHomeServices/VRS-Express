@@ -113,7 +113,7 @@ export default function TechFeedbackPage() {
     } catch {
       toast({
         title: "Upload Failed",
-        description: "Could not upload file. Please try again.",
+        description: "Could not upload the file — check your connection and try again.",
         variant: "destructive",
       });
     } finally {

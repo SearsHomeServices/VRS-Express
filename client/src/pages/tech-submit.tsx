@@ -414,8 +414,8 @@ export default function TechSubmitPage() {
     if (inputRef.current) inputRef.current.value = "";
     if (newFailures.length > 0) {
       toast({
-        title: "Some photos failed",
-        description: `${newFailures.length} photo(s) failed. Scroll down to retry.`,
+        title: "Some photos didn't upload",
+        description: `${newFailures.length} photo(s) didn't upload — likely a weak connection. They are NOT attached yet. Scroll down to retry before submitting.`,
         variant: "destructive",
       });
     }
@@ -451,8 +451,8 @@ export default function TechSubmitPage() {
         )
       );
       toast({
-        title: "Retry failed",
-        description: `${failed.file.name} — check your connection.`,
+        title: "Still didn't upload",
+        description: `${failed.file.name} — check your connection and try again. It is not attached yet.`,
         variant: "destructive",
       });
     }
@@ -606,13 +606,13 @@ export default function TechSubmitPage() {
           if (videoInputRef.current) videoInputRef.current.value = "";
         } else {
           setIsUploading(false);
-          toast({ title: "Upload Failed", description: "Failed to upload video to storage", variant: "destructive" });
+          toast({ title: "Video didn't upload", description: "The video did not upload. Check your connection and add it again before submitting.", variant: "destructive" });
         }
       });
 
       xhr.addEventListener("error", () => {
         setIsUploading(false);
-        toast({ title: "Upload Failed", description: "Network error during upload", variant: "destructive" });
+        toast({ title: "Video didn't upload", description: "Your connection dropped — the video was NOT uploaded. Check your signal and try again.", variant: "destructive" });
       });
 
       xhr.open("PUT", uploadURL);
@@ -620,7 +620,7 @@ export default function TechSubmitPage() {
       xhr.send(file);
     } catch (err) {
       setIsUploading(false);
-      toast({ title: "Upload Failed", description: "Failed to initiate upload", variant: "destructive" });
+      toast({ title: "Video didn't upload", description: "Couldn't start the upload — likely a connection issue. Check your signal and try again.", variant: "destructive" });
     }
   }
 
@@ -714,7 +714,7 @@ export default function TechSubmitPage() {
         setVoiceNoteUrl(url);
       }
     } else {
-      toast({ title: "Upload Failed", description: "Failed to upload audio file.", variant: "destructive" });
+      toast({ title: "Voice note didn't upload", description: "Your connection dropped, so the voice note was NOT attached. Re-record or upload it again before submitting.", variant: "destructive" });
     }
     setAudioUploading(false);
   }
