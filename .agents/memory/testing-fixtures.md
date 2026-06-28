@@ -17,9 +17,14 @@ description: How to build reliable e2e test data and log in during dev testing f
 - So for UI tests log in as `sysadmin` (admin) / `ZZTEST9` (generalist agent) with `VRS2026!`. The original seed passwords (admin123/agent123) do NOT work.
 - **CAVEAT — the reset is one-time/flag-gated, so accounts created AFTER it ran keep their own seed password, NOT `VRS2026!`.** Confirmed: `TESTADMIN` logs in with `TestAdmin2026!` (its seed value), not `VRS2026!`; `ZZTEST9` does use `VRS2026!`. Don't assume `VRS2026!` works for every test account — if it 401s, try the account's seed password from `SEED_USERS`, or set it deterministically via bcrypt + SQL UPDATE.
 
-## Tech submission form is un-testable via UI (photo gate)
-- `client/src/pages/tech-submit.tsx` requires at least one issue photo AND one estimate screenshot client-side before the submit button enables; the testing subagent cannot upload files.
-- The server (`createSubmissionSchema`) makes `photos` optional, so submission/duplicate-prevention logic is best validated at the API level: mint a tech JWT via `POST /api/auth/tech-login {ldapId}` then `POST /api/submissions`.
+## Tech submission form: full submit is gated, but file-selection handlers ARE UI-testable
+- `client/src/pages/tech-submit.tsx` requires ≥1 issue photo AND ≥1 estimate screenshot before the submit button enables. For end-to-end *submission/duplicate-prevention* logic, still prefer the API: mint a tech JWT via `POST /api/auth/tech-login {ldapId}` then `POST /api/submissions` (server `createSubmissionSchema` makes `photos` optional).
+- CORRECTION to the old "subagent cannot upload files" claim: the Playwright testing subagent CAN attach an in-memory file via `setInputFiles` with `{ name, mimeType, buffer }` (no filesystem needed) — target the hidden `<input type=file>` directly by its `data-testid`. It can ALSO use `page.route` to force failures. So upload-failure UX (the toasts that fire from `handlePhotosSelect`/`handleVideoSelect`/feedback `handleFileUpload`) IS e2e-testable.
+- To force an upload failure deterministically: `page.route('**/api/uploads/request-url**')` → fulfill HTTP 500. That makes the upload-URL fetch fail; the client returns null after its retries and fires the failure toast.
+
+## Catching transient toasts in tests (this app)
+- Toasts are shadcn/Radix: **TOAST_LIMIT=1** (a newer toast replaces the visible one) and **no custom duration** so they auto-dismiss ~5s. Never "wait N seconds then check once" — poll with `page.waitForFunction(() => document.body.innerText.includes("..."), { timeout, polling: 250 })`; portaled toast text shows up in `document.body.innerText`.
+- The **photo** path runs `imageCompression` in a **web worker** before upload; its timing is highly variable in the headless browser (seen sub-9s on a warm worker, >15s cold), so the failure toast can land far outside a short window. Use a long poll (~45s) AND isolate one toast per check (don't select a second file, or its toast replaces the one you're verifying). The **video** and **feedback** paths have no compression and fire deterministically (~immediately to a few seconds).
 
 ## FK children block submission deletes
 - Deleting `submissions` fails on FK from `sms_notifications` (and `communication_send_audit`). Delete those children first, then the submissions row.
