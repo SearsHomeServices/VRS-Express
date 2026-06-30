@@ -1575,7 +1575,7 @@ export class DatabaseStorage implements IStorage {
 
   async deactivateTechniciansNotIn(ldapIds: string[]): Promise<number> {
     if (ldapIds.length === 0) return 0;
-    const protectedIds = ["testtech1", "tmorri1"];
+    const protectedIds = ["testtech1", "tmorri1", "VRSTEST"];
     const allProtected = [...new Set([...ldapIds, ...protectedIds])];
     const result = await db
       .update(technicians)

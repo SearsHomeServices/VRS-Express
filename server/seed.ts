@@ -120,6 +120,11 @@ export async function seedDatabase() {
   const testTechEntries = [
     { ldapId: "testtech1", name: "Test Tech", phone: "5550001111", district: "TEST", techUnNo: "T0001" },
     { ldapId: "tmorri1", name: "Tyler Morrison", phone: "9105550147", district: "TEST", techUnNo: "T0002" },
+    // Tyler 2026-06-30 — test technician. Stored uppercase to match the
+    // pre-existing users.rac_id='VRSTEST' row so getOrCreateTechUser reuses it
+    // (exact racId match) rather than creating a duplicate lowercase user.
+    // Passwordless tech-login normalizes input + matches case-insensitively.
+    { ldapId: "VRSTEST", name: "VRS Test", phone: "5550009999", district: "TEST", techUnNo: "T0009" },
   ];
   for (const tech of testTechEntries) {
     try {

@@ -15,6 +15,7 @@ description: How to build reliable e2e test data and log in during dev testing f
 - `resetAllPasswords()` (one-time, flag `__pw_reset_v2_done__`) set EVERY non-`VRS_MASTER` user's password to `VRS2026!`.
 - Test accounts (`TEST_RAC_IDS`: ZZTEST9, testagent1, TESTADMIN, testtech1, tmorri1, sysadmin) get `mustChangePassword=false`; all other accounts get `mustChangePassword=true` (forced change on login — avoid them for automated login).
 - So for UI tests log in as `sysadmin` (admin) / `ZZTEST9` (generalist agent) with `VRS2026!`. The original seed passwords (admin123/agent123) do NOT work.
+- **Test technicians use passwordless tech-login** (`POST /api/auth/tech-login {ldapId}`), which looks up the `technicians` table — a `users` row alone is NOT enough. Seeded test techs: `testtech1`, `tmorri1`, `VRSTEST` (in `seed.ts` `testTechEntries` + protected from Snowflake-sync deactivation in `deactivateTechniciansNotIn`). A test tech created only as a `users` row (role=technician) will 404 on tech-login until a `technicians` row exists.
 - **CAVEAT — the reset is one-time/flag-gated, so accounts created AFTER it ran keep their own seed password, NOT `VRS2026!`.** Confirmed: `TESTADMIN` logs in with `TestAdmin2026!` (its seed value), not `VRS2026!`; `ZZTEST9` does use `VRS2026!`. Don't assume `VRS2026!` works for every test account — if it 401s, try the account's seed password from `SEED_USERS`, or set it deterministically via bcrypt + SQL UPDATE.
 
 ## Tech submission form: full submit is gated, but file-selection handlers ARE UI-testable
