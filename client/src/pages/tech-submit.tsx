@@ -48,6 +48,12 @@ import {
   stampDraftIdentity,
   type DraftEnvelope,
 } from "@/lib/draft-identity";
+import { getEtDateString } from "@shared/business-hours";
+
+// Tyler 2026-06-30 — one-day holiday closure notice shown on the tech submit
+// form. Gated to the Eastern-Time calendar date so it appears only on July 4,
+// 2026 and self-hides afterward (no cleanup needed).
+const HOLIDAY_CLOSURE_DATE = "2026-07-04";
 
 const APPLIANCE_TYPES = [
   { value: "refrigeration", label: "Refrigerator" },
@@ -1257,6 +1263,28 @@ export default function TechSubmitPage() {
       </div>
 
       <div className="max-w-lg mx-auto px-4 py-4">
+        {getEtDateString() === HOLIDAY_CLOSURE_DATE && (
+          <div
+            className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-4 space-y-2"
+            data-testid="banner-holiday-closure"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
+              <div className="font-semibold text-destructive" data-testid="text-holiday-closure-title">
+                VRS is closed today — Saturday, July 4
+              </div>
+            </div>
+            <p className="text-sm text-foreground/90" data-testid="text-holiday-closure-observance">
+              VRS is closed today Saturday, July 4, in observance of Independence Day.
+            </p>
+            <p className="text-sm text-foreground/90" data-testid="text-holiday-closure-afterhours">
+              For any PA, SHW, SPHW, FA or AHS authorization requests during this time, please use the after-hours process by submitting the request through the VRS Express App.
+            </p>
+            <p className="text-sm text-foreground/90" data-testid="text-holiday-closure-monday">
+              If authorization is needed, VRS will review and work to obtain it first thing Monday morning.
+            </p>
+          </div>
+        )}
         {draftRestored && (
           <div
             className="mb-4 rounded-md border border-primary/30 bg-primary/5 p-3 flex items-start justify-between gap-3"
