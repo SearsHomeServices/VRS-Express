@@ -16,3 +16,5 @@ description: How to run read-only prod Snowflake queries here despite creds bein
 4. For read-only safety, wrap `conn.execute` in a helper with a GUARD regex rejecting INSERT/UPDATE/DELETE/MERGE/CREATE/DROP/ALTER/TRUNCATE/GRANT/REVOKE/COPY/PUT/REMOVE.
 
 **Account facts:** account `SEARS_HS_PROD`, user `SVC_SCA_AUTO`, role `SCIENTIST`, wh `SCIENTIST_PRD_WH`. Has ~63 `*_READ` roles. `SNOWFLAKE.ACCOUNT_USAGE` is NOT granted — search metadata via per-DB `INFORMATION_SCHEMA.COLUMNS`/`.TABLES`, not ACCOUNT_USAGE.
+
+**UPDATE (2026-07-05): the /tmp bridge above is no longer needed for simple checks.** The `bash` tool can now run the app's own Snowflake code directly and it connects fine from this workspace: `timeout 110 npx tsx -e "import('./server/services/snowflake.ts').then(m=>m.fetchTechniciansFromSnowflake()).then(r=>...)"`. `probeSnowflakeSDK()` returns `{ok:true, version:'2.3.4'}` here (the old "dev can't load the SDK" note is stale). Creds are present in the bash env; a full-roster pull (~1,644 rows) completes within a ~110s timeout. Prefer reusing exported service functions over hand-rolling a connection.
