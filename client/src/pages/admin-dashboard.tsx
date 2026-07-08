@@ -1064,7 +1064,12 @@ function TicketOverviewSection() {
   // the default view. Debounce keeps us from firing a request per keystroke.
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setDebouncedSearch("");
+      return;
+    }
+    const t = setTimeout(() => setDebouncedSearch(trimmed), 300);
     return () => clearTimeout(t);
   }, [searchQuery]);
   const searchActive = debouncedSearch.length > 0;
