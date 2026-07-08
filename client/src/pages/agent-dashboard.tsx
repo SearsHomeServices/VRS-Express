@@ -1132,7 +1132,7 @@ export default function AgentDashboard() {
   // TechHub photos (feature-flagged). Surfaces the technician's
   // TechHub-uploaded photos (sourced from Snowflake by service order) next
   // to the VRS-native media on ANY ticket — NLA or regular authorization. Each
-  // photo is a self-contained proxy URL carrying a 5-min scoped token, so it
+  // photo is a self-contained proxy URL carrying a 30-min scoped token, so it
   // loads via a plain <img> with no media-token round-trip. staleTime is kept
   // under the token TTL so cached proxy URLs refetch before their tokens expire.
   const techHubPhotosQuery = useQuery<{

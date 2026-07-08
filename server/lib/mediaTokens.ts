@@ -3,7 +3,7 @@
 // These are narrow-claim JWTs with:
 //   type: "media"         — distinguishes from session JWTs (no account access)
 //   path: "/objects/..."  — bound to a single object path
-//   exp:  now + 5 min     — short-lived to limit damage from URL leakage
+//   exp:  now + 30 min    — short-lived to limit damage from URL leakage
 //
 // They are issued by GET /api/media-token?path= (requires a valid session
 // JWT in the Authorization header) and accepted ONLY by
@@ -13,7 +13,17 @@
 
 import jwt from "jsonwebtoken";
 
-const MEDIA_TOKEN_TTL_SEC = 5 * 60; // 5 minutes
+// 2026-07-08 (Tyler — "media takes super long to populate"): raised from
+// 5 min to 30 min. The token rides in the /objects/ URL query string, and
+// browsers key their HTTP cache on the FULL URL — so every token rotation
+// changed every media URL and silently defeated the browser cache +
+// ETag/304 revalidation the server already supports. Result: reopening a
+// ticket re-downloaded every photo through the VM. With a 30 min TTL (and
+// the client caching tokens for 25 min) URLs stay stable across dialog
+// reopens, so repeat views come from browser cache / 304s.
+// Security tradeoff (deliberate): a leaked URL now exposes that ONE file
+// for ≤30 min instead of ≤5 — still path-bound, still no account access.
+const MEDIA_TOKEN_TTL_SEC = 30 * 60; // 30 minutes
 
 function getSecret(): string {
   const s = process.env.SESSION_SECRET;

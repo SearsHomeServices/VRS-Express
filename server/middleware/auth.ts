@@ -153,7 +153,7 @@ export async function authenticateToken(
 // only narrow-claim tokens issued by GET /api/media-token are valid.
 //
 // This design means a leaked /objects/ URL (browser history, copied link,
-// screenshot, proxy log) only exposes access to that single file for ≤5 min,
+// screenshot, proxy log) only exposes access to that single file for ≤30 min,
 // not the holder's full account credentials.
 //
 // Per-object authorization (ownership) is enforced at /api/media-token

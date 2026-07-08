@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
@@ -1057,6 +1057,17 @@ function TicketOverviewSection() {
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  // Tyler 2026-07-08 — search covers ALL tickets, not just the visible
+  // window. The table defaults to the last 30 days ("auto-archive"), but
+  // typing a search switches the data source to a debounced server-side
+  // all-time search so older tickets are still findable without widening
+  // the default view. Debounce keeps us from firing a request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  const searchActive = debouncedSearch.length > 0;
   // Tyler 2026-05-06 (Task #4 perf): default the admin Ticket Overview to
   // the last 30 days of created tickets. Pre-change this view pulled every
   // submission in the database (~500+ rows in prod, soon many more) on a
@@ -1124,6 +1135,19 @@ function TicketOverviewSection() {
     refetchOnWindowFocus: false,
   });
 
+  // Tyler 2026-07-08 — all-time search (no createdAfter param, so the server
+  // applies its own generous floor + row cap). Only fetches while a search
+  // term is present; results replace the windowed rows as the table source.
+  const { data: searchData, isLoading: searchLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+    queryKey: [`/api/submissions?search=${encodeURIComponent(debouncedSearch)}`],
+    enabled: searchActive,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+    // Each debounced term is a distinct query key; keep the previous term's
+    // rows on screen while the new fetch resolves (no skeleton flash per key).
+    placeholderData: keepPreviousData,
+  });
+
   const { data: usersData } = useQuery<{ users: any[] }>({
     queryKey: ["/api/admin/users"],
   });
@@ -1163,7 +1187,11 @@ function TicketOverviewSection() {
     }
   }
 
-  const rawTickets = allData?.submissions || [];
+  // While searching, the all-time server results are the source of truth;
+  // otherwise the windowed (default 30d) list is. The client-side filter
+  // below still runs over whichever source is active — it matches the same
+  // fields the server search does, so it only ever narrows, never hides.
+  const rawTickets = (searchActive ? searchData?.submissions : allData?.submissions) || [];
   const allTickets = requestTypeFilter === "all"
     ? rawTickets
     : requestTypeFilter === "nla"
@@ -1332,20 +1360,27 @@ function TicketOverviewSection() {
         ))}
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by service order, technician, or agent..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
-          data-testid="input-ticket-search"
-        />
+      <div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by service order, technician, or agent..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+            data-testid="input-ticket-search"
+          />
+        </div>
+        {searchActive && (
+          <p className="text-xs text-muted-foreground mt-1 pl-1" data-testid="text-search-scope">
+            Searching all tickets, including those outside the {createdAfterWindow === "all" ? "current" : createdAfterWindow.replace("d", "-day")} view.
+          </p>
+        )}
       </div>
 
       <Card>
         <CardContent className="p-0">
-          {allLoading ? (
+          {(searchActive ? searchLoading : allLoading) ? (
             <div className="p-6 space-y-2">
               {[1, 2, 3, 4, 5].map((i) => (
                 <Skeleton key={i} className="h-12 w-full" />

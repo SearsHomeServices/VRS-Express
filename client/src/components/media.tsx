@@ -24,7 +24,9 @@ type MediaImageProps = ImgHTMLAttributes<HTMLImageElement> & {
 
 export function MediaImage({ src, ...props }: MediaImageProps) {
   const tokenizedSrc = useMediaUrl(src);
-  return <img src={tokenizedSrc || undefined} {...props} />;
+  // lazy/async defaults: photo grids only fetch images near the viewport
+  // and decode off the main thread. Callers can override via props.
+  return <img loading="lazy" decoding="async" src={tokenizedSrc || undefined} {...props} />;
 }
 
 type MediaVideoProps = VideoHTMLAttributes<HTMLVideoElement> & {

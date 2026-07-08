@@ -143,13 +143,17 @@ export function getToken(): string | null {
 // ---------------------------------------------------------------------------
 // Scoped media token cache + helpers
 //
-// GET /api/media-token?path=<objectPath> issues a short-lived (5 min),
+// GET /api/media-token?path=<objectPath> issues a short-lived (30 min),
 // path-bound JWT with { type:"media", path } that is accepted by
 // GET/HEAD /objects/* instead of the full session JWT.  This prevents
 // leaked /objects/ URLs from exposing full account credentials.
 //
-// Tokens are cached client-side for 4 minutes (slightly under the server's
-// 5 min TTL) so repeated renders of the same image don't hammer the endpoint.
+// Tokens are cached client-side for 25 minutes (slightly under the server's
+// 30 min TTL) so repeated renders of the same image don't hammer the endpoint
+// AND — critically — so the tokenized /objects/ URL stays byte-identical
+// across dialog reopens. Browsers key their HTTP cache on the full URL, so
+// a stable URL is what lets Cache-Control/ETag actually avoid re-downloading
+// media bytes (this was the "media takes super long to populate" fix).
 // The cache is keyed by objectPath and cleared on logout.
 // ---------------------------------------------------------------------------
 
@@ -158,7 +162,7 @@ interface CachedMediaToken {
   exp: number; // ms timestamp — token is considered valid until this point
 }
 
-const CACHE_TTL_MS = 4 * 60 * 1000; // 4 min (server TTL is 5 min)
+const CACHE_TTL_MS = 25 * 60 * 1000; // 25 min (server TTL is 30 min)
 
 export const mediaTokenCache = new Map<string, CachedMediaToken>();
 

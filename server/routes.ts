@@ -1658,13 +1658,21 @@ export async function registerRoutes(
         // drills via GET /api/submissions/:id for full-row data.
         let result = await storage.getSubmissionsListView(filters, completedToday);
 
+        // 2026-07-08 (Tyler): search matches the same fields the admin
+        // Ticket Overview's client-side filter uses (SO, tech name/ldap,
+        // assigned agent), so an all-time server search returns everything
+        // the user expects — the dashboard sends ?search without a
+        // createdAfter window to find tickets older than the default 30d view.
         const search = req.query.search as string | undefined;
         if (search && result.length > 0) {
           const searchTerm = search.toLowerCase();
-          result = result.filter(sub => 
+          result = result.filter(sub =>
             sub.serviceOrder.toLowerCase().includes(searchTerm) ||
             sub.serviceOrder.replace(/^(\d{4})-/, '').includes(searchTerm) ||
-            sub.racId.toLowerCase().includes(searchTerm)
+            sub.racId.toLowerCase().includes(searchTerm) ||
+            (sub.technicianLdapId || "").toLowerCase().includes(searchTerm) ||
+            (sub.technicianName || "").toLowerCase().includes(searchTerm) ||
+            (sub.assignedAgentName || "").toLowerCase().includes(searchTerm)
           );
         }
 
@@ -5656,7 +5664,7 @@ export async function registerRoutes(
   // SCOPED MEDIA TOKEN ENDPOINT
   // ========================================================================
   //
-  // Issues a short-lived (5 min), path-bound JWT with { type:"media", path }
+  // Issues a short-lived (30 min), path-bound JWT with { type:"media", path }
   // for GET/HEAD /objects/* serving.  The full session JWT is NOT accepted on
   // the media-serving route; only these narrow-claim tokens are, so a leaked
   // /objects/ URL never exposes full account credentials.
@@ -5786,7 +5794,7 @@ export async function registerRoutes(
   });
 
   // Scoped proxy: accepts ONLY a techhub_photo token (no session JWT), so a
-  // leaked proxy URL exposes a single image for <=5 min and nothing else. The
+  // leaked proxy URL exposes a single image for <=30 min and nothing else. The
   // token already encodes a URL we signed; we still re-validate the host against
   // the allowlist before any outbound fetch (defense-in-depth vs. SSRF).
   app.get("/api/techhub-photo", async (req, res) => {
