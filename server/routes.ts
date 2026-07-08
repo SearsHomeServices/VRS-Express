@@ -113,6 +113,75 @@ const VIDEO_PROBE_FLAGS = [
   "-fflags", "+genpts",
 ];
 
+// ---------------------------------------------------------------------------
+// Tyler 2026-07-07 (perf) — ffmpeg concurrency control.
+//
+// Prod logs showed convert-video calls taking 60-95s of CPU each, and
+// conversions from DIFFERENT technicians overlapping. Each overlap saturated
+// the Reserved VM's CPU and dragged every other request (normally 40-150ms)
+// up to 1-2.5s for the duration. Two controls fix that:
+//
+//   1. A global FIFO queue so only ONE ffmpeg transcode runs at a time.
+//      A queued request waits for the in-flight one, so a technician's
+//      upload may take longer during bursts, but the API stays fast for
+//      everyone else. Queue wait + depth are logged for observability.
+//   2. Every ffmpeg process is launched through `nice -n 19` so that even
+//      the single running transcode yields CPU to the API under load.
+//
+// The per-technician ownership guard on the routes is unchanged; this is a
+// cross-user cap. ffprobe (metadata-only, sub-second) is NOT queued.
+// ---------------------------------------------------------------------------
+let ffmpegChain: Promise<void> = Promise.resolve();
+let ffmpegQueueDepth = 0;
+
+// Backpressure: refuse new conversion requests (BEFORE downloading the
+// source file to /tmp) once this many jobs are queued/running. At 60-95s
+// per video job, 5 jobs ≈ up to ~8 minutes of wait — beyond that, waiting
+// requests would outlive client/proxy HTTP timeouts and half-downloaded
+// temp files would pile up on disk. Normal traffic (2-3 overlapping at
+// worst today) never hits this; it is a saturation safety valve.
+const FFMPEG_MAX_QUEUE = parseInt(process.env.FFMPEG_MAX_QUEUE || "5", 10);
+
+function ffmpegQueueSaturated(): boolean {
+  return Number.isFinite(FFMPEG_MAX_QUEUE)
+    && FFMPEG_MAX_QUEUE > 0
+    && ffmpegQueueDepth >= FFMPEG_MAX_QUEUE;
+}
+
+function runFfmpegQueued<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const position = ffmpegQueueDepth;
+  ffmpegQueueDepth++;
+  const enqueuedAt = Date.now();
+  if (position > 0) {
+    console.log(`ffmpeg queue: ${label} waiting behind ${position} job(s)`);
+  }
+  const result = ffmpegChain.then(() => {
+    const waitedMs = Date.now() - enqueuedAt;
+    if (waitedMs > 1000) {
+      console.log(`ffmpeg queue: ${label} starting after ${Math.round(waitedMs / 1000)}s wait`);
+    }
+    return fn();
+  });
+  // The chain must never reject, or one failed conversion would wedge the
+  // queue for every subsequent caller.
+  ffmpegChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result.finally(() => {
+    ffmpegQueueDepth--;
+  });
+}
+
+// Launch ffmpeg at the lowest CPU priority. `nice` is part of coreutils and
+// present in both the dev and production Nix images (verified 2026-07-07).
+function execFfmpegLowPriority(
+  args: string[],
+  options: { timeout: number },
+): ReturnType<typeof execFileAsync> {
+  return execFileAsync("nice", ["-n", "19", "ffmpeg", ...args], options);
+}
+
 type VideoConversionResult =
   | { ok: true; mode: "primary" | "audio_stripped" }
   | { ok: false; mode: "failed"; primaryError?: string; fallbackError?: string };
@@ -121,51 +190,55 @@ async function convertVideoToPlayableMp4(
   inputPath: string,
   outputPath: string,
 ): Promise<VideoConversionResult> {
-  // Primary pass: keep the first video + first audio stream, transcode to
-  // browser-friendly H.264/AAC with an 8-bit pixel format.
-  try {
-    await execFileAsync("ffmpeg", [
-      ...VIDEO_PROBE_FLAGS,
-      "-i", inputPath,
-      "-map", "0:v:0",
-      "-map", "0:a:0?",
-      "-ignore_unknown",
-      "-c:v", "libx264",
-      "-pix_fmt", "yuv420p",
-      "-c:a", "aac",
-      "-ac", "2",
-      "-movflags", "+faststart",
-      "-preset", "fast",
-      "-crf", "23",
-      "-y",
-      outputPath,
-    ], { timeout: 180000 });
-    return { ok: true, mode: "primary" };
-  } catch (firstErr: any) {
-    const primaryError = firstErr?.message || String(firstErr);
-    console.warn("Video conversion: first pass failed, retrying without audio:", primaryError);
-    // Last-resort fallback: drop audio entirely (e.g. the only audio track is
-    // Apple spatial-audio / apac that ffmpeg 6.1.1 cannot decode).
+  // Both passes run as ONE queued unit so a fallback retry can't be
+  // interleaved with another user's conversion.
+  return runFfmpegQueued("video-convert", async () => {
+    // Primary pass: keep the first video + first audio stream, transcode to
+    // browser-friendly H.264/AAC with an 8-bit pixel format.
     try {
-      await execFileAsync("ffmpeg", [
+      await execFfmpegLowPriority([
         ...VIDEO_PROBE_FLAGS,
         "-i", inputPath,
         "-map", "0:v:0",
-        "-an",
+        "-map", "0:a:0?",
+        "-ignore_unknown",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-ac", "2",
         "-movflags", "+faststart",
         "-preset", "fast",
         "-crf", "23",
         "-y",
         outputPath,
       ], { timeout: 180000 });
-      return { ok: true, mode: "audio_stripped" };
-    } catch (secondErr: any) {
-      const fallbackError = secondErr?.message || String(secondErr);
-      return { ok: false, mode: "failed", primaryError, fallbackError };
+      return { ok: true, mode: "primary" } as const;
+    } catch (firstErr: any) {
+      const primaryError = firstErr?.message || String(firstErr);
+      console.warn("Video conversion: first pass failed, retrying without audio:", primaryError);
+      // Last-resort fallback: drop audio entirely (e.g. the only audio track is
+      // Apple spatial-audio / apac that ffmpeg 6.1.1 cannot decode).
+      try {
+        await execFfmpegLowPriority([
+          ...VIDEO_PROBE_FLAGS,
+          "-i", inputPath,
+          "-map", "0:v:0",
+          "-an",
+          "-c:v", "libx264",
+          "-pix_fmt", "yuv420p",
+          "-movflags", "+faststart",
+          "-preset", "fast",
+          "-crf", "23",
+          "-y",
+          outputPath,
+        ], { timeout: 180000 });
+        return { ok: true, mode: "audio_stripped" } as const;
+      } catch (secondErr: any) {
+        const fallbackError = secondErr?.message || String(secondErr);
+        return { ok: false, mode: "failed", primaryError, fallbackError } as const;
+      }
     }
-  }
+  });
 }
 
 // Probe the first video stream's codec + pixel format. Used by the one-time
@@ -5791,6 +5864,16 @@ export async function registerRoutes(
       return res.status(403).json({ error: "Access denied" });
     }
 
+    // Saturation guard — reject before we stream anything to /tmp.
+    if (ffmpegQueueSaturated()) {
+      console.warn(`Audio conversion rejected: queue saturated (depth=${ffmpegQueueDepth})`);
+      return res.status(503).json({
+        objectPath,
+        converted: false,
+        error: "Server is busy processing other media. Please try again in a few minutes.",
+      });
+    }
+
     const objectStorageService = new ObjectStorageService();
     const inputPath = `/tmp/audio-input-${randomUUID()}`;
     const outputPath = `/tmp/audio-output-${randomUUID()}.mp3`;
@@ -5815,13 +5898,18 @@ export async function registerRoutes(
       const writeStream = createWriteStream(inputPath);
       await pipeline(readStream, writeStream);
 
-      await execFileAsync("ffmpeg", [
-        "-i", inputPath,
-        "-codec:a", "libmp3lame",
-        "-qscale:a", "4",
-        "-y",
-        outputPath,
-      ], { timeout: 60000 });
+      // Queued + low-priority like video conversion: audio transcodes are
+      // shorter but still CPU-bound, and must not stack on top of a running
+      // video transcode.
+      await runFfmpegQueued("audio-convert", () =>
+        execFfmpegLowPriority([
+          "-i", inputPath,
+          "-codec:a", "libmp3lame",
+          "-qscale:a", "4",
+          "-y",
+          outputPath,
+        ], { timeout: 60000 }),
+      );
 
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const newObjectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
@@ -5869,6 +5957,16 @@ export async function registerRoutes(
     const callerUserId = (req as AuthenticatedRequest).user?.id;
     if (!callerUserId || !verifyUploadOwnership(objectPath, callerUserId)) {
       return res.status(403).json({ error: "Access denied" });
+    }
+
+    // Saturation guard — reject before we stream anything to /tmp.
+    if (ffmpegQueueSaturated()) {
+      console.warn(`Video conversion rejected: queue saturated (depth=${ffmpegQueueDepth})`);
+      return res.status(503).json({
+        converted: false,
+        failed: true,
+        error: "Server is busy processing other videos. Please try again in a few minutes.",
+      });
     }
 
     const objectStorageService = new ObjectStorageService();
