@@ -115,6 +115,13 @@ export const submissions = pgTable("submissions", {
   estimateAmount: text("estimate_amount"), // stored as text, parsed as decimal in application
   partNumbers: text("part_numbers"), // JSON string array, e.g. '["WPW10321304","W10321304"]'
   photos: text("photos"), // JSON string of photo URLs array
+  // Tyler 2026-07-08 — client-generated thumbnails for fast first paint in
+  // ticket photo grids. JSON map { fullPhotoPath: thumbPath } (map, not a
+  // parallel array, so it survives both photos formats and partial thumb
+  // failures). Full paths remain the identity everywhere (lightbox,
+  // rejection, rejected_media) — only the grid <img src> swaps to the thumb.
+  // Migrated idempotently in seed.ts (ensurePhotoThumbnailsColumn).
+  photoThumbnails: text("photo_thumbnails"),
   videoUrl: varchar("video_url", { length: 500 }),
   voiceNoteUrl: varchar("voice_note_url", { length: 500 }),
   technicianLdapId: varchar("technician_ldap_id", { length: 50 }),
@@ -242,6 +249,10 @@ export type SubmissionListItem = Pick<Submission,
   // closes that window without re-introducing the heavy columns
   // (agentNotes / auditTrail / rejectedMedia / partNumbers / etc.).
   | "photos" | "videoUrl" | "voiceNoteUrl"
+  // Tyler 2026-07-08 — thumbnails ride with photos for the same reason:
+  // the detail panel renders media from the slim row before the heavy
+  // detail fetch resolves, and the grid needs the thumb map at that moment.
+  | "photoThumbnails"
 >;
 
 export type SubmissionListItemWithTech = SubmissionListItem & {

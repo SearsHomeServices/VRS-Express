@@ -86,6 +86,12 @@ export async function seedDatabase() {
   // getUserByRacId which selects all columns). Run this awaited migration
   // first — idempotent (ADD COLUMN IF NOT EXISTS).
   await ensureProviderCompanyColumn();
+  // Tyler 2026-07-08 — photo thumbnails: submissions.photo_thumbnails is
+  // referenced by the Drizzle schema, so it must exist BEFORE the first
+  // submissions query in this boot path (backfillClaimedAt /
+  // cleanupTestSubmissions below select all columns). Awaited, not
+  // fire-and-forget, for the same reason as ensureProviderCompanyColumn.
+  await ensurePhotoThumbnailsColumn();
   for (const seedUser of SEED_USERS) {
     let user = seedUser.racId ? await storage.getUserByRacId(seedUser.racId) : null;
 
@@ -334,6 +340,22 @@ async function ensureProviderCompanyColumn() {
     console.log("[provider-1099] users.company_name ensured (nullable)");
   } catch (err: any) {
     console.warn(`[provider-1099] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// Tyler 2026-07-08 — photo thumbnails column. JSON map of full photo path →
+// thumbnail path, written at submit time by the tech PWA. Same one-shot
+// idempotent migration pattern as the other ensure* helpers. Must be awaited
+// before the first submissions query on boot (Drizzle selects all columns).
+async function ensurePhotoThumbnailsColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS photo_thumbnails TEXT
+    `));
+    console.log("[photo-thumbnails] submissions.photo_thumbnails ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[photo-thumbnails] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

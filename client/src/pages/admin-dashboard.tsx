@@ -834,6 +834,17 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                     let parsed: any = null;
                     try { parsed = sub.photos ? JSON.parse(sub.photos) : null; } catch { parsed = null; }
                     if (!parsed) return <p className="text-sm text-muted-foreground" data-testid="text-admin-no-photos">No photos attached</p>;
+                    // Tyler 2026-07-08 — thumb map; grid src only. Full paths
+                    // remain the identity for lightbox + open-in-new-tab.
+                    let thumbs: Record<string, string> = {};
+                    try {
+                      const rawT = (sub as any).photoThumbnails ? JSON.parse((sub as any).photoThumbnails) : null;
+                      if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
+                        for (const [k, v] of Object.entries(rawT)) {
+                          if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
+                        }
+                      }
+                    } catch {}
 
                     const isNewFormat = parsed && typeof parsed === "object" && !Array.isArray(parsed);
                     const estimatePhotos: string[] = (isNewFormat ? (parsed.estimate || []) : []).filter((u: any) => typeof u === "string" && u);
@@ -858,7 +869,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                                 data-testid={`admin-${testIdPrefix}-photo-${i}`}
                               >
                                 <MediaImage
-                                  src={url}
+                                  src={thumbs[url] ?? url}
                                   alt={`${label} ${i + 1}`}
                                   decoding="async"
                                   className="w-full h-full object-cover pointer-events-none"

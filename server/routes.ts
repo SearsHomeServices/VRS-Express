@@ -977,6 +977,26 @@ export async function registerRoutes(
     estimateAmount: z.string().optional(),
     partNumbers: z.string().optional(),
     photos: z.string().optional(),
+    // Tyler 2026-07-08 — client-generated photo thumbnails. JSON map of
+    // { fullPhotoPath: thumbPath } where both sides are /objects/ paths.
+    // Thumbs are best-effort: a missing/partial map is fine (UI falls back
+    // to the full image). Validated as a parseable object of /objects/
+    // string pairs so junk can't land in the column — same trust bar as
+    // `photos` (paths are not ownership-verified at submit; access is
+    // enforced at read time by the media-token route).
+    photoThumbnails: z.string().optional().refine((val) => {
+      if (!val) return true;
+      try {
+        const parsed = JSON.parse(val);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+        return Object.entries(parsed).every(
+          ([k, v]) => typeof k === "string" && k.startsWith("/objects/")
+            && typeof v === "string" && v.startsWith("/objects/"),
+        );
+      } catch {
+        return false;
+      }
+    }, "photoThumbnails must be a JSON object mapping /objects/ paths to /objects/ paths"),
     // Tyler 2026-04-30: multi-video. Clients send `videoUrls` (array of
     // up to 3 object-storage paths). The legacy `videoUrl` single-string
     // field is kept for backward compatibility with any in-flight client
@@ -1363,6 +1383,7 @@ export async function registerRoutes(
         estimateAmount: parsed.data.estimateAmount || null,
         partNumbers: parsed.data.partNumbers || null,
         photos: parsed.data.photos || null,
+        photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent
         // `videoUrls` AT ALL (even empty), it is authoritative — empty
         // array → null (not "[]") so existing "no video" reads stay
@@ -5702,6 +5723,7 @@ export async function registerRoutes(
             video_url = ${objectPath}
             OR voice_note_url = ${objectPath}
             OR photos::text LIKE ${matchPath}
+            OR photo_thumbnails::text LIKE ${matchPath}
             OR rejected_media::text LIKE ${matchPath}
           )
           LIMIT 1

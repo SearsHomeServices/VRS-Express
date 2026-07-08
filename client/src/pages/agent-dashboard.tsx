@@ -2588,6 +2588,19 @@ export default function AgentDashboard() {
                         {(() => {
                           let parsed: any = null;
                           try { parsed = selectedSubmission.photos ? JSON.parse(selectedSubmission.photos) : null; } catch { parsed = null; }
+                          // Tyler 2026-07-08 — thumb map { fullPath: thumbPath }.
+                          // Grid <img> src swaps to the thumb when one exists;
+                          // FULL paths stay the identity for rejection toggles,
+                          // lightbox, and downloads. Junk/missing → empty map.
+                          let thumbs: Record<string, string> = {};
+                          try {
+                            const rawT = (selectedSubmission as any).photoThumbnails ? JSON.parse((selectedSubmission as any).photoThumbnails) : null;
+                            if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
+                              for (const [k, v] of Object.entries(rawT)) {
+                                if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
+                              }
+                            }
+                          } catch {}
                           // Tyler 2026-05-07 (prod fire — VRS rejecting
                           // tickets as "no photos"): if the heavy detail
                           // fetch is still in-flight AND the slim row
@@ -2649,7 +2662,7 @@ export default function AgentDashboard() {
                                           data-testid={`${testIdPrefix}-photo-${i}`}
                                         >
                                           <MediaImage
-                                            src={url}
+                                            src={thumbs[url] ?? url}
                                             alt={`${label} ${i + 1}`}
                                             decoding="async"
                                             className={`w-full h-full object-cover pointer-events-none ${rejected ? "opacity-40" : ""}`}
@@ -2911,6 +2924,17 @@ export default function AgentDashboard() {
                       } catch {
                         parsedPrior = null;
                       }
+                      // Prior ticket's thumb map (if it has one) — same
+                      // swap-src-only rule as the main grid.
+                      let priorThumbs: Record<string, string> = {};
+                      try {
+                        const rawT = (priorRejection as any).photoThumbnails ? JSON.parse((priorRejection as any).photoThumbnails) : null;
+                        if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
+                          for (const [k, v] of Object.entries(rawT)) {
+                            if (typeof k === "string" && typeof v === "string") priorThumbs[k] = v;
+                          }
+                        }
+                      } catch {}
                       const isObj = parsedPrior && typeof parsedPrior === "object" && !Array.isArray(parsedPrior);
                       const priorIssue: string[] = isObj ? (parsedPrior.issue || []) : [];
                       const priorEstimate: string[] = isObj ? (parsedPrior.estimate || []) : [];
@@ -2936,7 +2960,7 @@ export default function AgentDashboard() {
                                   data-testid={`prior-${testIdPrefix}-photo-${i}`}
                                 >
                                   <MediaImage
-                                    src={url}
+                                    src={priorThumbs[url] ?? url}
                                     alt={`${label} ${i + 1}`}
                                     decoding="async"
                                     className="w-full h-full object-cover pointer-events-none"

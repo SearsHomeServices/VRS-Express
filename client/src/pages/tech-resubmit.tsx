@@ -31,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import imageCompression from "browser-image-compression";
 import { Camera, Send, X, AlertTriangle, ArrowLeft, Lock, Video, Upload, Info, Plus } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import type { Submission } from "@shared/schema";
@@ -69,6 +70,11 @@ export default function TechResubmitPage() {
   const { toast } = useToast();
   const [issuePhotoUrls, setIssuePhotoUrls] = useState<string[]>([]);
   const [estimatePhotoUrls, setEstimatePhotoUrls] = useState<string[]>([]);
+  // Tyler 2026-07-08 — thumbnail map keyed by FULL photo path (same identity
+  // rule as tech-submit). Hydrated from the original submission's map for
+  // kept photos and extended with new uploads; the payload filter keeps only
+  // entries whose full photo is actually attached at resubmit time.
+  const [photoThumbs, setPhotoThumbs] = useState<Record<string, string>>({});
   const [issuePhotoUploading, setIssuePhotoUploading] = useState(false);
   const [estimatePhotoUploading, setEstimatePhotoUploading] = useState(false);
   // Tyler 2026-04-30: multi-video resubmit. Up to 3 videos per ticket,
@@ -152,6 +158,18 @@ export default function TechResubmitPage() {
         if (parsed.estimate) setEstimatePhotoUrls(parsed.estimate.filter((url: string) => !rejectedPhotoUrls.has(url)));
       } else if (Array.isArray(parsed)) {
         setIssuePhotoUrls(parsed.filter((url: string) => !rejectedPhotoUrls.has(url)));
+      }
+    } catch {}
+    // Carry the original ticket's thumbnails forward so kept photos don't
+    // lose their thumbs on resubmission. Best-effort parse; junk → empty.
+    try {
+      const rawThumbs = (sub as any).photoThumbnails ? JSON.parse((sub as any).photoThumbnails) : null;
+      if (rawThumbs && typeof rawThumbs === "object" && !Array.isArray(rawThumbs)) {
+        const clean: Record<string, string> = {};
+        for (const [k, v] of Object.entries(rawThumbs)) {
+          if (typeof k === "string" && typeof v === "string") clean[k] = v;
+        }
+        setPhotoThumbs(clean);
       }
     } catch {}
     // Tyler 2026-04-30: parse multi-video JSON or legacy single-URL.
@@ -249,6 +267,29 @@ export default function TechResubmitPage() {
     }
   }
 
+  // Tyler 2026-07-08 — same best-effort thumbnail generator as tech-submit:
+  // ~480px / ~60 KB forced JPEG for fast agent-side grid paint. Any failure
+  // returns null and the grid falls back to the full image.
+  async function generateAndUploadThumb(file: File): Promise<string | null> {
+    try {
+      const thumbBlob = await imageCompression(file, {
+        maxSizeMB: 0.06,
+        maxWidthOrHeight: 480,
+        useWebWorker: true,
+        initialQuality: 0.7,
+        fileType: "image/jpeg",
+      });
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const thumbFile = new File([thumbBlob], `thumb_${baseName}.jpg`, {
+        type: "image/jpeg",
+        lastModified: file.lastModified,
+      });
+      return await uploadSingleFile(thumbFile);
+    } catch {
+      return null;
+    }
+  }
+
   async function handlePhotosSelect(
     files: FileList | null,
     currentUrls: string[],
@@ -277,6 +318,10 @@ export default function TechResubmitPage() {
         const url = await uploadSingleFile(filesToUpload[idx]);
         if (url) {
           newUrls.push(url);
+          // Thumb rides in the same worker slot (respects the concurrency
+          // cap); silent failure by design.
+          const thumb = await generateAndUploadThumb(filesToUpload[idx]);
+          if (thumb) setPhotoThumbs((prev) => ({ ...prev, [url]: thumb }));
         } else {
           failedCount += 1;
         }
@@ -415,6 +460,14 @@ export default function TechResubmitPage() {
     if (estimatePhotoUrls.length > 0) photosObj.estimate = estimatePhotoUrls;
     if (issuePhotoUrls.length > 0) photosObj.issue = issuePhotoUrls;
     if (Object.keys(photosObj).length > 0) payload.photos = JSON.stringify(photosObj);
+    // Thumb map filtered to photos actually attached to THIS resubmission —
+    // removed/rejected photos' entries stay behind on the original ticket.
+    const attachedUrls = new Set([...estimatePhotoUrls, ...issuePhotoUrls]);
+    const thumbsForPayload: Record<string, string> = {};
+    for (const [full, thumb] of Object.entries(photoThumbs)) {
+      if (attachedUrls.has(full)) thumbsForPayload[full] = thumb;
+    }
+    if (Object.keys(thumbsForPayload).length > 0) payload.photoThumbnails = JSON.stringify(thumbsForPayload);
     if (videoUrls.length > 0) payload.videoUrls = videoUrls;
     if (formData.appealNotes && formData.appealNotes.trim()) {
       payload.appealNotes = formData.appealNotes.trim();
@@ -862,7 +915,7 @@ export default function TechResubmitPage() {
                   <div className="grid grid-cols-4 gap-2">
                     {issuePhotoUrls.map((url, i) => (
                       <div key={i} className="relative aspect-square bg-muted rounded-md overflow-hidden">
-                        <MediaImage src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-resubmit-${i}`} />
+                        <MediaImage src={photoThumbs[url] ?? url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-resubmit-${i}`} />
                         <button
                           type="button"
                           className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
@@ -907,7 +960,7 @@ export default function TechResubmitPage() {
                   <div className="grid grid-cols-4 gap-2">
                     {estimatePhotoUrls.map((url, i) => (
                       <div key={i} className="relative aspect-square bg-muted rounded-md overflow-hidden">
-                        <MediaImage src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-resubmit-${i}`} />
+                        <MediaImage src={photoThumbs[url] ?? url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-resubmit-${i}`} />
                         <button
                           type="button"
                           className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"

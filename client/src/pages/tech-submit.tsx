@@ -140,6 +140,12 @@ export default function TechSubmitPage() {
   // under the per-section "Uploading N/M" text so the tech can see movement
   // instead of staring at a frozen spinner on weak signal.
   const [photoUploadProgress, setPhotoUploadProgress] = useState<Record<string, number>>({});
+  // Tyler 2026-07-08 — client-generated thumbnails, keyed by the FULL photo
+  // object path (the identity used everywhere else: rejection, lightbox,
+  // rejected_media). Best-effort: a thumb that fails to generate or upload
+  // simply has no entry here and viewers fall back to the full image. Sent
+  // as `photoThumbnails` (JSON map) in the submission payload.
+  const [photoThumbs, setPhotoThumbs] = useState<Record<string, string>>({});
   const [aiPreview, setAiPreview] = useState<string | null>(null);
   const [originalBeforeAi, setOriginalBeforeAi] = useState<string | null>(null);
   const [aiUsed, setAiUsed] = useState(false);
@@ -273,6 +279,38 @@ export default function TechSubmitPage() {
     return null;
   }
 
+  // Tyler 2026-07-08 — generate + upload a small grid thumbnail for a photo
+  // that just finished its full-size upload. ~480px max edge / ~60 KB JPEG:
+  // plenty for the ~150-300px grid cells agents see, ~15-20x lighter than
+  // the 1.2 MB full image, so first paint of a ticket's photo grid is fast
+  // even cold. Forced to JPEG (PNG screenshots would balloon). Entirely
+  // best-effort: any failure returns null and the caller just skips the map
+  // entry — the grid falls back to the full image, exactly today's behavior.
+  // 1 retry (vs 2 for the real photo) because losing a thumb is harmless.
+  async function generateAndUploadThumb(file: File): Promise<string | null> {
+    try {
+      const thumbBlob = await imageCompression(file, {
+        maxSizeMB: 0.06,
+        maxWidthOrHeight: 480,
+        useWebWorker: true,
+        initialQuality: 0.7,
+        fileType: "image/jpeg",
+      });
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const thumbFile = new File([thumbBlob], `thumb_${baseName}.jpg`, {
+        type: "image/jpeg",
+        lastModified: file.lastModified,
+      });
+      return await uploadSinglePhoto(thumbFile, 1);
+    } catch (err) {
+      console.warn("[tech-submit] thumbnail generation failed; grid will use full image", {
+        name: file.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
   async function handlePhotosSelect(
     files: FileList | null,
     currentUrls: string[],
@@ -393,6 +431,12 @@ export default function TechSubmitPage() {
         if (url) {
           newUrls.push(url);
           newPreviews[url] = localBlob;
+          // Thumb rides after the full upload inside the same worker slot so
+          // it respects the adaptive concurrency cap (no extra parallel
+          // request competing on weak signal). ~60 KB — adds well under a
+          // second per photo. Failure is silent by design.
+          const thumb = await generateAndUploadThumb(file);
+          if (thumb) setPhotoThumbs((prev) => ({ ...prev, [url]: thumb }));
         } else {
           URL.revokeObjectURL(localBlob);
           newFailures.push({
@@ -439,6 +483,8 @@ export default function TechSubmitPage() {
     });
     if (url) {
       const localBlob = URL.createObjectURL(failed.file);
+      const thumb = await generateAndUploadThumb(failed.file);
+      if (thumb) setPhotoThumbs((prev) => ({ ...prev, [url]: thumb }));
       if (failed.category === "estimate") {
         setEstimatePhotoUrls((prev) => [...prev, url]);
         setEstimatePhotoLocalPreviews((prev) => ({ ...prev, [url]: localBlob }));
@@ -919,6 +965,15 @@ export default function TechSubmitPage() {
     if (estimatePhotoUrls.length > 0) photosObj.estimate = estimatePhotoUrls;
     if (issuePhotoUrls.length > 0) photosObj.issue = issuePhotoUrls;
     if (Object.keys(photosObj).length > 0) payload.photos = JSON.stringify(photosObj);
+    // Thumb map filtered to photos actually attached (a removed photo's
+    // stale entry must not leak into the payload). Only sent when at least
+    // one attached photo has a thumb.
+    const attachedUrls = new Set([...estimatePhotoUrls, ...issuePhotoUrls]);
+    const thumbsForPayload: Record<string, string> = {};
+    for (const [full, thumb] of Object.entries(photoThumbs)) {
+      if (attachedUrls.has(full)) thumbsForPayload[full] = thumb;
+    }
+    if (Object.keys(thumbsForPayload).length > 0) payload.photoThumbnails = JSON.stringify(thumbsForPayload);
     if (data.requestType === "parts_nla") {
       const nlaParts = partNumbers.filter(p => p.trim() !== "");
       const otherParts = availableParts.filter(p => p.trim() !== "");
@@ -1016,6 +1071,16 @@ export default function TechSubmitPage() {
     }
     if (Array.isArray(draft.estimatePhotoUrls)) setEstimatePhotoUrls(draft.estimatePhotoUrls as string[]);
     if (Array.isArray(draft.issuePhotoUrls)) setIssuePhotoUrls(draft.issuePhotoUrls as string[]);
+    // Thumb map — tolerate absence (drafts saved before thumbnails shipped)
+    // and junk (only keep string→string entries).
+    const draftThumbs = (draft as any).photoThumbs;
+    if (draftThumbs && typeof draftThumbs === "object" && !Array.isArray(draftThumbs)) {
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(draftThumbs)) {
+        if (typeof k === "string" && typeof v === "string") clean[k] = v;
+      }
+      setPhotoThumbs(clean);
+    }
     // Tyler 2026-04-30: hydrate multi-video. Prefer the new `videoUrls`
     // array; fall back to legacy `videoUrl` string for drafts saved before
     // this change rolled out (auto-promotes single → [single]).
@@ -1120,6 +1185,7 @@ export default function TechSubmitPage() {
         formValues,
         estimatePhotoUrls,
         issuePhotoUrls,
+        photoThumbs,
         // Tyler 2026-04-30: drafts now persist the full array. The legacy
         // `videoUrl` field stays out of the saved envelope (parser tolerates
         // its absence). Old drafts already on disk still hydrate correctly
@@ -1144,6 +1210,7 @@ export default function TechSubmitPage() {
     watchedValues,
     estimatePhotoUrls,
     issuePhotoUrls,
+    photoThumbs,
     videoUrls,
     voiceNoteUrl,
     partNumbers,
@@ -1916,7 +1983,7 @@ export default function TechSubmitPage() {
                           className="w-full h-full object-cover rounded-md"
                           data-testid={`img-issue-preview-${i}`}
                         />
-                        <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = issuePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setIssuePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setIssuePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-issue-${i}`}>
+                        <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = issuePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setIssuePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setPhotoThumbs((prev) => { const n = {...prev}; delete n[url]; return n; }); setIssuePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-issue-${i}`}>
                           <X className="w-3 h-3" />
                         </Button>
                       </div>
@@ -2037,7 +2104,7 @@ export default function TechSubmitPage() {
                             className="w-full h-full object-cover rounded-md"
                             data-testid={`img-estimate-preview-${i}`}
                           />
-                          <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = estimatePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setEstimatePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setEstimatePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-estimate-${i}`}>
+                          <Button type="button" size="icon" variant="destructive" className="absolute -top-2 -right-2 h-6 w-6" onClick={() => { const blobUrl = estimatePhotoLocalPreviews[url]; if (blobUrl) URL.revokeObjectURL(blobUrl); setEstimatePhotoLocalPreviews((prev) => { const n = {...prev}; delete n[url]; return n; }); setPhotoThumbs((prev) => { const n = {...prev}; delete n[url]; return n; }); setEstimatePhotoUrls((prev) => prev.filter((_, idx) => idx !== i)); }} data-testid={`button-remove-estimate-${i}`}>
                             <X className="w-3 h-3" />
                           </Button>
                         </div>

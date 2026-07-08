@@ -524,6 +524,17 @@ export default function SubmissionDetailPage() {
           let parsed: any = null;
           try { parsed = sub.photos ? JSON.parse(sub.photos) : null; } catch { parsed = null; }
           if (!parsed) return null;
+          // Tyler 2026-07-08 — thumb map; grid src only, full paths stay the
+          // identity everywhere else. Junk/missing → empty map.
+          let thumbs: Record<string, string> = {};
+          try {
+            const rawT = (sub as any).photoThumbnails ? JSON.parse((sub as any).photoThumbnails) : null;
+            if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
+              for (const [k, v] of Object.entries(rawT)) {
+                if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
+              }
+            }
+          } catch {}
           
           const isNewFormat = parsed && typeof parsed === "object" && !Array.isArray(parsed);
           const estimatePhotos: string[] = isNewFormat ? (parsed.estimate || []) : [];
@@ -543,7 +554,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-issue-photos-detail">
                       {issuePhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <MediaImage src={url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-detail-${i}`} />
+                          <MediaImage src={thumbs[url] ?? url} alt={`Issue ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-issue-detail-${i}`} />
                         </div>
                       ))}
                     </div>
@@ -558,7 +569,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-estimate-photos-detail">
                       {estimatePhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <MediaImage src={url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-detail-${i}`} />
+                          <MediaImage src={thumbs[url] ?? url} alt={`Estimate ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-estimate-detail-${i}`} />
                         </div>
                       ))}
                     </div>
@@ -573,7 +584,7 @@ export default function SubmissionDetailPage() {
                     <div className="grid grid-cols-3 gap-2" data-testid="media-photos-detail">
                       {legacyPhotos.map((url: string, i: number) => (
                         <div key={i} className="aspect-square bg-muted rounded-md overflow-hidden">
-                          <MediaImage src={url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-photo-detail-${i}`} />
+                          <MediaImage src={thumbs[url] ?? url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" data-testid={`img-photo-detail-${i}`} />
                         </div>
                       ))}
                     </div>

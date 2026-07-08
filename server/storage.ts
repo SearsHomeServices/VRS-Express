@@ -1055,6 +1055,11 @@ export class DatabaseStorage implements IStorage {
           // small string columns and don't reintroduce the Task #4 payload
           // bloat from agentNotes/auditTrail/rejectedMedia.
           photos: submissions.photos,
+          // Tyler 2026-07-08 — thumb map rides with photos so the detail
+          // panel's instant-render path (slim row before heavy fetch) can
+          // show thumbnails immediately. Small JSON string, same class of
+          // payload as photos.
+          photoThumbnails: submissions.photoThumbnails,
           videoUrl: submissions.videoUrl,
           voiceNoteUrl: submissions.voiceNoteUrl,
         },

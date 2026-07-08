@@ -23,6 +23,7 @@ Key architectural patterns include:
 - **Division Correction:** Agents can correct the appliance type mid-review, with intelligent handling of ticket ownership based on their assigned divisions.
 - **Comprehensive Onboarding & Help System:** Features first-login wizards, "What's New" modals, contextual help tooltips, and a searchable Help Center.
 - **Mobile-First Design:** The technician PWA and agent/admin dashboards adapt to various screen sizes.
+- **Photo Thumbnails (2026-07-08):** Tech clients generate a ~480px/~60KB JPEG thumbnail per photo at upload time (browser-image-compression), stored as a `{fullPath: thumbPath}` JSON map in `submissions.photo_thumbnails`. Photo grids swap ONLY the `<img>` src to the thumb; full paths remain the identity for rejection toggles, rejected_media, lightbox, and downloads. Missing thumb → silent fallback to the full image (legacy rows unaffected).
 - **Dark Mode:** App-wide dark mode toggle via `ThemeProvider` (`client/src/components/theme-provider.tsx`) using Tailwind's `darkMode: ["class"]`. Persists preference to `localStorage` (key `vrs-theme`) with OS preference fallback. Toggle buttons in tech header, agent sidebar footer, and admin sidebar footer.
 
 **Frontend Pages:**
