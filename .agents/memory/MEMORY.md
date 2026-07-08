@@ -16,4 +16,5 @@
 - [Reserved-VM hang from pool exhaustion](reserved-vm-hang-pool-exhaustion.md) — sustained 502 + logs stop + many-queries-fail-at-once = pg pool exhausted (default max 10, no connectionTimeout); VM won't auto-restart a hung process; set max+timeouts to fail fast.
 - [Prod replica freezes after big prune](prod-verification-replica-lag.md) — large retention prune stalls read-replica replay ~25-30m, blocking post-deploy churn checks; use getDeploymentInfo/healthz/logs for real-time, replica backfills later.
 - [stage1Status = overall outcome](stage1status-overall-outcome.md) — two-stage negatives must keep stage1Status as the FINAL result (analytics read it for approval-rate/completed-today/queue); record Stage-2 audit additively in stage2* cols.
+- [Submissions list micro-cache](submissions-list-micro-cache.md) — every new submissions/intake_forms write must bump the data-version stamp; never cache the redacted tech branch; key before time-derived default filters.
 - [Photo thumbnails identity invariant](photo-thumbnails-invariant.md) — thumb map swaps grid img src ONLY; full paths stay the identity for rejection/lightbox/download/resubmit.

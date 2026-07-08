@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { formatDate } from "@/lib/utils";
@@ -23,7 +23,7 @@ import {
   Package,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/lib/auth";
+import { useAuth, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Submission } from "@shared/schema";
@@ -43,6 +43,16 @@ export default function SubmissionDetailPage() {
     queryKey: ["/api/submissions", id],
     enabled: !!id,
   });
+
+  // Tyler 2026-07-08 (perf) — batch-prefetch media tokens once the
+  // submission lands, so the photo grid mounts against warm tokens instead
+  // of firing one GET /api/media-token per image. Fire-and-forget; failures
+  // fall back to the per-path fetch inside getMediaToken.
+  useEffect(() => {
+    if (data?.submission) {
+      prefetchMediaTokens(collectSubmissionMediaPaths(data.submission));
+    }
+  }, [data?.submission]);
 
   const historyQuery = useQuery<{
     history: Submission[];

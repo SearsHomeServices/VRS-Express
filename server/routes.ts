@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { storage, db } from "./storage";
+import { storage, db, getSubmissionsDataVersion } from "./storage";
 import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
@@ -1535,6 +1535,28 @@ export async function registerRoutes(
     }
   });
 
+  // Tyler 2026-07-08 (perf) — 2s micro-cache for the STAFF branch of
+  // GET /api/submissions. Agent/admin dashboards poll this endpoint and
+  // WS events trigger refetch bursts from every connected staff client at
+  // once; identical queries inside a 2s window now serve one DB read.
+  //   • Staff branch ONLY — the tech/provider branch below runs
+  //     redactWarrantyForProvider and is scoped per-technician; it is never
+  //     cached (a shared cache there could leak unredacted rows).
+  //   • Key = canonical resolved filters (incl. agent-derived assignedTo /
+  //     reviewedBy / divisionFilter) + role class + completedToday + search,
+  //     computed BEFORE the admin default-window injection (that value is
+  //     time-derived and would change every request).
+  //   • Freshness = TTL AND a data-version stamp (see
+  //     bumpSubmissionsDataVersion in storage.ts): any submissions/intake
+  //     write invalidates instantly, so the worst case is a 2s-stale list
+  //     for reads racing a write in another process — which doesn't exist
+  //     on this single-VM deployment.
+  const submissionsListCache = new Map<
+    string,
+    { expiresAt: number; version: number; body: string }
+  >();
+  const SUBMISSIONS_LIST_CACHE_TTL_MS = 2000;
+
   app.get("/api/submissions", authenticateToken, async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
@@ -1638,6 +1660,40 @@ export async function registerRoutes(
       const completedToday = req.query.completedToday === "true";
 
       if (user.role === "vrs_agent" || user.role === "admin" || user.role === "super_admin") {
+        // Micro-cache lookup (see comment above the route). Key is computed
+        // BEFORE the admin default-window injection below; the injected
+        // createdAfter is derived from Date.now() and differs every request,
+        // but within the 2s TTL the drift is immaterial.
+        const cacheKey = JSON.stringify({
+          roleClass: user.role === "vrs_agent" ? "agent" : "admin",
+          ticketStatus: filters.ticketStatus ?? null,
+          stage1Status: filters.stage1Status ?? null,
+          stage2Status: filters.stage2Status ?? null,
+          assignedTo: filters.assignedTo ?? null,
+          reviewedBy: filters.reviewedBy ?? null,
+          applianceType: filters.applianceType ?? null,
+          requestType: filters.requestType ?? null,
+          excludeRequestType: filters.excludeRequestType ?? null,
+          divisionFilter: filters.divisionFilter
+            ? [...filters.divisionFilter].sort()
+            : null,
+          completedSince: filters.completedSince?.toISOString() ?? null,
+          createdAfter: filters.createdAfter?.toISOString() ?? null,
+          completedToday,
+          search: ((req.query.search as string) || "").toLowerCase(),
+        });
+        // Version captured BEFORE the DB read: a write that lands during
+        // the read bumps the stamp and invalidates this entry immediately.
+        const versionAtRead = getSubmissionsDataVersion();
+        const cachedEntry = submissionsListCache.get(cacheKey);
+        if (
+          cachedEntry &&
+          cachedEntry.expiresAt > Date.now() &&
+          cachedEntry.version === versionAtRead
+        ) {
+          return res.status(200).type("application/json").send(cachedEntry.body);
+        }
+
         // Tyler 2026-06-27 (scalability) — bound the admin Ticket Overview.
         // Agents are always scoped by assignment/division/status above, so
         // their queries are naturally small. Admin/super_admin, however, can
@@ -1697,7 +1753,17 @@ export async function registerRoutes(
           );
         }
 
-        return res.status(200).json({ submissions: result });
+        const body = JSON.stringify({ submissions: result });
+        // Bounded: distinct staff filter combos are few (queue/pending/
+        // completed per agent + admin windows); clear-all on overflow is a
+        // cheap, safe pressure valve.
+        if (submissionsListCache.size > 300) submissionsListCache.clear();
+        submissionsListCache.set(cacheKey, {
+          expiresAt: Date.now() + SUBMISSIONS_LIST_CACHE_TTL_MS,
+          version: versionAtRead,
+          body,
+        });
+        return res.status(200).type("application/json").send(body);
       }
 
       let techResult = await storage.getSubmissions(filters);
@@ -5739,6 +5805,76 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Media token error:", error);
       return res.status(500).json({ error: "Failed to issue media token" });
+    }
+  });
+
+  // Tyler 2026-07-08 (perf) — batched variant of GET /api/media-token.
+  // A ticket with 12 photos + 12 thumbs used to fire ~24 near-simultaneous
+  // token GETs the moment the media grid mounted. This issues all tokens in
+  // ONE round trip (and, for techs/providers, one ownership query instead of
+  // one per path). Authorization parity with the single-path route:
+  //   • staff (vrs_agent/admin/super_admin) → any stored object;
+  //   • technician/provider_1099 → fetch the media columns of the caller's
+  //     OWN submissions, then verify EACH requested path individually in JS.
+  //     A row merely matching *some* path never unlocks the others — one
+  //     legitimate path can't be used to batch-mint tokens for someone
+  //     else's media. Unverified paths are silently omitted; the client
+  //     falls back to the single-path route (which 403s) for those.
+  app.post("/api/media-tokens", authenticateToken, async (req, res) => {
+    try {
+      const bodySchema = z.object({
+        paths: z
+          .array(z.string().max(500).startsWith("/objects/"))
+          .min(1)
+          .max(60),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request" });
+      }
+      const paths = Array.from(new Set(parsed.data.paths));
+
+      const user = (req as AuthenticatedRequest).user!;
+      const staffRoles = ["vrs_agent", "admin", "super_admin"];
+      let allowedPaths: string[];
+
+      if (staffRoles.includes(user.role)) {
+        allowedPaths = paths;
+      } else {
+        const pathChecks = paths.map((p) => {
+          const like = `%${p}%`;
+          return sql`(video_url = ${p} OR voice_note_url = ${p} OR photos::text LIKE ${like} OR photo_thumbnails::text LIKE ${like} OR rejected_media::text LIKE ${like})`;
+        });
+        const rows = await db.execute(sql`
+          SELECT video_url, voice_note_url,
+                 photos::text AS photos_text,
+                 photo_thumbnails::text AS thumbs_text,
+                 rejected_media::text AS rejected_text
+          FROM submissions
+          WHERE technician_id = ${user.id}
+          AND (${sql.join(pathChecks, sql` OR `)})
+        `);
+        const owned = rows.rows || [];
+        allowedPaths = paths.filter((p) =>
+          owned.some(
+            (r: any) =>
+              r.video_url === p ||
+              r.voice_note_url === p ||
+              (typeof r.photos_text === "string" && r.photos_text.includes(p)) ||
+              (typeof r.thumbs_text === "string" && r.thumbs_text.includes(p)) ||
+              (typeof r.rejected_text === "string" && r.rejected_text.includes(p)),
+          ),
+        );
+      }
+
+      const tokens: Record<string, string> = {};
+      for (const p of allowedPaths) {
+        tokens[p] = issueMediaToken(p);
+      }
+      return res.json({ tokens });
+    } catch (error) {
+      console.error("Batch media token error:", error);
+      return res.status(500).json({ error: "Failed to issue media tokens" });
     }
   });
 

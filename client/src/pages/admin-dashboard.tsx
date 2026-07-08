@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useAuth, getToken, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
+import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
@@ -280,7 +280,9 @@ function AgentStatusSection() {
   // safety net — bumped 15s → 60s to cut tab/server churn.
   const { data, isLoading } = useQuery<{ agents: AgentStatusInfo[] }>({
     queryKey: ["/api/admin/agent-status"],
-    refetchInterval: 60000,
+    // Tyler 2026-07-08 (perf) — jittered so polling clients drift apart
+    // instead of all hitting the server in the same second.
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
     staleTime: 45000,
     refetchOnWindowFocus: false,
   });
@@ -514,7 +516,15 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!res.ok) throw new Error("Failed to load ticket details");
-      return res.json();
+      const json = await res.json();
+      // Tyler 2026-07-08 (perf) — batch-prefetch media tokens as soon as the
+      // ticket detail lands, so the Media tab's grid mounts against warm
+      // tokens instead of firing one GET /api/media-token per image.
+      // Fire-and-forget; failures fall back to per-path fetches.
+      if (json?.submission) {
+        prefetchMediaTokens(collectSubmissionMediaPaths(json.submission));
+      }
+      return json;
     },
     enabled: !!ticketId && open,
   });
@@ -1146,7 +1156,9 @@ function TicketOverviewSection() {
   // dialog drills into /api/submissions/:id for heavy fields.
   const { data: allData, isLoading: allLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [adminSubmissionsUrl],
-    refetchInterval: 60000,
+    // Tyler 2026-07-08 (perf) — jittered so polling clients drift apart
+    // instead of all hitting the server in the same second.
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
     staleTime: 45000,
     refetchOnWindowFocus: false,
   });
@@ -2756,9 +2768,12 @@ export default function AdminDashboard() {
   const { subscribe } = useWebSocket(user?.role);
 
   useEffect(() => {
+    // Tyler 2026-07-08 (perf) — WS refetches are coalesced (2.5s trailing
+    // debounce via scheduleWsInvalidate) so an event burst triggers one
+    // refetch wave instead of one per event. Toasts/sounds stay immediate;
+    // mutation onSuccess invalidations elsewhere stay immediate too.
     const unsub = subscribe("agent_status_changed", () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/agent-status"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      scheduleWsInvalidate(["/api/admin/agent-status", "/api/admin/users"]);
     });
 
     const unsub2 = subscribe("new_ticket", (payload: any) => {
@@ -2767,8 +2782,7 @@ export default function AdminDashboard() {
       const desc = `SO #${payload.serviceOrder}`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
     const unsub3 = subscribe("ticket_queued", (payload: any) => {
@@ -2777,8 +2791,7 @@ export default function AdminDashboard() {
       const desc = `${payload.applianceLabel} - ${payload.warrantyLabel} (SO #${payload.serviceOrder})`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
     const unsub4 = subscribe("pending_tickets", (payload: any) => {
@@ -2786,8 +2799,7 @@ export default function AdminDashboard() {
       const desc = `SO #${payload.serviceOrder} waiting in queue`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
     // Tyler 2026-05-01 (architect fix): when another admin tab saves
@@ -2810,14 +2822,13 @@ export default function AdminDashboard() {
     // No toast/sound — admins don't need to be paged on every claim,
     // just kept in sync silently.
     const unsub6 = subscribe("ticket_claimed", () => {
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      scheduleWsInvalidate(["/api/submissions"]);
     });
     const unsub7 = subscribe("ticket_assigned", () => {
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      scheduleWsInvalidate(["/api/submissions"]);
     });
     const unsub8 = subscribe("resubmission_received", () => {
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
     // Tyler 2026-05-15: VRS reported the admin Ticket Overview showed a
@@ -2830,14 +2841,15 @@ export default function AdminDashboard() {
     // re-renders the moment the DB row commits. Silent (no toast/sound)
     // — admins don't need to be paged on every completion.
     const unsub9 = subscribe("ticket_updated", () => {
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
-      // Tyler 2026-05-20 (afternoon) — Replacement Review analytics card
-      // is sourced from a separate endpoint; invalidate alongside the main
-      // analytics so the Today/Week tiles update in real time as agents
-      // process tickets.
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/replacement-review-analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/b2b-replacement-analytics"] });
+      // Replacement Review + B2B analytics cards are sourced from separate
+      // endpoints; coalesce alongside the main analytics so the Today/Week
+      // tiles update as agents process tickets.
+      scheduleWsInvalidate([
+        "/api/submissions",
+        "/api/admin/analytics",
+        "/api/admin/replacement-review-analytics",
+        "/api/admin/b2b-replacement-analytics",
+      ]);
     });
 
     return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };

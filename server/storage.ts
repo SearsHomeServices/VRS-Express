@@ -393,6 +393,24 @@ export interface IStorage {
   }): Promise<{ deleted: number; batches: number }>;
 }
 
+// Tyler 2026-07-08 (perf) — monotonically increasing stamp for the
+// GET /api/submissions list micro-cache in routes.ts. EVERY code path that
+// writes data feeding the list view must bump it: the submissions table
+// itself AND intake_forms (the list view's intakeFormCompletedAt subquery
+// reads it). The cache stores the stamp it saw at read time and treats any
+// mismatch as a miss, so one bump instantly invalidates every cached list
+// response. In-process only — this deployment is a single Reserved-VM
+// process; if the app ever scales horizontally this must move to a shared
+// store. seed.ts also writes submissions, but only at boot / one-time
+// migrations, which is inside the cache's 2s TTL noise floor.
+let submissionsDataVersion = 0;
+export function bumpSubmissionsDataVersion(): void {
+  submissionsDataVersion++;
+}
+export function getSubmissionsDataVersion(): number {
+  return submissionsDataVersion;
+}
+
 export class DatabaseStorage implements IStorage {
   // User methods
   async getUser(id: number): Promise<User | undefined> {
@@ -461,6 +479,7 @@ export class DatabaseStorage implements IStorage {
     await db.update(submissions).set({ assignedTo: null } as any).where(eq(submissions.assignedTo, id));
     await db.update(submissions).set({ stage1ReviewedBy: null } as any).where(eq(submissions.stage1ReviewedBy, id));
     await db.update(submissions).set({ stage2ReviewedBy: null } as any).where(eq(submissions.stage2ReviewedBy, id));
+    bumpSubmissionsDataVersion();
     await db.update(feedback).set({ resolvedBy: null } as any).where(eq(feedback.resolvedBy, id));
     await db.delete(feedback).where(eq(feedback.technicianId, id));
     const result = await db.delete(users).where(eq(users.id, id)).returning();
@@ -522,6 +541,7 @@ export class DatabaseStorage implements IStorage {
       .insert(submissions)
       .values(submission)
       .returning();
+    bumpSubmissionsDataVersion();
     return result[0];
   }
 
@@ -647,6 +667,11 @@ export class DatabaseStorage implements IStorage {
       }
 
       const [created] = await tx.insert(submissions).values(submission).returning();
+      // Bumped inside the tx callback. If the commit later fails this is a
+      // harmless extra invalidation. A read racing the pre-commit window
+      // could still cache pre-commit data under the new stamp — bounded by
+      // the cache's 2s TTL, which is the intended worst case.
+      bumpSubmissionsDataVersion();
       return { submission: created, wasDuplicate: false };
     });
   }
@@ -727,6 +752,7 @@ export class DatabaseStorage implements IStorage {
       .set(data)
       .where(eq(submissions.id, id))
       .returning();
+    bumpSubmissionsDataVersion();
     return result[0];
   }
 
@@ -771,12 +797,14 @@ export class DatabaseStorage implements IStorage {
       .set(data)
       .where(and(...predicates))
       .returning();
+    bumpSubmissionsDataVersion();
     return result[0];
   }
 
   async deleteSubmission(id: number): Promise<boolean> {
     await db.delete(smsNotifications).where(eq(smsNotifications.submissionId, id));
     const result = await db.delete(submissions).where(eq(submissions.id, id)).returning();
+    bumpSubmissionsDataVersion();
     return result.length > 0;
   }
 
@@ -2268,6 +2296,8 @@ export class DatabaseStorage implements IStorage {
 
   async createIntakeForm(data: InsertIntakeForm): Promise<IntakeForm> {
     const [row] = await db.insert(intakeForms).values(data).returning();
+    // intake_forms feeds the list view's intakeFormCompletedAt subquery.
+    bumpSubmissionsDataVersion();
     return row;
   }
 
@@ -2341,6 +2371,8 @@ export class DatabaseStorage implements IStorage {
       }
       // 3. Insert.
       const [row] = await tx.insert(intakeForms).values(data).returning();
+      // intake_forms feeds the list view's intakeFormCompletedAt subquery.
+      bumpSubmissionsDataVersion();
       return { ok: true as const, intakeForm: row };
     });
   }
@@ -2375,6 +2407,7 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .returning();
+    bumpSubmissionsDataVersion();
     return updated;
   }
 

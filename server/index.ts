@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -25,6 +26,23 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+// Tyler 2026-07-08 (perf) — gzip JSON/static responses. The /api/submissions
+// list is ~1MB+ uncompressed in prod at 1000 rows; gzip cuts JSON ~75-85%.
+// HARD-SKIP /objects/* : downloadObject streams Range/206 media responses
+// (jpeg/mp4 already compressed, and some uploads carry
+// application/octet-stream which mime-db marks compressible) — gzipping a
+// 206 partial would corrupt video seeking. ETag/304 behavior is unchanged:
+// express computes the weak ETag on the uncompressed body and evaluates
+// req.fresh before compression touches the stream.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path.startsWith("/objects/")) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

@@ -193,3 +193,50 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// ---------------------------------------------------------------------------
+// Tyler 2026-07-08 (perf) — WS invalidation coalescing + poll de-syncing.
+//
+// Prod logs showed synchronized 1-1.9s request bursts: every WS ticket event
+// (new_ticket, ticket_claimed, ...) made EVERY connected dashboard refetch
+// all /api/submissions queries at the same instant, and the 60s polls were
+// phase-aligned on top. Two mitigations:
+//
+// 1. scheduleWsInvalidate(prefixes): trailing-debounce (2.5s) invalidator.
+//    A burst of WS events within the window collapses into ONE refetch wave
+//    per client. Toasts/sounds stay immediate at the call site; only the
+//    refetch is deferred. Mutation onSuccess invalidations (the user's OWN
+//    actions) must keep calling queryClient.invalidateQueries directly —
+//    never route those through here.
+//
+// 2. JITTERED_POLL_INTERVAL_MS: 60s +0-15s picked once per page load so
+//    polling clients drift apart instead of stampeding in the same second.
+//
+// Claim-race safety: worst case an agent acts on a ~2.5s-stale queue row;
+// the server's atomic status guard (updateSubmissionIfStatus) rejects it and
+// the agent's own mutation error/refetch path recovers immediately.
+// ---------------------------------------------------------------------------
+
+export const JITTERED_POLL_INTERVAL_MS =
+  60_000 + Math.floor(Math.random() * 15_000);
+
+const WS_INVALIDATE_DEBOUNCE_MS = 2_500;
+const pendingWsInvalidatePrefixes = new Set<string>();
+let wsInvalidateTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleWsInvalidate(prefixes: string[]) {
+  for (const p of prefixes) pendingWsInvalidatePrefixes.add(p);
+  if (wsInvalidateTimer) return;
+  wsInvalidateTimer = setTimeout(() => {
+    wsInvalidateTimer = null;
+    const toInvalidate = Array.from(pendingWsInvalidatePrefixes);
+    pendingWsInvalidatePrefixes.clear();
+    queryClient.invalidateQueries({
+      predicate: (q) => {
+        const k = q.queryKey[0];
+        if (typeof k !== "string") return false;
+        return toInvalidate.some((p) => k.startsWith(p));
+      },
+    });
+  }, WS_INVALIDATE_DEBOUNCE_MS);
+}

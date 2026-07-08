@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useAuth, buildMediaUrl, buildMediaUrls } from "@/lib/auth";
+import { useAuth, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
-import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
 import {
@@ -512,8 +512,10 @@ export default function AgentDashboard() {
       const desc = `SO #${payload.serviceOrder}`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      // Tyler 2026-07-08 (perf) — WS refetches are coalesced (2.5s trailing
+      // debounce) so an event burst triggers one refetch wave instead of one
+      // per event. Mutation onSuccess invalidations stay immediate.
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub2 = subscribe("ticket_claimed", (payload: any) => {
@@ -522,8 +524,7 @@ export default function AgentDashboard() {
         description: payload?.serviceOrder ? `SO #${payload.serviceOrder} is no longer available.` : "A queued ticket has been claimed by another agent.",
         duration: 5000,
       });
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub3 = subscribe("ticket_queued", (payload: any) => {
@@ -532,8 +533,7 @@ export default function AgentDashboard() {
       const desc = `${payload.applianceLabel} - ${payload.warrantyLabel} (SO #${payload.serviceOrder})`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub4 = subscribe("pending_tickets", (payload: any) => {
@@ -541,8 +541,7 @@ export default function AgentDashboard() {
       const desc = `SO #${payload.serviceOrder} waiting in queue`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub5 = subscribe("resubmission_received", (payload: any) => {
@@ -551,8 +550,7 @@ export default function AgentDashboard() {
       const desc = `SO #${payload.serviceOrder} — ${payload.applianceLabel} (${payload.warrantyLabel}). A technician resubmitted a ticket you previously reviewed.`;
       toast({ title, description: desc, duration: 10000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub6 = subscribe("ticket_assigned", (payload: any) => {
@@ -561,8 +559,7 @@ export default function AgentDashboard() {
       const desc = payload.message || `SO #${payload.serviceOrder} has been assigned to you by an admin.`;
       toast({ title, description: desc, duration: 8000 });
       showBrowserNotification(title, desc);
-      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
     const unsub7 = subscribe("own_status_changed", (payload: any) => {
@@ -890,7 +887,9 @@ export default function AgentDashboard() {
   // a megabyte every time the user switches tabs.
   const { data: submissionsData, isLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [submissionsUrl],
-    refetchInterval: 60000,
+    // Tyler 2026-07-08 (perf) — jittered so polling clients drift apart
+    // instead of all hitting the server in the same second.
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
     staleTime: 45000,
     refetchOnWindowFocus: false,
   });
@@ -917,7 +916,7 @@ export default function AgentDashboard() {
 
   const { data: statsData } = useQuery<{ queueCount: number; pendingCount: number; completedToday: number; nlaQueueCount?: number; nlaPendingCount?: number; nlaCompletedToday?: number }>({
     queryKey: ["/api/agent/stats"],
-    refetchInterval: 60000,
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
     staleTime: 45000,
     refetchOnWindowFocus: false,
   });
@@ -1070,6 +1069,17 @@ export default function AgentDashboard() {
   // Backward-compatible alias retained so any callsite still using the old
   // name continues to work; both reference the same snapshot-fallback value.
   const effectiveSelectedSubmission = selectedSubmission;
+
+  // Tyler 2026-07-08 (perf) — batch-prefetch media tokens the moment the
+  // selected ticket's media list is known (slim row carries photos/thumbs/
+  // video/voice), so the grid mounts against warm tokens instead of firing
+  // one GET /api/media-token per image. Fire-and-forget; failures fall back
+  // to the per-path fetch inside getMediaToken.
+  useEffect(() => {
+    if (selectedSubmission) {
+      prefetchMediaTokens(collectSubmissionMediaPaths(selectedSubmission));
+    }
+  }, [selectedSubmission]);
 
   // Reset intake form working values when switching submissions so we don't
   // leak data between tickets. Also clears the pending auto-fire flag so a
