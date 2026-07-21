@@ -63,9 +63,16 @@ Flow: decisions are attributed to the seeded **`VRS_EXTERNAL_API` system account
 
 Consequences to know:
 - A ticket already claimed by a **live agent** returns 403 — external callers cannot override a human's active review. This is intentional.
-- All internal business rules apply unchanged: `approve` requires today's RGC code to be set (400 if not); AHS/First American finals require `authCode`; NLA P-card escalated tickets are claim-blocked; etc.
+- All internal business rules apply unchanged: `approve` requires today's RGC code to be set (400 if not); AHS/First American finals require `authCode`; every NLA resolution action requires `technicianMessage` (400 "Instructions for technician are required" if missing — and the failed decision triggers the auto-claim rollback like any other 4xx); NLA P-card escalated tickets are claim-blocked; etc.
+- A decision on a ticket already in a terminal state (completed/rejected/invalid) returns **400** "Ticket must be in pending status to process" — not 409.
 - The tech receives the claim SMS and the decision SMS back-to-back on an auto-claimed decision.
 - Terminal rejections show `agent: null` in responses — the internal reject flow clears `assignedTo` (same as human-agent rejects); `reviewedBy` in the audit trail records the decision-maker.
+
+**Warranty-gate normalization (2026-07-21):** the AHS/First American detection in the internal process handlers matches `warrantyProvider || warrantyType` (lowercased) against the substrings "american home shield" / "ahs" / "first american". Stored `warrantyType` enum values use underscores (`american_home_shield`, `first_american`), which never matched — so an external create with `warrantyType: "american_home_shield"` and no `warrantyProvider` skipped the external-auth-code requirement and completed with the RGC code. All four gate sites (`isTwoStage`, `b2b_approved_replacement`, `approve`, `approve_replacement_review`) now normalize underscores to spaces before matching. This also tightens internal tickets stored with an underscore warrantyType and empty provider. Two companion changes keep client and server in agreement: (a) the agent dashboard's `needsExternalAuth` / `getProviderAuthLabel` now mirror the exact server gate (`warrantyProvider || warrantyType`, lowercased, underscores normalized) so such tickets render the two-stage flow with the auth-code input; (b) the external create adapter defaults `warrantyProvider` to "American Home Shield" / "First American" when the caller omits it, so externally created rows carry a human-readable provider like internal ones.
+
+## Public docs page
+
+`GET /api/external/v1/docs` — unauthenticated, static self-contained HTML integration guide (`server/external-api-docs.ts`, `EXTERNAL_API_DOCS_HTML`). Placeholder keys only, `noindex`, own 30/min rate-limit bucket so doc fetches never consume the read budget. Shareable URL: `https://vrs-auth-tool.replit.app/api/external/v1/docs`. Keep it in sync when the contract changes.
 
 ## The `VRS_EXTERNAL_API` system account
 

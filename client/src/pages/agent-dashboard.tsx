@@ -1656,7 +1656,10 @@ export default function AgentDashboard() {
 
   const needsExternalAuth = (sub: SubmissionWithTech | null): boolean => {
     if (!sub) return false;
-    const provider = (sub.warrantyProvider || "").toLowerCase();
+    // Mirrors the server-side gate exactly: warrantyProvider first, falling
+    // back to warrantyType, with underscores normalized (external-API creates
+    // can leave warrantyProvider empty while warrantyType='american_home_shield').
+    const provider = ((sub.warrantyProvider || (sub as any).warrantyType || "") as string).toLowerCase().replace(/_/g, " ");
     return ["american home shield", "ahs", "first american"].some(w => provider.includes(w));
   };
 
@@ -1667,7 +1670,7 @@ export default function AgentDashboard() {
 
   const getProviderAuthLabel = (sub: SubmissionWithTech | null): string => {
     if (!sub) return "Authorization Code";
-    const provider = (sub.warrantyProvider || "").toLowerCase();
+    const provider = ((sub.warrantyProvider || (sub as any).warrantyType || "") as string).toLowerCase().replace(/_/g, " ");
     if (provider.includes("american home shield") || provider.includes("ahs")) return "AHS Authorization Code";
     if (provider.includes("first american")) return "First American Authorization Code";
     return "Authorization Code";

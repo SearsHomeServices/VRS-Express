@@ -20,6 +20,7 @@ import {
   EXTERNAL_API_RAC_ID,
   SERVICE_ORDER_REGEX,
 } from "./external-api";
+import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -2326,7 +2327,7 @@ export async function registerRoutes(
         }, authReq.user!.id);
       }
 
-      const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+      const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase().replace(/_/g, " ");
       const isTwoStage = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
       const isNla = submission.requestType === "parts_nla";
 
@@ -2442,7 +2443,7 @@ export async function registerRoutes(
         if (submission.requestType === "parts_nla") {
           return res.status(400).json({ error: "B2B Approved Replacement is not used on NLA tickets." });
         }
-        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase().replace(/_/g, " ");
         const isB2bWarranty = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
         if (!isB2bWarranty) {
           return res.status(400).json({ error: "B2B Approved Replacement is only available on AHS / First American tickets." });
@@ -2522,7 +2523,7 @@ export async function registerRoutes(
           if (submission.requestType === "parts_nla") {
             authCode = rgcCode;
           } else {
-            const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+            const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase().replace(/_/g, " ");
             const needsExternalAuth = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
 
             if (needsExternalAuth) {
@@ -2573,7 +2574,7 @@ export async function registerRoutes(
         }
         const rgcCode = todayRgcCode.code;
 
-        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase();
+        const warrantyCompany = (submission.warrantyProvider || submission.warrantyType || "").toLowerCase().replace(/_/g, " ");
         const needsExternalAuth = ["american home shield", "ahs", "first american"].some(w => warrantyCompany.includes(w));
         if (needsExternalAuth) {
           if (!authCode || !authCode.trim()) {
@@ -3287,6 +3288,14 @@ export async function registerRoutes(
   const externalReadRateLimit = makeExternalRateLimiter("read", 60);
   const externalWriteRateLimit = makeExternalRateLimiter("write", 10);
 
+  // Public integration guide — deliberately unauthenticated so the URL can be
+  // shared with the external team. Static string, no secrets, own light rate
+  // limit so doc fetches never eat the real caller's read budget.
+  const externalDocsRateLimit = makeExternalRateLimiter("docs", 30);
+  app.get("/api/external/v1/docs", externalDocsRateLimit, (_req, res) => {
+    res.type("html").send(EXTERNAL_API_DOCS_HTML);
+  });
+
   // Full lookup by service order — every workflow (authorization, infestation,
   // NLA), every status, newest first. Bounded projection only.
   app.get("/api/external/v1/service-orders/:so", requireExternalApiKey, externalReadRateLimit, async (req, res) => {
@@ -3363,12 +3372,20 @@ export async function registerRoutes(
 
       // Rebuild the body with ONLY internal-schema fields, then invoke the
       // same handler the PWA uses, impersonating the resolved technician.
+      // warrantyProvider default: internal PWA submits always carry a
+      // human-readable provider label; external callers may omit it. Derive
+      // one from warrantyType so AHS/First American tickets render the
+      // two-stage flow in the agent dashboard like internal ones do.
+      const defaultProviderLabels: Record<string, string> = {
+        american_home_shield: "American Home Shield",
+        first_american: "First American",
+      };
       req.body = {
         serviceOrder: parsed.data.serviceOrder,
         applianceType: parsed.data.applianceType,
         requestType: parsed.data.requestType,
         warrantyType: parsed.data.warrantyType,
-        warrantyProvider: parsed.data.warrantyProvider,
+        warrantyProvider: parsed.data.warrantyProvider || defaultProviderLabels[parsed.data.warrantyType],
         issueDescription: parsed.data.issueDescription,
         estimateAmount: parsed.data.estimateAmount,
         partNumbers: parsed.data.partNumbers,
