@@ -44,7 +44,7 @@ Body (`externalCreateSubmissionSchema`):
 
 **Deliberately not accepted in v1:** media fields (`photos`, `videoUrls`, `voiceNoteUrl`, thumbnails — external `/objects/` path injection risk) and `resubmissionOf` (ownership/chain semantics an external caller can't satisfy). Agents will see these tickets without photos.
 
-The submission is attributed to the real technician user — SO duplicate/idempotency guards, Snowflake ProcID lookup, queue broadcast, and the "received" SMS to the tech all run normally. Internal handler statuses pass through (e.g. 409 duplicate-SO, 201 created, 200 idempotent replay).
+The submission is attributed to the real technician user — SO duplicate/idempotency guards, Snowflake ProcID lookup, queue broadcast, and the "received" SMS to the tech all run normally. Internal handler statuses pass through (e.g. 409 duplicate-SO, 201 created, 200 idempotent replay). On success the row is re-read through `getSubmissionByIdForExternal` so the write response carries the same nested `{technician, agent}` shape as the read routes (falls back to the flat projection only if the re-read misses).
 
 ### POST `/api/external/v1/submissions/:id/decision` — record a decision
 Body (`externalDecisionSchema`): `action` plus the same optional fields agents send (`agentNotes`, `technicianMessage`, `authCode`, `rejectionReasons`, `invalidReason`, `invalidInstructions`, `nlaFoundPartNumber`, `nlaResolution`).
@@ -55,12 +55,17 @@ Allowlisted actions:
 - Action-family must match the ticket type → 400 `ACTION_MISMATCH`.
 - **Deferred from v1** (need capabilities the system account doesn't have): `approve_replacement_review`, `b2b_approved_replacement`, `nla_part_found_vrs_ordered`, `nla_escalate_to_pcard`, `nla_pcard_confirm`, `nla_rfr_eligible`.
 
-Flow: decisions are attributed to the seeded **`VRS_EXTERNAL_API` system account** (503 `NOT_CONFIGURED` if missing). A `queued` ticket is auto-claimed by that account first via the real claim handler (fires the normal claim SMS + broadcasts + claim/optimistic-lock conflict handling — a lost race returns the claim handler's 409/403 as-is). Then the real process / process-nla handler runs.
+Flow: decisions are attributed to the seeded **`VRS_EXTERNAL_API` system account** (503 `NOT_CONFIGURED` if missing). A `queued` ticket is auto-claimed by that account first via the real claim handler (fires the normal claim SMS + broadcasts + claim/optimistic-lock conflict handling — a lost race returns the claim handler's 409/403 as-is). Then the real process / process-nla handler runs. On success the row is re-read through `getSubmissionByIdForExternal` for the nested read shape.
+
+**Auto-claim rollback:** if the decision step fails (4xx/5xx or throw) *after* the auto-claim succeeded, the route returns the ticket to the general queue (`updateSubmissionIfStatus(["pending"] → queued, assignedTo: null, expectAssignee = system account)`) and re-broadcasts `ticket_queued` to the right division (NLA-aware) — otherwise the ticket would strand assigned to the system account, invisible to human agents. The `expectAssignee` guard means a concurrent legitimate move wins and the rollback becomes a no-op. Verified: `approve` without today's RGC → 400 and the ticket lands back in queue.
+
+**System-account status reset:** the claim handler flips the actor to `working` and the process handler to `online` — real agent lifecycle states that would leave the system account lingering on the admin live board. A `finally` block parks it back to `offline` after every decision flow (DB update + WS status map + `agent_status_changed` broadcast to admins, only when it isn't already offline).
 
 Consequences to know:
 - A ticket already claimed by a **live agent** returns 403 — external callers cannot override a human's active review. This is intentional.
 - All internal business rules apply unchanged: `approve` requires today's RGC code to be set (400 if not); AHS/First American finals require `authCode`; NLA P-card escalated tickets are claim-blocked; etc.
 - The tech receives the claim SMS and the decision SMS back-to-back on an auto-claimed decision.
+- Terminal rejections show `agent: null` in responses — the internal reject flow clears `assignedTo` (same as human-agent rejects); `reviewedBy` in the audit trail records the decision-maker.
 
 ## The `VRS_EXTERNAL_API` system account
 
