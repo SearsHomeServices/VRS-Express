@@ -276,6 +276,7 @@ export interface IStorage {
     cursor?: number; // return rows with id < cursor (descending id pagination)
     limit: number;
   }): Promise<ExternalSubmissionRow[]>;
+  getSubmissionByIdForExternal(id: number): Promise<ExternalSubmissionRow | undefined>;
   // Idempotency guard for double-submit / network-retry scenarios.
   // Returns the most recent submission by this tech for this SO# created
   // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
@@ -1641,6 +1642,22 @@ export class DatabaseStorage implements IStorage {
     }
     const rows = await query.orderBy(desc(submissions.id)).limit(limit);
     return rows.map((r) => this.mapExternalRow(r));
+  }
+
+  // Single-row variant so the external WRITE routes can answer with the same
+  // nested {technician, agent} shape as the read routes (the internal
+  // handlers return the raw row, which has flat technicianId/assignedTo).
+  async getSubmissionByIdForExternal(id: number): Promise<ExternalSubmissionRow | undefined> {
+    const tech = alias(users, "tech");
+    const agent = alias(users, "agent");
+    const rows = await db
+      .select(this.externalRowSelection(tech, agent))
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .leftJoin(agent, eq(agent.id, submissions.assignedTo))
+      .where(eq(submissions.id, id))
+      .limit(1);
+    return rows.length ? this.mapExternalRow(rows[0]) : undefined;
   }
 
   // 2026-04-30 — Tyler request: server-side idempotency for double-submit /

@@ -3387,7 +3387,10 @@ export async function registerRoutes(
       await createSubmissionHandler(req, capturedRes);
       const body: any = captured.body;
       if (captured.statusCode < 400 && body?.submission) {
-        return res.status(captured.statusCode).json({ data: projectSubmissionForExternal(body.submission) });
+        // Re-read through the external projection so write responses share
+        // the same nested {technician, agent} shape as the read routes.
+        const row = await storage.getSubmissionByIdForExternal(body.submission.id);
+        return res.status(captured.statusCode).json({ data: row ?? projectSubmissionForExternal(body.submission) });
       }
       return res.status(captured.statusCode).json(body ?? { error: "Create failed" });
     } catch (err) {
@@ -3440,25 +3443,91 @@ export async function registerRoutes(
       };
       req.body = parsed.data;
 
-      if (submission.ticketStatus === "queued") {
-        const { res: claimRes, captured: claimCaptured } = makeCapturedResponse();
-        await claimSubmissionHandler(req, claimRes);
-        if (claimCaptured.statusCode >= 400) {
-          return res.status(claimCaptured.statusCode).json(claimCaptured.body ?? { error: "Auto-claim failed" });
-        }
-      }
+      let autoClaimed = false;
 
-      const { res: procRes, captured } = makeCapturedResponse();
-      if (isNlaTicket) {
-        await processNlaSubmissionHandler(req, procRes);
-      } else {
-        await processSubmissionHandler(req, procRes);
+      // If the decision step fails AFTER we auto-claimed, return the ticket
+      // to the general queue — otherwise it strands assigned to the system
+      // account, invisible to human agents, with no decision recorded.
+      // Guarded by expectAssignee so a concurrent legitimate move wins.
+      const rollbackAutoClaim = async () => {
+        try {
+          const reverted = await storage.updateSubmissionIfStatus(id, ["pending"], {
+            ticketStatus: "queued",
+            statusChangedAt: new Date(),
+            assignedTo: null,
+            updatedAt: new Date(),
+          } as any, sysUser.id);
+          if (!reverted) return; // already moved by someone else — leave it
+          const payload = {
+            submissionId: reverted.id,
+            serviceOrder: reverted.serviceOrder,
+            applianceType: reverted.applianceType,
+            applianceLabel: getDivisionLabel(reverted.applianceType),
+            warrantyLabel: getWarrantyLabel(reverted.warrantyType),
+          };
+          if (reverted.requestType === "parts_nla") {
+            broadcastToNlaDivisionAgents(reverted.applianceType, { type: "ticket_queued", payload });
+          } else {
+            broadcastToDivisionAgents(reverted.applianceType, { type: "ticket_queued", payload });
+          }
+          console.warn(`[external-api] decision failed after auto-claim — submission ${id} returned to queue`);
+        } catch (rbErr) {
+          console.error(`[external-api] auto-claim rollback failed for submission ${id}:`, rbErr);
+        }
+      };
+
+      // The claim handler flips the actor to "working" and the process
+      // handler to "online" — real agent lifecycle states. The system
+      // account never has a session, so park it back on "offline" after
+      // every decision flow so it doesn't linger on the admin live board.
+      const resetSystemAccountStatus = async () => {
+        try {
+          const fresh = await storage.getUser(sysUser.id);
+          if (fresh && (fresh as any).agentStatus !== "offline") {
+            await storage.updateUser(sysUser.id, { agentStatus: "offline", updatedAt: new Date() } as any);
+            updateClientStatus(sysUser.id, "offline");
+            broadcastToAdmins({
+              type: "agent_status_changed",
+              payload: { userId: sysUser.id, name: sysUser.name, status: "offline" },
+            });
+          }
+        } catch (stErr) {
+          console.error("[external-api] failed to reset system account status:", stErr);
+        }
+      };
+
+      try {
+        if (submission.ticketStatus === "queued") {
+          const { res: claimRes, captured: claimCaptured } = makeCapturedResponse();
+          await claimSubmissionHandler(req, claimRes);
+          if (claimCaptured.statusCode >= 400) {
+            return res.status(claimCaptured.statusCode).json(claimCaptured.body ?? { error: "Auto-claim failed" });
+          }
+          autoClaimed = true;
+        }
+
+        const { res: procRes, captured } = makeCapturedResponse();
+        if (isNlaTicket) {
+          await processNlaSubmissionHandler(req, procRes);
+        } else {
+          await processSubmissionHandler(req, procRes);
+        }
+        const body: any = captured.body;
+        if (captured.statusCode >= 400 && autoClaimed) {
+          await rollbackAutoClaim();
+        }
+        if (captured.statusCode < 400 && body?.submission) {
+          // Same nested {technician, agent} shape as the read routes.
+          const row = await storage.getSubmissionByIdForExternal(id);
+          return res.status(captured.statusCode).json({ data: row ?? projectSubmissionForExternal(body.submission) });
+        }
+        return res.status(captured.statusCode).json(body ?? { error: "Decision failed" });
+      } catch (innerErr) {
+        if (autoClaimed) await rollbackAutoClaim();
+        throw innerErr;
+      } finally {
+        await resetSystemAccountStatus();
       }
-      const body: any = captured.body;
-      if (captured.statusCode < 400 && body?.submission) {
-        return res.status(captured.statusCode).json({ data: projectSubmissionForExternal(body.submission) });
-      }
-      return res.status(captured.statusCode).json(body ?? { error: "Decision failed" });
     } catch (err) {
       console.error(`[external-api] POST /v1/submissions/${id}/decision failed:`, err);
       return res.status(500).json({ error: "Decision failed" });
