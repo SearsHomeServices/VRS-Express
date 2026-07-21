@@ -7,6 +7,19 @@ import { storage, db, getSubmissionsDataVersion } from "./storage";
 import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
+import {
+  makeExternalKeyMiddleware,
+  makeExternalRateLimiter,
+  makeCapturedResponse,
+  projectSubmissionForExternal,
+  externalCreateSubmissionSchema,
+  externalDecisionSchema,
+  externalListQuerySchema,
+  EXTERNAL_AUTH_ACTIONS,
+  EXTERNAL_NLA_ACTIONS,
+  EXTERNAL_API_RAC_ID,
+  SERVICE_ORDER_REGEX,
+} from "./external-api";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -1040,7 +1053,11 @@ export async function registerRoutes(
     next();
   });
 
-  app.post("/api/submissions", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
+  // Named handler (2026-07-21): also invoked by the external v1 API adapter
+  // (POST /api/external/v1/submissions) with an impersonated technician user.
+  // Body must stay byte-identical to the original inline handler — every side
+  // effect (Snowflake lookup, SMS, WS broadcast, micro-cache bump) is shared.
+  const createSubmissionHandler = async (req: Request, res: Response) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const parsed = createSubmissionSchema.safeParse(req.body);
@@ -1533,7 +1550,9 @@ export async function registerRoutes(
       console.error("Create submission error:", error);
       return res.status(500).json({ error: "Failed to create submission" });
     }
-  });
+  };
+
+  app.post("/api/submissions", authenticateToken, requireRole("technician", "provider_1099"), createSubmissionHandler);
 
   // Tyler 2026-07-08 (perf) — 2s micro-cache for the STAFF branch of
   // GET /api/submissions. Agent/admin dashboards poll this endpoint and
@@ -2205,7 +2224,9 @@ export async function registerRoutes(
   // TICKET CLAIM ROUTE — Agent claims a queued ticket
   // ========================================================================
 
-  app.patch("/api/submissions/:id/claim", authenticateToken, requireRole("vrs_agent", "admin"), async (req, res) => {
+  // Named handler (2026-07-21): also invoked by the external v1 decision
+  // adapter for auto-claim by the VRS External API system account.
+  const claimSubmissionHandler = async (req: Request, res: Response) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const id = parseInt(req.params.id as string);
@@ -2335,7 +2356,9 @@ export async function registerRoutes(
       console.error("Claim ticket error:", error);
       return res.status(500).json({ error: "Failed to claim ticket" });
     }
-  });
+  };
+
+  app.patch("/api/submissions/:id/claim", authenticateToken, requireRole("vrs_agent", "admin"), claimSubmissionHandler);
 
   // ========================================================================
   // UNIFIED TICKET PROCESS ROUTE — Approve / Reject / Invalid
@@ -2356,7 +2379,9 @@ export async function registerRoutes(
     invalidInstructions: z.string().optional(),
   });
 
-  app.patch("/api/submissions/:id/process", authenticateToken, requireRole("vrs_agent", "admin"), async (req, res) => {
+  // Named handler (2026-07-21): also invoked by the external v1 decision
+  // adapter with the VRS External API system account impersonated.
+  const processSubmissionHandler = async (req: Request, res: Response) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const id = parseInt(req.params.id as string);
@@ -2853,7 +2878,9 @@ export async function registerRoutes(
       console.error("Process ticket error:", error);
       return res.status(500).json({ error: "Failed to process ticket" });
     }
-  });
+  };
+
+  app.patch("/api/submissions/:id/process", authenticateToken, requireRole("vrs_agent", "admin"), processSubmissionHandler);
 
   // ========================================================================
   // NLA TICKET PROCESS ROUTE — NLA-specific resolution actions
@@ -2880,7 +2907,9 @@ export async function registerRoutes(
     invalidInstructions: z.string().optional(),
   });
 
-  app.patch("/api/submissions/:id/process-nla", authenticateToken, requireRole("vrs_agent", "admin"), async (req, res) => {
+  // Named handler (2026-07-21): also invoked by the external v1 decision
+  // adapter with the VRS External API system account impersonated.
+  const processNlaSubmissionHandler = async (req: Request, res: Response) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const id = parseInt(req.params.id as string);
@@ -3236,6 +3265,203 @@ export async function registerRoutes(
     } catch (error) {
       console.error("NLA process error:", error);
       return res.status(500).json({ error: "Failed to process NLA ticket" });
+    }
+  };
+
+  app.patch("/api/submissions/:id/process-nla", authenticateToken, requireRole("vrs_agent", "admin"), processNlaSubmissionHandler);
+
+  // ==========================================================================
+  // EXTERNAL API v1 — machine-to-machine REST surface (x-api-key auth)
+  // --------------------------------------------------------------------------
+  // Reads:  VRS_LOOKUP_API_KEY (same key as the legacy /nla lookup above)
+  // Writes: VRS_EXTERNAL_WRITE_API_KEY (separate, higher-privilege key)
+  // Write routes are thin adapters over the SAME internal handlers used by the
+  // PWA/dashboard (createSubmissionHandler, claimSubmissionHandler,
+  // processSubmissionHandler, processNlaSubmissionHandler), so SMS, WebSocket
+  // broadcasts, audit stamps, optimistic locking, and the submissions
+  // micro-cache bump behave identically to an in-app action. Registered AFTER
+  // those consts (they are referenced by value at registration time — TDZ).
+  // See docs/architecture/external-api.md for the full contract.
+  // ==========================================================================
+  const requireExternalWriteKey = makeExternalKeyMiddleware("VRS_EXTERNAL_WRITE_API_KEY");
+  const externalReadRateLimit = makeExternalRateLimiter("read", 60);
+  const externalWriteRateLimit = makeExternalRateLimiter("write", 10);
+
+  // Full lookup by service order — every workflow (authorization, infestation,
+  // NLA), every status, newest first. Bounded projection only.
+  app.get("/api/external/v1/service-orders/:so", requireExternalApiKey, externalReadRateLimit, async (req, res) => {
+    const so = String(req.params.so ?? "");
+    if (!SERVICE_ORDER_REGEX.test(so)) {
+      return res.status(400).json({
+        error: "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)",
+        code: "BAD_SERVICE_ORDER",
+      });
+    }
+    try {
+      const rows = await storage.getSubmissionsByServiceOrderForExternal(so);
+      return res.json({ data: { serviceOrder: so, submissionCount: rows.length, submissions: rows } });
+    } catch (err) {
+      console.error(`[external-api] GET /v1/service-orders/${so} failed:`, err);
+      return res.status(500).json({ error: "Lookup failed" });
+    }
+  });
+
+  // Filterable list / polling endpoint. Cursor pagination: rows come back in
+  // descending id order; pass nextCursor as ?cursor= to fetch the next page.
+  app.get("/api/external/v1/submissions", requireExternalApiKey, externalReadRateLimit, async (req, res) => {
+    const parsed = externalListQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message, code: "BAD_QUERY" });
+    }
+    try {
+      const rows = await storage.getSubmissionsForExternal(parsed.data);
+      const nextCursor = rows.length === parsed.data.limit ? rows[rows.length - 1].id : null;
+      return res.json({ data: rows, nextCursor });
+    } catch (err) {
+      console.error("[external-api] GET /v1/submissions failed:", err);
+      return res.status(500).json({ error: "List failed" });
+    }
+  });
+
+  // Create a request on behalf of a real technician (resolved by LDAP id).
+  // Media fields and resubmissionOf are deliberately NOT accepted in v1 —
+  // see externalCreateSubmissionSchema. The submission is attributed to the
+  // real tech user, so the received/claim/decision SMS chain reaches them.
+  app.post("/api/external/v1/submissions", requireExternalWriteKey, externalWriteRateLimit, async (req, res) => {
+    const parsed = externalCreateSubmissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message, code: "BAD_REQUEST" });
+    }
+    try {
+      const technician = await storage.getTechnicianByLdapId(parsed.data.technicianLdapId);
+      if (!technician) {
+        return res.status(422).json({
+          error: `Unknown technician LDAP id: ${parsed.data.technicianLdapId}`,
+          code: "UNKNOWN_TECHNICIAN",
+        });
+      }
+      if (!technician.isActive) {
+        return res.status(422).json({
+          error: `Technician ${parsed.data.technicianLdapId} is inactive`,
+          code: "INACTIVE_TECHNICIAN",
+        });
+      }
+      const phone = parsed.data.phone || technician.phone;
+      if (!phone) {
+        return res.status(400).json({
+          error: "No phone number — technician has none on file, so `phone` is required",
+          code: "NO_PHONE",
+        });
+      }
+      const techUser = await storage.getOrCreateTechUser(technician.ldapId, technician.name || technician.ldapId, technician.phone || "");
+      if (techUser.role !== "technician") {
+        return res.status(409).json({
+          error: "The resolved account is not a technician account",
+          code: "NOT_A_TECHNICIAN",
+        });
+      }
+
+      // Rebuild the body with ONLY internal-schema fields, then invoke the
+      // same handler the PWA uses, impersonating the resolved technician.
+      req.body = {
+        serviceOrder: parsed.data.serviceOrder,
+        applianceType: parsed.data.applianceType,
+        requestType: parsed.data.requestType,
+        warrantyType: parsed.data.warrantyType,
+        warrantyProvider: parsed.data.warrantyProvider,
+        issueDescription: parsed.data.issueDescription,
+        estimateAmount: parsed.data.estimateAmount,
+        partNumbers: parsed.data.partNumbers,
+        phone,
+        additionalRequest: parsed.data.additionalRequest,
+      };
+      (req as AuthenticatedRequest).user = {
+        id: techUser.id,
+        email: techUser.email ?? "",
+        name: techUser.name,
+        role: techUser.role,
+        ldapId: techUser.racId ?? undefined,
+        isTechnician: true,
+      };
+      const { res: capturedRes, captured } = makeCapturedResponse();
+      await createSubmissionHandler(req, capturedRes);
+      const body: any = captured.body;
+      if (captured.statusCode < 400 && body?.submission) {
+        return res.status(captured.statusCode).json({ data: projectSubmissionForExternal(body.submission) });
+      }
+      return res.status(captured.statusCode).json(body ?? { error: "Create failed" });
+    } catch (err) {
+      console.error("[external-api] POST /v1/submissions failed:", err);
+      return res.status(500).json({ error: "Create failed" });
+    }
+  });
+
+  // Record a decision like an agent would. Queued tickets are auto-claimed by
+  // the VRS External API system account first (fires the normal claim SMS +
+  // broadcasts). A ticket already claimed by a live agent returns 403 —
+  // external callers cannot override a human agent's active review.
+  app.post("/api/external/v1/submissions/:id/decision", requireExternalWriteKey, externalWriteRateLimit, async (req, res) => {
+    const id = parseInt(req.params.id as string);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid submission ID", code: "BAD_ID" });
+    }
+    const parsed = externalDecisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message, code: "BAD_REQUEST" });
+    }
+    try {
+      const submission = await storage.getSubmission(id);
+      if (!submission) {
+        return res.status(404).json({ error: "Submission not found", code: "NOT_FOUND" });
+      }
+      const isNlaTicket = submission.requestType === "parts_nla";
+      const isNlaAction = (EXTERNAL_NLA_ACTIONS as readonly string[]).includes(parsed.data.action);
+      if (isNlaTicket !== isNlaAction) {
+        return res.status(400).json({
+          error: isNlaTicket
+            ? `NLA tickets accept only: ${EXTERNAL_NLA_ACTIONS.join(", ")}`
+            : `Authorization/infestation tickets accept only: ${EXTERNAL_AUTH_ACTIONS.join(", ")}`,
+          code: "ACTION_MISMATCH",
+        });
+      }
+      const sysUser = await storage.getUserByRacId(EXTERNAL_API_RAC_ID);
+      if (!sysUser) {
+        return res.status(503).json({
+          error: "External API system account is missing — contact an administrator",
+          code: "NOT_CONFIGURED",
+        });
+      }
+
+      (req as AuthenticatedRequest).user = {
+        id: sysUser.id,
+        email: sysUser.email ?? "",
+        name: sysUser.name,
+        role: sysUser.role,
+      };
+      req.body = parsed.data;
+
+      if (submission.ticketStatus === "queued") {
+        const { res: claimRes, captured: claimCaptured } = makeCapturedResponse();
+        await claimSubmissionHandler(req, claimRes);
+        if (claimCaptured.statusCode >= 400) {
+          return res.status(claimCaptured.statusCode).json(claimCaptured.body ?? { error: "Auto-claim failed" });
+        }
+      }
+
+      const { res: procRes, captured } = makeCapturedResponse();
+      if (isNlaTicket) {
+        await processNlaSubmissionHandler(req, procRes);
+      } else {
+        await processSubmissionHandler(req, procRes);
+      }
+      const body: any = captured.body;
+      if (captured.statusCode < 400 && body?.submission) {
+        return res.status(captured.statusCode).json({ data: projectSubmissionForExternal(body.submission) });
+      }
+      return res.status(captured.statusCode).json(body ?? { error: "Decision failed" });
+    } catch (err) {
+      console.error(`[external-api] POST /v1/submissions/${id}/decision failed:`, err);
+      return res.status(500).json({ error: "Decision failed" });
     }
   });
 

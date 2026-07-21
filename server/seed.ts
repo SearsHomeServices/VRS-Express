@@ -164,6 +164,10 @@ export async function seedDatabase() {
   }
 
   await resetAllPasswords();
+  // External API system account — created AFTER resetAllPasswords so a fresh
+  // database can never reset this account to the generic password.
+  try { await ensureExternalApiUser(); }
+  catch (e: any) { console.warn(`[external-api] system account seed failed: ${e?.message || e}`); }
   await backfillClaimedAt();
   try { await healStuckWorkingAgents(); }
   catch (e: any) { console.warn(`[stuck-working-heal] failed: ${e?.message || e}`); }
@@ -827,6 +831,45 @@ async function seedDefaultCommunicationTemplates() {
 // Tyler 2026-04-29 — testagent1 renamed to ZZTEST9 (see SEED_USERS above).
 // Both kept here so historical pre-rename rows are still recognised by cleanup.
 const TEST_RAC_IDS = ["ZZTEST9", "testagent1", "TESTADMIN", "testtech1", "tmorri1", "sysadmin"];
+
+// ============================================================================
+// External API system account (2026-07-21). Decisions recorded through the
+// external v1 write API (POST /api/external/v1/submissions/:id/decision) are
+// attributed to this account. Role vrs_agent (NOT admin — normal assignment
+// checks in /process must still apply) with ALL divisions + nla so the claim
+// handler's division gate passes for every ticket type.
+//   • isSystemAccount: true  → deleteUser refuses it; admin delete route blocks it.
+//   • isActive: false + random unrecoverable password → dashboard login impossible;
+//     the external adapter impersonates it directly, no JWT involved.
+// Idempotent: keyed on rac_id VRS_EXTERNAL_API.
+// ============================================================================
+async function ensureExternalApiUser() {
+  const EXTERNAL_RAC = "VRS_EXTERNAL_API";
+  const ALL_DIVISIONS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"];
+  let user = await storage.getUserByRacId(EXTERNAL_RAC);
+  if (!user) {
+    const randomSecret = `ext-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    const hashed = await bcryptjs.hash(randomSecret, 10);
+    user = await storage.createUser({
+      email: null,
+      password: hashed,
+      name: "VRS External API",
+      role: "vrs_agent",
+      phone: null,
+      racId: EXTERNAL_RAC,
+      mustChangePassword: false,
+      isSystemAccount: true,
+      isActive: false,
+    } as any);
+    console.log(`[external-api] Seeded system account ${EXTERNAL_RAC} (id=${user.id})`);
+  }
+  const existing = await storage.getSpecializations(user.id);
+  const have = new Set(existing.map(s => s.division));
+  if (ALL_DIVISIONS.some(d => !have.has(d))) {
+    await storage.setSpecializations(user.id, ALL_DIVISIONS);
+    console.log(`[external-api] Ensured all divisions for ${EXTERNAL_RAC}`);
+  }
+}
 
 async function resetAllPasswords() {
   const RESET_FLAG_RAC = "__pw_reset_v2_done__";

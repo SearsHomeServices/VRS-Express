@@ -42,6 +42,7 @@ Deep-dive operational notes for individual subsystems live under `docs/architect
 - [Flexed Technicians (VRS Access)](docs/architecture/flexed-technicians.md) — role-based grant/revoke model, why field login is unaffected, demotion guards.
 - [1099 Provider Portal](docs/architecture/1099-provider-portal.md) — `ENABLE_1099_PORTAL` flag, `provider_1099` role, warranty derivation + Sears-exclusion / no-leak behavior.
 - [Dashboard Query Performance](docs/architecture/dashboard-performance.md) — SQL business-hours averages, N+1 removal, performance indexes, concurrent reads.
+- [External API v1](docs/architecture/external-api.md) — `/api/external/v1/*` machine-to-machine surface: two x-api-key keys (read/write), adapter-over-existing-handlers design, VRS_EXTERNAL_API system account, allowlisted decision actions, bounded projections.
 
 ## Schema & Data Safety
 - `drizzle.config.ts` has `strict: true` and `verbose: true` — `db:push` will prompt for confirmation on any destructive changes.

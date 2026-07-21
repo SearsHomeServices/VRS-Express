@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq, and, or, desc, asc, gte, lte, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, desc, asc, gte, lte, lt, sql, isNull, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   users,
@@ -72,6 +72,43 @@ export type NlaLookupRow = {
   agentNotes: string | null;
   createdAt: Date | null;
   claimedAt: Date | null;
+  statusChangedAt: Date | null;
+};
+
+// Bounded projection for the external v1 API (all request types). Like
+// NlaLookupRow, this is an explicit allowlist — NEVER return raw submission
+// rows to external callers. Media paths (photos/video/voiceNote/thumbnails),
+// phoneOverride, rejectedMedia, reassignment/appeal notes, and RGC codes are
+// deliberately excluded.
+export type ExternalSubmissionRow = {
+  id: number;
+  serviceOrder: string;
+  requestType: string;
+  applianceType: string;
+  ticketStatus: string;
+  stage1Status: string;
+  stage2Status: string;
+  stage2Outcome: string | null;
+  submissionApproved: boolean;
+  warrantyType: string;
+  warrantyProvider: string | null;
+  issueDescription: string;
+  estimateAmount: string | null;
+  partNumbers: string | null;
+  authCode: string | null;
+  rejectionReasons: string | null;
+  invalidReason: string | null;
+  invalidInstructions: string | null;
+  agentNotes: string | null;
+  technicianMessage: string | null;
+  nlaResolution: string | null;
+  nlaFoundPartNumber: string | null;
+  resubmissionOf: number | null;
+  technician: { id: number; name: string; racId: string | null };
+  agent: { id: number; name: string } | null;
+  createdAt: Date | null;
+  claimedAt: Date | null;
+  reviewedAt: Date | null;
   statusChangedAt: Date | null;
 };
 
@@ -229,6 +266,16 @@ export interface IStorage {
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
   hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
   getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]>;
+  // External v1 API reads — bounded ExternalSubmissionRow projection only.
+  getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]>;
+  getSubmissionsForExternal(filters: {
+    requestType?: string;
+    ticketStatus?: string;
+    createdAfter?: Date;
+    createdBefore?: Date;
+    cursor?: number; // return rows with id < cursor (descending id pagination)
+    limit: number;
+  }): Promise<ExternalSubmissionRow[]>;
   // Idempotency guard for double-submit / network-retry scenarios.
   // Returns the most recent submission by this tech for this SO# created
   // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
@@ -1472,6 +1519,128 @@ export class DatabaseStorage implements IStorage {
       claimedAt: r.claimedAt,
       statusChangedAt: r.statusChangedAt,
     }));
+  }
+
+  // ---------------------------------------------------------------------
+  // External v1 API reads. Explicit bounded projection (ExternalSubmissionRow)
+  // — same principle as getNlaSubmissionsByServiceOrder: never raw rows.
+  // ---------------------------------------------------------------------
+  private externalRowSelection(tech: any, agent: any) {
+    return {
+      id: submissions.id,
+      serviceOrder: submissions.serviceOrder,
+      requestType: submissions.requestType,
+      applianceType: submissions.applianceType,
+      ticketStatus: submissions.ticketStatus,
+      stage1Status: submissions.stage1Status,
+      stage2Status: submissions.stage2Status,
+      stage2Outcome: submissions.stage2Outcome,
+      submissionApproved: submissions.submissionApproved,
+      warrantyType: submissions.warrantyType,
+      warrantyProvider: submissions.warrantyProvider,
+      issueDescription: submissions.issueDescription,
+      estimateAmount: submissions.estimateAmount,
+      partNumbers: submissions.partNumbers,
+      authCode: submissions.authCode,
+      rejectionReasons: submissions.rejectionReasons,
+      invalidReason: submissions.invalidReason,
+      invalidInstructions: submissions.invalidInstructions,
+      agentNotes: submissions.agentNotes,
+      technicianMessage: submissions.technicianMessage,
+      nlaResolution: submissions.nlaResolution,
+      nlaFoundPartNumber: submissions.nlaFoundPartNumber,
+      resubmissionOf: submissions.resubmissionOf,
+      techId: tech.id,
+      techName: tech.name,
+      techRacId: tech.racId,
+      agentId: agent.id,
+      agentName: agent.name,
+      createdAt: submissions.createdAt,
+      claimedAt: submissions.claimedAt,
+      reviewedAt: submissions.reviewedAt,
+      statusChangedAt: submissions.statusChangedAt,
+    };
+  }
+
+  private mapExternalRow(r: any): ExternalSubmissionRow {
+    return {
+      id: r.id,
+      serviceOrder: r.serviceOrder,
+      requestType: r.requestType,
+      applianceType: r.applianceType,
+      ticketStatus: r.ticketStatus,
+      stage1Status: r.stage1Status,
+      stage2Status: r.stage2Status,
+      stage2Outcome: r.stage2Outcome,
+      submissionApproved: r.submissionApproved,
+      warrantyType: r.warrantyType,
+      warrantyProvider: r.warrantyProvider,
+      issueDescription: r.issueDescription,
+      estimateAmount: r.estimateAmount,
+      partNumbers: r.partNumbers,
+      authCode: r.authCode,
+      rejectionReasons: r.rejectionReasons,
+      invalidReason: r.invalidReason,
+      invalidInstructions: r.invalidInstructions,
+      agentNotes: r.agentNotes,
+      technicianMessage: r.technicianMessage,
+      nlaResolution: r.nlaResolution,
+      nlaFoundPartNumber: r.nlaFoundPartNumber,
+      resubmissionOf: r.resubmissionOf,
+      technician: {
+        id: r.techId ?? 0,
+        name: r.techName ?? "unknown",
+        racId: r.techRacId ?? null,
+      },
+      agent: r.agentId ? { id: r.agentId, name: r.agentName ?? "unknown" } : null,
+      createdAt: r.createdAt,
+      claimedAt: r.claimedAt,
+      reviewedAt: r.reviewedAt,
+      statusChangedAt: r.statusChangedAt,
+    };
+  }
+
+  async getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]> {
+    const tech = alias(users, "tech");
+    const agent = alias(users, "agent");
+    const rows = await db
+      .select(this.externalRowSelection(tech, agent))
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .leftJoin(agent, eq(agent.id, submissions.assignedTo))
+      .where(eq(submissions.serviceOrder, serviceOrder))
+      .orderBy(desc(submissions.createdAt));
+    return rows.map((r) => this.mapExternalRow(r));
+  }
+
+  async getSubmissionsForExternal(filters: {
+    requestType?: string;
+    ticketStatus?: string;
+    createdAfter?: Date;
+    createdBefore?: Date;
+    cursor?: number;
+    limit: number;
+  }): Promise<ExternalSubmissionRow[]> {
+    const tech = alias(users, "tech");
+    const agent = alias(users, "agent");
+    const conditions = [];
+    if (filters.requestType) conditions.push(eq(submissions.requestType, filters.requestType));
+    if (filters.ticketStatus) conditions.push(eq(submissions.ticketStatus, filters.ticketStatus));
+    if (filters.createdAfter) conditions.push(gte(submissions.createdAt, filters.createdAfter));
+    if (filters.createdBefore) conditions.push(lte(submissions.createdAt, filters.createdBefore));
+    if (filters.cursor) conditions.push(lt(submissions.id, filters.cursor));
+    const limit = Math.min(Math.max(filters.limit, 1), 100);
+    let query = db
+      .select(this.externalRowSelection(tech, agent))
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .leftJoin(agent, eq(agent.id, submissions.assignedTo))
+      .$dynamic();
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+    const rows = await query.orderBy(desc(submissions.id)).limit(limit);
+    return rows.map((r) => this.mapExternalRow(r));
   }
 
   // 2026-04-30 — Tyler request: server-side idempotency for double-submit /
