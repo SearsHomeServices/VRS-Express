@@ -29,7 +29,7 @@ Key architectural patterns include:
 
 **Frontend Pages:**
 - **Technician:** Login, Home, Submission Form, History, Submission Detail, Help Center.
-- **VRS Agent:** Login, Dashboard (unified Queue, My Tickets, Completed views + dedicated NLA Queue, NLA My Tickets, NLA Completed sub-tabs), supporting claim-to-process workflow, division correction. SHSAI panel is suppressed for NLA tickets.
+- **VRS Agent:** When reviewing a resubmission, a "Media From Previous Submissions" card (2026-07-23) shows every strictly-earlier submission in the chain — photos (red ring + badge for ones the prior reviewer rejected via rejectedMedia), videos, voice notes, outcome badge, date, reviewer — sourced from the existing /history endpoint; no server change. Login, Dashboard (unified Queue, My Tickets, Completed views + dedicated NLA Queue, NLA My Tickets, NLA Completed sub-tabs), supporting claim-to-process workflow, division correction. SHSAI panel is suppressed for NLA tickets.
 - **Admin:** Login, Dashboard (user management, division assignments, analytics with resubmission rate tracking, district-level rollup, and NLA analytics card, real-time agent status, ticket overview with FIFO queue and request type filter (All/Authorization Only/NLA Only), clickable audit trail per ticket, technician feedback management, export with CSV + XLSX).
 - **Technician Feedback:** Technicians can submit feedback (issue, improvement, general) with priority and optional attachments from /tech/feedback. Admins manage feedback from the "Technician Feedback" view with status tracking (new, in_progress, resolved, dismissed) and admin notes.
 

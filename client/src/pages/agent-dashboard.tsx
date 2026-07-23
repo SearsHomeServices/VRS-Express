@@ -2930,117 +2930,186 @@ export default function AgentDashboard() {
                       </Card>
                     )}
 
-                    {priorRejection && (() => {
-                      let parsedPrior: any = null;
-                      try {
-                        parsedPrior = priorRejection.photos ? JSON.parse(priorRejection.photos) : null;
-                      } catch {
-                        parsedPrior = null;
-                      }
-                      // Prior ticket's thumb map (if it has one) — same
-                      // swap-src-only rule as the main grid.
-                      let priorThumbs: Record<string, string> = {};
-                      try {
-                        const rawT = (priorRejection as any).photoThumbnails ? JSON.parse((priorRejection as any).photoThumbnails) : null;
-                        if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
-                          for (const [k, v] of Object.entries(rawT)) {
-                            if (typeof k === "string" && typeof v === "string") priorThumbs[k] = v;
+                    {/* One-glance media audit (2026-07-23, VRS feedback via
+                        Kaamil Foster complaint): agents must be able to see
+                        the media from EVERY submission in the resubmission
+                        chain without navigating to prior tickets. Replaces
+                        the old single "Media on Previous Submission" card
+                        (which only showed the most recent prior rejection).
+                        Data source unchanged — /history already returns full
+                        rows. Photos the prior reviewer marked rejected get a
+                        red ring + badge (parsed from that row's
+                        rejectedMedia). */}
+                    {submissionHistoryQuery.data && selectedSubmission.resubmissionOf != null && (() => {
+                      const histAll = submissionHistoryQuery.data!.history;
+                      // Strictly EARLIER rows only (not just "other rows") —
+                      // if an agent opens an older ticket in a chain that has
+                      // newer resubmissions, those future rows must not
+                      // appear in a "previous submissions" audit. Same
+                      // chronology rule as the priorRejection memo above.
+                      const selCreatedMs = (selectedSubmission as any).createdAt
+                        ? new Date((selectedSubmission as any).createdAt).getTime()
+                        : Number.POSITIVE_INFINITY;
+                      const priorRows = histAll
+                        .filter((h: any) => {
+                          if (h.id === selectedId) return false;
+                          const t = h.createdAt ? new Date(h.createdAt).getTime() : 0;
+                          return t < selCreatedMs;
+                        })
+                        .sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+                      if (priorRows.length === 0) return null;
+                      const reviewerNames = submissionHistoryQuery.data!.reviewerNames || {};
+                      const sections = priorRows.map((item: any) => {
+                        let parsed: any = null;
+                        try { parsed = item.photos ? JSON.parse(item.photos) : null; } catch {}
+                        let thumbs: Record<string, string> = {};
+                        try {
+                          const rawT = item.photoThumbnails ? JSON.parse(item.photoThumbnails) : null;
+                          if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
+                            for (const [k, v] of Object.entries(rawT)) {
+                              if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
+                            }
                           }
-                        }
-                      } catch {}
-                      const isObj = parsedPrior && typeof parsedPrior === "object" && !Array.isArray(parsedPrior);
-                      const priorIssue: string[] = isObj ? (parsedPrior.issue || []) : [];
-                      const priorEstimate: string[] = isObj ? (parsedPrior.estimate || []) : [];
-                      const priorLegacy: string[] = Array.isArray(parsedPrior) ? parsedPrior : [];
-                      const priorAll = [...priorIssue, ...priorEstimate, ...priorLegacy];
-                      const priorVideos = parseVideoUrls(priorRejection.videoUrl);
-                      const hasAnyMedia = priorAll.length > 0 || priorVideos.length > 0 || !!priorRejection.voiceNoteUrl;
+                        } catch {}
+                        let rejectedUrls = new Set<string>();
+                        try {
+                          const rawR = item.rejectedMedia ? (typeof item.rejectedMedia === "string" ? JSON.parse(item.rejectedMedia) : item.rejectedMedia) : null;
+                          for (const p of rawR?.photos || []) {
+                            if (typeof p?.url === "string") rejectedUrls.add(p.url);
+                          }
+                        } catch {}
+                        const isObj = parsed && typeof parsed === "object" && !Array.isArray(parsed);
+                        const issue: string[] = isObj ? (parsed.issue || []) : [];
+                        const estimate: string[] = isObj ? (parsed.estimate || []) : [];
+                        const legacy: string[] = Array.isArray(parsed) ? parsed : [];
+                        const all = [...issue, ...estimate, ...legacy];
+                        const videos = parseVideoUrls(item.videoUrl);
+                        const wasRejected = item.ticketStatus === "rejected" || item.ticketStatus === "rejected_closed" || item.stage1Status === "rejected";
+                        const wasInvalid = item.ticketStatus === "invalid" || item.stage1Status === "invalid";
+                        const wasApproved = item.ticketStatus === "completed" || item.stage1Status === "approved";
+                        const reviewerId = item.stage1ReviewedBy || item.reviewedBy;
+                        return { item, issue, estimate, legacy, all, thumbs, rejectedUrls, videos, wasRejected, wasInvalid, wasApproved, reviewerName: reviewerId ? reviewerNames[reviewerId] || null : null };
+                      });
+                      const hasAnyMedia = sections.some(s => s.all.length > 0 || s.videos.length > 0 || !!s.item.voiceNoteUrl);
                       if (!hasAnyMedia) return null;
-                      const renderPriorGrid = (photos: string[], label: string, testIdPrefix: string, baseOffset: number) => {
-                        if (photos.length === 0) return null;
-                        return (
-                          <div>
-                            <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
-                              <ImageIcon className="w-3.5 h-3.5" />
-                              {label} ({photos.length})
-                            </p>
-                            <div className="grid grid-cols-3 gap-2" data-testid={`media-prior-${testIdPrefix}`}>
-                              {photos.map((url, i) => (
-                                <div
-                                  key={i}
-                                  className="relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group ring-1 ring-blue-200 dark:ring-blue-900"
-                                  onClick={async () => openLightbox(await buildMediaUrls(priorAll), baseOffset + i)}
-                                  data-testid={`prior-${testIdPrefix}-photo-${i}`}
-                                >
-                                  <MediaImage
-                                    src={priorThumbs[url] ?? url}
-                                    alt={`${label} ${i + 1}`}
-                                    decoding="async"
-                                    className="w-full h-full object-cover pointer-events-none"
-                                  />
-                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <ZoomIn className="w-6 h-6 text-white" />
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      };
+                      let resubCounter = 0;
                       return (
                         <Card className="border-blue-200 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20">
                           <CardHeader className="pb-3">
                             <CardTitle className="text-base flex items-center gap-2 text-blue-900 dark:text-blue-100">
                               <RotateCcw className="w-4 h-4" />
-                              Media on Previous Submission
+                              Media From Previous Submissions
                             </CardTitle>
                             <p className="text-xs text-blue-700/70 dark:text-blue-300/70">
-                              Read-only — compare against the new media above to verify the tech addressed the prior rejection.
-                              {priorRejection.createdAt && (
-                                <> Submitted {formatDate(priorRejection.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</>
-                              )}
+                              Read-only audit view — every photo, video, and voice note the tech submitted on earlier attempts of this service order. Photos outlined in red were marked rejected by the prior reviewer.
                             </p>
                           </CardHeader>
-                          <CardContent className="space-y-4">
-                            {renderPriorGrid(priorIssue, "Issue Photos", "issue", 0)}
-                            {renderPriorGrid(priorEstimate, "Estimate Photos", "estimate", priorIssue.length)}
-                            {renderPriorGrid(priorLegacy, "Photos", "legacy", priorIssue.length + priorEstimate.length)}
-                            {priorAll.length === 0 && (
-                              <p className="text-sm text-blue-700/60 dark:text-blue-300/60" data-testid="text-prior-no-photos">No photos were attached to the prior submission.</p>
-                            )}
-                            {priorVideos.length > 0 && (
-                              <div>
-                                <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
-                                  <Video className="w-3.5 h-3.5" />
-                                  Video ({priorVideos.length})
-                                </p>
-                                <div className="space-y-2">
-                                  {priorVideos.map((url, i) => (
-                                    <MediaVideo
-                                      key={i}
-                                      src={url}
-                                      controls
-                                      className="w-full rounded-md ring-1 ring-blue-200 dark:ring-blue-900"
-                                      data-testid={`prior-video-${i}`}
-                                    />
-                                  ))}
+                          <CardContent className="space-y-5">
+                            {sections.map((sec, sIdx) => {
+                              const { item } = sec;
+                              const isOriginal = item.resubmissionOf == null;
+                              if (!isOriginal) resubCounter++;
+                              const label = isOriginal ? "Original Submission" : `Resubmission #${resubCounter}`;
+                              const hasMedia = sec.all.length > 0 || sec.videos.length > 0 || !!item.voiceNoteUrl;
+                              const renderGrid = (photos: string[], gridLabel: string, testIdPrefix: string, baseOffset: number) => {
+                                if (photos.length === 0) return null;
+                                return (
+                                  <div>
+                                    <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                                      <ImageIcon className="w-3.5 h-3.5" />
+                                      {gridLabel} ({photos.length})
+                                    </p>
+                                    <div className="grid grid-cols-3 gap-2" data-testid={`media-prior-${item.id}-${testIdPrefix}`}>
+                                      {photos.map((url, i) => {
+                                        const wasPhotoRejected = sec.rejectedUrls.has(url);
+                                        return (
+                                          <div
+                                            key={i}
+                                            className={`relative aspect-square bg-muted rounded-md overflow-hidden cursor-pointer group ring-1 ${wasPhotoRejected ? "ring-2 ring-red-500 dark:ring-red-600" : "ring-blue-200 dark:ring-blue-900"}`}
+                                            onClick={async () => openLightbox(await buildMediaUrls(sec.all), baseOffset + i)}
+                                            data-testid={`prior-${item.id}-${testIdPrefix}-photo-${i}`}
+                                          >
+                                            <MediaImage
+                                              src={sec.thumbs[url] ?? url}
+                                              alt={`${gridLabel} ${i + 1}`}
+                                              decoding="async"
+                                              className="w-full h-full object-cover pointer-events-none"
+                                            />
+                                            {wasPhotoRejected && (
+                                              <span className="absolute top-1 left-1 bg-red-600 text-white text-[9px] font-medium px-1 py-0.5 rounded pointer-events-none">
+                                                Rejected
+                                              </span>
+                                            )}
+                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                              <ZoomIn className="w-6 h-6 text-white" />
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              };
+                              return (
+                                <div key={item.id} data-testid={`prior-submission-media-${item.id}`}>
+                                  {sIdx > 0 && <Separator className="mb-4 bg-blue-200/60 dark:bg-blue-900/60" />}
+                                  <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                                      {label}
+                                      {sec.wasRejected && <Badge variant="destructive" className="ml-2 text-[10px] py-0">Rejected</Badge>}
+                                      {sec.wasInvalid && <Badge variant="secondary" className="ml-2 text-[10px] py-0">Invalid</Badge>}
+                                      {sec.wasApproved && <Badge className="ml-2 text-[10px] py-0 bg-green-600 hover:bg-green-600">Approved</Badge>}
+                                    </p>
+                                    <p className="text-xs text-blue-700/70 dark:text-blue-300/70">
+                                      {formatDate(item.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                      {sec.reviewerName && <> · reviewed by {sec.reviewerName}</>}
+                                    </p>
+                                  </div>
+                                  {!hasMedia ? (
+                                    <p className="text-sm text-blue-700/60 dark:text-blue-300/60" data-testid={`text-prior-no-media-${item.id}`}>No media was attached to this submission.</p>
+                                  ) : (
+                                    <div className="space-y-4">
+                                      {renderGrid(sec.issue, "Issue Photos", "issue", 0)}
+                                      {renderGrid(sec.estimate, "Estimate Photos", "estimate", sec.issue.length)}
+                                      {renderGrid(sec.legacy, "Photos", "legacy", sec.issue.length + sec.estimate.length)}
+                                      {sec.videos.length > 0 && (
+                                        <div>
+                                          <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                                            <Video className="w-3.5 h-3.5" />
+                                            Video ({sec.videos.length})
+                                          </p>
+                                          <div className="space-y-2">
+                                            {sec.videos.map((url, i) => (
+                                              <MediaVideo
+                                                key={i}
+                                                src={url}
+                                                controls
+                                                className="w-full rounded-md ring-1 ring-blue-200 dark:ring-blue-900"
+                                                data-testid={`prior-${item.id}-video-${i}`}
+                                              />
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                      {item.voiceNoteUrl && (
+                                        <div>
+                                          <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
+                                            <Mic className="w-3.5 h-3.5" />
+                                            Voice Note
+                                          </p>
+                                          <MediaAudio
+                                            src={item.voiceNoteUrl}
+                                            controls
+                                            className="w-full"
+                                            data-testid={`prior-${item.id}-audio-player`}
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                            )}
-                            {priorRejection.voiceNoteUrl && (
-                              <div>
-                                <p className="text-xs text-blue-700/80 dark:text-blue-300/80 uppercase tracking-wider font-medium mb-2 flex items-center gap-1.5">
-                                  <Mic className="w-3.5 h-3.5" />
-                                  Voice Note
-                                </p>
-                                <MediaAudio
-                                  src={priorRejection.voiceNoteUrl}
-                                  controls
-                                  className="w-full"
-                                  data-testid="prior-audio-player"
-                                />
-                              </div>
-                            )}
+                              );
+                            })}
                           </CardContent>
                         </Card>
                       );
