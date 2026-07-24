@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import imageCompression from "browser-image-compression";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { formatDate } from "@/lib/utils";
@@ -23,7 +24,7 @@ import {
   Package,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
+import { useAuth, getToken, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Submission } from "@shared/schema";
@@ -72,6 +73,96 @@ export default function SubmissionDetailPage() {
 
   const [noteDraft, setNoteDraft] = useState("");
   const [postingNote, setPostingNote] = useState(false);
+
+  // Add-photos-while-open (2026-07-23): techs can append photos to their
+  // own ticket while it is still queued/pending. Uploads reuse the same
+  // compress -> signed-URL -> PUT -> thumbnail pipeline as tech-submit,
+  // then POST the new /objects/ paths to /api/submissions/:id/photos
+  // (append-only server merge).
+  const issueInputRef = useRef<HTMLInputElement | null>(null);
+  const estimateInputRef = useRef<HTMLInputElement | null>(null);
+  const [addUpload, setAddUpload] = useState<{ section: "issue" | "estimate"; done: number; total: number } | null>(null);
+
+  async function uploadOneFile(file: File): Promise<string | null> {
+    const token = getToken();
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        const urlRes = await fetch("/api/uploads/request-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type || "image/jpeg" }),
+        });
+        if (!urlRes.ok) throw new Error("Failed to get upload URL");
+        const { uploadURL, objectPath } = await urlRes.json();
+        const ok = await new Promise<boolean>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.timeout = 60000;
+          xhr.addEventListener("load", () => resolve(xhr.status >= 200 && xhr.status < 300));
+          xhr.addEventListener("error", () => resolve(false));
+          xhr.addEventListener("timeout", () => resolve(false));
+          xhr.open("PUT", uploadURL);
+          xhr.setRequestHeader("Content-Type", file.type || "image/jpeg");
+          xhr.send(file);
+        });
+        if (ok) return objectPath;
+      } catch {}
+      if (attempt < 2) await new Promise((r) => setTimeout(r, Math.min(30000, 2 ** attempt * 1000) + Math.floor(Math.random() * 1000)));
+    }
+    return null;
+  }
+
+  async function handleAddPhotos(section: "issue" | "estimate", files: FileList | null, inputRef: React.RefObject<HTMLInputElement | null>) {
+    if (!files || files.length === 0 || !id) return;
+    const valid = Array.from(files).filter((f) => f.size <= 20 * 1024 * 1024 && (f.type.startsWith("image/") || f.type === ""));
+    if (valid.length === 0) {
+      toast({ title: "Invalid Files", description: "Please select image files under 20MB each.", variant: "destructive" });
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+    const selected = valid.slice(0, section === "issue" ? 15 : 5);
+    setAddUpload({ section, done: 0, total: selected.length });
+    try {
+      const paths: string[] = [];
+      const thumbs: Record<string, string> = {};
+      for (const file of selected) {
+        let toUpload = file;
+        try {
+          const compressed = await imageCompression(file, { maxSizeMB: 1.2, maxWidthOrHeight: 2560, useWebWorker: true, initialQuality: 0.85 });
+          toUpload = compressed instanceof File && compressed.name === file.name
+            ? compressed
+            : new File([compressed], file.name, { type: compressed.type || file.type, lastModified: file.lastModified });
+        } catch {}
+        const fullPath = await uploadOneFile(toUpload);
+        if (fullPath) {
+          paths.push(fullPath);
+          // Best-effort grid thumbnail (same params as tech-submit).
+          try {
+            const thumbBlob = await imageCompression(file, { maxSizeMB: 0.06, maxWidthOrHeight: 480, useWebWorker: true, initialQuality: 0.7, fileType: "image/jpeg" });
+            const thumbFile = new File([thumbBlob], `thumb_${file.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg", lastModified: file.lastModified });
+            const thumbPath = await uploadOneFile(thumbFile);
+            if (thumbPath) thumbs[fullPath] = thumbPath;
+          } catch {}
+        }
+        setAddUpload((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+      }
+      if (paths.length === 0) {
+        toast({ title: "Upload failed", description: "None of the photos could be uploaded. Please check your connection and try again.", variant: "destructive" });
+        return;
+      }
+      await apiRequest("POST", `/api/submissions/${id}/photos`, {
+        ...(section === "issue" ? { issuePhotos: paths } : { estimatePhotos: paths }),
+        ...(Object.keys(thumbs).length > 0 ? { photoThumbnails: thumbs } : {}),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id, "notes"] });
+      toast({ title: "Photos added", description: `${paths.length} photo(s) added to this submission.${paths.length < selected.length ? ` ${selected.length - paths.length} failed to upload.` : ""}` });
+    } catch (err: any) {
+      toast({ title: "Failed to add photos", description: String(err?.message || err), variant: "destructive" });
+    } finally {
+      setAddUpload(null);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
 
   async function postNote() {
     if (!noteDraft.trim() || !id) return;
@@ -604,6 +695,64 @@ export default function SubmissionDetailPage() {
             </Card>
           ) : null;
         })()}
+
+        {(sub.ticketStatus === "queued" || sub.ticketStatus === "pending") && (
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  Add More Photos
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  You can add photos while this ticket is under review. The reviewing agent will see them right away.
+                </p>
+              </div>
+              <input
+                ref={issueInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => handleAddPhotos("issue", e.target.files, issueInputRef)}
+                data-testid="input-add-issue-photos"
+              />
+              <input
+                ref={estimateInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => handleAddPhotos("estimate", e.target.files, estimateInputRef)}
+                data-testid="input-add-estimate-photos"
+              />
+              {addUpload ? (
+                <div className="text-sm text-muted-foreground py-1" data-testid="text-add-photos-progress">
+                  Uploading {addUpload.done}/{addUpload.total} {addUpload.section === "issue" ? "issue" : "model/serial & estimate"} photo(s)...
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => issueInputRef.current?.click()}
+                    data-testid="button-add-issue-photos"
+                  >
+                    Add Issue Photos
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => estimateInputRef.current?.click()}
+                    data-testid="button-add-estimate-photos"
+                  >
+                    Add Model/Serial &amp; Estimate
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {(() => {
           // Tyler 2026-04-30: render up to 3 video tiles. Backward-compatible

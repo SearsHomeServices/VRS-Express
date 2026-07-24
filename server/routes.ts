@@ -2043,6 +2043,170 @@ export async function registerRoutes(
   );
 
   // ========================================================================
+  // ADD PHOTOS TO AN OPEN SUBMISSION — tech appends photos before close
+  // ========================================================================
+  // Technicians (and 1099 providers) can add photos to their OWN submission
+  // while the ticket is still open (queued or pending). Closed states
+  // (completed / rejected / invalid) are refused — rejected tickets keep
+  // the existing resubmission flow. Photos are APPEND-ONLY: existing paths
+  // are never removed or reordered, so rejectedMedia references, thumbnail
+  // identity, and prior-media audit views stay intact. Uses the
+  // optimistic-lock update (status pushed into the UPDATE predicate) so a
+  // concurrent agent decision can't be raced.
+  app.post("/api/submissions/:id/photos", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid submission ID" });
+      const sub = await storage.getSubmission(id);
+      if (!sub) return res.status(404).json({ error: "Submission not found" });
+
+      const user = (req as any).user;
+      if (sub.technicianId !== user.id) {
+        return res.status(403).json({ error: "Not your submission" });
+      }
+      if (sub.ticketStatus !== "queued" && sub.ticketStatus !== "pending") {
+        return res.status(409).json({ error: "Photos can only be added while the ticket is still under review" });
+      }
+
+      const objectPath = z.string().min(10).max(500).startsWith("/objects/");
+      const addPhotosSchema = z.object({
+        issuePhotos: z.array(objectPath).max(15).optional(),
+        estimatePhotos: z.array(objectPath).max(5).optional(),
+        // Same shape + trust bar as the submit-time photoThumbnails field:
+        // JSON map of { fullPath: thumbPath }, both /objects/ paths. Paths
+        // are not ownership-verified here; access is enforced at read time
+        // by the media-token route (same as submit).
+        photoThumbnails: z.record(z.string(), z.string()).optional().refine((m) => {
+          if (!m) return true;
+          return Object.entries(m).every(
+            ([k, v]) => k.startsWith("/objects/") && v.startsWith("/objects/"),
+          );
+        }, "photoThumbnails must map /objects/ paths to /objects/ paths"),
+      }).refine(
+        (b) => (b.issuePhotos?.length || 0) + (b.estimatePhotos?.length || 0) > 0,
+        "At least one photo is required",
+      );
+      const parsed = addPhotosSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid photos payload", details: parsed.error.flatten() });
+      }
+      const newIssue = parsed.data.issuePhotos || [];
+      const newEstimate = parsed.data.estimatePhotos || [];
+
+      // Merge into the existing photos JSON. New format is
+      // { issue: [], estimate: [] }; legacy rows store a bare array — we
+      // convert array -> { issue: array } on first append (agent UI then
+      // labels them "Issue Photos" instead of the generic "Photos").
+      //
+      // Concurrency (architect fix): read-merge-write is racy — two
+      // simultaneous appends could both merge from the same stale value
+      // and the later write would drop the earlier photos. The UPDATE is
+      // a compare-and-swap on the prior `photos` value; on conflict we
+      // re-read and retry (up to 3 attempts).
+      let updated: any;
+      let totalAdded = 0;
+      let addedIssueCount = 0;
+      let addedEstimateCount = 0;
+      let cur: any = sub;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cur.ticketStatus !== "queued" && cur.ticketStatus !== "pending") {
+          return res.status(409).json({ error: "Ticket was just processed — photos can no longer be added" });
+        }
+        let existing: any = null;
+        try { existing = cur.photos ? JSON.parse(cur.photos) : null; } catch { existing = null; }
+        let issueArr: string[] = [];
+        let estimateArr: string[] = [];
+        if (Array.isArray(existing)) {
+          issueArr = existing.filter((p: any) => typeof p === "string");
+        } else if (existing && typeof existing === "object") {
+          issueArr = Array.isArray(existing.issue) ? existing.issue.filter((p: any) => typeof p === "string") : [];
+          estimateArr = Array.isArray(existing.estimate) ? existing.estimate.filter((p: any) => typeof p === "string") : [];
+        }
+        const already = new Set([...issueArr, ...estimateArr]);
+        const addedIssue = newIssue.filter((p) => !already.has(p));
+        addedIssue.forEach((p) => already.add(p));
+        const addedEstimate = newEstimate.filter((p) => !already.has(p));
+        totalAdded = addedIssue.length + addedEstimate.length;
+        addedIssueCount = addedIssue.length;
+        addedEstimateCount = addedEstimate.length;
+        if (totalAdded === 0) {
+          return res.status(400).json({ error: "All photos are already attached to this submission" });
+        }
+        if (issueArr.length + addedIssue.length > 30 || estimateArr.length + addedEstimate.length > 15) {
+          return res.status(400).json({ error: "Photo limit reached for this submission" });
+        }
+        const mergedPhotos = JSON.stringify({
+          issue: [...issueArr, ...addedIssue],
+          estimate: [...estimateArr, ...addedEstimate],
+        });
+
+        // Merge thumbnails — only keep entries for photos actually added.
+        let thumbMap: Record<string, string> = {};
+        try {
+          const rawT = cur.photoThumbnails ? JSON.parse(cur.photoThumbnails) : null;
+          if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) thumbMap = rawT;
+        } catch {}
+        const addedSet = new Set([...addedIssue, ...addedEstimate]);
+        for (const [k, v] of Object.entries(parsed.data.photoThumbnails || {})) {
+          if (addedSet.has(k)) thumbMap[k] = v;
+        }
+
+        updated = await storage.updateSubmissionIfStatusAndPhotos(id, ["queued", "pending"], cur.photos ?? null, {
+          photos: mergedPhotos,
+          photoThumbnails: Object.keys(thumbMap).length > 0 ? JSON.stringify(thumbMap) : cur.photoThumbnails,
+        } as any);
+        if (updated) break;
+        // CAS conflict — another writer changed the row. Re-read and retry.
+        const fresh = await storage.getSubmission(id);
+        if (!fresh) return res.status(404).json({ error: "Submission not found" });
+        cur = fresh;
+      }
+      if (!updated) {
+        return res.status(409).json({ error: "Ticket was updated by someone else — please try again" });
+      }
+
+      // Append-only audit note so the change is visible in the notes
+      // timeline (tech detail page, agent panel, admin audit trail).
+      try {
+        await storage.createSubmissionNote({
+          submissionId: id,
+          authorId: user.id,
+          authorRole: user.role,
+          body: `Added ${totalAdded} additional photo(s)${addedIssueCount ? ` — ${addedIssueCount} issue` : ""}${addedEstimateCount ? ` — ${addedEstimateCount} model/serial/estimate` : ""}.`,
+        });
+      } catch (noteErr) {
+        console.error(`[add-photos] audit note failed for submission ${id}:`, noteErr);
+      }
+
+      // Realtime: tell the assigned agent (if claimed) and admins so open
+      // ticket views refresh without waiting for the next poll.
+      try {
+        if (updated.assignedTo) {
+          broadcastToAgent(updated.assignedTo, {
+            type: "ticket_updated",
+            payload: {
+              submissionId: id,
+              serviceOrder: updated.serviceOrder,
+              message: `Technician added ${totalAdded} photo(s) to SO #${updated.serviceOrder}`,
+            },
+          });
+        }
+        broadcastToAdmins({
+          type: "ticket_updated",
+          payload: { submissionId: id, ticketStatus: updated.ticketStatus },
+        });
+      } catch (broadcastErr) {
+        console.error(`[add-photos] broadcast failed for submission ${id}:`, broadcastErr);
+      }
+
+      return res.status(200).json({ submission: updated, added: totalAdded });
+    } catch (error) {
+      console.error("Add photos error:", error);
+      return res.status(500).json({ error: "Failed to add photos" });
+    }
+  });
+
+  // ========================================================================
   // ADMIN AUDIT TRAIL — Full timeline for a submission
   // ========================================================================
 

@@ -562,6 +562,16 @@ export default function AgentDashboard() {
       scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
     });
 
+    // 2026-07-23 — tech added photos (or another server-side update) to a
+    // ticket assigned to this agent. Targeted broadcast, so a toast is
+    // appropriate; refetch picks up the new photos.
+    const unsubTicketUpdated = subscribe("ticket_updated", (payload: any) => {
+      if (payload?.message) {
+        toast({ title: "Ticket updated", description: payload.message, duration: 8000 });
+      }
+      scheduleWsInvalidate(["/api/submissions", "/api/agent/stats"]);
+    });
+
     const unsub7 = subscribe("own_status_changed", (payload: any) => {
       if (payload?.status) {
         applyAgentStatus(payload.status, "own_status_changed");
@@ -622,6 +632,7 @@ export default function AgentDashboard() {
       unsub7();
       unsub8();
       unsub9();
+      unsubTicketUpdated();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onVisibilityChange);
     };

@@ -323,6 +323,7 @@ export interface IStorage {
   updateFeedback(id: number, data: Partial<InsertFeedback>): Promise<Feedback | undefined>;
 
   createSubmissionNote(data: InsertSubmissionNote): Promise<SubmissionNote>;
+  updateSubmissionIfStatusAndPhotos(id: number, expectedStatuses: string[], expectedPhotos: string | null, data: Partial<InsertSubmission>): Promise<Submission | undefined>;
   getSubmissionNotes(submissionId: number): Promise<(SubmissionNote & { authorName: string })[]>;
 
   getAnalytics(): Promise<{
@@ -840,6 +841,38 @@ export class DatabaseStorage implements IStorage {
         predicates.push(eq(submissions.assignedTo, expectedAssignedTo));
       }
     }
+    const result = await db
+      .update(submissions)
+      .set(data)
+      .where(and(...predicates))
+      .returning();
+    bumpSubmissionsDataVersion();
+    return result[0];
+  }
+
+  // 2026-07-23 (add-photos-while-open): compare-and-swap variant for the
+  // tech append-photos route. Read-merge-write on the photos JSON in app
+  // code is racy — two concurrent appends could both merge from the same
+  // stale value and the later write would silently drop the earlier
+  // photos. This pushes the expected prior `photos` value into the UPDATE
+  // predicate; a losing concurrent writer gets undefined back and the
+  // route re-reads + retries.
+  async updateSubmissionIfStatusAndPhotos(
+    id: number,
+    expectedStatuses: string[],
+    expectedPhotos: string | null,
+    data: Partial<InsertSubmission>
+  ): Promise<Submission | undefined> {
+    if (!expectedStatuses || expectedStatuses.length === 0) {
+      throw new Error("updateSubmissionIfStatusAndPhotos requires at least one expectedStatus");
+    }
+    const predicates = [
+      eq(submissions.id, id),
+      inArray(submissions.ticketStatus, expectedStatuses),
+      expectedPhotos === null
+        ? sql`${submissions.photos} IS NULL`
+        : eq(submissions.photos, expectedPhotos),
+    ];
     const result = await db
       .update(submissions)
       .set(data)
