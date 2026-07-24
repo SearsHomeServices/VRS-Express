@@ -266,6 +266,24 @@ export interface IStorage {
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
   hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
   getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]>;
+  getSubmissionsByServiceOrderForAgentLookup(serviceOrder: string): Promise<Array<{
+    id: number;
+    serviceOrder: string;
+    requestType: string;
+    applianceType: string;
+    ticketStatus: string;
+    stage1Status: string;
+    submissionApproved: boolean;
+    resubmissionOf: number | null;
+    technicianName: string | null;
+    technicianRacId: string | null;
+    assignedAgentName: string | null;
+    reviewerName: string | null;
+    createdAt: Date | null;
+    claimedAt: Date | null;
+    reviewedAt: Date | null;
+  }>>;
+
   // External v1 API reads — bounded ExternalSubmissionRow projection only.
   getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]>;
   getSubmissionsForExternal(filters: {
@@ -1632,6 +1650,58 @@ export class DatabaseStorage implements IStorage {
       reviewedAt: r.reviewedAt,
       statusChangedAt: r.statusChangedAt,
     };
+  }
+
+  // Agent SO lookup (2026-07-24): cross-division visibility into whether a
+  // service order is in the system, who is working it, and its status.
+  // Deliberately bounded — no media paths, no auth/RGC codes, no phone
+  // numbers. Includes the reviewer join because reject/invalid paths null
+  // out assignedTo, so "who handled this" needs reviewedBy for closed rows.
+  async getSubmissionsByServiceOrderForAgentLookup(serviceOrder: string): Promise<Array<{
+    id: number;
+    serviceOrder: string;
+    requestType: string;
+    applianceType: string;
+    ticketStatus: string;
+    stage1Status: string;
+    submissionApproved: boolean;
+    resubmissionOf: number | null;
+    technicianName: string | null;
+    technicianRacId: string | null;
+    assignedAgentName: string | null;
+    reviewerName: string | null;
+    createdAt: Date | null;
+    claimedAt: Date | null;
+    reviewedAt: Date | null;
+  }>> {
+    const tech = alias(users, "tech");
+    const agent = alias(users, "agent");
+    const reviewer = alias(users, "reviewer");
+    const rows = await db
+      .select({
+        id: submissions.id,
+        serviceOrder: submissions.serviceOrder,
+        requestType: submissions.requestType,
+        applianceType: submissions.applianceType,
+        ticketStatus: submissions.ticketStatus,
+        stage1Status: submissions.stage1Status,
+        submissionApproved: submissions.submissionApproved,
+        resubmissionOf: submissions.resubmissionOf,
+        technicianName: tech.name,
+        technicianRacId: tech.racId,
+        assignedAgentName: agent.name,
+        reviewerName: reviewer.name,
+        createdAt: submissions.createdAt,
+        claimedAt: submissions.claimedAt,
+        reviewedAt: submissions.reviewedAt,
+      })
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .leftJoin(agent, eq(agent.id, submissions.assignedTo))
+      .leftJoin(reviewer, eq(reviewer.id, submissions.reviewedBy))
+      .where(eq(submissions.serviceOrder, serviceOrder))
+      .orderBy(desc(submissions.createdAt));
+    return rows as any;
   }
 
   async getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]> {

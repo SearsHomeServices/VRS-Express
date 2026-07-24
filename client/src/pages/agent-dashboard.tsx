@@ -112,6 +112,7 @@ import {
   ChevronDown,
   BellRing,
   X,
+  Search,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "@/components/theme-provider";
@@ -242,6 +243,36 @@ export default function AgentDashboard() {
   const [divisionFiltersOpen, setDivisionFiltersOpen] = useState(true);
   const [requestTypeOpen, setRequestTypeOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  // SO Lookup (2026-07-24): cross-division "where is this service order"
+  // search. soLookupSo holds the SUBMITTED value (drives the query);
+  // soLookupInput is the live input text.
+  const [soLookupOpen, setSoLookupOpen] = useState(false);
+  const [soLookupInput, setSoLookupInput] = useState("");
+  const [soLookupSo, setSoLookupSo] = useState<string | null>(null);
+  const soLookupQuery = useQuery<{
+    serviceOrder: string;
+    submissions: Array<{
+      id: number;
+      serviceOrder: string;
+      requestType: string;
+      applianceType: string;
+      ticketStatus: string;
+      stage1Status: string;
+      submissionApproved: boolean;
+      resubmissionOf: number | null;
+      technicianName: string | null;
+      technicianRacId: string | null;
+      assignedAgentName: string | null;
+      reviewerName: string | null;
+      createdAt: string | null;
+      claimedAt: string | null;
+      reviewedAt: string | null;
+    }>;
+  }>({
+    queryKey: [`/api/agent/so-lookup?so=${encodeURIComponent(soLookupSo ?? "")}`],
+    enabled: soLookupOpen && !!soLookupSo,
+    staleTime: 15_000,
+  });
   const [showOriginalDesc, setShowOriginalDesc] = useState(false);
 
   const [selectedAction, setSelectedAction] = useState<"approve" | "approve_replacement_review" | "b2b_approved_replacement" | "reject" | "reject_and_close" | "invalid" | "approve_submission" | null>(null);
@@ -2094,8 +2125,116 @@ export default function AgentDashboard() {
               </h1>
             </div>
             <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSoLookupOpen(true)}
+                data-testid="button-so-lookup"
+              >
+                <Search className="w-4 h-4 mr-1.5" />
+                SO Lookup
+              </Button>
             </div>
           </header>
+
+          <Dialog open={soLookupOpen} onOpenChange={(open) => { setSoLookupOpen(open); if (!open) { setSoLookupSo(null); setSoLookupInput(""); } }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Service Order Lookup</DialogTitle>
+                <DialogDescription>
+                  Check whether a service order has been submitted, who is working it, and its current status — across all divisions.
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const v = soLookupInput.trim();
+                  if (v) setSoLookupSo(v);
+                }}
+              >
+                <Input
+                  placeholder="e.g. 8175-12345678"
+                  value={soLookupInput}
+                  onChange={(e) => setSoLookupInput(e.target.value)}
+                  autoFocus
+                  data-testid="input-so-lookup"
+                />
+                <Button type="submit" disabled={!soLookupInput.trim() || soLookupQuery.isFetching} data-testid="button-so-lookup-search">
+                  {soLookupQuery.isFetching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Search"}
+                </Button>
+              </form>
+              {soLookupSo && soLookupQuery.isError && (
+                <p className="text-sm text-destructive" data-testid="text-so-lookup-error">
+                  {friendlyApiErrorMessage(soLookupQuery.error, "Lookup failed. Check the service order format (DDDD-SSSSSSSS).")}
+                </p>
+              )}
+              {soLookupSo && soLookupQuery.data && soLookupQuery.data.submissions.length === 0 && (
+                <div className="text-sm text-muted-foreground border rounded-md p-4 text-center" data-testid="text-so-lookup-empty">
+                  No submissions found for <span className="font-mono font-medium">#{soLookupQuery.data.serviceOrder}</span>.
+                  <br />This service order has not been submitted through the app.
+                </div>
+              )}
+              {soLookupSo && soLookupQuery.data && soLookupQuery.data.submissions.length > 0 && (
+                <ScrollArea className="max-h-80">
+                  <div className="space-y-2 pr-2">
+                    {soLookupQuery.data.submissions.map((row) => {
+                      const isOpen = row.ticketStatus === "queued" || row.ticketStatus === "pending";
+                      const statusLabel =
+                        row.ticketStatus === "queued" ? "In Queue — waiting to be claimed" :
+                        row.ticketStatus === "pending" ? (row.submissionApproved ? "Approved — awaiting authorization code" : "Being Worked") :
+                        row.ticketStatus === "completed" ? "Completed" :
+                        row.ticketStatus === "rejected" ? "Rejected — tech may resubmit" :
+                        row.ticketStatus === "rejected_closed" ? "Rejected & Closed" :
+                        row.ticketStatus === "invalid" ? "Not Applicable" :
+                        row.ticketStatus;
+                      const workedBy = row.assignedAgentName || row.reviewerName;
+                      return (
+                        <div key={row.id} className="border rounded-md p-3 space-y-1.5" data-testid={`card-so-lookup-${row.id}`}>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <Badge
+                              variant={isOpen ? "default" : "secondary"}
+                              className={
+                                row.ticketStatus === "completed" ? "bg-green-600 text-white" :
+                                row.ticketStatus === "rejected" || row.ticketStatus === "rejected_closed" ? "bg-destructive text-destructive-foreground" :
+                                row.ticketStatus === "pending" ? "bg-blue-600 text-white" :
+                                undefined
+                              }
+                              data-testid={`badge-so-lookup-status-${row.id}`}
+                            >
+                              {statusLabel}
+                            </Badge>
+                            <div className="flex items-center gap-1.5">
+                              {row.requestType === "parts_nla" && <Badge variant="outline" className="text-amber-600 border-amber-600">NLA</Badge>}
+                              {row.resubmissionOf != null && <Badge variant="outline" className="text-blue-600 border-blue-600">Resubmission</Badge>}
+                            </div>
+                          </div>
+                          <div className="text-sm space-y-0.5">
+                            <p>
+                              <span className="text-muted-foreground">Tech:</span>{" "}
+                              <span data-testid={`text-so-lookup-tech-${row.id}`}>{row.technicianName || "—"}{row.technicianRacId ? ` (${row.technicianRacId})` : ""}</span>
+                            </p>
+                            <p>
+                              <span className="text-muted-foreground">{isOpen ? "Working it:" : "Handled by:"}</span>{" "}
+                              <span data-testid={`text-so-lookup-agent-${row.id}`}>
+                                {row.ticketStatus === "queued" ? "No one yet — in the general queue" : (workedBy || "—")}
+                              </span>
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {row.applianceType.charAt(0).toUpperCase() + row.applianceType.slice(1)}
+                              {" · Submitted "}{formatDate(row.createdAt)}
+                              {row.claimedAt ? ` · Claimed ${formatDate(row.claimedAt)}` : ""}
+                              {row.reviewedAt ? ` · Reviewed ${formatDate(row.reviewedAt)}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+              )}
+            </DialogContent>
+          </Dialog>
 
           <div className="flex flex-1 min-h-0">
             <div className={`w-full md:w-[380px] border-r flex flex-col min-h-0 ${selectedId ? "hidden" : ""}`}>

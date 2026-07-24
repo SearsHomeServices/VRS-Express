@@ -5185,6 +5185,30 @@ export async function registerRoutes(
     }
   });
 
+  // ==========================================================================
+  // AGENT SO LOOKUP (2026-07-24) — cross-division visibility so agents can
+  // answer "is this service order in the system, who has it, what's its
+  // status" without asking an admin. Read-only, bounded projection (no media,
+  // no auth/RGC codes, no phone numbers). Any agent may look up any SO —
+  // that is the point of the feature — but they still cannot OPEN tickets
+  // outside their division (the detail route keeps its own checks).
+  // ==========================================================================
+  app.get("/api/agent/so-lookup", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const raw = String(req.query.so ?? "").trim();
+      // Accept "817512345678" too — normalize to the canonical dashed form.
+      const so = /^\d{12}$/.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+      if (!SERVICE_ORDER_REGEX.test(so)) {
+        return res.status(400).json({ error: "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)" });
+      }
+      const rows = await storage.getSubmissionsByServiceOrderForAgentLookup(so);
+      return res.status(200).json({ serviceOrder: so, submissions: rows });
+    } catch (error) {
+      console.error("Agent SO lookup error:", error);
+      return res.status(500).json({ error: "Lookup failed" });
+    }
+  });
+
   app.get("/api/agent/specializations", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
