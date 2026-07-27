@@ -1537,6 +1537,12 @@ export default function AgentDashboard() {
   const [sendToNlaOpen, setSendToNlaOpen] = useState(false);
   const [sendToNlaNotes, setSendToNlaNotes] = useState("");
   const [sendToNlaDivision, setSendToNlaDivision] = useState<string>("");
+  const [sendToVrsOpen, setSendToVrsOpen] = useState(false);
+  const [sendToVrsNotes, setSendToVrsNotes] = useState("");
+  const [sendToVrsDivision, setSendToVrsDivision] = useState<string>("");
+  const [correctTypeOpen, setCorrectTypeOpen] = useState(false);
+  const [correctTypeTarget, setCorrectTypeTarget] = useState<"authorization" | "parts_nla" | "">("");
+  const [correctTypeNotes, setCorrectTypeNotes] = useState("");
 
   const sendToNlaMutation = useMutation({
     mutationFn: async ({ submissionId, notes, division }: { submissionId: number; notes?: string; division?: string }) => {
@@ -1554,6 +1560,49 @@ export default function AgentDashboard() {
       setSendToNlaOpen(false);
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
       queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
+    },
+  });
+
+  const sendToVrsMutation = useMutation({
+    mutationFn: async ({ submissionId, notes, division }: { submissionId: number; notes?: string; division?: string }) => {
+      const res = await apiRequest("POST", `/api/submissions/${submissionId}/send-to-vrs`, { notes, division });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Sent to VRS Authorization",
+        description: "Ticket has been moved to the VRS Authorization queue.",
+      });
+      setSelectedId(null);
+      setSendToVrsNotes("");
+      setSendToVrsDivision("");
+      setSendToVrsOpen(false);
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/stats"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
+    },
+  });
+
+  const correctTypeMutation = useMutation({
+    mutationFn: async ({ submissionId, notes }: { submissionId: number; notes?: string }) => {
+      const res = await apiRequest("PATCH", `/api/submissions/${submissionId}/correct-request-type`, { newRequestType: "authorization", notes });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Request Type Corrected",
+        description: "Ticket is now an Authorization request. You still own this ticket.",
+      });
+      setCorrectTypeOpen(false);
+      setCorrectTypeTarget("");
+      setCorrectTypeNotes("");
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.refetchQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: friendlyApiErrorMessage(err), variant: "destructive" });
@@ -2517,6 +2566,35 @@ export default function AgentDashboard() {
                           >
                             <Package className="w-4 h-4 mr-1" />
                             Send to NLA
+                          </Button>
+                        )}
+                        {isMyTicketsView && selectedSubmission?.requestType === "parts_nla" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSendToVrsDivision(selectedSubmission?.applianceType || "");
+                              setSendToVrsOpen(true);
+                            }}
+                            data-testid="button-send-to-vrs"
+                          >
+                            <ArrowLeft className="w-4 h-4 mr-1" />
+                            Send to VRS Authorization
+                          </Button>
+                        )}
+                        {isMyTicketsView && selectedSubmission?.requestType === "infestation_non_accessible" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setCorrectTypeTarget("");
+                              setCorrectTypeNotes("");
+                              setCorrectTypeOpen(true);
+                            }}
+                            data-testid="button-correct-type"
+                          >
+                            <RotateCcw className="w-4 h-4 mr-1" />
+                            Correct Type
                           </Button>
                         )}
                         {isMyTicketsView && (user?.role === "admin" || user?.role === "super_admin") && (
@@ -5312,6 +5390,123 @@ export default function AgentDashboard() {
               data-testid="button-confirm-send-nla"
             >
               {sendToNlaMutation.isPending ? "Sending..." : "Send to NLA Queue"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={sendToVrsOpen} onOpenChange={(open) => { if (!open) { setSendToVrsOpen(false); setSendToVrsNotes(""); setSendToVrsDivision(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send to VRS Authorization Queue</DialogTitle>
+            <DialogDescription>
+              This will move the ticket to the VRS Authorization queue where an authorization agent can pick it up. The ticket will be unassigned from you.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Division</Label>
+              <Select value={sendToVrsDivision} onValueChange={setSendToVrsDivision}>
+                <SelectTrigger data-testid="select-vrs-division">
+                  <SelectValue placeholder="Select division..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(DIVISION_LABELS)
+                    .filter(([key]) => key !== "nla")
+                    .map(([key, label]) => (
+                    <SelectItem key={key} value={key} data-testid={`option-vrs-div-${key}`}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1 block">Notes (optional)</Label>
+              <Textarea
+                placeholder="Reason for sending to VRS Authorization..."
+                value={sendToVrsNotes}
+                onChange={(e) => setSendToVrsNotes(e.target.value)}
+                className="resize-none"
+                rows={3}
+                data-testid="input-send-vrs-notes"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => { setSendToVrsOpen(false); setSendToVrsNotes(""); setSendToVrsDivision(""); }} data-testid="button-cancel-send-vrs">Cancel</Button>
+            <Button
+              onClick={() => {
+                if (selectedId && sendToVrsDivision) {
+                  sendToVrsMutation.mutate({ submissionId: selectedId, division: sendToVrsDivision, notes: sendToVrsNotes || undefined });
+                }
+              }}
+              disabled={sendToVrsMutation.isPending || !sendToVrsDivision}
+              data-testid="button-confirm-send-vrs"
+            >
+              {sendToVrsMutation.isPending ? "Sending..." : "Send to VRS Authorization"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={correctTypeOpen} onOpenChange={(open) => { if (!open) { setCorrectTypeOpen(false); setCorrectTypeTarget(""); setCorrectTypeNotes(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Correct Request Type</DialogTitle>
+            <DialogDescription>
+              Use this when the technician selected Infestation/Non-Accessible by mistake. The ticket keeps all of its photos and details — no resubmission needed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Change to</Label>
+              <Select value={correctTypeTarget} onValueChange={(v) => setCorrectTypeTarget(v as "authorization" | "parts_nla")}>
+                <SelectTrigger data-testid="select-correct-type">
+                  <SelectValue placeholder="Select correct type..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="authorization" data-testid="option-correct-authorization">Authorization (stays with you)</SelectItem>
+                  <SelectItem value="parts_nla" data-testid="option-correct-nla">Parts — NLA (moves to NLA queue)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1 block">Notes (optional)</Label>
+              <Textarea
+                placeholder="Reason for the correction..."
+                value={correctTypeNotes}
+                onChange={(e) => setCorrectTypeNotes(e.target.value)}
+                className="resize-none"
+                rows={3}
+                data-testid="input-correct-type-notes"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => { setCorrectTypeOpen(false); setCorrectTypeTarget(""); setCorrectTypeNotes(""); }} data-testid="button-cancel-correct-type">Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!selectedId || !correctTypeTarget) return;
+                if (correctTypeTarget === "authorization") {
+                  correctTypeMutation.mutate({ submissionId: selectedId, notes: correctTypeNotes || undefined });
+                } else {
+                  // NLA correction routes through the existing send-to-nla
+                  // flow so queue routing/broadcasts stay uniform.
+                  sendToNlaMutation.mutate({
+                    submissionId: selectedId,
+                    division: selectedSubmission?.applianceType || undefined,
+                    notes: correctTypeNotes || `Corrected from Infestation/Non-Accessible to NLA`,
+                  });
+                  setCorrectTypeOpen(false);
+                  setCorrectTypeTarget("");
+                  setCorrectTypeNotes("");
+                }
+              }}
+              disabled={!correctTypeTarget || correctTypeMutation.isPending || sendToNlaMutation.isPending}
+              data-testid="button-confirm-correct-type"
+            >
+              {(correctTypeMutation.isPending || sendToNlaMutation.isPending) ? "Correcting..." : "Correct Request Type"}
             </Button>
           </div>
         </DialogContent>

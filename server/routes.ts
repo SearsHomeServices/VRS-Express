@@ -4502,6 +4502,226 @@ export async function registerRoutes(
   });
 
   // ========================================================================
+  // SEND TO VRS AUTHORIZATION — Agent sends an NLA ticket back to the VRS
+  // authorization queue. Mirror of /send-to-nla in the opposite direction.
+  // ========================================================================
+
+  app.post("/api/submissions/:id/send-to-vrs", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid submission ID" });
+      }
+
+      const VALID_DIVISIONS = ["refrigeration", "laundry", "cooking", "dishwasher", "microwave", "hvac", "all_other"];
+
+      const bodySchema = z.object({
+        notes: z.string().optional(),
+        division: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+
+      if (parsed.data.division && !VALID_DIVISIONS.includes(parsed.data.division)) {
+        return res.status(400).json({ error: "Invalid division" });
+      }
+
+      const submission = await storage.getSubmission(id);
+      if (!submission) {
+        return res.status(404).json({ error: "Submission not found" });
+      }
+
+      if (submission.requestType !== "parts_nla") {
+        return res.status(400).json({ error: "Only NLA tickets can be sent to VRS Authorization" });
+      }
+
+      if (submission.ticketStatus !== "pending") {
+        return res.status(400).json({ error: "Can only send claimed (pending) tickets to VRS Authorization" });
+      }
+
+      const isAdminActor = authReq.user!.role === "admin" || authReq.user!.role === "super_admin";
+      if (!isAdminActor && submission.assignedTo !== authReq.user!.id) {
+        return res.status(403).json({ error: "You can only send your own claimed tickets to VRS Authorization" });
+      }
+
+      const targetDivision = parsed.data.division || submission.applianceType;
+
+      // Same status-guarded CAS pattern as /send-to-nla: a stale send
+      // returns 409 instead of clobbering a concurrent /process-nla or
+      // reassignment.
+      const expectAssignee = isAdminActor ? undefined : authReq.user!.id;
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
+        requestType: "authorization",
+        applianceType: targetDivision,
+        ticketStatus: "queued",
+        assignedTo: null,
+        // Clear NLA-only state: an escalated NLA ticket carries
+        // nlaEscalatedBy, which gates claiming to P-card holders. Left in
+        // place it would strand the ticket in the VRS queue for most agents.
+        nlaEscalatedBy: null,
+        nlaResolution: null,
+        nlaFoundPartNumber: null,
+        reassignmentNotes: parsed.data.notes || `Sent to VRS Authorization queue by ${authReq.user!.name}`,
+        statusChangedAt: new Date(),
+        updatedAt: new Date(),
+      } as any, expectAssignee);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This ticket was already moved or reassigned. Please refresh and try again.",
+          code: "STALE_STATUS",
+        });
+      }
+
+      broadcastToDivisionAgents(updated.applianceType, {
+        type: "ticket_queued",
+        payload: {
+          submissionId: updated.id,
+          serviceOrder: updated.serviceOrder,
+          applianceType: updated.applianceType,
+          applianceLabel: getDivisionLabel(updated.applianceType),
+          warrantyLabel: getWarrantyLabel(updated.warrantyType),
+        },
+      });
+
+      // Mirror /send-to-nla: releasing the claimed ticket returns the
+      // agent's status from "working" to "online".
+      if (authReq.user!.role === "vrs_agent") {
+        try {
+          await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+            from: "working", to: "online", trigger: "send_to_vrs", submissionId: id,
+          });
+          updateClientStatus(authReq.user!.id, "online");
+          broadcastToAdmins({
+            type: "agent_status_changed",
+            payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
+          });
+          broadcastToAgent(authReq.user!.id, {
+            type: "own_status_changed",
+            payload: { status: "online" },
+          });
+          await broadcastVrsAvailability();
+        } catch (postErr) {
+          console.error(`[send-to-vrs] post-commit agent-status update failed for submission ${updated.id}:`, postErr);
+        }
+      } else if (submission.assignedTo && submission.assignedTo !== authReq.user!.id) {
+        // Admin sent another agent's claimed ticket back to VRS — free the
+        // displaced assignee (same pattern as reassign's previous-assignee
+        // restore). Best-effort: never 500 a send that already committed.
+        try {
+          const prior = await storage.getUser(submission.assignedTo);
+          if (prior && prior.role === "vrs_agent" && (prior as any).agentStatus === "working") {
+            const [vrsPending, nlaPending] = await Promise.all([
+              storage.getPendingCount(prior.id),
+              storage.getNlaPendingCount(prior.id),
+            ]);
+            if (Number(vrsPending) + Number(nlaPending) === 0) {
+              await storage.updateUser(prior.id, { agentStatus: "online", updatedAt: new Date() } as any);
+              await safeLogActivity(prior.id, "status_change_ticket_flow", {
+                from: "working", to: "online", trigger: "send_to_vrs_admin", submissionId: id,
+              });
+              updateClientStatus(prior.id, "online");
+              broadcastToAdmins({
+                type: "agent_status_changed",
+                payload: { userId: prior.id, name: prior.name, status: "online" },
+              });
+              broadcastToAgent(prior.id, {
+                type: "own_status_changed",
+                payload: { status: "online" },
+              });
+              await broadcastVrsAvailability();
+            }
+          }
+        } catch (postErr) {
+          console.error(`[send-to-vrs] previous-assignee status restore failed for submission ${updated.id}:`, postErr);
+        }
+      }
+
+      return res.status(200).json({ submission: updated });
+    } catch (error) {
+      console.error("Send to VRS error:", error);
+      return res.status(500).json({ error: "Failed to send ticket to VRS Authorization queue" });
+    }
+  });
+
+  // ========================================================================
+  // REQUEST-TYPE CORRECTION — Agent corrects an Infestation/Non-Accessible
+  // ticket that the technician selected by mistake. In-place flip to
+  // "authorization" (ticket stays claimed); for NLA the client routes
+  // through the existing /send-to-nla flow so queue routing stays uniform.
+  // ========================================================================
+
+  app.patch("/api/submissions/:id/correct-request-type", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid submission ID" });
+      }
+
+      const bodySchema = z.object({
+        newRequestType: z.enum(["authorization"]),
+        notes: z.string().max(2000).optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+
+      const submission = await storage.getSubmission(id);
+      if (!submission) {
+        return res.status(404).json({ error: "Submission not found" });
+      }
+
+      if (submission.requestType !== "infestation_non_accessible") {
+        return res.status(400).json({ error: "Only Infestation/Non-Accessible tickets can be corrected" });
+      }
+
+      if (submission.ticketStatus !== "pending") {
+        return res.status(400).json({ error: "Can only correct claimed (pending) tickets" });
+      }
+
+      const isAdminActor = authReq.user!.role === "admin" || authReq.user!.role === "super_admin";
+      if (!isAdminActor && submission.assignedTo !== authReq.user!.id) {
+        return res.status(403).json({ error: "You can only correct your own claimed tickets" });
+      }
+
+      const expectAssignee = isAdminActor ? undefined : authReq.user!.id;
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
+        requestType: parsed.data.newRequestType,
+        updatedAt: new Date(),
+      } as any, expectAssignee);
+      if (!updated) {
+        return res.status(409).json({
+          error: "This ticket was already moved or reassigned. Please refresh and try again.",
+          code: "STALE_STATUS",
+        });
+      }
+
+      // Append-only audit note so the correction is visible in the notes
+      // timeline for the tech, agents, and admin audit trail.
+      try {
+        await storage.createSubmissionNote({
+          submissionId: id,
+          authorId: authReq.user!.id,
+          authorRole: authReq.user!.role,
+          body: `Request type corrected from Infestation/Non-Accessible to Authorization by ${authReq.user!.name}.${parsed.data.notes ? ` Note: ${parsed.data.notes}` : ""}`,
+        });
+      } catch (noteErr) {
+        console.error(`[correct-request-type] audit note failed for submission ${id}:`, noteErr);
+      }
+
+      return res.status(200).json({ submission: updated });
+    } catch (error) {
+      console.error("Correct request type error:", error);
+      return res.status(500).json({ error: "Failed to correct request type" });
+    }
+  });
+
+  // ========================================================================
   // DIVISION CORRECTION ROUTE — Agent corrects ticket's appliance type
   // ========================================================================
 
