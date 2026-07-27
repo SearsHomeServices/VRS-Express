@@ -16,7 +16,7 @@ const ALLOWED_CONTENT_TYPE_PREFIXES = ["image/", "video/", "audio/", "applicatio
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
 
-  app.post("/api/uploads/request-url", authenticateToken, requireRole("technician"), async (req, res) => {
+  app.post("/api/uploads/request-url", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
     try {
       const { name, size, contentType } = req.body;
 

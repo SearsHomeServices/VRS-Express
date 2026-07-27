@@ -341,7 +341,7 @@ export interface IStorage {
   updateFeedback(id: number, data: Partial<InsertFeedback>): Promise<Feedback | undefined>;
 
   createSubmissionNote(data: InsertSubmissionNote): Promise<SubmissionNote>;
-  updateSubmissionIfStatusAndPhotos(id: number, expectedStatuses: string[], expectedPhotos: string | null, data: Partial<InsertSubmission>): Promise<Submission | undefined>;
+  updateSubmissionIfStatusAndPhotos(id: number, expectedStatuses: string[], expectedPhotos: string | null, data: Partial<InsertSubmission>, expectedVideoUrl?: string | null, expectedVoiceNoteUrl?: string | null): Promise<Submission | undefined>;
   getSubmissionNotes(submissionId: number): Promise<(SubmissionNote & { authorName: string })[]>;
 
   getAnalytics(): Promise<{
@@ -879,7 +879,15 @@ export class DatabaseStorage implements IStorage {
     id: number,
     expectedStatuses: string[],
     expectedPhotos: string | null,
-    data: Partial<InsertSubmission>
+    data: Partial<InsertSubmission>,
+    // Add-videos-while-open (2026-07-27): optional CAS on video_url too.
+    // Without it, two concurrent video-only appends would both pass the
+    // photos CAS (photos unchanged) and the later write would drop the
+    // earlier video. `undefined` = don't compare (photo-only callers).
+    expectedVideoUrl?: string | null,
+    // Voice-note append (2026-07-27): single-slot column — caller passes
+    // null ("must still be empty") when setting it. `undefined` = don't compare.
+    expectedVoiceNoteUrl?: string | null
   ): Promise<Submission | undefined> {
     if (!expectedStatuses || expectedStatuses.length === 0) {
       throw new Error("updateSubmissionIfStatusAndPhotos requires at least one expectedStatus");
@@ -891,6 +899,20 @@ export class DatabaseStorage implements IStorage {
         ? sql`${submissions.photos} IS NULL`
         : eq(submissions.photos, expectedPhotos),
     ];
+    if (expectedVideoUrl !== undefined) {
+      predicates.push(
+        expectedVideoUrl === null
+          ? sql`${submissions.videoUrl} IS NULL`
+          : eq(submissions.videoUrl, expectedVideoUrl),
+      );
+    }
+    if (expectedVoiceNoteUrl !== undefined) {
+      predicates.push(
+        expectedVoiceNoteUrl === null
+          ? sql`${submissions.voiceNoteUrl} IS NULL`
+          : eq(submissions.voiceNoteUrl, expectedVoiceNoteUrl),
+      );
+    }
     const result = await db
       .update(submissions)
       .set(data)

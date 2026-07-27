@@ -29,7 +29,7 @@ import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Submission } from "@shared/schema";
 import { shouldSuppressCashCall } from "@/lib/smsPreview";
-import { parseVideoUrls } from "@/lib/videoUrls";
+import { parseVideoUrls, MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 
 export default function SubmissionDetailPage() {
   const [, params] = useRoute("/tech/submissions/:id");
@@ -82,6 +82,87 @@ export default function SubmissionDetailPage() {
   const issueInputRef = useRef<HTMLInputElement | null>(null);
   const estimateInputRef = useRef<HTMLInputElement | null>(null);
   const [addUpload, setAddUpload] = useState<{ section: "issue" | "estimate"; done: number; total: number } | null>(null);
+  // Add-videos-while-open (2026-07-27): same append flow for videos. Reuses
+  // the tech-submit rules — max 3 per ticket, 50MB, 30s duration cap, and
+  // non-MP4 files go through /api/uploads/convert-video before attaching.
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const [addVideoPhase, setAddVideoPhase] = useState<"uploading" | "converting" | null>(null);
+  // Voice-note append (2026-07-27): single-slot — only offered when the
+  // ticket has no voice note yet. Records via MediaRecorder exactly like
+  // tech-submit (webm/mp4 output is web-friendly, no conversion needed).
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isRecordingNote, setIsRecordingNote] = useState(false);
+  const [recordingSecs, setRecordingSecs] = useState(0);
+  const [voiceUploading, setVoiceUploading] = useState(false);
+
+  // Safety: stop any active recording (and release the microphone) if the
+  // tech navigates away mid-recording.
+  useEffect(() => {
+    return () => {
+      try {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.stream?.getTracks().forEach((t) => t.stop());
+          mediaRecorderRef.current.stop();
+        }
+      } catch {}
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    };
+  }, []);
+
+  async function attachVoiceNote(file: File) {
+    if (!id) return;
+    setVoiceUploading(true);
+    try {
+      const path = await uploadOneFile(file);
+      if (!path) {
+        toast({ title: "Voice note didn't upload", description: "Your connection dropped — the voice note was NOT attached. Try again.", variant: "destructive" });
+        return;
+      }
+      await apiRequest("POST", `/api/submissions/${id}/photos`, { voiceNote: path });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id, "notes"] });
+      toast({ title: "Voice note added", description: "The voice note was added to this submission." });
+    } catch (err: any) {
+      toast({ title: "Failed to add voice note", description: String(err?.message || err), variant: "destructive" });
+    } finally {
+      setVoiceUploading(false);
+    }
+  }
+
+  function stopVoiceRecording() {
+    mediaRecorderRef.current?.stop();
+    setIsRecordingNote(false);
+  }
+
+  async function startVoiceRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4" });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      setRecordingSecs(0);
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (recordingIntervalRef.current) { clearInterval(recordingIntervalRef.current); recordingIntervalRef.current = null; }
+        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+        const ext = mediaRecorder.mimeType.includes("webm") ? "webm" : "m4a";
+        await attachVoiceNote(new File([blob], `voice-note.${ext}`, { type: mediaRecorder.mimeType }));
+      };
+      mediaRecorder.start(1000);
+      setIsRecordingNote(true);
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingSecs((prev) => {
+          if (prev >= 120) { stopVoiceRecording(); return prev; }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch {
+      toast({ title: "Microphone Access", description: "Please allow microphone access to record a voice note.", variant: "destructive" });
+    }
+  }
 
   async function uploadOneFile(file: File): Promise<string | null> {
     const token = getToken();
@@ -161,6 +242,76 @@ export default function SubmissionDetailPage() {
     } finally {
       setAddUpload(null);
       if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function handleAddVideo(files: FileList | null) {
+    if (!files || files.length === 0 || !id) return;
+    const file = files[0];
+    const reset = () => { if (videoInputRef.current) videoInputRef.current.value = ""; };
+    const existingCount = parseVideoUrls(data?.submission?.videoUrl).length;
+    if (existingCount >= MAX_VIDEOS_PER_TICKET) {
+      toast({ title: "Video limit reached", description: `Maximum ${MAX_VIDEOS_PER_TICKET} videos allowed per ticket.`, variant: "destructive" });
+      reset();
+      return;
+    }
+    const name = file.name.toLowerCase();
+    const isVideo = file.type.startsWith("video/") || name.endsWith(".mp4") || name.endsWith(".mov");
+    if (!isVideo) {
+      toast({ title: "Invalid file", description: "Please select a video file.", variant: "destructive" });
+      reset();
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      toast({ title: "Video too large", description: "Video file exceeds the 50MB limit.", variant: "destructive" });
+      reset();
+      return;
+    }
+    // Duration cap (30s) — same rule as tech-submit. If metadata can't be
+    // read (some codecs), proceed and let the upload/convert path handle it.
+    const durationOk = await new Promise<boolean>((resolve) => {
+      const el = document.createElement("video");
+      el.preload = "metadata";
+      el.onloadedmetadata = () => { URL.revokeObjectURL(el.src); resolve(el.duration <= 30); };
+      el.onerror = () => { URL.revokeObjectURL(el.src); resolve(true); };
+      el.src = URL.createObjectURL(file);
+    });
+    if (!durationOk) {
+      toast({ title: "Video too long", description: "Videos must be 30 seconds or shorter.", variant: "destructive" });
+      reset();
+      return;
+    }
+    setAddVideoPhase("uploading");
+    try {
+      const uploadedPath = await uploadOneFile(file);
+      if (!uploadedPath) {
+        toast({ title: "Video didn't upload", description: "The video did not upload. Check your connection and try again.", variant: "destructive" });
+        return;
+      }
+      let finalPath = uploadedPath;
+      const isMp4 = file.type === "video/mp4" || name.endsWith(".mp4");
+      if (!isMp4) {
+        // Non-MP4 (e.g. iPhone HEVC .mov) must be converted to a playable
+        // MP4 — an unconverted original would show a broken player for
+        // agents/admins, so on failure we do NOT attach the original.
+        setAddVideoPhase("converting");
+        const res = await apiRequest("POST", "/api/uploads/convert-video", { objectPath: uploadedPath });
+        const conv = await res.json();
+        if (conv.converted === false || !conv.objectPath) {
+          toast({ title: "Video couldn't be processed", description: "This video couldn't be converted to a playable format and was not attached. Please try again.", variant: "destructive" });
+          return;
+        }
+        finalPath = conv.objectPath;
+      }
+      await apiRequest("POST", `/api/submissions/${id}/photos`, { videos: [finalPath] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/submissions", id, "notes"] });
+      toast({ title: "Video added", description: "The video was added to this submission." });
+    } catch (err: any) {
+      toast({ title: "Failed to add video", description: String(err?.message || err), variant: "destructive" });
+    } finally {
+      setAddVideoPhase(null);
+      reset();
     }
   }
 
@@ -702,10 +853,10 @@ export default function SubmissionDetailPage() {
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1.5">
                   <ImageIcon className="w-3.5 h-3.5" />
-                  Add More Photos
+                  Add More Attachments
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  You can add photos while this ticket is under review. The reviewing agent will see them right away.
+                  You can add photos, videos, or a voice note while this ticket is under review. The reviewing agent will see them right away.
                 </p>
               </div>
               <input
@@ -726,9 +877,35 @@ export default function SubmissionDetailPage() {
                 onChange={(e) => handleAddPhotos("estimate", e.target.files, estimateInputRef)}
                 data-testid="input-add-estimate-photos"
               />
+              <input
+                ref={videoInputRef}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={(e) => handleAddVideo(e.target.files)}
+                data-testid="input-add-video"
+              />
               {addUpload ? (
                 <div className="text-sm text-muted-foreground py-1" data-testid="text-add-photos-progress">
                   Uploading {addUpload.done}/{addUpload.total} {addUpload.section === "issue" ? "issue" : "model/serial & estimate"} photo(s)...
+                </div>
+              ) : addVideoPhase ? (
+                <div className="text-sm text-muted-foreground py-1" data-testid="text-add-video-progress">
+                  {addVideoPhase === "uploading" ? "Uploading video..." : "Processing video..."}
+                </div>
+              ) : voiceUploading ? (
+                <div className="text-sm text-muted-foreground py-1" data-testid="text-add-voice-progress">
+                  Uploading voice note...
+                </div>
+              ) : isRecordingNote ? (
+                <div className="flex items-center justify-between gap-2 py-1">
+                  <span className="text-sm text-destructive flex items-center gap-1.5" data-testid="text-recording-voice">
+                    <Mic className="w-4 h-4 animate-pulse" />
+                    Recording... {Math.floor(recordingSecs / 60)}:{String(recordingSecs % 60).padStart(2, "0")} (2 min max)
+                  </span>
+                  <Button variant="destructive" size="sm" onClick={stopVoiceRecording} data-testid="button-stop-voice-note">
+                    Stop
+                  </Button>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-2">
@@ -748,6 +925,29 @@ export default function SubmissionDetailPage() {
                   >
                     Add Model/Serial &amp; Estimate
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="col-span-2"
+                    disabled={parseVideoUrls(sub.videoUrl).length >= MAX_VIDEOS_PER_TICKET}
+                    onClick={() => videoInputRef.current?.click()}
+                    data-testid="button-add-video"
+                  >
+                    <Video className="w-4 h-4 mr-1.5" />
+                    {parseVideoUrls(sub.videoUrl).length >= MAX_VIDEOS_PER_TICKET ? "Video Limit Reached (3)" : "Add Video (30 sec max)"}
+                  </Button>
+                  {!sub.voiceNoteUrl && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="col-span-2"
+                      onClick={startVoiceRecording}
+                      data-testid="button-add-voice-note"
+                    >
+                      <Mic className="w-4 h-4 mr-1.5" />
+                      Record Voice Note (2 min max)
+                    </Button>
+                  )}
                 </div>
               )}
             </CardContent>

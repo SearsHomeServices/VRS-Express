@@ -2072,6 +2072,13 @@ export async function registerRoutes(
       const addPhotosSchema = z.object({
         issuePhotos: z.array(objectPath).max(15).optional(),
         estimatePhotos: z.array(objectPath).max(5).optional(),
+        // Add-videos-while-open (2026-07-27): same append-only semantics as
+        // photos. Paths must already be uploaded (and converted to playable
+        // MP4 client-side via /api/uploads/convert-video when needed).
+        videos: z.array(objectPath).max(3).optional(),
+        // Voice note (2026-07-27): single-slot column — can only be added
+        // when the ticket doesn't already have one (no schema change).
+        voiceNote: objectPath.optional(),
         // Same shape + trust bar as the submit-time photoThumbnails field:
         // JSON map of { fullPath: thumbPath }, both /objects/ paths. Paths
         // are not ownership-verified here; access is enforced at read time
@@ -2083,8 +2090,8 @@ export async function registerRoutes(
           );
         }, "photoThumbnails must map /objects/ paths to /objects/ paths"),
       }).refine(
-        (b) => (b.issuePhotos?.length || 0) + (b.estimatePhotos?.length || 0) > 0,
-        "At least one photo is required",
+        (b) => (b.issuePhotos?.length || 0) + (b.estimatePhotos?.length || 0) + (b.videos?.length || 0) + (b.voiceNote ? 1 : 0) > 0,
+        "At least one photo, video, or voice note is required",
       );
       const parsed = addPhotosSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -2092,6 +2099,8 @@ export async function registerRoutes(
       }
       const newIssue = parsed.data.issuePhotos || [];
       const newEstimate = parsed.data.estimatePhotos || [];
+      const newVideos = parsed.data.videos || [];
+      const newVoiceNote = parsed.data.voiceNote || null;
 
       // Merge into the existing photos JSON. New format is
       // { issue: [], estimate: [] }; legacy rows store a bare array — we
@@ -2107,6 +2116,8 @@ export async function registerRoutes(
       let totalAdded = 0;
       let addedIssueCount = 0;
       let addedEstimateCount = 0;
+      let addedVideoCount = 0;
+      let addedVoiceNote = false;
       let cur: any = sub;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (cur.ticketStatus !== "queued" && cur.ticketStatus !== "pending") {
@@ -2126,14 +2137,38 @@ export async function registerRoutes(
         const addedIssue = newIssue.filter((p) => !already.has(p));
         addedIssue.forEach((p) => already.add(p));
         const addedEstimate = newEstimate.filter((p) => !already.has(p));
-        totalAdded = addedIssue.length + addedEstimate.length;
+
+        // Video merge — append-only into the videoUrl JSON array (same
+        // legacy-single-string-compatible format as tech-submit).
+        const videoArr = parseVideoUrlsServer(cur.videoUrl);
+        const videoSet = new Set(videoArr);
+        const addedVideos = newVideos.filter((v) => !videoSet.has(v));
+
+        // Voice note — single-slot column: only attachable when the ticket
+        // doesn't already have one (same limit as first submission).
+        if (newVoiceNote && cur.voiceNoteUrl && cur.voiceNoteUrl !== newVoiceNote) {
+          return res.status(400).json({ error: "This ticket already has a voice note" });
+        }
+        const addingVoiceNote = !!(newVoiceNote && !cur.voiceNoteUrl);
+        totalAdded = addedIssue.length + addedEstimate.length + addedVideos.length + (addingVoiceNote ? 1 : 0);
         addedIssueCount = addedIssue.length;
         addedEstimateCount = addedEstimate.length;
+        addedVideoCount = addedVideos.length;
+        addedVoiceNote = addingVoiceNote;
         if (totalAdded === 0) {
-          return res.status(400).json({ error: "All photos are already attached to this submission" });
+          return res.status(400).json({ error: "All attachments are already on this submission" });
         }
         if (issueArr.length + addedIssue.length > 30 || estimateArr.length + addedEstimate.length > 15) {
           return res.status(400).json({ error: "Photo limit reached for this submission" });
+        }
+        if (videoArr.length + addedVideos.length > 3) {
+          return res.status(400).json({ error: "Maximum 3 videos allowed per ticket" });
+        }
+        const mergedVideoUrl = addedVideos.length > 0
+          ? serializeVideoUrlsServer([...videoArr, ...addedVideos])
+          : cur.videoUrl;
+        if (mergedVideoUrl && mergedVideoUrl.length > 500) {
+          return res.status(400).json({ error: "Combined video URLs exceed storage limit" });
         }
         const mergedPhotos = JSON.stringify({
           issue: [...issueArr, ...addedIssue],
@@ -2154,7 +2189,9 @@ export async function registerRoutes(
         updated = await storage.updateSubmissionIfStatusAndPhotos(id, ["queued", "pending"], cur.photos ?? null, {
           photos: mergedPhotos,
           photoThumbnails: Object.keys(thumbMap).length > 0 ? JSON.stringify(thumbMap) : cur.photoThumbnails,
-        } as any);
+          videoUrl: mergedVideoUrl,
+          ...(addingVoiceNote ? { voiceNoteUrl: newVoiceNote } : {}),
+        } as any, cur.videoUrl ?? null, addingVoiceNote ? null : undefined);
         if (updated) break;
         // CAS conflict — another writer changed the row. Re-read and retry.
         const fresh = await storage.getSubmission(id);
@@ -2172,7 +2209,7 @@ export async function registerRoutes(
           submissionId: id,
           authorId: user.id,
           authorRole: user.role,
-          body: `Added ${totalAdded} additional photo(s)${addedIssueCount ? ` — ${addedIssueCount} issue` : ""}${addedEstimateCount ? ` — ${addedEstimateCount} model/serial/estimate` : ""}.`,
+          body: `Added ${totalAdded} additional attachment(s)${addedIssueCount ? ` — ${addedIssueCount} issue photo(s)` : ""}${addedEstimateCount ? ` — ${addedEstimateCount} model/serial/estimate photo(s)` : ""}${addedVideoCount ? ` — ${addedVideoCount} video(s)` : ""}${addedVoiceNote ? " — 1 voice note" : ""}.`,
         });
       } catch (noteErr) {
         console.error(`[add-photos] audit note failed for submission ${id}:`, noteErr);
@@ -2187,7 +2224,7 @@ export async function registerRoutes(
             payload: {
               submissionId: id,
               serviceOrder: updated.serviceOrder,
-              message: `Technician added ${totalAdded} photo(s) to SO #${updated.serviceOrder}`,
+              message: `Technician added ${totalAdded} attachment(s) to SO #${updated.serviceOrder}`,
             },
           });
         }
@@ -6513,7 +6550,7 @@ export async function registerRoutes(
     objectPath: z.string().min(1),
   });
 
-  app.post("/api/uploads/convert-audio", authenticateToken, requireRole("technician"), async (req, res) => {
+  app.post("/api/uploads/convert-audio", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
     const parsed = convertMediaSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "objectPath is required" });
@@ -6610,7 +6647,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/uploads/convert-video", authenticateToken, requireRole("technician"), async (req, res) => {
+  app.post("/api/uploads/convert-video", authenticateToken, requireRole("technician", "provider_1099"), async (req, res) => {
     const parsed = convertMediaSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "objectPath is required" });
