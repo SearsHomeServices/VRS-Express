@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — VRS ↔ SASHA API Contract V5 admission boundary (2026-07-28)
+- **Sync first.** Reconciled the live Replit `main` with GitHub before implementation: Replit's clean 14-commit lead was transferred over SSH and pushed, then the local checkout was fast-forwarded. All three sources were confirmed at `98542cf` before this branch began.
+- **New contract route.** Added `POST /vrs/authorize` with a dedicated `VRS_SASHA_API_KEY`, timing-safe `X-API-Key` authentication, strict V5 payload validation, and the documented `202` / `400` / `401` / `409` / `429` response shapes. The existing `/api/external/v1/*` ticket API remains separate.
+- **Durable admission queue.** Added the additive `vrs_ai_calls` table plus a transaction-scoped PostgreSQL advisory admission lock. Admission atomically enforces one active call per service order, 10 requests/hour per technician, and 100 active calls globally. Public call IDs are random `vrs_call_<uuid>` values.
+- **Secret and callback hardening.** Per-request `callback_secret` values are AES-256-GCM encrypted using `SESSION_SECRET`; cleartext is excluded from persisted JSON. Callback URLs are restricted to the exact confirmed SASHA prod/stage HTTPS webhook endpoints, including no alternate port, credentials, query, or fragment.
+- **Webhook utility.** Added HMAC-SHA256 signing and contract retry behavior for network failures and `500`/`502`/`503` responses (maximum five attempts, stable event ID).
+- **Scope truth.** This change does **not** implement the Twilio/AI AHS call runner, `cta_no` Snowflake lookup, recording endpoint, or durable webhook event worker. Those are explicitly documented follow-ons; a `202 queued` response does not claim that AHS has been dialed.
+- **Docs/tests.** Added `docs/architecture/vrs-sasha-api-v5.md`, linked it from `replit.md`, and added `npm run test:vrs-sasha` with 15 contract/queue tests.
+
 ### Added — External REST API v1 for non-Replit app integration (2026-07-21)
 - **Why.** An external (non-Replit) application needs to read all VRS workflows and write (create authorization/infestation/NLA requests on behalf of technicians AND record decisions) without going through the PWA/dashboard UIs.
 - **Surface (`server/routes.ts`, helpers in new `server/external-api.ts`).** `GET /api/external/v1/service-orders/:so`, `GET /api/external/v1/submissions` (filters + descending-id cursor pagination, limit ≤100), `POST /api/external/v1/submissions`, `POST /api/external/v1/submissions/:id/decision`. Auth via `x-api-key`: reads reuse `VRS_LOOKUP_API_KEY`, writes require a separate `VRS_EXTERNAL_WRITE_API_KEY` (timing-safe compare, 401 + IP/UA warn log). In-process global rate limits: 60 reads/min, 10 writes/min.

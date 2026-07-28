@@ -1,34 +1,42 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-05-08 00:00
+Updated: 2026-07-28 12:31
 
 ## Current Session
 
-- Implemented and shipped a first-pass performance hot-path patch set focused on sluggishness and lag:
-  - Bounded-concurrency photo uploads (3 workers) in tech submit/resubmit flows.
-  - Safe upload MIME fallback when `File.type` is empty (common iPhone edge case).
-  - Lazy image loading in agent/admin media grids.
-  - Reduced logging overhead in `server/index.ts` by disabling full API body serialization unless explicitly enabled.
-- Updated `CHANGELOG.md` under `[Unreleased]` with the shipped performance fixes.
-- Implemented business-hours policy wording update requested by Tyler:
-  - Agents/admins are not implied to be blocked outside business hours.
-  - Technician after-hours messaging still includes business-hours notice.
-  - Added legacy-template normalization in `server/sms.ts` so existing production template rows stop saying "next business day only".
-  - Updated help-center copy and seed defaults to match.
+- Reconciled source before changing code:
+  - Replit `main` was clean and 14 commits ahead of GitHub.
+  - GitHub was 181 commits ahead of the stale local checkout.
+  - Replit tip `98542cf` was transferred over SSH, pushed to GitHub, and used
+    to fast-forward local `main`.
+- Created `codex/vrs-sasha-api-v5` from synchronized commit `98542cf`.
+- Implemented the safe admission boundary from the supplied VRS ↔ SASHA API
+  Contract V5:
+  - `POST /vrs/authorize`
+  - dedicated `VRS_SASHA_API_KEY`
+  - strict V5 request schema
+  - exact SASHA callback allowlist
+  - durable `vrs_ai_calls` queue
+  - atomic duplicate/per-tech/global admission limits
+  - encrypted callback secrets
+  - HMAC callback signing and retry utility
+- Added 15 passing contract/queue tests and architecture documentation.
 
-## Technician Submission Flow Verified
+## Scope Boundary
 
-- `client/src/pages/tech-submit.tsx` request types:
-  - `authorization` -> Authorization
-  - `infestation_non_accessible` -> Infestation / Non-Accessible
-  - `parts_nla` -> Parts - No Longer Available (NLA)
-- NLA path includes separate NLA part numbers and other available parts.
-- NLA guidance says Sears Protect / Sears PA / Sears Home Warranty (Cinch) only.
-- AHS / First American NLA displays a warning to use TechHub.
+- This branch does not contain a Twilio voice/AI authorization-call runner.
+- `202 queued` means the request was durably admitted, not that AHS was dialed.
+- Still required: dev DB schema application, `cta_no` Snowflake lookup, call
+  state worker, recording endpoint, durable webhook delivery worker, staging
+  DNS/proxy routing, and end-to-end staging validation.
+- No production database schema or data changes were made.
 
 ## Notes
 
-- `rg.exe` failed with Access denied in this Windows/Codex bundle; use `Select-String` if it recurs.
-- Root `AGENTS.md` is currently untracked.
-- Current modified files from performance patch: `client/src/pages/tech-submit.tsx`, `client/src/pages/tech-resubmit.tsx`, `client/src/pages/agent-dashboard.tsx`, `client/src/pages/admin-dashboard.tsx`, `server/index.ts`, plus changelog/memory files.
-- Additional modified files for policy wording: `server/sms.ts`, `server/seed.ts`, `client/src/pages/help-center.tsx`.
+- Existing `/api/external/v1/*` routes manage human ticket workflows and are
+  intentionally separate from the new SASHA AI-call surface.
+- The local user-owned `graphify-out/` directory remains untracked and was not
+  staged or modified.
+- Full `npm run check` has a pre-existing TypeScript baseline; require zero new
+  errors in the VRS SASHA files and use the focused tests plus production build
+  as the feature gate.

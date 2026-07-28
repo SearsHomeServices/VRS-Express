@@ -21,6 +21,8 @@ import {
   SERVICE_ORDER_REGEX,
 } from "./external-api";
 import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
+import { registerVrsSashaApi } from "./vrs-sasha-api";
+import { vrsAiCallQueue } from "./vrs-sasha-store";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -463,6 +465,14 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // VRS ↔ SASHA API Contract V5. This is a separate machine-to-machine
+  // surface from /api/external/v1: it queues AHS AI authorization calls and
+  // uses a dedicated key so ticket-workflow access cannot authorize calls.
+  registerVrsSashaApi(app, {
+    apiKey: process.env.VRS_SASHA_API_KEY,
+    queue: vrsAiCallQueue,
+  });
+
 
   await seedDatabase();
 

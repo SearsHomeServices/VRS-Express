@@ -2,6 +2,10 @@
 
 Machine-to-machine REST surface (`/api/external/v1/*`) for a non-Replit external app. Read access to every workflow (authorization, infestation, NLA) plus write access to create requests and record decisions. Added 2026-07-21.
 
+> This is not the SASHA AI-call contract. SASHA uses the separate
+> `POST /vrs/authorize` queue described in
+> [VRS ↔ SASHA API Contract V5](vrs-sasha-api-v5.md).
+
 ## Design principle: adapter over existing handlers
 
 The write routes do NOT reimplement any business logic. `server/routes.ts` names four previously inline handlers as consts — `createSubmissionHandler`, `claimSubmissionHandler`, `processSubmissionHandler`, `processNlaSubmissionHandler` — re-registers them on their original internal paths unchanged, and the external adapters invoke those same consts with an impersonated user on the request. Every side effect is therefore identical to an in-app action: Snowflake ProcID lookup, SMS chain, WebSocket broadcasts, audit/timing stamps, optimistic-locking claim semantics, idempotent create, and the submissions micro-cache bump.

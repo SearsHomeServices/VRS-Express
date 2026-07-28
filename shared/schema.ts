@@ -726,6 +726,76 @@ export type AgentExternalCredential =
   typeof agentExternalCredentials.$inferSelect;
 
 // ============================================================================
+// VRS ↔ SASHA AI AUTHORIZATION CALL QUEUE
+// ============================================================================
+// Durable boundary for API Contract V5. The authorize endpoint only accepts
+// and queues work; a separate AI/Twilio worker will claim queued rows and drive
+// state transitions. callback_secret is never stored in request_payload or in
+// cleartext — the four callbackSecret* columns contain AES-256-GCM material.
+export const vrsAiCalls = pgTable(
+  "vrs_ai_calls",
+  {
+    id: serial("id").primaryKey(),
+    callId: varchar("call_id", { length: 100 }).notNull(),
+    serviceOrder: varchar("service_order", { length: 20 }).notNull(),
+    techId: varchar("tech_id", { length: 50 }).notNull(),
+    techPhone: varchar("tech_phone", { length: 20 }).notNull(),
+    techName: varchar("tech_name", { length: 255 }).notNull(),
+    state: text("state").notNull().default("queued"),
+    requestPayload: jsonb("request_payload")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    callbackUrl: text("callback_url").notNull(),
+    callbackSecretCipher: text("callback_secret_cipher").notNull(),
+    callbackSecretIv: text("callback_secret_iv").notNull(),
+    callbackSecretAuthTag: text("callback_secret_auth_tag").notNull(),
+    callbackSecretSalt: text("callback_secret_salt").notNull(),
+    ctaNo: varchar("cta_no", { length: 100 }),
+    authNumber: varchar("auth_number", { length: 100 }),
+    authorizedAmount: varchar("authorized_amount", { length: 30 }),
+    requestedAmount: varchar("requested_amount", { length: 30 }),
+    denyReason: text("deny_reason"),
+    failureReason: varchar("failure_reason", { length: 100 }),
+    retryable: boolean("retryable"),
+    durationSec: integer("duration_sec"),
+    recordingUrl: text("recording_url"),
+    webhookEventId: varchar("webhook_event_id", { length: 100 }),
+    webhookAttemptCount: integer("webhook_attempt_count")
+      .notNull()
+      .default(0),
+    webhookLastStatus: integer("webhook_last_status"),
+    webhookLastAttemptAt: timestamp("webhook_last_attempt_at"),
+    webhookDeliveredAt: timestamp("webhook_delivered_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (table) => ({
+    callIdUnique: uniqueIndex("vrs_ai_calls_call_id_uidx").on(table.callId),
+    serviceOrderStateIdx: index("vrs_ai_calls_so_state_idx").on(
+      table.serviceOrder,
+      table.state,
+    ),
+    techCreatedIdx: index("vrs_ai_calls_tech_created_idx").on(
+      table.techId,
+      table.createdAt,
+    ),
+    stateCreatedIdx: index("vrs_ai_calls_state_created_idx").on(
+      table.state,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const insertVrsAiCallSchema = createInsertSchema(vrsAiCalls).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertVrsAiCall = z.infer<typeof insertVrsAiCallSchema>;
+export type VrsAiCall = typeof vrsAiCalls.$inferSelect;
+
+// ============================================================================
 // TECHNICIAN USER VIEW (for admin Field Technicians tab)
 // ============================================================================
 export interface TechnicianUserView {
