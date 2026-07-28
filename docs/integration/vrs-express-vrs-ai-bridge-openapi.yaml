@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: VRS Express to VRS AI Bridge
   version: 1.0.0-v5
-  summary: Enzo-facing machine contract for AHS authorization calls
+  summary: Machine contract between VRS Express and VRS AI for AHS authorization calls
   description: |
     Contract implemented by the VRS Express bridge after the July 24 ownership
     decision. VRS AI hosts POST /vrs/authorize and posts signed result events

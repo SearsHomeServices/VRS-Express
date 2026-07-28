@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-28 14:37
+Updated: 2026-07-28 15:11
 
 ## Decisions
 
@@ -30,3 +30,4 @@ Updated: 2026-07-28 14:37
 - [CX] 2026-07-28 - Treat VRS AI `failed` as terminal per V5, surface its reason/retryable flag on the pending ticket, and preserve the existing manual authorization path until Enzo confirms where redial ownership belongs.
 - [CX] 2026-07-28 - Give Enzo one versioned partner package with a human-readable handoff, machine-readable OpenAPI 3.1 contract, and deterministic HMAC vector. Treat the committed Express schemas as authoritative when the older V5 narrative differs.
 - [CX] 2026-07-28 - Explicitly exclude Phase 2 `queued`, `dialing`, `connected`, and `awaiting_decision` callbacks from the Enzo Phase 1 contract; the Express receiver currently accepts only `approved`, `partial`, `denied`, `failed`, and `requires_info`.
+- [CX] 2026-07-28 - Platform-facing integration documentation names only VRS Express and VRS AI. Individual owners must not appear in filenames, titles, ownership tables, readiness sections, examples, or test-vector identifiers.

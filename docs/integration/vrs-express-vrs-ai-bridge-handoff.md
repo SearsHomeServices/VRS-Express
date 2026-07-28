@@ -1,19 +1,19 @@
-# Enzo Integration Handoff - VRS Express to VRS AI
+# VRS Express to VRS AI Integration Handoff
 
 | Item | Value |
 |---|---|
-| Audience | Enzo and the VRS AI implementation team |
+| Audience | VRS Express and VRS AI implementation teams |
 | Status | Staging integration handoff |
 | Prepared | 2026-07-28 |
 | Contract basis | SASHA API Contract V5 plus the July 24 Granola ownership decision |
 | Express implementation | Commit `6ec180f` on draft [PR #1](https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1) |
-| Machine-readable contract | [enzo-vrs-ai-bridge-openapi.yaml](./enzo-vrs-ai-bridge-openapi.yaml) |
+| Machine-readable contract | [vrs-express-vrs-ai-bridge-openapi.yaml](./vrs-express-vrs-ai-bridge-openapi.yaml) |
 
 No production deployment or production database change has been made. This
 document describes the interface implemented in the draft VRS Express branch
 and the corresponding interface VRS AI must provide.
 
-## 1. What Enzo's team needs to implement
+## 1. What VRS AI needs to implement
 
 VRS AI must:
 
@@ -57,7 +57,7 @@ asynchronous admission, not proof that dialing has started or completed.
 |---|---|
 | SASHA / Tech Hub | Initial V5 data capture, initial Express intake, final result UX |
 | VRS Express | Human review, outbound AI dispatch, result verification, ticket/SMS processing, SASHA forwarding |
-| VRS AI / Enzo | Admission limits, prompt construction, AHS/Twilio call, recordings, call lifecycle, signed callback production and retries |
+| VRS AI | Admission limits, prompt construction, AHS/Twilio call, recordings, call lifecycle, signed callback production and retries |
 
 Phase 1 is American Home Shield authorization only. First American is a
 separate portal workflow and is not part of this interface. Choice, OEM, and
@@ -143,7 +143,7 @@ Express callback endpoint and Express callback secret.
 
 ### 5.3 Required fields and constraints
 
-Unknown fields are not accepted at the Express boundary. Enzo should implement
+Unknown fields are not accepted at the Express boundary. VRS AI should implement
 the V5 names exactly; V4 aliases such as `end_level` and
 `diagnostic_photos` must not be used.
 
@@ -207,7 +207,7 @@ Each `comments[]` entry requires:
   send `cta_no`.
 - Use `appliance_type` as additive prompt context even when `model_number` is
   present.
-- Enzo must confirm the prompt placement of `repair_replace_rationale`; see
+- VRS AI must confirm the prompt placement of `repair_replace_rationale`; see
   Open Decision 1 below.
 
 ## 6. VRS AI authorize responses
@@ -426,7 +426,7 @@ endpoint.
 | `requires_info` | Status-only update; keep ticket pending and wait for later terminal event |
 
 Express then forwards the event to SASHA with the public Express bridge
-`callId`. Enzo does not perform the SASHA forwarding hop.
+`callId`. VRS AI does not perform the SASHA forwarding hop.
 
 ## 8. Callback signing
 
@@ -456,13 +456,13 @@ This vector is for implementation testing only.
 
 ```text
 Secret:
-enzo-test-secret-do-not-use-in-prod
+vrs-ai-test-secret-do-not-use-in-prod
 
 Exact raw body:
 {"version":1,"eventId":"evt_001","callId":"vrs_ai_call_456","soNo":"13538277","occurredAt":"2026-07-24T17:24:00Z","state":"approved","authNumber":"AHS-001","authorizedAmount":365.6}
 
 Expected X-VRS-Signature:
-sha256=d449bc5f9f12b86eb0098220b3ee0bba7e8d0894918ed7418180958acc6df96a
+sha256=5631d513c93853fa58efc382eed0c19db14ab42b94b1fa44938bb44ee352d4b6
 ```
 
 Production `eventId` values should be UUID v4 even though this deterministic
@@ -525,7 +525,7 @@ repeat the ticket decision or technician SMS.
 
 ## 11. Staging acceptance checklist
 
-### 11.1 Enzo / VRS AI readiness
+### 11.1 VRS AI readiness
 
 - [ ] Staging `POST /vrs/authorize` is reachable at the confirmed hostname.
 - [ ] A staging API key is provided to the Express team through a secure
@@ -541,7 +541,7 @@ repeat the ticket decision or technician SMS.
 ### 11.2 Express readiness
 
 - [ ] Exposed credentials from the earlier SSH-output incident are rotated
-      with Tyler's approval and coordination.
+      with authorized approval and coordination.
 - [ ] Additive bridge schema is applied to the development database only.
 - [ ] `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and
       `VRS_AI_CALLBACK_URL` are configured in staging.
@@ -568,7 +568,7 @@ Capture HTTP status, Express bridge call ID, VRS AI call ID, event ID, state,
 and timestamps. Do not capture API keys, callback secrets, customer PII, or
 full phone numbers.
 
-## 12. Decisions needed from Enzo
+## 12. Decisions needed from VRS AI
 
 ### Decision 1 - `repair_replace_rationale` prompt placement
 

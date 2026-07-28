@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-28 14:37 — Created and validated the send-ready Enzo VRS AI integration package.
+> **Last Touched:** Codex — 2026-07-28 15:11 — Converted the integration package to platform-only VRS Express and VRS AI naming.
 
 ## Current State
 - Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf`
@@ -11,7 +11,7 @@
 - Draft PR #1 is open: `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
 - The corrected PR implements the meeting-confirmed flow:
   SASHA/Tech Hub → normal VRS Express pending ticket → human
-  **Approve & Send to VRS AI** action → Enzo's VRS AI → signed result callback
+  **Approve & Send to VRS AI** action → VRS AI → signed result callback
   → normal VRS Express result/SMS handling → signed SASHA callback.
 - Phase 1 is AHS-only. The bridge reuses the existing submission and process
   handlers, persists safe review context, tracks AI dispatch separately, and
@@ -21,10 +21,13 @@
 - Verification: 32/32 focused tests pass, the production build passes, and a
   fresh `origin/main` worktree comparison produced the exact same 56 raw / 26
   normalized pre-existing TypeScript diagnostics (zero branch delta).
-- Enzo's partner package now exists as Markdown, OpenAPI 3.1, and a polished
+- The VRS Express-to-VRS AI partner package now exists as Markdown, OpenAPI 3.1, and a polished
   10-page DOCX. It covers exact request/response/callback contracts, HMAC test
-  vector, retries/idempotency, staging acceptance evidence, and Enzo's three
+  vector, retries/idempotency, staging acceptance evidence, and VRS AI's three
   remaining decisions.
+- Platform-facing package filenames, headings, ownership language, readiness
+  checks, and test-vector identifiers now reference only VRS Express and VRS
+  AI. All 10 revised DOCX pages were rendered and visually reviewed.
 - The OpenAPI parses with all local references resolved; its authorize example
   and all five callback examples pass the committed Zod schemas; the HMAC
   vector matches the implementation. All DOCX pages were rendered and visually
@@ -50,6 +53,7 @@
 - [CX] 2026-07-28 - Treat VRS AI `failed` as terminal under V5 but leave the Express ticket pending for the existing manual path; Enzo must confirm whether retryable failures are redialed by AI or need an explicit Express retry action.
 - [CX] 2026-07-28 - Use a paired human-readable handoff plus OpenAPI 3.1 as the Enzo integration source, with the committed Express schemas authoritative over older narrative examples.
 - [CX] 2026-07-28 - Do not include Phase 2 intermediate call-state callbacks in the Enzo Phase 1 contract; Express currently accepts only the five implemented V5 result shapes.
+- [CX] 2026-07-28 - Use only the VRS Express and VRS AI platform names in external integration artifacts; individual owner names remain internal context only.
 
 ## Open Threads
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
@@ -59,7 +63,7 @@
   URL without exposing their values in Git or task output.
 - [CX] Complete an AHS-only staging transaction through the full Express
   approval bridge before any production approval.
-- [CX] Confirm with Enzo whether retryable terminal failures are redialed by
+- [CX] Confirm with the VRS AI team whether retryable terminal failures are redialed by
   VRS AI or require an explicit Express retry endpoint/button.
 - [CX] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
   expiry behavior.

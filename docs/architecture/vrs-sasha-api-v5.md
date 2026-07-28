@@ -17,7 +17,7 @@ SASHA / Tech Hub
   → POST /vrs/authorize on VRS Express
   → normal pending VRS Express ticket
   → human agent: Approve & Send to VRS AI
-  → POST /vrs/authorize on Enzo's VRS AI
+  → POST /vrs/authorize on VRS AI
   → AHS phone authorization
   → signed callback to VRS Express
   → existing VRS ticket decision + technician SMS
@@ -34,7 +34,7 @@ outside this increment.
 |---|---|
 | SASHA / Tech Hub | Assemble the V5 payload, call Express, and receive the final callback. |
 | VRS Express (this repository) | Authenticate intake, create/enrich the human ticket, hold for approval, dispatch to VRS AI, apply results, keep the existing SMS path, and forward callbacks. |
-| VRS AI (Enzo) | Enforce call admission limits, build the AI prompt, dial AHS, manage recordings/call state, and send V5 events. |
+| VRS AI | Enforce call admission limits, build the AI prompt, dial AHS, manage recordings/call state, and send V5 events. |
 
 The existing `/api/external/v1/*` API remains a separate general-purpose
 human-ticket integration surface.
@@ -139,7 +139,7 @@ Never run `db:push` against the production-connected Replit database.
 
 - Valid staging API/HMAC keys from SASHA and VRS AI
 - A routable public Express callback URL
-- Enzo's decision for V5 O-V5-3: how
+- VRS AI's decision for V5 O-V5-3: how
   `repair_replace_rationale` enters the AI prompt
 - A real AHS staging transaction and known callback test vector
 

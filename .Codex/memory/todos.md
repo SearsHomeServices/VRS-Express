@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-28 14:37
+Updated: 2026-07-28 15:11
 
 ## Done
 
@@ -22,7 +22,7 @@ Updated: 2026-07-28 14:37
 - [x] Added 15 V5 contract/queue tests and architecture documentation.
 - [x] Located and reviewed the July 24 Granola architecture meeting.
 - [x] Confirmed VRS Express is the human approval/data-enrichment bridge and
-  Enzo's VRS AI platform owns call execution.
+  VRS AI owns call execution.
 - [x] Removed AI-owned admission/rate-limit/worker behavior from VRS Express.
 - [x] Implemented authenticated SASHA/Tech Hub V5 intake into a normal pending
   VRS Express ticket.
@@ -35,11 +35,14 @@ Updated: 2026-07-28 14:37
 - [x] Added focused bridge/UI-copy tests and updated architecture documentation.
 - [x] Completed final 32/32 tests, production build, exact `origin/main`
   TypeScript-baseline comparison, commit/push, and draft PR #1 update.
-- [x] Created the Enzo integration handoff in Markdown and DOCX plus a matching
+- [x] Created the VRS Express-to-VRS AI integration handoff in Markdown and DOCX plus a matching
   OpenAPI 3.1 contract, deterministic HMAC vector, and staging acceptance
   checklist.
 - [x] Validated the OpenAPI/example payloads against the committed schemas and
   visually inspected all 10 rendered DOCX pages.
+- [x] Removed the individual owner's name from the platform-facing package,
+  renamed all three deliverables, recalculated the neutral HMAC test vector,
+  and re-rendered/reviewed all 10 DOCX pages.
 
 ## Open
 
@@ -60,7 +63,7 @@ Updated: 2026-07-28 14:37
 - [ ] Configure/verify the confirmed NextGen staging and production hostnames.
 - [ ] Run a real SASHA/Tech Hub → VRS Express → human approval → VRS AI →
   VRS Express callback staging transaction before production approval.
-- [ ] Decide with Enzo whether retryable terminal failures are redialed inside
+- [ ] Decide with the VRS AI team whether retryable terminal failures are redialed inside
   VRS AI or need an explicit Express retry endpoint/button.
 - [ ] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
-  expiry behavior with Enzo.
+  expiry behavior with the VRS AI team.
