@@ -24,6 +24,10 @@ Updated: 2026-07-28 12:31
 ## Open
 
 - [ ] Review and merge draft PR #1 (`codex/vrs-sasha-api-v5`).
+- [ ] With Tyler's explicit approval and coordination, rotate every credential
+  exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
+  passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API
+  keys, and VRS master password. Restart/redeploy only after Tyler approves.
 - [ ] Add server-side pagination and SQL-backed search for `/api/submissions` to avoid broad fetch + in-memory filtering under large volumes.
 - [ ] Stream CSV export rows instead of building one large in-memory string.
 - [ ] Remove duplicate metadata/ACL fetches in object-serving path to reduce image/video time-to-first-byte.

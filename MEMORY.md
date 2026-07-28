@@ -11,6 +11,9 @@
 - Verification: 15/15 focused tests pass, production build passes, and TypeScript comparison shows the same 26 normalized baseline errors on both branch and `origin/main` (0 new).
 - No production DB schema/data change and no deployment were performed.
 - Local user-owned `graphify-out/` remains untracked and untouched.
+- [HANDOFF] Final SSH verification accidentally printed the Replit environment
+  into the task tool output due to nested-shell quoting. Treat every secret
+  present on the box as exposed; rotation is pending Tyler's explicit approval.
 
 ## Recent Decisions
 - [CX] 2026-04-27 - Treated Tyler's "development" wording as a request for the latest published development state, but verified GitHub branch reality before pulling. Since no `development` branch exists, fast-forwarded `main` from `origin/main`.
@@ -26,9 +29,18 @@
 - [CX] Build the Twilio/AI call worker, Snowflake `cta_no` lookup, recording route, and durable webhook-event worker.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
 - [CX] Configure the confirmed NextGen hostnames and complete a real SASHA-to-VRS-to-callback staging transaction.
+- [HANDOFF] Rotate exposed Replit environment credentials before relying on
+  them again: OpenAI, Snowflake credentials/key material, Twilio auth,
+  Replit identity/DB tokens, `SESSION_SECRET`, VRS API keys, and VRS master
+  password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
 - [CX] 2026-04-27 - Bundled `rg.exe` failed with Windows `Access is denied`; PowerShell `Select-String` worked as the fallback.
 - [CX] 2026-04-27 - Project root had no `MEMORY.md` and no `.Codex/memory` directory at session start, despite repo instructions requiring both to be maintained.
 - [CX] 2026-07-28 - `git push` from the Replit shell hung on an HTTPS credential prompt. Safe path: fetch the Replit branch over SSH into the authenticated local checkout, verify fast-forward ancestry, then push locally.
 - [CX] 2026-07-28 - `npm run check` is not clean on `main`; compare normalized diagnostics against a fresh baseline instead of claiming the whole repository type-checks.
+- [CX] 2026-07-28 - A nested `ssh ... sh -c` quoting failure executed `set`
+  without the intended options and printed the Replit environment. Never place
+  shell setup plus verification in a nested quoted command on this box; use
+  single direct commands and ensure secret-bearing environment output is
+  impossible.

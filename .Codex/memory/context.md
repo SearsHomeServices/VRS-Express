@@ -33,6 +33,10 @@ Updated: 2026-07-28 12:31
   state worker, recording endpoint, durable webhook delivery worker, staging
   DNS/proxy routing, and end-to-end staging validation.
 - No production database schema or data changes were made.
+- Security incident: the final nested-shell SSH verification printed the Replit
+  environment into task tool output. No values were saved to files or Git, but
+  all box credentials must be treated as exposed pending Tyler-approved
+  rotation.
 
 ## Notes
 
