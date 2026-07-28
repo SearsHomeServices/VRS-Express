@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-28 12:31
+Updated: 2026-07-28 13:07
 
 ## Done
 
@@ -20,10 +20,13 @@ Updated: 2026-07-28 12:31
 - [x] Added exact SASHA callback URL allowlisting and encrypted callback-secret storage.
 - [x] Added HMAC-SHA256 webhook signing and the V5 retry policy utility.
 - [x] Added 15 V5 contract/queue tests and architecture documentation.
+- [x] Located and reviewed the July 24 Granola architecture meeting.
+- [x] Confirmed VRS Express is the human approval/data-enrichment bridge and
+  Enzo's VRS AI platform owns call execution.
 
 ## Open
 
-- [ ] Review and merge draft PR #1 (`codex/vrs-sasha-api-v5`).
+- [ ] Rework draft PR #1 (`codex/vrs-sasha-api-v5`) before review or merge.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential
   exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
   passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API
@@ -32,12 +35,20 @@ Updated: 2026-07-28 12:31
 - [ ] Stream CSV export rows instead of building one large in-memory string.
 - [ ] Remove duplicate metadata/ACL fetches in object-serving path to reduce image/video time-to-first-byte.
 - [ ] Add indexes for hottest submission filters/sorts and verify with `EXPLAIN ANALYZE`.
-- [ ] Apply the additive `vrs_ai_calls` schema to the VRS development DB only, then promote through the normal deployment pipeline.
-- [ ] Configure `VRS_SASHA_API_KEY` in staging through the environment secret manager.
-- [ ] Build the Twilio/AI AHS call worker that claims queued VRS AI calls and drives state transitions.
-- [ ] Add Snowflake `cta_no` lookup from `IH_SERVICEORDER_FULLDETAIL_TBL`.
-- [ ] Persist webhook events/attempts and invoke `deliverVrsWebhook()` from the call worker.
-- [ ] Implement protected recording retrieval and populate `recordingUrl`.
+- [ ] Remove AI-owned admission/rate-limit/webhook-sender behavior from the
+  VRS Express side of the draft.
+- [ ] Define and implement authenticated SASHA/Tech Hub intake into a pending
+  VRS Express review ticket.
+- [ ] Add the new human approval/send-to-VRS-AI action and UI button.
+- [ ] Add the outbound VRS AI `/vrs/authorize` client and outbound-call
+  tracking suitable for VRS Express.
+- [ ] Add a signed VRS AI result callback receiver that updates the ticket and
+  preserves the existing technician SMS flow.
+- [ ] Gate Phase 1 automation to AHS; keep First American portal automation
+  separate until its execution path is validated.
+- [ ] Do not apply the current `vrs_ai_calls` schema until the Express-side
+  tracking design is reworked and reviewed.
 - [ ] Resolve V5 O-V5-3: how `repair_replace_rationale` enters the AI prompt.
 - [ ] Configure/verify the confirmed NextGen staging and production hostnames.
-- [ ] Run a real SASHA → VRS → callback staging transaction before production approval.
+- [ ] Run a real SASHA/Tech Hub → VRS Express → human approval → VRS AI →
+  VRS Express callback staging transaction before production approval.

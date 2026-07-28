@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — VRS Express/VRS AI ownership correction (2026-07-28)
+- **Architecture source confirmed.** The July 24 Granola meeting establishes VRS Express as the human approval and data-enrichment bridge: SASHA/Tech Hub submits data to VRS Express, a human approves it, VRS Express calls Enzo's VRS AI platform, and the result returns to VRS Express while the existing technician SMS remains in place.
+- **Draft status.** Draft PR #1 must not be merged in its current form. Its admission limits, AI-call queue semantics, and webhook sender are VRS AI responsibilities and need to be removed or relocated; the Express implementation must instead provide intake, pending review, a new approve/send action, an outbound AI client, and a signed result callback receiver.
+- **Scope correction.** Phase 1 phone automation is AHS. First American remains a separate portal workflow pending a validated execution path; Choice/OEM partners are excluded and Assurance follows later.
+
 ### Added — VRS ↔ SASHA API Contract V5 admission boundary (2026-07-28)
 - **Sync first.** Reconciled the live Replit `main` with GitHub before implementation: Replit's clean 14-commit lead was transferred over SSH and pushed, then the local checkout was fast-forwarded. All three sources were confirmed at `98542cf` before this branch began.
 - **New contract route.** Added `POST /vrs/authorize` with a dedicated `VRS_SASHA_API_KEY`, timing-safe `X-API-Key` authentication, strict V5 payload validation, and the documented `202` / `400` / `401` / `409` / `429` response shapes. The existing `/api/external/v1/*` ticket API remains separate.

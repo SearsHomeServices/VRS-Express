@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-28 12:31
+Updated: 2026-07-28 13:07
 
 ## Decisions
 
@@ -20,3 +20,6 @@ Updated: 2026-07-28 12:31
 - [CX] 2026-07-28 - Use a dedicated `VRS_SASHA_API_KEY`, exact callback URL allowlisting, random public call IDs, and AES-256-GCM encryption of callback secrets.
 - [CX] 2026-07-28 - Serialize VRS AI call admission with a PostgreSQL transaction advisory lock so duplicate, per-tech, and global-cap checks remain atomic across concurrent service orders.
 - [CX] 2026-07-28 - Add only a new table in Drizzle schema and do not run `db:push` against the production-connected Replit environment.
+- [CX] 2026-07-28 - Use the July 24 Granola meeting as the ownership source of truth: VRS Express receives/enriches the SASHA/Tech Hub request, waits for a human approval action, then sends to Enzo's VRS AI service.
+- [CX] 2026-07-28 - Do not merge the current AI-side admission implementation. Rework it so VRS Express owns intake, human review, outbound AI invocation, callback intake, ticket updates, and existing technician SMS; the AI platform owns call admission, Twilio/AI execution, recording, and webhook delivery.
+- [CX] 2026-07-28 - Limit the initial phone-automation path to AHS. Treat First American portal automation as a separate integration pending an execution-capable API or validated scraper; exclude Choice/OEM and defer Assurance.
