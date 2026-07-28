@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-28 13:49
+Updated: 2026-07-28 14:37
 
 ## Current Session
 
@@ -33,6 +33,18 @@ Updated: 2026-07-28 13:49
 - Final verification: 32/32 bridge tests pass and the production build passes.
   Branch and a fresh `origin/main` worktree each have the same 56 raw / 26
   normalized pre-existing TypeScript diagnostics, with zero branch delta.
+- Added the Enzo-facing integration package:
+  - `docs/integration/enzo-vrs-ai-bridge-handoff.md`
+  - `docs/integration/enzo-vrs-ai-bridge-openapi.yaml`
+  - `output/doc/Enzo-VRS-AI-Bridge-Integration-Handoff.docx`
+- The package documents the exact Express-to-AI request and response contract,
+  five Phase 1 callback shapes, raw-body HMAC and retry rules, a deterministic
+  signing vector, ownership, business effects, staging evidence, and three
+  decisions Enzo must return.
+- Documentation validation passes: OpenAPI 3.1 parses with all local schema
+  references resolved; its authorize example and all five callback examples
+  pass the committed Zod schemas; the HMAC vector matches the implementation.
+  The DOCX was rendered through Word and all 10 pages were visually inspected.
 
 ## Scope Boundary
 
@@ -53,6 +65,8 @@ Updated: 2026-07-28 13:49
 
 - Required staging variables are documented in
   `docs/architecture/vrs-sasha-api-v5.md`.
+- The Enzo package deliberately contains no live keys, callback secrets, or
+  customer data. Actual staging values must be exchanged securely.
 - Additive `vrs_ai_calls` / `vrs_ai_call_events` schema remains unapplied.
 - A `failed` AI callback remains pending for the existing manual authorization
   flow; `retryable` is surfaced to the agent, but automatic redial is owned by

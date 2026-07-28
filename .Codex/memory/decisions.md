@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-28 13:33
+Updated: 2026-07-28 14:37
 
 ## Decisions
 
@@ -28,3 +28,5 @@ Updated: 2026-07-28 13:33
 - [CX] 2026-07-28 - Use a separate event ledger because `requires_info` may precede a terminal event and because a failed SASHA forward must resume without repeating ticket or SMS side effects.
 - [CX] 2026-07-28 - Use `VRS_BRIDGE_ENCRYPTION_KEY` instead of `SESSION_SECRET` for stored SASHA callback secrets so auth-secret rotation does not make in-flight callbacks undecryptable.
 - [CX] 2026-07-28 - Treat VRS AI `failed` as terminal per V5, surface its reason/retryable flag on the pending ticket, and preserve the existing manual authorization path until Enzo confirms where redial ownership belongs.
+- [CX] 2026-07-28 - Give Enzo one versioned partner package with a human-readable handoff, machine-readable OpenAPI 3.1 contract, and deterministic HMAC vector. Treat the committed Express schemas as authoritative when the older V5 narrative differs.
+- [CX] 2026-07-28 - Explicitly exclude Phase 2 `queued`, `dialing`, `connected`, and `awaiting_decision` callbacks from the Enzo Phase 1 contract; the Express receiver currently accepts only `approved`, `partial`, `denied`, `failed`, and `requires_info`.

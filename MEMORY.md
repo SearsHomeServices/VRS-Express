@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-28 13:49 — Completed and verified the AHS VRS Express-to-VRS AI human-approval bridge for draft PR #1.
+> **Last Touched:** Codex — 2026-07-28 14:37 — Created and validated the send-ready Enzo VRS AI integration package.
 
 ## Current State
 - Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf`
@@ -21,6 +21,14 @@
 - Verification: 32/32 focused tests pass, the production build passes, and a
   fresh `origin/main` worktree comparison produced the exact same 56 raw / 26
   normalized pre-existing TypeScript diagnostics (zero branch delta).
+- Enzo's partner package now exists as Markdown, OpenAPI 3.1, and a polished
+  10-page DOCX. It covers exact request/response/callback contracts, HMAC test
+  vector, retries/idempotency, staging acceptance evidence, and Enzo's three
+  remaining decisions.
+- The OpenAPI parses with all local references resolved; its authorize example
+  and all five callback examples pass the committed Zod schemas; the HMAC
+  vector matches the implementation. All DOCX pages were rendered and visually
+  inspected.
 - No production DB schema/data change and no deployment were performed.
 - Local user-owned `graphify-out/` remains untracked and untouched.
 - [HANDOFF] Final SSH verification accidentally printed the Replit environment
@@ -40,6 +48,8 @@
 - [CX] 2026-07-28 - Gave Express and VRS AI separate call IDs and added an event ledger so `requires_info` can precede a terminal event and failed SASHA forwarding can resume without reapplying ticket/SMS side effects.
 - [CX] 2026-07-28 - Separated bridge-secret encryption from `SESSION_SECRET`; rotating an auth secret must not make in-flight SASHA callbacks undecryptable.
 - [CX] 2026-07-28 - Treat VRS AI `failed` as terminal under V5 but leave the Express ticket pending for the existing manual path; Enzo must confirm whether retryable failures are redialed by AI or need an explicit Express retry action.
+- [CX] 2026-07-28 - Use a paired human-readable handoff plus OpenAPI 3.1 as the Enzo integration source, with the committed Express schemas authoritative over older narrative examples.
+- [CX] 2026-07-28 - Do not include Phase 2 intermediate call-state callbacks in the Enzo Phase 1 contract; Express currently accepts only the five implemented V5 result shapes.
 
 ## Open Threads
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
@@ -51,6 +61,8 @@
   approval bridge before any production approval.
 - [CX] Confirm with Enzo whether retryable terminal failures are redialed by
   VRS AI or require an explicit Express retry endpoint/button.
+- [CX] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
+  expiry behavior.
 - [CX] Validate an execution-capable First American portal path separately
   before including it; Choice/OEM remain excluded and Assurance remains later.
 - [HANDOFF] Rotate exposed Replit environment credentials before relying on

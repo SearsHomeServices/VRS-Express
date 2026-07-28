@@ -1,0 +1,681 @@
+openapi: 3.1.0
+info:
+  title: VRS Express to VRS AI Bridge
+  version: 1.0.0-v5
+  summary: Enzo-facing machine contract for AHS authorization calls
+  description: |
+    Contract implemented by the VRS Express bridge after the July 24 ownership
+    decision. VRS AI hosts POST /vrs/authorize and posts signed result events
+    to the callback_url supplied by Express. Phase 1 supports AHS only.
+servers:
+  - url: https://vrs-dev.stage.nextgen.shs.com
+    description: Staging / development VRS AI
+  - url: https://vrs.prod.nextgen.shs.com
+    description: Production VRS AI
+tags:
+  - name: Authorization
+paths:
+  /vrs/authorize:
+    post:
+      tags:
+        - Authorization
+      operationId: authorizeAhsCall
+      summary: Admit an approved AHS authorization call
+      description: |
+        VRS Express calls this endpoint only after a human agent approves the
+        ticket for AI dispatch. VRS AI owns admission, Twilio/AHS execution,
+        prompt construction, recordings, and callback production.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeRequest'
+            examples:
+              ahsRepair:
+                value:
+                  service_order: '13538277'
+                  tech_id: '0123456'
+                  tech_phone: '+12145550199'
+                  tech_name: Carlos Rivera
+                  reason_for_call: authorization
+                  callback_url: https://vrs-express-stage.example/api/integrations/vrs-ai/v1/webhook
+                  callback_secret: express-supplied-secret-at-least-16-characters
+                  parts:
+                    - part_id: WPW10503278
+                      part_description: Electronic Control Board
+                      sell_price: 245
+                      part_function: Controls wash cycle timing and motor speed.
+                  customer_name: Maria Gonzalez
+                  customer_address: 742 Evergreen Terrace, Hagerstown, MD 21740
+                  service_address: 742 Evergreen Terrace, Hagerstown, MD 21740
+                  brand: Whirlpool
+                  model_number: WTW5000DW1
+                  serial_number: C31290822
+                  appliance_type: Washer
+                  appliance_age: 4
+                  labor_amount: 120
+                  tax_amount: 15.6
+                  part_price: 245
+                  appliance_location: laundry room
+                  failure_cause: normal-wear
+                  tech_recommendation: repair
+                  repair_replace_rationale: Board failure is isolated and repair is within the coverage threshold.
+                  appliance_grade: mid
+                  partner_id: ahs
+                  appliance_photos:
+                    - https://srdm.example.com/photo_1.jpg
+                  comments:
+                    - tech_id: '0123456'
+                      work_item: failure_diagnosis
+                      text: Diagnostic code F7E1.
+                      timestamp: '2026-05-12T13:55:00Z'
+      responses:
+        '202':
+          description: Call admitted asynchronously
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorizeAccepted'
+        '400':
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '401':
+          description: Missing or invalid X-API-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: An active call already exists for the service order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DuplicateCall'
+        '429':
+          description: VRS AI admission limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimited'
+        '500':
+          description: VRS AI internal failure before admission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: VRS AI dependency failure before admission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: VRS AI temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      callbacks:
+        vrsAiResult:
+          '{$request.body#/callback_url}':
+            post:
+              operationId: receiveVrsAiResult
+              summary: Deliver a signed VRS AI result to Express
+              description: |
+                Sign the exact raw request body with HMAC-SHA256 using the
+                callback_secret from the authorize request. Prefix the
+                lowercase hexadecimal digest with sha256=. Use the same
+                eventId and exact body on retries.
+              parameters:
+                - name: X-VRS-Signature
+                  in: header
+                  required: true
+                  description: HMAC-SHA256 over exact raw UTF-8 request bytes
+                  schema:
+                    type: string
+                    pattern: '^sha256=[0-9a-f]{64}$'
+                - name: X-VRS-Event-Id
+                  in: header
+                  required: true
+                  description: Must exactly equal body eventId
+                  schema:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                - name: X-VRS-Timestamp
+                  in: header
+                  required: true
+                  description: Current Unix epoch milliseconds, within five minutes
+                  schema:
+                    type: string
+                    pattern: '^[0-9]+$'
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/WebhookEvent'
+              responses:
+                '200':
+                  description: Processed or previously processed
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/WebhookAccepted'
+                '400':
+                  description: Invalid event body or event-ID mismatch; do not retry unchanged
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '401':
+                  description: Invalid signature or stale timestamp; correct signing/clock
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '500':
+                  description: Express internal processing failure; retry
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '503':
+                  description: Express callback is not configured; retry after coordination
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static VRS AI API key exchanged through a secure channel
+  schemas:
+    Money:
+      type: number
+      minimum: 0
+      maximum: 1000000
+      multipleOf: 0.01
+    Part:
+      type: object
+      additionalProperties: false
+      required:
+        - part_id
+        - part_description
+        - sell_price
+        - part_function
+      properties:
+        part_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        part_description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        sell_price:
+          $ref: '#/components/schemas/Money'
+        part_function:
+          type: string
+          minLength: 1
+          maxLength: 200
+    Comment:
+      type: object
+      additionalProperties: false
+      required:
+        - tech_id
+        - work_item
+        - text
+        - timestamp
+      properties:
+        tech_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+        work_item:
+          type: string
+          enum:
+            - failure_diagnosis
+            - tech_recommendation
+            - appliance_features
+            - customer_history
+            - tech_observation
+            - other
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        timestamp:
+          type: string
+          format: date-time
+    AuthorizeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - service_order
+        - tech_id
+        - tech_phone
+        - tech_name
+        - reason_for_call
+        - callback_url
+        - callback_secret
+        - parts
+        - customer_name
+        - customer_address
+        - service_address
+        - brand
+        - model_number
+        - serial_number
+        - appliance_type
+        - appliance_age
+        - labor_amount
+        - tax_amount
+        - part_price
+        - appliance_location
+        - failure_cause
+        - tech_recommendation
+        - repair_replace_rationale
+      properties:
+        service_order:
+          type: string
+          pattern: '^[0-9]{8}$'
+        tech_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+        tech_phone:
+          type: string
+          pattern: '^\+[1-9][0-9]{7,14}$'
+        tech_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        reason_for_call:
+          type: string
+          const: authorization
+        callback_url:
+          type: string
+          format: uri
+          pattern: '^https://[^/?#]+/api/integrations/vrs-ai/v1/webhook$'
+        callback_secret:
+          type: string
+          minLength: 16
+          maxLength: 512
+          writeOnly: true
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Part'
+        customer_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        customer_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        service_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        brand:
+          type: string
+          minLength: 1
+          maxLength: 100
+        model_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+        serial_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+        appliance_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+        appliance_age:
+          type: number
+          minimum: 0
+          maximum: 100
+        labor_amount:
+          $ref: '#/components/schemas/Money'
+        tax_amount:
+          $ref: '#/components/schemas/Money'
+        part_price:
+          $ref: '#/components/schemas/Money'
+        appliance_location:
+          type: string
+          minLength: 1
+          maxLength: 100
+        failure_cause:
+          type: string
+          enum:
+            - normal-wear
+            - power-surge
+            - impact
+            - installation-error
+            - abuse
+            - age
+            - other
+        tech_recommendation:
+          type: string
+          enum:
+            - repair
+            - replace
+        repair_replace_rationale:
+          type: string
+          minLength: 1
+        appliance_grade:
+          type: string
+          enum:
+            - entry
+            - mid
+            - top
+        partner_id:
+          type: string
+          enum:
+            - ahs
+            - american_home_shield
+        appliance_photos:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+        comments:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Comment'
+    AuthorizeAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - call_id
+        - service_order
+        - state
+        - created_at
+      properties:
+        call_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        service_order:
+          type: string
+          pattern: '^[0-9]{8}$'
+        state:
+          type: string
+          const: queued
+        created_at:
+          type: string
+          format: date-time
+    DuplicateCall:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+        - message
+        - existing_call_id
+        - state
+      properties:
+        error:
+          type: string
+          const: DUPLICATE_CALL
+        message:
+          type: string
+        existing_call_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        state:
+          type: string
+          const: in_progress
+    RateLimited:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+        - message
+        - retry_after_seconds
+      properties:
+        error:
+          type: string
+          const: RATE_LIMITED
+        message:
+          type: string
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+    ValidationError:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+        - message
+        - fields
+      properties:
+        error:
+          type: string
+          const: VALIDATION_ERROR
+        message:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    EventEnvelope:
+      type: object
+      required:
+        - version
+        - eventId
+        - callId
+        - soNo
+        - occurredAt
+        - state
+      properties:
+        version:
+          type: integer
+          const: 1
+        eventId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Stable UUID v4 in production; reuse on retry
+        callId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Exact provider call_id returned by VRS AI
+        soNo:
+          type: string
+          pattern: '^[0-9]{8}$'
+        occurredAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+    RecordingFields:
+      type: object
+      properties:
+        durationSec:
+          type: integer
+          minimum: 0
+        recordingUrl:
+          type: string
+          format: uri
+    ApprovedEvent:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - authNumber
+            - authorizedAmount
+          properties:
+            state:
+              type: string
+              const: approved
+            authNumber:
+              type: string
+              minLength: 1
+              maxLength: 100
+            authorizedAmount:
+              $ref: '#/components/schemas/Money'
+            durationSec:
+              type: integer
+              minimum: 0
+            recordingUrl:
+              type: string
+              format: uri
+    PartialEvent:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - authNumber
+            - authorizedAmount
+            - requestedAmount
+          properties:
+            state:
+              type: string
+              const: partial
+            authNumber:
+              type: string
+              minLength: 1
+              maxLength: 100
+            authorizedAmount:
+              $ref: '#/components/schemas/Money'
+            requestedAmount:
+              $ref: '#/components/schemas/Money'
+            denyReason:
+              type: string
+              minLength: 1
+              maxLength: 2000
+            durationSec:
+              type: integer
+              minimum: 0
+            recordingUrl:
+              type: string
+              format: uri
+    DeniedEvent:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - denyReason
+          properties:
+            state:
+              type: string
+              const: denied
+            denyReason:
+              type: string
+              minLength: 1
+              maxLength: 2000
+            durationSec:
+              type: integer
+              minimum: 0
+            recordingUrl:
+              type: string
+              format: uri
+    FailedEvent:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - reason
+            - retryable
+          properties:
+            state:
+              type: string
+              const: failed
+            reason:
+              type: string
+              enum:
+                - busy
+                - no_answer
+                - ivr_error
+                - agent_error
+                - timeout
+                - aborted
+            retryable:
+              type: boolean
+    RequiresInfoEvent:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - question
+            - field
+            - urgency
+          properties:
+            state:
+              type: string
+              const: requires_info
+            question:
+              type: string
+              minLength: 1
+              maxLength: 2000
+            field:
+              type: string
+              minLength: 1
+              maxLength: 100
+            urgency:
+              type: string
+              enum:
+                - soft
+                - hard
+    WebhookEvent:
+      oneOf:
+        - $ref: '#/components/schemas/ApprovedEvent'
+        - $ref: '#/components/schemas/PartialEvent'
+        - $ref: '#/components/schemas/DeniedEvent'
+        - $ref: '#/components/schemas/FailedEvent'
+        - $ref: '#/components/schemas/RequiresInfoEvent'
+      discriminator:
+        propertyName: state
+        mapping:
+          approved: '#/components/schemas/ApprovedEvent'
+          partial: '#/components/schemas/PartialEvent'
+          denied: '#/components/schemas/DeniedEvent'
+          failed: '#/components/schemas/FailedEvent'
+          requires_info: '#/components/schemas/RequiresInfoEvent'
+    WebhookAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - ok
+        - eventId
+        - deduped
+      properties:
+        ok:
+          type: boolean
+          const: true
+        eventId:
+          type: string
+        deduped:
+          type: boolean

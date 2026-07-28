@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-28 13:49
+Updated: 2026-07-28 14:37
 
 ## Done
 
@@ -35,6 +35,11 @@ Updated: 2026-07-28 13:49
 - [x] Added focused bridge/UI-copy tests and updated architecture documentation.
 - [x] Completed final 32/32 tests, production build, exact `origin/main`
   TypeScript-baseline comparison, commit/push, and draft PR #1 update.
+- [x] Created the Enzo integration handoff in Markdown and DOCX plus a matching
+  OpenAPI 3.1 contract, deterministic HMAC vector, and staging acceptance
+  checklist.
+- [x] Validated the OpenAPI/example payloads against the committed schemas and
+  visually inspected all 10 rendered DOCX pages.
 
 ## Open
 
@@ -57,3 +62,5 @@ Updated: 2026-07-28 13:49
   VRS Express callback staging transaction before production approval.
 - [ ] Decide with Enzo whether retryable terminal failures are redialed inside
   VRS AI or need an explicit Express retry endpoint/button.
+- [ ] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
+  expiry behavior with Enzo.
