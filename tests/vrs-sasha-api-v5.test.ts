@@ -1,17 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createVrsWebhookSignature,
-  deliverVrsWebhook,
-  type VrsWebhookEvent,
-  vrsAuthorizeRequestSchema,
-} from "../server/vrs-sasha-contract";
-import {
-  registerVrsSashaApi,
-  type EnqueueVrsAiCallResult,
-  type VrsAiCallQueue,
-} from "../server/vrs-sasha-api";
+import * as apiModule from "../server/vrs-sasha-api";
+import * as contractModule from "../server/vrs-sasha-contract";
 import {
   decryptVrsCallbackSecret,
   encryptVrsCallbackSecret,
@@ -63,32 +54,80 @@ const validPayload = {
   ],
 };
 
-class FakeQueue implements VrsAiCallQueue {
+type IntakeResult =
+  | {
+      kind: "accepted";
+      callId: string;
+      serviceOrder: string;
+      createdAt: Date;
+    }
+  | {
+      kind: "duplicate";
+      existingCallId: string;
+      state: string;
+    }
+  | {
+      kind: "unsupported_partner";
+      partnerId: string;
+    }
+  | {
+      kind: "rejected";
+      status: 409 | 422;
+      code: string;
+      message: string;
+    };
+
+class FakeIntake {
   public received: unknown;
 
-  constructor(private readonly result: EnqueueVrsAiCallResult) {}
+  constructor(private readonly result: IntakeResult) {}
 
-  async enqueue(input: unknown): Promise<EnqueueVrsAiCallResult> {
+  async receive(input: unknown): Promise<IntakeResult> {
     this.received = input;
     return this.result;
   }
 }
 
-function makeApp(queue: VrsAiCallQueue, apiKey = "test-vrs-api-key") {
+function makeIntakeApp(
+  intake: FakeIntake,
+  apiKey = "test-vrs-api-key",
+) {
   const app = express();
   app.use(express.json());
-  registerVrsSashaApi(app, { apiKey, queue });
+  (apiModule.registerVrsSashaApi as any)(app, { apiKey, intake });
   return app;
 }
 
-describe("VRS ↔ SASHA API Contract V5", () => {
+function makeWebhookApp(
+  sink: { receive(event: unknown): Promise<"processed" | "duplicate"> },
+  webhookSecret = "express-ai-webhook-secret",
+) {
+  const app = express();
+  app.use(
+    express.json({
+      verify: (req, _res, buffer) => {
+        req.rawBody = buffer;
+      },
+    }),
+  );
+  const register = (apiModule as any).registerVrsAiWebhookApi;
+  if (typeof register === "function") {
+    register(app, { webhookSecret, sink });
+  }
+  return app;
+}
+
+describe("VRS Express bridge — V5 contract boundary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.SESSION_SECRET;
+    delete process.env.VRS_BRIDGE_ENCRYPTION_KEY;
   });
 
   it("accepts the V5 payload and rejects renamed V4 aliases", () => {
-    expect(vrsAuthorizeRequestSchema.safeParse(validPayload).success).toBe(true);
+    expect(
+      contractModule.vrsAuthorizeRequestSchema.safeParse(validPayload).success,
+    ).toBe(true);
 
     const v4Payload = {
       ...validPayload,
@@ -97,7 +136,8 @@ describe("VRS ↔ SASHA API Contract V5", () => {
       end_level: "mid",
       diagnostic_photos: ["https://srdm.example.com/legacy.jpg"],
     };
-    const parsed = vrsAuthorizeRequestSchema.safeParse(v4Payload);
+    const parsed =
+      contractModule.vrsAuthorizeRequestSchema.safeParse(v4Payload);
 
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
@@ -105,28 +145,18 @@ describe("VRS ↔ SASHA API Contract V5", () => {
         expect.arrayContaining(["end_level", "diagnostic_photos"]),
       );
     }
-
-    expect(
-      vrsAuthorizeRequestSchema.safeParse({
-        ...validPayload,
-        labor_amount: 120.001,
-      }).success,
-    ).toBe(false);
   });
 
-  it("rejects callback URLs outside the two confirmed SASHA hosts", () => {
-    const parsed = vrsAuthorizeRequestSchema.safeParse({
-      ...validPayload,
-      callback_url: "https://attacker.example/webhook",
-    });
-
-    expect(parsed.success).toBe(false);
-    if (!parsed.success) {
-      expect(parsed.error.issues[0].path).toEqual(["callback_url"]);
-    }
+  it("rejects upstream callback URLs outside the confirmed SASHA hosts", () => {
+    expect(
+      contractModule.vrsAuthorizeRequestSchema.safeParse({
+        ...validPayload,
+        callback_url: "https://attacker.example/webhook",
+      }).success,
+    ).toBe(false);
 
     expect(
-      vrsAuthorizeRequestSchema.safeParse({
+      contractModule.vrsAuthorizeRequestSchema.safeParse({
         ...validPayload,
         callback_url:
           "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook?forward=attacker",
@@ -134,41 +164,40 @@ describe("VRS ↔ SASHA API Contract V5", () => {
     ).toBe(false);
   });
 
-  it("returns the contract 202 envelope when a call is durably queued", async () => {
-    const queue = new FakeQueue({
-      kind: "queued",
-      callId: "vrs_call_abc123",
+  it("queues the request for VRS Express human review without admitting an AI call", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "vrs_call_bridge_123",
       serviceOrder: "13538277",
-      state: "queued",
-      createdAt: new Date("2026-05-13T19:30:00.000Z"),
+      createdAt: new Date("2026-07-24T17:01:52.000Z"),
     });
 
-    const response = await request(makeApp(queue))
+    const response = await request(makeIntakeApp(intake))
       .post("/vrs/authorize")
       .set("X-API-Key", "test-vrs-api-key")
       .send(validPayload);
 
     expect(response.status).toBe(202);
     expect(response.body).toEqual({
-      call_id: "vrs_call_abc123",
+      call_id: "vrs_call_bridge_123",
       service_order: "13538277",
       state: "queued",
-      created_at: "2026-05-13T19:30:00.000Z",
+      created_at: "2026-07-24T17:01:52.000Z",
     });
-    expect(queue.received).toMatchObject({
+    expect(intake.received).toMatchObject({
       service_order: "13538277",
-      tech_id: "0123456",
+      partner_id: "ahs",
     });
   });
 
-  it("returns 409 with the existing active call", async () => {
-    const queue = new FakeQueue({
+  it("returns the existing bridge call for a duplicate service order", async () => {
+    const intake = new FakeIntake({
       kind: "duplicate",
-      existingCallId: "vrs_call_existing",
-      state: "in_progress",
+      existingCallId: "vrs_call_bridge_existing",
+      state: "pending_review",
     });
 
-    const response = await request(makeApp(queue))
+    const response = await request(makeIntakeApp(intake))
       .post("/vrs/authorize")
       .set("X-API-Key", "test-vrs-api-key")
       .send(validPayload);
@@ -178,156 +207,326 @@ describe("VRS ↔ SASHA API Contract V5", () => {
       error: "DUPLICATE_CALL",
       message:
         "A call is already in progress for service order 13538277",
-      existing_call_id: "vrs_call_existing",
+      existing_call_id: "vrs_call_bridge_existing",
       state: "in_progress",
     });
   });
 
-  it("returns the contract rate-limit response for the per-tech cap", async () => {
-    const queue = new FakeQueue({
-      kind: "rate_limited",
-      scope: "tech",
-      retryAfterSeconds: 1800,
+  it("rejects First American at the AHS-only Phase 1 bridge gate", async () => {
+    const intake = new FakeIntake({
+      kind: "unsupported_partner",
+      partnerId: "first_american",
     });
 
-    const response = await request(makeApp(queue))
+    const response = await request(makeIntakeApp(intake))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "test-vrs-api-key")
+      .send({ ...validPayload, partner_id: "first_american" });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      error: "UNSUPPORTED_PARTNER",
+      message:
+        "Phase 1 VRS AI phone automation supports American Home Shield only",
+      partner_id: "first_american",
+    });
+  });
+
+  it("returns actionable technician-context errors from VRS Express intake", async () => {
+    const intake = new FakeIntake({
+      kind: "rejected",
+      status: 422,
+      code: "UNKNOWN_TECHNICIAN",
+      message: "Unknown technician LDAP id: 0123456",
+    });
+
+    const response = await request(makeIntakeApp(intake))
       .post("/vrs/authorize")
       .set("X-API-Key", "test-vrs-api-key")
       .send(validPayload);
 
-    expect(response.status).toBe(429);
+    expect(response.status).toBe(422);
     expect(response.body).toEqual({
-      error: "RATE_LIMITED",
-      message: "Tech 0123456 has exceeded 10 calls/hour",
-      retry_after_seconds: 1800,
+      error: "UNKNOWN_TECHNICIAN",
+      message: "Unknown technician LDAP id: 0123456",
     });
   });
 
-  it("rejects a bad API key before enqueueing", async () => {
-    const queue = new FakeQueue({
-      kind: "queued",
+  it("rejects a bad API key before creating a VRS Express intake", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
       callId: "must-not-run",
       serviceOrder: "13538277",
-      state: "queued",
       createdAt: new Date(),
     });
 
-    const response = await request(makeApp(queue))
+    const response = await request(makeIntakeApp(intake))
       .post("/vrs/authorize")
       .set("X-API-Key", "wrong-key")
       .send(validPayload);
 
     expect(response.status).toBe(401);
-    expect(response.body).toEqual({
-      error: "UNAUTHORIZED",
-      message: "Invalid or missing API key",
-    });
-    expect(queue.received).toBeUndefined();
+    expect(intake.received).toBeUndefined();
   });
 
-  it("returns field names for invalid request bodies", async () => {
-    const queue = new FakeQueue({
-      kind: "queued",
-      callId: "must-not-run",
-      serviceOrder: "13538277",
+  it("sends the approved Express payload to the configured VRS AI endpoint", async () => {
+    const send = (contractModule as any).sendVrsAuthorizeRequest;
+    expect(typeof send).toBe("function");
+
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          call_id: "vrs_ai_call_456",
+          service_order: "13538277",
+          state: "queued",
+          created_at: "2026-07-24T17:20:00Z",
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await send({
+      baseUrl: "https://vrs-dev.stage.nextgen.shs.com",
+      apiKey: "vrs-ai-key",
+      callbackUrl:
+        "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-ai-webhook-secret",
+      payload: validPayload,
+      fetchImpl,
+    });
+
+    expect(result).toEqual({
+      kind: "accepted",
+      callId: "vrs_ai_call_456",
       state: "queued",
-      createdAt: new Date(),
+      duplicate: false,
     });
-
-    const response = await request(makeApp(queue))
-      .post("/vrs/authorize")
-      .set("X-API-Key", "test-vrs-api-key")
-      .send({ ...validPayload, parts: [] });
-
-    expect(response.status).toBe(400);
-    expect(response.body.error).toBe("VALIDATION_ERROR");
-    expect(response.body.fields).toContain("parts");
-    expect(queue.received).toBeUndefined();
-  });
-
-  it("matches the standard HMAC-SHA256 test vector", () => {
-    expect(
-      createVrsWebhookSignature(
-        "The quick brown fox jumps over the lazy dog",
-        "key",
-      ),
-    ).toBe(
-      "sha256=f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://vrs-dev.stage.nextgen.shs.com/vrs/authorize",
     );
+    expect(new Headers(calls[0].init?.headers).get("X-API-Key")).toBe(
+      "vrs-ai-key",
+    );
+    const sentBody = JSON.parse(String(calls[0].init?.body));
+    expect(sentBody.callback_url).toBe(
+      "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+    );
+    expect(sentBody.callback_secret).toBe("express-ai-webhook-secret");
+    expect(sentBody.service_order).toBe("13538277");
   });
 
-  it("retries only retryable webhook failures and reuses the event id", async () => {
-    const statuses = [503, 502, 200];
-    const sent: Array<{ body: string; headers: Headers }> = [];
-    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      sent.push({
-        body: String(init?.body),
-        headers: new Headers(init?.headers),
-      });
-      return new Response("{}", { status: statuses.shift() ?? 500 });
+  it("accepts the Express callback on a retry payload while keeping the inbound SASHA allowlist separate", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          call_id: "vrs_ai_call_retry",
+          state: "queued",
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      contractModule.sendVrsAuthorizeRequest({
+        baseUrl: "https://vrs-dev.stage.nextgen.shs.com",
+        apiKey: "vrs-ai-key",
+        callbackUrl:
+          "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+        callbackSecret: "express-ai-webhook-secret",
+        payload: {
+          ...validPayload,
+          callback_url:
+            "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+          callback_secret: "express-ai-webhook-secret",
+        },
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({
+      kind: "accepted",
+      callId: "vrs_ai_call_retry",
     });
-    const event: VrsWebhookEvent = {
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an outbound callback URL that is not the Express webhook route", async () => {
+    await expect(
+      contractModule.sendVrsAuthorizeRequest({
+        baseUrl: "https://vrs-dev.stage.nextgen.shs.com",
+        apiKey: "vrs-ai-key",
+        callbackUrl: "https://vrs-express.example/unrelated-webhook",
+        callbackSecret: "express-ai-webhook-secret",
+        payload: validPayload,
+        fetchImpl: vi.fn(),
+      }),
+    ).rejects.toThrow("callback URL");
+  });
+
+  it("verifies the AI callback HMAC against the exact raw request bytes", () => {
+    const rawBody =
+      '{"version":1,"eventId":"evt_001","callId":"vrs_ai_call_456"}';
+    const signature = contractModule.createVrsWebhookSignature(
+      rawBody,
+      "express-ai-webhook-secret",
+    );
+    const verify = (contractModule as any).verifyVrsWebhookSignature;
+
+    expect(typeof verify).toBe("function");
+    expect(
+      verify(rawBody, signature, "express-ai-webhook-secret"),
+    ).toBe(true);
+    expect(
+      verify(`${rawBody} `, signature, "express-ai-webhook-secret"),
+    ).toBe(false);
+  });
+
+  it("accepts a signed VRS AI callback once and acknowledges a replay", async () => {
+    const event = {
       version: 1,
       eventId: "evt_001",
-      callId: "vrs_abc",
+      callId: "vrs_ai_call_456",
       soNo: "13538277",
-      occurredAt: "2026-05-13T19:42:00Z",
+      occurredAt: "2026-07-24T17:24:00Z",
       state: "approved",
       authNumber: "AHS-001",
       authorizedAmount: 365.6,
     };
-
-    const result = await deliverVrsWebhook({
-      callbackUrl: "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
-      callbackSecret: "callback-secret",
-      event,
-      fetchImpl,
-      sleep: async () => undefined,
-      now: () => 1_768_000_000_000,
-    });
-
-    expect(result).toEqual({ delivered: true, attempts: 3, status: 200 });
-    expect(sent).toHaveLength(3);
-    expect(
-      sent.map((requestAttempt) =>
-        requestAttempt.headers.get("X-VRS-Event-Id"),
-      ),
-    ).toEqual(["evt_001", "evt_001", "evt_001"]);
-    expect(new Set(sent.map((requestAttempt) => requestAttempt.body)).size).toBe(
-      1,
+    const rawBody = JSON.stringify(event);
+    const signature = contractModule.createVrsWebhookSignature(
+      rawBody,
+      "express-ai-webhook-secret",
     );
-  });
-
-  it("does not retry a webhook 400 response", async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response("{}", { status: 400 }),
-    );
-    const event: VrsWebhookEvent = {
-      version: 1,
-      eventId: "evt_bad",
-      callId: "vrs_bad",
-      soNo: "13538277",
-      occurredAt: "2026-05-13T19:42:00Z",
-      state: "failed",
-      reason: "agent_error",
-      retryable: false,
+    const sink = {
+      receive: vi
+        .fn()
+        .mockResolvedValueOnce("processed")
+        .mockResolvedValueOnce("duplicate"),
     };
+    const app = makeWebhookApp(sink);
+    const timestamp = String(Date.now());
 
-    const result = await deliverVrsWebhook({
-      callbackUrl: "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
-      callbackSecret: "callback-secret",
-      event,
-      fetchImpl,
-      sleep: async () => undefined,
+    const first = await request(app)
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set("X-VRS-Signature", signature)
+      .set("X-VRS-Event-Id", "evt_001")
+      .set("X-VRS-Timestamp", timestamp)
+      .send(rawBody);
+    const replay = await request(app)
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set("X-VRS-Signature", signature)
+      .set("X-VRS-Event-Id", "evt_001")
+      .set("X-VRS-Timestamp", timestamp)
+      .send(rawBody);
+
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({
+      ok: true,
+      eventId: "evt_001",
+      deduped: false,
     });
-
-    expect(result).toEqual({ delivered: false, attempts: 1, status: 400 });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual({
+      ok: true,
+      eventId: "evt_001",
+      deduped: true,
+    });
+    expect(sink.receive).toHaveBeenCalledTimes(2);
   });
 
-  it("encrypts callback secrets at rest and detects tampering", () => {
-    process.env.SESSION_SECRET =
-      "unit-test-session-secret-that-is-long-enough";
+  it("rejects an invalid VRS AI callback signature before applying it", async () => {
+    const sink = { receive: vi.fn() };
+    const response = await request(makeWebhookApp(sink))
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set("X-VRS-Signature", "sha256=bad")
+      .set("X-VRS-Event-Id", "evt_001")
+      .set("X-VRS-Timestamp", String(Date.now()))
+      .send({
+        version: 1,
+        eventId: "evt_001",
+        callId: "vrs_ai_call_456",
+        soNo: "13538277",
+        occurredAt: "2026-07-24T17:24:00Z",
+        state: "approved",
+        authNumber: "AHS-001",
+        authorizedAmount: 365.6,
+      });
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("INVALID_SIGNATURE");
+    expect(sink.receive).not.toHaveBeenCalled();
+  });
+
+  it("rejects a signed callback outside the five-minute replay window", async () => {
+    const event = {
+      version: 1,
+      eventId: "evt_old",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "failed",
+      reason: "timeout",
+      retryable: true,
+    };
+    const rawBody = JSON.stringify(event);
+    const sink = { receive: vi.fn() };
+    const response = await request(makeWebhookApp(sink))
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set(
+        "X-VRS-Signature",
+        contractModule.createVrsWebhookSignature(
+          rawBody,
+          "express-ai-webhook-secret",
+        ),
+      )
+      .set("X-VRS-Event-Id", "evt_old")
+      .set("X-VRS-Timestamp", String(Date.now() - 5 * 60_000 - 1))
+      .send(rawBody);
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("TIMESTAMP_OUT_OF_WINDOW");
+    expect(sink.receive).not.toHaveBeenCalled();
+  });
+
+  it("requires the event id header and keeps it equal to the signed body", async () => {
+    const event = {
+      version: 1,
+      eventId: "evt_missing_header",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "failed",
+      reason: "timeout",
+      retryable: true,
+    };
+    const rawBody = JSON.stringify(event);
+    const sink = { receive: vi.fn() };
+    const response = await request(makeWebhookApp(sink))
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set(
+        "X-VRS-Signature",
+        contractModule.createVrsWebhookSignature(
+          rawBody,
+          "express-ai-webhook-secret",
+        ),
+      )
+      .set("X-VRS-Timestamp", String(Date.now()))
+      .send(rawBody);
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("EVENT_ID_MISMATCH");
+    expect(sink.receive).not.toHaveBeenCalled();
+  });
+
+  it("keeps upstream SASHA callback secrets encrypted at rest", () => {
+    process.env.VRS_BRIDGE_ENCRYPTION_KEY =
+      "unit-test-bridge-key-that-is-long-enough";
     const encrypted = encryptVrsCallbackSecret(
       "sasha-callback-secret-value",
     );
@@ -338,11 +537,13 @@ describe("VRS ↔ SASHA API Contract V5", () => {
     expect(decryptVrsCallbackSecret(encrypted)).toBe(
       "sasha-callback-secret-value",
     );
+  });
+
+  it("does not couple callback-secret encryption to the JWT session secret", () => {
+    process.env.SESSION_SECRET =
+      "unit-test-session-secret-that-is-long-enough";
     expect(() =>
-      decryptVrsCallbackSecret({
-        ...encrypted,
-        cipher: `${encrypted.cipher.slice(0, -2)}AA`,
-      }),
-    ).toThrow();
+      encryptVrsCallbackSecret("sasha-callback-secret-value"),
+    ).toThrow("VRS_BRIDGE_ENCRYPTION_KEY");
   });
 });

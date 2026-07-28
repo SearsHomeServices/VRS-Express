@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-28 13:07
+Updated: 2026-07-28 13:33
 
 ## Decisions
 
@@ -23,3 +23,8 @@ Updated: 2026-07-28 13:07
 - [CX] 2026-07-28 - Use the July 24 Granola meeting as the ownership source of truth: VRS Express receives/enriches the SASHA/Tech Hub request, waits for a human approval action, then sends to Enzo's VRS AI service.
 - [CX] 2026-07-28 - Do not merge the current AI-side admission implementation. Rework it so VRS Express owns intake, human review, outbound AI invocation, callback intake, ticket updates, and existing technician SMS; the AI platform owns call admission, Twilio/AI execution, recording, and webhook delivery.
 - [CX] 2026-07-28 - Limit the initial phone-automation path to AHS. Treat First American portal automation as a separate integration pending an execution-capable API or validated scraper; exclude Choice/OEM and defer Assurance.
+- [CX] 2026-07-28 - Reuse the normal submission and process handlers at both bridge boundaries so ticket routing, optimistic locks, audits, WebSocket updates, and technician SMS do not fork into a second implementation.
+- [CX] 2026-07-28 - Give Express its own public bridge call ID, retain VRS AI's provider call ID separately, replace callback ownership only for the AI hop, and restore the Express call ID when forwarding events to SASHA.
+- [CX] 2026-07-28 - Use a separate event ledger because `requires_info` may precede a terminal event and because a failed SASHA forward must resume without repeating ticket or SMS side effects.
+- [CX] 2026-07-28 - Use `VRS_BRIDGE_ENCRYPTION_KEY` instead of `SESSION_SECRET` for stored SASHA callback secrets so auth-secret rotation does not make in-flight callbacks undecryptable.
+- [CX] 2026-07-28 - Treat VRS AI `failed` as terminal per V5, surface its reason/retryable flag on the pending ticket, and preserve the existing manual authorization path until Enzo confirms where redial ownership belongs.

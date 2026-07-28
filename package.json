@@ -8,7 +8,8 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "test:vrs-sasha": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-queue.test.ts",
+    "test:vrs-sasha": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-ai-bridge-ui.test.ts",
+    "test:vrs-ai-bridge": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-ai-bridge-ui.test.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

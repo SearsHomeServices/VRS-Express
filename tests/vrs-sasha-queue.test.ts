@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import type { VrsAuthorizeRequest } from "../server/vrs-sasha-contract";
-import {
-  DurableVrsAiCallQueue,
-  type NewVrsAiCallRecord,
-  type VrsAiCallDatabase,
-  type VrsAiCallTransaction,
-} from "../server/vrs-sasha-queue";
+import { describe, expect, it, vi } from "vitest";
+import * as bridgeModule from "../server/vrs-sasha-queue";
+import type {
+  VrsAuthorizeRequest,
+  VrsWebhookEvent,
+} from "../server/vrs-sasha-contract";
 
 const requestPayload: VrsAuthorizeRequest = {
   service_order: "13538277",
@@ -40,144 +38,533 @@ const requestPayload: VrsAuthorizeRequest = {
   tech_recommendation: "repair",
   repair_replace_rationale:
     "Board failure is isolated and repair is within the coverage threshold.",
+  partner_id: "ahs",
 };
 
-class FakeTransaction implements VrsAiCallTransaction {
-  lockedServiceOrder?: string;
-  activeCall?: { callId: string; state: string };
-  techCallTimes: Date[] = [];
-  activeCallCount = 0;
-  inserted?: NewVrsAiCallRecord;
+describe("VRS Express bridge orchestration", () => {
+  it("maps the SASHA payload into the existing VRS Express ticket shape", () => {
+    const map = (bridgeModule as any).mapVrsPayloadToSubmission;
+    expect(typeof map).toBe("function");
 
-  async lockServiceOrder(serviceOrder: string): Promise<void> {
-    this.lockedServiceOrder = serviceOrder;
-  }
-
-  async findActiveByServiceOrder(): Promise<
-    { callId: string; state: string } | undefined
-  > {
-    return this.activeCall;
-  }
-
-  async getTechCallTimesSince(): Promise<Date[]> {
-    return this.techCallTimes;
-  }
-
-  async countActiveCalls(): Promise<number> {
-    return this.activeCallCount;
-  }
-
-  async insert(record: NewVrsAiCallRecord): Promise<void> {
-    this.inserted = record;
-  }
-}
-
-class FakeDatabase implements VrsAiCallDatabase {
-  constructor(readonly tx: FakeTransaction) {}
-
-  async transaction<T>(
-    work: (transaction: VrsAiCallTransaction) => Promise<T>,
-  ): Promise<T> {
-    return work(this.tx);
-  }
-}
-
-describe("durable VRS AI call queue", () => {
-  afterEach(() => {
-    delete process.env.SESSION_SECRET;
+    expect(map(requestPayload, "8175")).toEqual({
+      serviceOrder: "8175-13538277",
+      applianceType: "laundry",
+      requestType: "authorization",
+      warrantyType: "american_home_shield",
+      warrantyProvider: "American Home Shield",
+      issueDescription:
+        "Board failure is isolated and repair is within the coverage threshold.",
+      estimateAmount: "380.60",
+      partNumbers: '["WPW10503278"]',
+      phone: "+12145550199",
+    });
   });
 
-  it("locks the service order and returns the existing active call", async () => {
-    process.env.SESSION_SECRET = "queue-test-session-secret";
-    const tx = new FakeTransaction();
-    tx.activeCall = {
-      callId: "vrs_call_existing",
-      state: "queued",
+  it("projects the human review context without callback credentials or routing", () => {
+    const context = bridgeModule.projectVrsBridgeReviewContext(requestPayload);
+
+    expect(context).toMatchObject({
+      customer_name: "Maria Gonzalez",
+      service_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
+      brand: "Whirlpool",
+      model_number: "WTW5000DW1",
+      serial_number: "C31290822",
+      appliance_type: "Washer",
+      failure_cause: "normal-wear",
+      tech_recommendation: "repair",
+      repair_replace_rationale:
+        "Board failure is isolated and repair is within the coverage threshold.",
+    });
+    expect(context.parts).toHaveLength(1);
+    expect(JSON.stringify(context)).not.toContain("callback_url");
+    expect(JSON.stringify(context)).not.toContain("callback_secret");
+  });
+
+  it("maps common appliance names to the VRS Express routing divisions", () => {
+    const map = (bridgeModule as any).mapVrsApplianceType;
+    expect(typeof map).toBe("function");
+
+    expect(map("Washer")).toBe("laundry");
+    expect(map("French Door Refrigerator")).toBe("refrigeration");
+    expect(map("Wall Oven")).toBe("cooking");
+    expect(map("Dishwasher")).toBe("dishwasher");
+    expect(map("Over-the-range microwave")).toBe("microwave");
+    expect(map("Central Air Conditioner")).toBe("hvac");
+    expect(map("Garbage Disposal")).toBe("all_other");
+  });
+
+  it("dispatches only a pending bridge record and replaces callback ownership", async () => {
+    const dispatch = (bridgeModule as any).dispatchVrsAiForSubmission;
+    expect(typeof dispatch).toBe("function");
+
+    const record = {
+      id: 9,
+      submissionId: 42,
+      callId: "vrs_call_bridge_123",
+      providerCallId: null,
+      state: "pending_review",
+      requestPayload: {
+        ...requestPayload,
+        callback_secret: undefined,
+      },
     };
-    const queue = new DurableVrsAiCallQueue(new FakeDatabase(tx));
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue(record),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted",
+        callId: "vrs_ai_call_456",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
 
-    const result = await queue.enqueue(requestPayload);
-
-    expect(tx.lockedServiceOrder).toBe("13538277");
-    expect(result).toEqual({
-      kind: "duplicate",
-      existingCallId: "vrs_call_existing",
-      state: "in_progress",
+    const result = await dispatch({
+      submissionId: 42,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-ai-webhook-secret",
     });
-    expect(tx.inserted).toBeUndefined();
-  });
-
-  it("enforces ten requests per tech in a rolling hour", async () => {
-    process.env.SESSION_SECRET = "queue-test-session-secret";
-    const now = new Date("2026-05-13T19:30:00.000Z");
-    const tx = new FakeTransaction();
-    tx.techCallTimes = Array.from(
-      { length: 10 },
-      (_, index) => new Date(now.getTime() - (30 - index) * 60_000),
-    );
-    const queue = new DurableVrsAiCallQueue(
-      new FakeDatabase(tx),
-      () => now,
-    );
-
-    const result = await queue.enqueue(requestPayload);
 
     expect(result).toEqual({
-      kind: "rate_limited",
-      scope: "tech",
-      retryAfterSeconds: 1800,
-    });
-    expect(tx.inserted).toBeUndefined();
-  });
-
-  it("enforces the global 100-active-call cap", async () => {
-    process.env.SESSION_SECRET = "queue-test-session-secret";
-    const tx = new FakeTransaction();
-    tx.activeCallCount = 100;
-    const queue = new DurableVrsAiCallQueue(new FakeDatabase(tx));
-
-    const result = await queue.enqueue(requestPayload);
-
-    expect(result).toEqual({
-      kind: "rate_limited",
-      scope: "global",
-      retryAfterSeconds: 60,
-    });
-    expect(tx.inserted).toBeUndefined();
-  });
-
-  it("persists a sanitized payload and encrypted callback secret", async () => {
-    process.env.SESSION_SECRET = "queue-test-session-secret";
-    const now = new Date("2026-05-13T19:30:00.000Z");
-    const tx = new FakeTransaction();
-    const queue = new DurableVrsAiCallQueue(
-      new FakeDatabase(tx),
-      () => now,
-      () => "vrs_call_abc123",
-    );
-
-    const result = await queue.enqueue(requestPayload);
-
-    expect(result).toEqual({
-      kind: "queued",
-      callId: "vrs_call_abc123",
-      serviceOrder: "13538277",
+      kind: "accepted",
+      providerCallId: "vrs_ai_call_456",
       state: "queued",
-      createdAt: now,
+      duplicate: false,
     });
-    expect(tx.inserted).toMatchObject({
-      callId: "vrs_call_abc123",
-      serviceOrder: "13538277",
-      techId: "0123456",
+    expect(store.markDispatching).toHaveBeenCalledWith(9);
+    expect(client.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          service_order: "13538277",
+          callback_url:
+            "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook",
+          callback_secret: "express-ai-webhook-secret",
+        }),
+      }),
+    );
+    expect(store.markAccepted).toHaveBeenCalledWith(
+      9,
+      "vrs_ai_call_456",
+      "queued",
+    );
+  });
+
+  it("does not dispatch a manual ticket or an already-dispatched bridge twice", async () => {
+    const dispatch = (bridgeModule as any).dispatchVrsAiForSubmission;
+    expect(typeof dispatch).toBe("function");
+
+    const client = { authorize: vi.fn() };
+    const noBridgeStore = {
+      getBySubmissionId: vi.fn().mockResolvedValue(undefined),
+    };
+    expect(
+      await dispatch({
+        submissionId: 41,
+        store: noBridgeStore,
+        client,
+        callbackUrl: "https://vrs-express.example/webhook",
+        callbackSecret: "secret",
+      }),
+    ).toEqual({ kind: "not_applicable" });
+
+    const acceptedStore = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 9,
+        submissionId: 42,
+        providerCallId: "vrs_ai_call_456",
+        state: "queued",
+        requestPayload,
+      }),
+    };
+    expect(
+      await dispatch({
+        submissionId: 42,
+        store: acceptedStore,
+        client,
+        callbackUrl: "https://vrs-express.example/webhook",
+        callbackSecret: "secret",
+      }),
+    ).toEqual({
+      kind: "already_dispatched",
+      providerCallId: "vrs_ai_call_456",
+      state: "queued",
+    });
+    expect(client.authorize).not.toHaveBeenCalled();
+  });
+
+  it("marks a failed AI dispatch so the human can retry safely", async () => {
+    const dispatch = (bridgeModule as any).dispatchVrsAiForSubmission;
+    expect(typeof dispatch).toBe("function");
+
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 9,
+        submissionId: 42,
+        state: "pending_review",
+        requestPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn(),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "failed",
+        status: 503,
+        message: "VRS AI unavailable",
+      }),
+    };
+
+    const result = await dispatch({
+      submissionId: 42,
+      store,
+      client,
+      callbackUrl: "https://vrs-express.example/webhook",
+      callbackSecret: "secret",
+    });
+
+    expect(result).toEqual({
+      kind: "failed",
+      status: 503,
+      message: "VRS AI unavailable",
+    });
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      9,
+      "VRS AI unavailable",
+    );
+    expect(store.markAccepted).not.toHaveBeenCalled();
+  });
+
+  it("turns a thrown client/configuration error into a retryable dispatch failure", async () => {
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 9,
+        submissionId: 42,
+        state: "pending_review",
+        requestPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn(),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      bridgeModule.dispatchVrsAiForSubmission({
+        submissionId: 42,
+        store,
+        client: {
+          authorize: vi.fn().mockRejectedValue(new Error("Bad VRS AI URL")),
+        },
+        callbackUrl: "https://vrs-express.example/webhook",
+        callbackSecret: "secret",
+      }),
+    ).resolves.toEqual({
+      kind: "failed",
+      message: "Bad VRS AI URL",
+    });
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      9,
+      "Bad VRS AI URL",
+    );
+  });
+
+  it("applies an AI result once and forwards the bridge call id to SASHA", async () => {
+    const process = (bridgeModule as any).processVrsAiWebhookEvent;
+    expect(typeof process).toBe("function");
+
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_001",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "approved",
+      authNumber: "AHS-001",
+      authorizedAmount: 365.6,
+    };
+    const record = {
+      id: 9,
+      submissionId: 42,
+      callId: "vrs_call_bridge_123",
+      providerCallId: "vrs_ai_call_456",
       callbackUrl:
         "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
+      callbackSecretCipher: "cipher",
+      callbackSecretIv: "iv",
+      callbackSecretAuthTag: "tag",
+      callbackSecretSalt: "salt",
+      webhookEventId: null,
       state: "queued",
-      createdAt: now,
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue(record),
+      beginWebhookEvent: vi.fn().mockResolvedValue({
+        kind: "claimed",
+        alreadyApplied: false,
+      }),
+      markWebhookApplied: vi.fn().mockResolvedValue(undefined),
+      markWebhookForwarded: vi.fn().mockResolvedValue(undefined),
+      markWebhookFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const applyResult = vi.fn().mockResolvedValue(undefined);
+    const forward = vi.fn().mockResolvedValue({
+      delivered: true,
+      attempts: 1,
+      status: 200,
     });
-    expect(tx.inserted?.requestPayload).not.toHaveProperty("callback_secret");
-    expect(JSON.stringify(tx.inserted)).not.toContain(
-      requestPayload.callback_secret,
+
+    const result = await process({
+      event,
+      store,
+      decryptCallbackSecret: vi.fn().mockReturnValue("sasha-secret"),
+      applyResult,
+      forward,
+    });
+
+    expect(result).toBe("processed");
+    expect(applyResult).toHaveBeenCalledWith(42, event);
+    expect(store.markWebhookApplied).toHaveBeenCalledWith(9, "evt_001", event);
+    expect(forward).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callbackUrl: record.callbackUrl,
+        callbackSecret: "sasha-secret",
+        event: { ...event, callId: "vrs_call_bridge_123" },
+      }),
     );
-    expect(tx.inserted?.callbackSecretCipher).toBeTruthy();
+    expect(store.markWebhookForwarded).toHaveBeenCalledWith(
+      9,
+      "evt_001",
+      expect.objectContaining({
+        delivered: true,
+        attempts: 1,
+        status: 200,
+      }),
+    );
+  });
+
+  it("acknowledges a duplicate AI event without repeating ticket or SMS effects", async () => {
+    const process = (bridgeModule as any).processVrsAiWebhookEvent;
+    expect(typeof process).toBe("function");
+
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_001",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "failed",
+      reason: "timeout",
+      retryable: true,
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue({ id: 9 }),
+      beginWebhookEvent: vi.fn().mockResolvedValue({ kind: "duplicate" }),
+    };
+    const applyResult = vi.fn();
+    const forward = vi.fn();
+
+    expect(
+      await process({
+        event,
+        store,
+        decryptCallbackSecret: vi.fn(),
+        applyResult,
+        forward,
+      }),
+    ).toBe("duplicate");
+    expect(applyResult).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("rejects a callback whose service order does not match the dispatched request", async () => {
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_wrong_so",
+      callId: "vrs_ai_call_456",
+      soNo: "99999999",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "failed",
+      reason: "timeout",
+      retryable: true,
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue({
+        id: 9,
+        submissionId: 42,
+        requestPayload,
+      }),
+      beginWebhookEvent: vi.fn(),
+    };
+
+    await expect(
+      bridgeModule.processVrsAiWebhookEvent({
+        event,
+        store: store as any,
+        decryptCallbackSecret: vi.fn(),
+        applyResult: vi.fn(),
+        forward: vi.fn(),
+      }),
+    ).rejects.toThrow("does not match");
+    expect(store.beginWebhookEvent).not.toHaveBeenCalled();
+  });
+
+  it("retries only upstream forwarding when a persisted event was already applied", async () => {
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_retry",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "approved",
+      authNumber: "AHS-001",
+      authorizedAmount: 365.6,
+    };
+    const record = {
+      id: 9,
+      submissionId: 42,
+      callId: "vrs_call_bridge_123",
+      callbackUrl:
+        "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
+      callbackSecretCipher: "cipher",
+      callbackSecretIv: "iv",
+      callbackSecretAuthTag: "tag",
+      callbackSecretSalt: "salt",
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue(record),
+      beginWebhookEvent: vi.fn().mockResolvedValue({
+        kind: "claimed",
+        alreadyApplied: true,
+      }),
+      markWebhookApplied: vi.fn(),
+      markWebhookForwarded: vi.fn().mockResolvedValue(undefined),
+      markWebhookFailed: vi.fn(),
+    };
+    const applyResult = vi.fn();
+    const forward = vi.fn().mockResolvedValue({
+      delivered: true,
+      attempts: 1,
+      status: 200,
+    });
+
+    await bridgeModule.processVrsAiWebhookEvent({
+      event,
+      store,
+      decryptCallbackSecret: vi.fn().mockReturnValue("sasha-secret"),
+      applyResult,
+      forward,
+    });
+
+    expect(applyResult).not.toHaveBeenCalled();
+    expect(store.markWebhookApplied).not.toHaveBeenCalled();
+    expect(forward).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an undelivered upstream callback retryable without reapplying the result", async () => {
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_forward_failure",
+      callId: "vrs_ai_call_456",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "denied",
+      denyReason: "Coverage limit exceeded",
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue({
+        id: 9,
+        submissionId: 42,
+        callId: "vrs_call_bridge_123",
+        callbackUrl:
+          "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
+        callbackSecretCipher: "cipher",
+        callbackSecretIv: "iv",
+        callbackSecretAuthTag: "tag",
+        callbackSecretSalt: "salt",
+      }),
+      beginWebhookEvent: vi.fn().mockResolvedValue({
+        kind: "claimed",
+        alreadyApplied: false,
+      }),
+      markWebhookApplied: vi.fn().mockResolvedValue(undefined),
+      markWebhookForwarded: vi.fn().mockResolvedValue(undefined),
+      markWebhookFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      bridgeModule.processVrsAiWebhookEvent({
+        event,
+        store,
+        decryptCallbackSecret: vi.fn().mockReturnValue("sasha-secret"),
+        applyResult: vi.fn().mockResolvedValue(undefined),
+        forward: vi.fn().mockResolvedValue({
+          delivered: false,
+          attempts: 5,
+          status: 503,
+        }),
+      }),
+    ).rejects.toThrow("Unable to forward VRS AI result to SASHA");
+    expect(store.markWebhookFailed).toHaveBeenCalledWith(
+      9,
+      "evt_forward_failure",
+      "Unable to forward VRS AI result to SASHA",
+    );
+  });
+
+  it("maps terminal AI outcomes into the existing ticket/SMS actions", () => {
+    expect(
+      bridgeModule.mapVrsAiWebhookToSubmissionDecision({
+        version: 1,
+        eventId: "evt_approved",
+        callId: "vrs_ai_call_1",
+        soNo: "13538277",
+        occurredAt: "2026-07-24T17:24:00Z",
+        state: "approved",
+        authNumber: "AHS-001",
+        authorizedAmount: 365.6,
+      }),
+    ).toMatchObject({
+      kind: "process",
+      body: { action: "approve", authCode: "AHS-001" },
+    });
+
+    expect(
+      bridgeModule.mapVrsAiWebhookToSubmissionDecision({
+        version: 1,
+        eventId: "evt_denied",
+        callId: "vrs_ai_call_2",
+        soNo: "13538277",
+        occurredAt: "2026-07-24T17:24:00Z",
+        state: "denied",
+        denyReason: "Coverage limit exceeded",
+      }),
+    ).toMatchObject({
+      kind: "process",
+      body: {
+        action: "reject",
+        rejectionReasons: ["Coverage limit exceeded"],
+      },
+    });
+
+    expect(
+      bridgeModule.mapVrsAiWebhookToSubmissionDecision({
+        version: 1,
+        eventId: "evt_info",
+        callId: "vrs_ai_call_3",
+        soNo: "13538277",
+        occurredAt: "2026-07-24T17:24:00Z",
+        state: "requires_info",
+        question: "Confirm the serial number",
+        field: "serial_number",
+        urgency: "hard",
+      }),
+    ).toEqual({ kind: "status_only" });
   });
 });

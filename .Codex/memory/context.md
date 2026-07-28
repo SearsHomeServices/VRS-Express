@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-28 13:07
+Updated: 2026-07-28 13:49
 
 ## Current Session
 
@@ -10,18 +10,8 @@ Updated: 2026-07-28 13:07
   - Replit tip `98542cf` was transferred over SSH, pushed to GitHub, and used
     to fast-forward local `main`.
 - Created `codex/vrs-sasha-api-v5` from synchronized commit `98542cf`.
-- Implemented the safe admission boundary from the supplied VRS ↔ SASHA API
-  Contract V5:
-  - `POST /vrs/authorize`
-  - dedicated `VRS_SASHA_API_KEY`
-  - strict V5 request schema
-  - exact SASHA callback allowlist
-  - durable `vrs_ai_calls` queue
-  - atomic duplicate/per-tech/global admission limits
-  - encrypted callback secrets
-  - HMAC callback signing and retry utility
-- Added 15 passing contract/queue tests and architecture documentation.
-- Pushed commit `7f2c996` to `origin/codex/vrs-sasha-api-v5`.
+- Earlier AI-side admission work was pushed for review, then explicitly
+  superseded after the July 24 Granola meeting clarified ownership.
 - Opened draft PR #1:
   `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
 - Located and reviewed the July 24 Granola meeting:
@@ -29,19 +19,27 @@ Updated: 2026-07-28 13:07
 - The meeting confirms the intended flow is:
   SASHA/Tech Hub → VRS Express → human approval → VRS AI → VRS Express result,
   with the existing technician SMS retained for now.
-- This makes the current draft architecture incorrect for this repository:
-  call admission, Twilio/AI execution, rate limits, and webhook sending belong
-  to Enzo's VRS AI service. VRS Express owns intake, review, the new
-  approval/send action, outbound client, result receiver, and ticket/SMS update.
+- Reworked the implementation to the confirmed bridge:
+  - strict authenticated SASHA/Tech Hub V5 intake
+  - normal pending VRS Express ticket through `createSubmissionHandler`
+  - AHS-only gate and district/SO/appliance mapping
+  - **Approve & Send to VRS AI** human action
+  - outbound `/vrs/authorize` client
+  - signed/timestamped VRS AI callback receiver
+  - result application through `processSubmissionHandler`
+  - signed callback forwarding to SASHA with the Express call ID
+  - event-level idempotency checkpoints
+- Callback secrets now use `VRS_BRIDGE_ENCRYPTION_KEY`, not `SESSION_SECRET`.
+- Final verification: 32/32 bridge tests pass and the production build passes.
+  Branch and a fresh `origin/main` worktree each have the same 56 raw / 26
+  normalized pre-existing TypeScript diagnostics, with zero branch delta.
 
 ## Scope Boundary
 
-- **Draft PR #1 must not be merged in its current form.**
-- The current branch implements the VRS AI-side admission boundary inside the
-  VRS Express repository and must be reworked into the Express bridge.
-- The supplied V5 contract describes SASHA BFF → VRS AI directly; it does not
-  define the extra VRS Express intake/pending-review contract required by the
-  meeting.
+- Draft PR #1 remains unmergeable until the additive dev schema and staging
+  configuration are applied and a complete AHS staging transaction passes.
+- The supplied V5 contract defines the wire shape; the Granola meeting defines
+  the extra Express human-approval boundary and system ownership.
 - Phase 1 is AHS phone authorization. First American's portal automation is a
   separate, incompletely validated execution path; Choice/OEM are excluded and
   Assurance is later.
@@ -53,11 +51,14 @@ Updated: 2026-07-28 13:07
 
 ## Notes
 
-- Existing `/api/external/v1/*` routes may provide reusable human-ticket
-  adapter logic, but the exact SASHA/Tech Hub intake route and payload mapping
-  still need to be defined for the bridge.
+- Required staging variables are documented in
+  `docs/architecture/vrs-sasha-api-v5.md`.
+- Additive `vrs_ai_calls` / `vrs_ai_call_events` schema remains unapplied.
+- A `failed` AI callback remains pending for the existing manual authorization
+  flow; `retryable` is surfaced to the agent, but automatic redial is owned by
+  VRS AI and is not claimed here.
 - The local user-owned `graphify-out/` directory remains untracked and was not
   staged or modified.
-- Full `npm run check` has a pre-existing TypeScript baseline; require zero new
-  errors in the VRS SASHA files and use the focused tests plus production build
-  as the feature gate.
+- Full `npm run check` has a pre-existing TypeScript baseline: 56 raw
+  diagnostics collapse to 26 unique diagnostics after line/column
+  normalization. The branch and fresh `origin/main` outputs match exactly.

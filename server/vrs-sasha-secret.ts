@@ -18,9 +18,11 @@ const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
 
 function getMasterSecret(): string {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) {
-    throw new Error("SESSION_SECRET is required for callback-secret encryption");
+  const secret = process.env.VRS_BRIDGE_ENCRYPTION_KEY;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "VRS_BRIDGE_ENCRYPTION_KEY (at least 32 characters) is required for callback-secret encryption",
+    );
   }
   return secret;
 }

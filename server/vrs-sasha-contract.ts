@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { z } from "zod";
 
 export const VRS_SASHA_CALLBACK_HOSTS = new Set([
@@ -125,6 +125,46 @@ export const vrsAuthorizeRequestSchema = z
 
 export type VrsAuthorizeRequest = z.infer<typeof vrsAuthorizeRequestSchema>;
 
+const vrsOutboundSourceRequestShape = {
+  ...vrsAuthorizeRequestShape,
+  // The inbound schema above deliberately pins this to SASHA. Once Express
+  // owns the callback, retries may already contain the Express URL, so the
+  // outbound client validates the trusted replacement separately below.
+  callback_url: z.string().url(),
+};
+
+const vrsOutboundSourceRequestSchema = z
+  .object(vrsOutboundSourceRequestShape)
+  .passthrough()
+  .superRefine((value, context) => {
+    for (const key of Object.keys(value)) {
+      if (!(key in vrsOutboundSourceRequestShape)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `Unrecognized field: ${key}`,
+        });
+      }
+    }
+  });
+
+export function isValidVrsExpressCallbackUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "" &&
+      url.pathname === "/api/integrations/vrs-ai/v1/webhook" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
 const webhookEnvelope = {
   version: z.literal(1),
   eventId: requiredText("eventId", 100),
@@ -200,6 +240,161 @@ export function createVrsWebhookSignature(
   secret: string,
 ): string {
   return `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+}
+
+export function verifyVrsWebhookSignature(
+  rawBody: string | Buffer,
+  presentedSignature: string,
+  secret: string,
+): boolean {
+  const expected = Buffer.from(
+    createVrsWebhookSignature(
+      typeof rawBody === "string" ? rawBody : rawBody.toString("utf8"),
+      secret,
+    ),
+  );
+  const presented = Buffer.from(presentedSignature);
+  return (
+    expected.length === presented.length &&
+    timingSafeEqual(expected, presented)
+  );
+}
+
+export type VrsAiAuthorizeResult =
+  | {
+      kind: "accepted";
+      callId: string;
+      state: string;
+      duplicate: boolean;
+    }
+  | {
+      kind: "rate_limited";
+      retryAfterSeconds: number;
+      message: string;
+    }
+  | {
+      kind: "failed";
+      status?: number;
+      message: string;
+    };
+
+export async function sendVrsAuthorizeRequest(options: {
+  baseUrl: string;
+  apiKey: string;
+  callbackUrl: string;
+  callbackSecret: string;
+  payload: VrsAuthorizeRequest;
+  fetchImpl?: typeof fetch;
+}): Promise<VrsAiAuthorizeResult> {
+  const sourcePayload = vrsOutboundSourceRequestSchema.parse(options.payload);
+  const baseUrl = new URL(options.baseUrl);
+  if (
+    baseUrl.protocol !== "https:" ||
+    baseUrl.username ||
+    baseUrl.password ||
+    baseUrl.search ||
+    baseUrl.hash
+  ) {
+    throw new Error("VRS AI base URL must be a clean HTTPS origin");
+  }
+
+  const callbackUrl = new URL(options.callbackUrl);
+  if (
+    !isValidVrsExpressCallbackUrl(callbackUrl.toString())
+  ) {
+    throw new Error(
+      "VRS Express callback URL must be the clean HTTPS VRS AI webhook route",
+    );
+  }
+
+  const outboundPayload: VrsAuthorizeRequest = {
+    ...sourcePayload,
+    callback_url: callbackUrl.toString(),
+    callback_secret: options.callbackSecret,
+  };
+  const endpoint = new URL("/vrs/authorize", baseUrl);
+  const fetchImpl = options.fetchImpl ?? fetch;
+
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": options.apiKey,
+      },
+      body: JSON.stringify(outboundPayload),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await response
+      .json()
+      .catch(() => ({} as Record<string, unknown>)) as Record<
+      string,
+      unknown
+    >;
+
+    if (response.status === 202) {
+      if (typeof body.call_id !== "string" || !body.call_id) {
+        return {
+          kind: "failed",
+          status: response.status,
+          message: "VRS AI returned 202 without call_id",
+        };
+      }
+      return {
+        kind: "accepted",
+        callId: body.call_id,
+        state: typeof body.state === "string" ? body.state : "queued",
+        duplicate: false,
+      };
+    }
+
+    if (response.status === 409) {
+      if (
+        typeof body.existing_call_id !== "string" ||
+        !body.existing_call_id
+      ) {
+        return {
+          kind: "failed",
+          status: response.status,
+          message: "VRS AI returned 409 without existing_call_id",
+        };
+      }
+      return {
+        kind: "accepted",
+        callId: body.existing_call_id,
+        state: typeof body.state === "string" ? body.state : "in_progress",
+        duplicate: true,
+      };
+    }
+
+    if (response.status === 429) {
+      return {
+        kind: "rate_limited",
+        retryAfterSeconds:
+          typeof body.retry_after_seconds === "number"
+            ? body.retry_after_seconds
+            : 60,
+        message:
+          typeof body.message === "string"
+            ? body.message
+            : "VRS AI rate limit reached",
+      };
+    }
+
+    return {
+      kind: "failed",
+      status: response.status,
+      message:
+        typeof body.message === "string"
+          ? body.message
+          : `VRS AI request failed with HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      kind: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function deliverVrsWebhook(options: {

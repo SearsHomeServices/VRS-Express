@@ -1,103 +1,156 @@
-# VRS ↔ SASHA API Contract V5
+# VRS Express ↔ VRS AI Bridge (SASHA Contract V5)
 
-Implementation boundary for the July 2026 SASHA contract supplied by Tyler on
-2026-07-28. This surface is separate from `/api/external/v1/*`, which manages
-human VRS tickets. SASHA's endpoint queues AI-assisted AHS authorization calls.
+This design combines two sources:
 
-## Current implementation status
+- The V5 wire contract supplied on 2026-07-28.
+- The July 24 Granola meeting, “VRS Express API integration — tech hub,
+  Sasha, and AI system endpoints.”
 
-### Implemented
+The meeting is the ownership source of truth. The contract's diagram shows
+SASHA calling VRS AI directly, but the operational design requires VRS Express
+to remain the human approval and data-enrichment bridge.
+
+## Phase 1 flow
+
+```text
+SASHA / Tech Hub
+  → POST /vrs/authorize on VRS Express
+  → normal pending VRS Express ticket
+  → human agent: Approve & Send to VRS AI
+  → POST /vrs/authorize on Enzo's VRS AI
+  → AHS phone authorization
+  → signed callback to VRS Express
+  → existing VRS ticket decision + technician SMS
+  → signed callback forwarded to SASHA
+```
+
+Phase 1 is American Home Shield only. First American remains a separate portal
+workflow until its execution path is validated. Choice, OEM, and Assurance are
+outside this increment.
+
+## Ownership
+
+| System | Responsibility |
+|---|---|
+| SASHA / Tech Hub | Assemble the V5 payload, call Express, and receive the final callback. |
+| VRS Express (this repository) | Authenticate intake, create/enrich the human ticket, hold for approval, dispatch to VRS AI, apply results, keep the existing SMS path, and forward callbacks. |
+| VRS AI (Enzo) | Enforce call admission limits, build the AI prompt, dial AHS, manage recordings/call state, and send V5 events. |
+
+The existing `/api/external/v1/*` API remains a separate general-purpose
+human-ticket integration surface.
+
+## Implemented surfaces
+
+### SASHA → VRS Express intake
 
 - `POST /vrs/authorize`
-- Dedicated static `X-API-Key` using `VRS_SASHA_API_KEY`
-- Strict V5 request validation, including the V5 names
-  `appliance_grade`, `appliance_photos`, `parts[].sell_price`,
-  `parts[].part_function`, and `repair_replace_rationale`
-- Callback URL allowlist restricted to the exact confirmed production and
-  staging SASHA HTTPS webhook URLs
-- Contract responses: `202`, `400`, `401`, `409`, and `429`
-- Durable PostgreSQL queue in `vrs_ai_calls`
-- Atomic admission lock covering duplicate SO detection, 10 calls/hour per
-  technician, and 100 concurrent active calls
-- AES-256-GCM encryption of each request's `callback_secret`; cleartext is not
-  stored in the JSON payload or database columns
-- HMAC-SHA256 webhook signing and the documented retry policy (network errors
-  or `500`/`502`/`503`, maximum five attempts, stable event ID)
-- Unit/integration contract coverage in `tests/vrs-sasha-*.test.ts`
+- Timing-safe `X-API-Key` authentication with `VRS_SASHA_API_KEY`
+- Strict V5 validation, including `repair_replace_rationale`,
+  `appliance_grade`, `appliance_photos`, and the V5 part/comment shapes
+- Exact SASHA callback allowlist:
+  - `https://sasha.prod.nextgen.shs.com/sasha/api/vrs/webhook`
+  - `https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook`
+- AHS-only partner gate
+- Technician lookup against the Snowflake-synced technician table
+- Bare eight-digit SO mapped to the normal `DDDD-SSSSSSSS` ticket format using
+  the technician's four-digit district
+- Normal `createSubmissionHandler` reuse, preserving duplicate checks, queue
+  routing, broadcasts, ProcID lookup, and the existing received SMS
+- Upstream callback secret encrypted with AES-256-GCM using the dedicated
+  `VRS_BRIDGE_ENCRYPTION_KEY`
 
-### Not implemented yet
+The `202 queued` response means the Express review ticket exists. It does not
+claim that VRS AI has dialed AHS.
 
-The existing VRS app has no Twilio voice/AI authorization-call runner. This
-change creates the safe API and durable queue boundary but does not pretend a
-queued row has dialed AHS.
+### Human approval → VRS AI
 
-The follow-on worker still must:
+Bridge-backed Stage 1 tickets show **Approve & Send to VRS AI**. That action:
 
-1. Claim `queued` rows and drive `dialing`/`connected`/terminal states.
-2. Fetch `cta_no` from Snowflake
-   `IH_SERVICEORDER_FULLDETAIL_TBL`.
-3. Derive `partner_id` and `appliance_grade` when absent, expand
-   `failure_cause`, chronologically join `comments[]`, and build the AI prompt,
-   including the still-open V5 decision for how
-   `repair_replace_rationale` is injected.
-4. Place the AHS call, store the recording, and expose the protected recording
-   URL.
-5. Persist webhook delivery attempts and invoke `deliverVrsWebhook()` for
-   terminal and `requires_info` events.
+1. Atomically reserves one outbound dispatch.
+2. Replaces SASHA's callback URL/secret with the Express callback.
+3. Sends the unchanged V5 business payload to the configured VRS AI
+   `/vrs/authorize` endpoint.
+4. Records the VRS AI `call_id`.
+5. Only then marks Stage 1 approved and sends the existing technician SMS.
 
-The contract's `vrs.prod.nextgen.shs.com` and
-`vrs-dev.stage.nextgen.shs.com` hostnames also require enterprise DNS/proxy
-routing outside this repository.
+Manual/PWA tickets without a bridge record retain their current approval flow.
 
-## Request admission
+### VRS AI → Express → SASHA callback
 
-`server/vrs-sasha-contract.ts` is the wire-contract source. Requests must use
-the confirmed SASHA callback URL exactly:
+VRS AI posts to:
 
-- Production:
-  `https://sasha.prod.nextgen.shs.com/sasha/api/vrs/webhook`
-- Staging:
-  `https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook`
+`POST /api/integrations/vrs-ai/v1/webhook`
 
-No alternate host, port, credentials, query string, or fragment is accepted.
-This prevents the caller-controlled callback from becoming an SSRF path.
+Express verifies:
 
-`server/vrs-sasha-queue.ts` owns admission behavior. The database adapter in
-`server/vrs-sasha-store.ts` takes a transaction-scoped PostgreSQL advisory
-lock before checking:
+- HMAC-SHA256 over the exact raw body
+- `X-VRS-Timestamp` within five minutes
+- required matching `X-VRS-Event-Id`
+- V5 event schema and matching service order/provider call ID
 
-- one active call per `service_order`
-- ten requests per `tech_id` in a rolling hour
-- 100 active calls globally
+An event ledger makes ticket/SMS application idempotent and allows a failed
+upstream forward to resume without repeating the technician side effects.
+Terminal `approved`, `partial`, and `denied` events run through the existing
+ticket process handler. `failed` and `requires_info` remain visible on the
+pending ticket for agent/manual follow-up. The callback forwarded to SASHA
+restores the public Express `call_id` and is signed with SASHA's original
+per-request secret.
 
-Active states are `queued`, `dialing`, `connected`,
-`awaiting_decision`, `requires_info`, and `in_progress`.
+## Persistence
 
-## Database rollout
+- `vrs_ai_calls`: one Express bridge record per submission, sanitized source
+  payload, encrypted SASHA secret, provider call ID, dispatch/result state, and
+  aggregate delivery status.
+- `vrs_ai_call_events`: event-level idempotency and apply/forward checkpoints.
 
-`vrs_ai_calls` is a new table only; no existing columns are changed or removed.
-Per production safety rules, do not run `db:push` against production.
+Both are additive tables/columns. No schema or data change has been applied to
+the production-connected Replit database.
 
-Required rollout sequence:
+## Required configuration
 
-1. Apply `npm run db:push` to the VRS development database.
-2. Set `VRS_SASHA_API_KEY` through the environment's secret manager.
-3. Confirm `SESSION_SECRET` remains set; it is the encryption root for callback
-   secrets.
-4. Run the contract tests and a staging `POST /vrs/authorize`.
-5. Promote through the normal Replit deployment pipeline.
+| Variable | Purpose |
+|---|---|
+| `VRS_SASHA_API_KEY` | SASHA/Tech Hub → Express intake key |
+| `VRS_BRIDGE_ENCRYPTION_KEY` | Dedicated 32+ character encryption root for stored SASHA callback secrets |
+| `VRS_AI_BASE_URL` | `https://vrs-dev.stage.nextgen.shs.com` in staging; `https://vrs.prod.nextgen.shs.com` in production |
+| `VRS_AI_API_KEY` | Express → VRS AI key |
+| `VRS_AI_WEBHOOK_SECRET` | VRS AI → Express callback HMAC secret |
+| `VRS_AI_CALLBACK_URL` | Exact public Express callback URL ending `/api/integrations/vrs-ai/v1/webhook` |
+| `VRS_EXPRESS_PUBLIC_URL` | Optional origin used to derive the callback URL and rejection links |
 
-Until the schema is applied and the AI-call worker exists, this feature is not
-production-ready.
+Do not reuse `SESSION_SECRET` as the bridge encryption key. Rotating JWT/session
+credentials must not make in-flight callback secrets undecryptable.
+
+## Safe rollout
+
+1. Rotate the credentials exposed by the earlier SSH-output incident before
+   relying on them.
+2. Apply the additive schema to the VRS development database only.
+3. Configure staging secrets and the public callback URL.
+4. Run the focused tests and production build.
+5. Complete one AHS staging transaction end to end:
+   intake → agent approval → VRS AI → Express callback → SASHA callback.
+6. Promote through the normal deployment pipeline only after that evidence is
+   captured.
+
+Never run `db:push` against the production-connected Replit database.
+
+## Remaining external dependencies
+
+- Valid staging API/HMAC keys from SASHA and VRS AI
+- A routable public Express callback URL
+- Enzo's decision for V5 O-V5-3: how
+  `repair_replace_rationale` enters the AI prompt
+- A real AHS staging transaction and known callback test vector
 
 ## Validation
 
 ```powershell
-npm run test:vrs-sasha
-npm run check
+npm run test:vrs-ai-bridge
 npm run build
+npm run check
 ```
 
-The repository has pre-existing TypeScript errors; compare `npm run check`
-against the current `main` baseline and require zero new errors in the VRS
-SASHA files.
+`npm run check` has a pre-existing repository baseline. Require zero new
+diagnostics relative to `origin/main`; focused tests and the production build
+must both pass.

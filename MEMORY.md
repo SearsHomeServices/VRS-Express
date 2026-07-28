@@ -1,24 +1,26 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-28 13:07 — Located the July 24 Granola handoff and corrected the VRS Express/VRS AI ownership boundary for draft PR #1.
+> **Last Touched:** Codex — 2026-07-28 13:49 — Completed and verified the AHS VRS Express-to-VRS AI human-approval bridge for draft PR #1.
 
 ## Current State
-- Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf` before new work; the Replit worktree was clean.
-- Replit's 14-commit lead was transferred over SSH and pushed to GitHub; the stale local checkout was fast-forwarded by 195 commits total.
-- Current local branch is `codex/vrs-sasha-api-v5`, pushed at commit `1629114`.
+- Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf`
+  before new work. A fresh post-implementation SSH check confirmed Replit is
+  still clean on `main...origin/main` at `98542cf`.
+- Current branch is `codex/vrs-sasha-api-v5`; its corrected bridge
+  implementation is pushed for review in draft PR #1.
 - Draft PR #1 is open: `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
-- The PR adds `POST /vrs/authorize`, strict SASHA V5 validation, a durable `vrs_ai_calls` queue, atomic admission limits, encrypted callback secrets, and HMAC webhook delivery utilities.
-- **Do not merge the PR in its current form.** The July 24 Granola meeting
-  ("VRS Express API integration — tech hub, Sasha, and AI system endpoints")
-  confirms that this repository is the VRS Express approval/data-enrichment
-  bridge, not Enzo's VRS AI call-execution service.
-- Confirmed target flow: SASHA/Tech Hub payload → VRS Express pending human
-  review → new approval action/button → outbound payload to VRS AI → result
-  returned to VRS Express, while the existing technician SMS remains in place.
-- The supplied V5 contract describes SASHA BFF calling VRS AI directly and
-  returning results to SASHA. It does not fully specify the additional VRS
-  Express intake/approval boundary required by the meeting.
-- Verification: 15/15 focused tests pass, production build passes, and TypeScript comparison shows the same 26 normalized baseline errors on both branch and `origin/main` (0 new).
+- The corrected PR implements the meeting-confirmed flow:
+  SASHA/Tech Hub → normal VRS Express pending ticket → human
+  **Approve & Send to VRS AI** action → Enzo's VRS AI → signed result callback
+  → normal VRS Express result/SMS handling → signed SASHA callback.
+- Phase 1 is AHS-only. The bridge reuses the existing submission and process
+  handlers, persists safe review context, tracks AI dispatch separately, and
+  uses an event ledger so a callback retry cannot repeat the ticket/SMS action.
+- SASHA callback secrets are encrypted with the dedicated
+  `VRS_BRIDGE_ENCRYPTION_KEY`; they are excluded from staff API projections.
+- Verification: 32/32 focused tests pass, the production build passes, and a
+  fresh `origin/main` worktree comparison produced the exact same 56 raw / 26
+  normalized pre-existing TypeScript diagnostics (zero branch delta).
 - No production DB schema/data change and no deployment were performed.
 - Local user-owned `graphify-out/` remains untracked and untouched.
 - [HANDOFF] Final SSH verification accidentally printed the Replit environment
@@ -34,21 +36,23 @@
 - [CX] 2026-07-28 - Did not apply the additive table to any production-connected database; schema rollout remains dev-first through the normal deployment pipeline.
 - [CX] 2026-07-28 - The July 24 Granola meeting is the architecture source of truth for this integration: VRS Express receives/enriches the request, holds it for human approval, then calls Enzo's VRS AI service. The current draft PR implements AI-owned behavior on the Express side and must be reworked before merge.
 - [CX] 2026-07-28 - Phase 1 automation is AHS phone authorization. First American is a separate portal workflow whose execution-capable API remains unvalidated; Choice and OEM partners are excluded, and Assurance follows after AHS/FA validation.
+- [CX] 2026-07-28 - Reused the normal Express create/process handlers at both bridge boundaries so routing, audit fields, optimistic locks, WebSocket updates, and technician SMS remain one implementation.
+- [CX] 2026-07-28 - Gave Express and VRS AI separate call IDs and added an event ledger so `requires_info` can precede a terminal event and failed SASHA forwarding can resume without reapplying ticket/SMS side effects.
+- [CX] 2026-07-28 - Separated bridge-secret encryption from `SESSION_SECRET`; rotating an auth secret must not make in-flight SASHA callbacks undecryptable.
+- [CX] 2026-07-28 - Treat VRS AI `failed` as terminal under V5 but leave the Express ticket pending for the existing manual path; Enzo must confirm whether retryable failures are redialed by AI or need an explicit Express retry action.
 
 ## Open Threads
-- [CX] Rework draft PR #1 before review: remove AI-owned call admission,
-  rate-limit, and webhook-sender responsibilities from VRS Express.
-- [CX] Implement the Express-owned bridge: authenticated SASHA/Tech Hub intake,
-  pending human review, a new approval/send-to-AI action, outbound
-  `/vrs/authorize` client, signed result callback receiver, ticket status
-  updates, and the existing technician SMS path.
-- [CX] Do not apply the current `vrs_ai_calls` schema until its role is revised
-  for outbound integration tracking and the new design is reviewed.
-- [CX] Reconcile the V5 contract's direct SASHA → VRS AI callback model with
-  the meeting's SASHA/Tech Hub → VRS Express → VRS AI flow.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
+- [CX] Apply the additive bridge schema to the VRS development database only
+  through the approved dev-first pipeline; never push it directly to prod.
+- [CX] Configure the staging bridge/API/HMAC secrets and Express public callback
+  URL without exposing their values in Git or task output.
 - [CX] Complete an AHS-only staging transaction through the full Express
   approval bridge before any production approval.
+- [CX] Confirm with Enzo whether retryable terminal failures are redialed by
+  VRS AI or require an explicit Express retry endpoint/button.
+- [CX] Validate an execution-capable First American portal path separately
+  before including it; Choice/OEM remain excluded and Assurance remains later.
 - [HANDOFF] Rotate exposed Replit environment credentials before relying on
   them again: OpenAI, Snowflake credentials/key material, Twilio auth,
   Replit identity/DB tokens, `SESSION_SECRET`, VRS API keys, and VRS master
@@ -69,3 +73,6 @@
   outbound callbacks to VRS AI. Read it together with the July 24 Granola
   meeting; implementing the contract literally in this repository puts the AI
   service on the wrong side of the bridge.
+- [CX] 2026-07-28 - Windows OpenSSH hung against the Replit host in this
+  environment; Git's bundled `C:\Program Files\Git\usr\bin\ssh.exe` completed
+  the same read-only verification successfully.

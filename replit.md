@@ -43,7 +43,7 @@ Deep-dive operational notes for individual subsystems live under `docs/architect
 - [1099 Provider Portal](docs/architecture/1099-provider-portal.md) — `ENABLE_1099_PORTAL` flag, `provider_1099` role, warranty derivation + Sears-exclusion / no-leak behavior.
 - [Dashboard Query Performance](docs/architecture/dashboard-performance.md) — SQL business-hours averages, N+1 removal, performance indexes, concurrent reads.
 - [External API v1](docs/architecture/external-api.md) — `/api/external/v1/*` machine-to-machine surface: two x-api-key keys (read/write), adapter-over-existing-handlers design, VRS_EXTERNAL_API system account, allowlisted decision actions, bounded projections.
-- [VRS ↔ SASHA API Contract V5](docs/architecture/vrs-sasha-api-v5.md) — separate `POST /vrs/authorize` AI-call queue, strict V5 validation, dedicated `VRS_SASHA_API_KEY`, encrypted callback secrets, admission limits, webhook signing/retries, and the explicit Twilio/AI worker gap.
+- [VRS Express ↔ VRS AI Bridge](docs/architecture/vrs-sasha-api-v5.md) — SASHA/Tech Hub intake, normal human review ticket, AHS-only approval/send action, outbound VRS AI client, signed result callback, and callback forwarding to SASHA.
 
 ## Schema & Data Safety
 - `drizzle.config.ts` has `strict: true` and `verbose: true` — `db:push` will prompt for confirmation on any destructive changes.
@@ -63,7 +63,7 @@ Deep-dive operational notes for individual subsystems live under `docs/architect
 
 ## External Dependencies
 - **Twilio:** Used for sending SMS notifications to technicians.
-- **SASHA V5 API:** `POST /vrs/authorize` requires `VRS_SASHA_API_KEY`. `SESSION_SECRET` encrypts per-request SASHA callback secrets at rest. The durable admission queue exists, but the Twilio voice/AI call worker is still a required follow-on.
+- **SASHA/VRS AI bridge:** `POST /vrs/authorize` requires `VRS_SASHA_API_KEY` and creates a normal pending Express ticket. Bridge callback secrets use the dedicated `VRS_BRIDGE_ENCRYPTION_KEY`. Human Stage 1 approval sends the V5 payload to Enzo's VRS AI service; VRS AI callbacks return through Express and are forwarded to SASHA.
 - **Snowflake:** Integrates for synchronizing technician data into the platform's database. Also provides ProcID (CMB_THD_PTY_ID) and Client Name lookup per service order via `fetchProcIdForServiceOrder` in `server/services/snowflake.ts`, stored as `procId` and `clientNm` on the submissions table.
 - **SHSAI Service:** An external AI service for querying service order history and handling follow-up questions during the authorization process.
 - **LDAP Service:** Utilized for secure authentication of technicians (passwordless) and verifying credentials for agents and administrators.

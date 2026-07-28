@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-28 13:07
+Updated: 2026-07-28 13:49
 
 ## Done
 
@@ -23,10 +23,21 @@ Updated: 2026-07-28 13:07
 - [x] Located and reviewed the July 24 Granola architecture meeting.
 - [x] Confirmed VRS Express is the human approval/data-enrichment bridge and
   Enzo's VRS AI platform owns call execution.
+- [x] Removed AI-owned admission/rate-limit/worker behavior from VRS Express.
+- [x] Implemented authenticated SASHA/Tech Hub V5 intake into a normal pending
+  VRS Express ticket.
+- [x] Added the AHS-only **Approve & Send to VRS AI** agent action.
+- [x] Added the outbound VRS AI `/vrs/authorize` client and dispatch tracking.
+- [x] Added the signed/timestamped VRS AI result receiver, existing ticket/SMS
+  result application, and signed callback forwarding to SASHA.
+- [x] Added event-level callback idempotency and retryable forwarding.
+- [x] Separated callback-secret encryption from `SESSION_SECRET`.
+- [x] Added focused bridge/UI-copy tests and updated architecture documentation.
+- [x] Completed final 32/32 tests, production build, exact `origin/main`
+  TypeScript-baseline comparison, commit/push, and draft PR #1 update.
 
 ## Open
 
-- [ ] Rework draft PR #1 (`codex/vrs-sasha-api-v5`) before review or merge.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential
   exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
   passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API
@@ -35,20 +46,14 @@ Updated: 2026-07-28 13:07
 - [ ] Stream CSV export rows instead of building one large in-memory string.
 - [ ] Remove duplicate metadata/ACL fetches in object-serving path to reduce image/video time-to-first-byte.
 - [ ] Add indexes for hottest submission filters/sorts and verify with `EXPLAIN ANALYZE`.
-- [ ] Remove AI-owned admission/rate-limit/webhook-sender behavior from the
-  VRS Express side of the draft.
-- [ ] Define and implement authenticated SASHA/Tech Hub intake into a pending
-  VRS Express review ticket.
-- [ ] Add the new human approval/send-to-VRS-AI action and UI button.
-- [ ] Add the outbound VRS AI `/vrs/authorize` client and outbound-call
-  tracking suitable for VRS Express.
-- [ ] Add a signed VRS AI result callback receiver that updates the ticket and
-  preserves the existing technician SMS flow.
-- [ ] Gate Phase 1 automation to AHS; keep First American portal automation
-  separate until its execution path is validated.
-- [ ] Do not apply the current `vrs_ai_calls` schema until the Express-side
-  tracking design is reworked and reviewed.
+- [ ] Apply the additive bridge schema to the VRS development DB through the
+  approved dev-first pipeline; never push it directly to production.
+- [ ] Configure staging `VRS_SASHA_API_KEY`,
+  `VRS_BRIDGE_ENCRYPTION_KEY`, `VRS_AI_API_KEY`,
+  `VRS_AI_WEBHOOK_SECRET`, and the Express public callback URL.
 - [ ] Resolve V5 O-V5-3: how `repair_replace_rationale` enters the AI prompt.
 - [ ] Configure/verify the confirmed NextGen staging and production hostnames.
 - [ ] Run a real SASHA/Tech Hub → VRS Express → human approval → VRS AI →
   VRS Express callback staging transaction before production approval.
+- [ ] Decide with Enzo whether retryable terminal failures are redialed inside
+  VRS AI or need an explicit Express retry endpoint/button.

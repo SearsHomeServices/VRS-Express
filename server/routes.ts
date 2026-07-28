@@ -21,8 +21,27 @@ import {
   SERVICE_ORDER_REGEX,
 } from "./external-api";
 import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
-import { registerVrsSashaApi } from "./vrs-sasha-api";
-import { vrsAiCallQueue } from "./vrs-sasha-store";
+import {
+  registerVrsAiWebhookApi,
+  registerVrsSashaApi,
+  type VrsExpressIntake,
+} from "./vrs-sasha-api";
+import { vrsBridgeStore } from "./vrs-sasha-store";
+import {
+  dispatchVrsAiForSubmission,
+  mapVrsAiWebhookToSubmissionDecision,
+  mapVrsPayloadToSubmission,
+  processVrsAiWebhookEvent,
+} from "./vrs-sasha-queue";
+import {
+  deliverVrsWebhook,
+  sendVrsAuthorizeRequest,
+  type VrsWebhookEvent,
+} from "./vrs-sasha-contract";
+import {
+  decryptVrsCallbackSecret,
+  encryptVrsCallbackSecret,
+} from "./vrs-sasha-secret";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -465,15 +484,6 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // VRS ↔ SASHA API Contract V5. This is a separate machine-to-machine
-  // surface from /api/external/v1: it queues AHS AI authorization calls and
-  // uses a dedicated key so ticket-workflow access cannot authorize calls.
-  registerVrsSashaApi(app, {
-    apiKey: process.env.VRS_SASHA_API_KEY,
-    queue: vrsAiCallQueue,
-  });
-
-
   await seedDatabase();
 
   registerObjectStorageRoutes(app);
@@ -1565,6 +1575,151 @@ export async function registerRoutes(
 
   app.post("/api/submissions", authenticateToken, requireRole("technician", "provider_1099"), createSubmissionHandler);
 
+  // SASHA/Tech Hub intake for the VRS Express → VRS AI bridge. The V5
+  // request is first converted into the normal VRS Express ticket so every
+  // existing queue, SMS, duplicate, and audit behavior remains in one place.
+  // No AI call is made here; a human agent performs that handoff at Stage 1.
+  const vrsExpressIntake: VrsExpressIntake = {
+    async receive(payload) {
+      const partnerId = (payload.partner_id ?? "ahs")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_");
+      if (!["ahs", "american_home_shield"].includes(partnerId)) {
+        return {
+          kind: "unsupported_partner",
+          partnerId: payload.partner_id ?? "unknown",
+        };
+      }
+
+      const existing = await vrsBridgeStore.findActiveByServiceOrder(
+        payload.service_order,
+      );
+      if (existing) {
+        return {
+          kind: "duplicate",
+          existingCallId: existing.callId,
+          state: existing.state,
+        };
+      }
+
+      const technician = await storage.getTechnicianByLdapId(payload.tech_id);
+      if (!technician) {
+        return {
+          kind: "rejected",
+          status: 422,
+          code: "UNKNOWN_TECHNICIAN",
+          message: `Unknown technician LDAP id: ${payload.tech_id}`,
+        };
+      }
+      if (!technician.isActive) {
+        return {
+          kind: "rejected",
+          status: 422,
+          code: "INACTIVE_TECHNICIAN",
+          message: `Technician ${payload.tech_id} is inactive`,
+        };
+      }
+      if (!technician.district || !/^\d{4}$/.test(technician.district)) {
+        return {
+          kind: "rejected",
+          status: 422,
+          code: "INVALID_TECHNICIAN_DISTRICT",
+          message: `Technician ${payload.tech_id} does not have a four-digit district`,
+        };
+      }
+
+      const techUser = await storage.getOrCreateTechUser(
+        technician.ldapId,
+        technician.name || payload.tech_name,
+        technician.phone || payload.tech_phone,
+      );
+      if (techUser.role !== "technician") {
+        return {
+          kind: "rejected",
+          status: 409,
+          code: "NOT_A_TECHNICIAN",
+          message: "The resolved account is not a technician account",
+        };
+      }
+
+      // Fail configuration validation before creating a user-visible ticket;
+      // otherwise a missing encryption key would leave an orphaned manual
+      // ticket after the bridge intake itself returned 500.
+      const { callback_secret: _callbackSecret, ...requestPayload } = payload;
+      const encryptedSecret = encryptVrsCallbackSecret(
+        payload.callback_secret,
+      );
+      const bridgeCallId = `vrs_call_${randomUUID()}`;
+
+      const internalRequest = {
+        body: mapVrsPayloadToSubmission(payload, technician.district),
+      } as Request;
+      (internalRequest as AuthenticatedRequest).user = {
+        id: techUser.id,
+        email: techUser.email ?? "",
+        name: techUser.name,
+        role: techUser.role,
+        ldapId: techUser.racId ?? undefined,
+        isTechnician: true,
+      };
+      const { res: capturedRes, captured } = makeCapturedResponse();
+      await createSubmissionHandler(internalRequest, capturedRes);
+      const responseBody = captured.body as any;
+      if (captured.statusCode !== 201 || !responseBody?.submission?.id) {
+        const message =
+          typeof responseBody?.error === "string"
+            ? responseBody.error
+            : "VRS Express could not create the authorization ticket";
+        return {
+          kind: "rejected",
+          status:
+            captured.statusCode === 200 || captured.statusCode === 409
+              ? 409
+              : 422,
+          code:
+            captured.statusCode === 200
+              ? "SUBMISSION_ALREADY_EXISTS"
+              : "SUBMISSION_REJECTED",
+          message,
+        };
+      }
+
+      const stored = await vrsBridgeStore.createIntake({
+        submissionId: responseBody.submission.id,
+        callId: bridgeCallId,
+        serviceOrder: payload.service_order,
+        techId: payload.tech_id,
+        techPhone: payload.tech_phone,
+        techName: payload.tech_name,
+        requestPayload,
+        callbackUrl: payload.callback_url,
+        callbackSecretCipher: encryptedSecret.cipher,
+        callbackSecretIv: encryptedSecret.iv,
+        callbackSecretAuthTag: encryptedSecret.authTag,
+        callbackSecretSalt: encryptedSecret.salt,
+      });
+      if (stored.kind === "duplicate") {
+        return {
+          kind: "duplicate",
+          existingCallId: stored.record.callId,
+          state: stored.record.state,
+        };
+      }
+      return {
+        kind: "accepted",
+        callId: stored.record.callId,
+        serviceOrder: payload.service_order,
+        createdAt: stored.createdAt,
+      };
+    },
+  };
+
+  registerVrsSashaApi(app, {
+    apiKey: process.env.VRS_SASHA_API_KEY,
+    intake: vrsExpressIntake,
+  });
+
   // Tyler 2026-07-08 (perf) — 2s micro-cache for the STAFF branch of
   // GET /api/submissions. Agent/admin dashboards poll this endpoint and
   // WS events trigger refetch bursts from every connected staff client at
@@ -1858,7 +2013,14 @@ export async function registerRoutes(
         }
       }
 
-      return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
+      const vrsAi =
+        user.role === "technician" || user.role === "provider_1099"
+          ? null
+          : await vrsBridgeStore.getStatusBySubmissionId(submission.id);
+      return res.status(200).json({
+        submission: redactWarrantyForProvider(user.role, submission),
+        vrsAi,
+      });
     } catch (error) {
       console.error("Get submission error:", error);
       return res.status(500).json({ error: "Failed to get submission" });
@@ -2668,6 +2830,67 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid reason is required" });
       }
 
+      // Bridge-backed AHS tickets cross the human-in-the-loop boundary here.
+      // Manual/PWA tickets have no bridge row and retain the legacy Stage 1
+      // flow. For a bridge ticket, do not mark Stage 1 approved or notify the
+      // technician until VRS AI has durably accepted the outbound request.
+      if (action === "approve_submission") {
+        const bridge = await vrsBridgeStore.getBySubmissionId(id);
+        if (bridge) {
+          const aiBaseUrl = process.env.VRS_AI_BASE_URL;
+          const aiApiKey = process.env.VRS_AI_API_KEY;
+          const aiWebhookSecret = process.env.VRS_AI_WEBHOOK_SECRET;
+          let callbackUrl = process.env.VRS_AI_CALLBACK_URL;
+          if (!callbackUrl && process.env.VRS_EXPRESS_PUBLIC_URL) {
+            try {
+              callbackUrl = new URL(
+                "/api/integrations/vrs-ai/v1/webhook",
+                process.env.VRS_EXPRESS_PUBLIC_URL,
+              ).toString();
+            } catch {
+              callbackUrl = undefined;
+            }
+          }
+          if (!aiBaseUrl || !aiApiKey || !aiWebhookSecret || !callbackUrl) {
+            return res.status(503).json({
+              error:
+                "VRS AI bridge is not configured. Set VRS_AI_BASE_URL, VRS_AI_API_KEY, VRS_AI_WEBHOOK_SECRET, and VRS_AI_CALLBACK_URL (or VRS_EXPRESS_PUBLIC_URL).",
+              code: "VRS_AI_NOT_CONFIGURED",
+            });
+          }
+
+          const dispatch = await dispatchVrsAiForSubmission({
+            submissionId: id,
+            store: vrsBridgeStore,
+            callbackUrl,
+            callbackSecret: aiWebhookSecret,
+            client: {
+              authorize: ({ payload }) =>
+                sendVrsAuthorizeRequest({
+                  baseUrl: aiBaseUrl,
+                  apiKey: aiApiKey,
+                  callbackUrl,
+                  callbackSecret: aiWebhookSecret,
+                  payload,
+                }),
+            },
+          });
+          if (dispatch.kind === "busy") {
+            return res.status(409).json({
+              error:
+                "This ticket is already being sent to VRS AI. Wait a moment and refresh.",
+              code: "VRS_AI_DISPATCH_IN_PROGRESS",
+            });
+          }
+          if (dispatch.kind === "failed") {
+            return res.status(dispatch.status === 429 ? 429 : 502).json({
+              error: dispatch.message,
+              code: "VRS_AI_DISPATCH_FAILED",
+            });
+          }
+        }
+      }
+
       const updateData: Record<string, unknown> = {
         reviewedBy: authReq.user!.id,
         reviewedAt: new Date(),
@@ -2716,7 +2939,10 @@ export async function registerRoutes(
           console.error(`[process:approve_submission] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
         }
 
-        return res.status(200).json({ submission: updated });
+        return res.status(200).json({
+          submission: updated,
+          vrsAi: await vrsBridgeStore.getStatusBySubmissionId(id),
+        });
       }
 
       if (action === "approve") {
@@ -3093,6 +3319,161 @@ export async function registerRoutes(
   };
 
   app.patch("/api/submissions/:id/process", authenticateToken, requireRole("vrs_agent", "admin"), processSubmissionHandler);
+
+  // VRS AI calls back into Express, not directly to SASHA. Express applies
+  // terminal outcomes through the same ticket handler used by agents (which
+  // preserves SMS/audit/optimistic-lock behavior), then signs and forwards
+  // the original public bridge call id to SASHA.
+  registerVrsAiWebhookApi(app, {
+    webhookSecret: process.env.VRS_AI_WEBHOOK_SECRET,
+    sink: {
+      async receive(event: VrsWebhookEvent) {
+        const outcome = await processVrsAiWebhookEvent({
+          event,
+          store: vrsBridgeStore,
+          decryptCallbackSecret: decryptVrsCallbackSecret,
+          async applyResult(submissionId, callbackEvent) {
+            const decision =
+              mapVrsAiWebhookToSubmissionDecision(callbackEvent);
+            if (decision.kind === "status_only") return;
+
+            const submission = await storage.getSubmission(submissionId);
+            if (!submission) {
+              throw new Error(
+                `Submission ${submissionId} for VRS AI callback was not found`,
+              );
+            }
+
+            // A webhook retry can arrive after the ticket transition won but
+            // before its event-ledger stamp committed. Recognize the exact
+            // resulting state so the retry never sends the technician twice.
+            if (
+              (callbackEvent.state === "approved" ||
+                callbackEvent.state === "partial") &&
+              submission.ticketStatus === "completed" &&
+              submission.authCode === callbackEvent.authNumber
+            ) {
+              return;
+            }
+            if (
+              callbackEvent.state === "denied" &&
+              submission.ticketStatus === "rejected"
+            ) {
+              try {
+                const reasons = submission.rejectionReasons
+                  ? JSON.parse(submission.rejectionReasons)
+                  : [];
+                if (
+                  Array.isArray(reasons) &&
+                  reasons.includes(callbackEvent.denyReason)
+                ) {
+                  return;
+                }
+              } catch {
+                // A malformed legacy reason is not proof this event applied.
+              }
+            }
+
+            const reviewerId =
+              submission.assignedTo ??
+              submission.stage1ReviewedBy ??
+              submission.reviewedBy;
+            if (!reviewerId) {
+              throw new Error(
+                `Submission ${submissionId} has no human reviewer for the VRS AI result`,
+              );
+            }
+            const reviewer = await storage.getUser(reviewerId);
+            if (!reviewer) {
+              throw new Error(
+                `Reviewer ${reviewerId} for submission ${submissionId} was not found`,
+              );
+            }
+
+            const publicUrl =
+              process.env.VRS_EXPRESS_PUBLIC_URL ??
+              process.env.VRS_AI_CALLBACK_URL ??
+              "https://vrs-express.invalid";
+            let callbackHost = "vrs-express.invalid";
+            try {
+              callbackHost = new URL(publicUrl).host;
+            } catch {
+              // The outbound configuration validation reports bad URLs before
+              // dispatch. This fallback only builds a rejection resubmit link.
+            }
+            const internalRequest = {
+              params: { id: String(submissionId) },
+              body: decision.body,
+              protocol: "https",
+              get(name: string) {
+                const header = name.toLowerCase();
+                if (header === "host") return callbackHost;
+                if (header === "x-forwarded-proto") return "https";
+                return undefined;
+              },
+            } as unknown as Request;
+            (internalRequest as AuthenticatedRequest).user = {
+              id: reviewer.id,
+              email: reviewer.email ?? "",
+              name: reviewer.name,
+              // Internal callback application deliberately bypasses a later
+              // reassignment while preserving the human reviewer id in audit
+              // columns. This object never crosses the auth middleware.
+              role: "admin",
+              ldapId: reviewer.racId ?? undefined,
+            };
+
+            const { res: capturedRes, captured } = makeCapturedResponse();
+            await processSubmissionHandler(internalRequest, capturedRes);
+            if (captured.statusCode >= 400) {
+              const body = captured.body as any;
+              throw new Error(
+                typeof body?.error === "string"
+                  ? body.error
+                  : `Unable to apply VRS AI result to submission ${submissionId}`,
+              );
+            }
+          },
+          forward: ({ callbackUrl, callbackSecret, event: forwardedEvent }) =>
+            deliverVrsWebhook({
+              callbackUrl,
+              callbackSecret,
+              event: forwardedEvent,
+            }),
+        });
+
+        if (outcome === "processed") {
+          const record = await vrsBridgeStore.getByProviderCallId(event.callId);
+          if (record) {
+            const refreshed = await storage.getSubmission(record.submissionId);
+            const reviewerId =
+              refreshed?.assignedTo ??
+              refreshed?.stage1ReviewedBy ??
+              refreshed?.reviewedBy;
+            if (reviewerId) {
+              broadcastToAgent(reviewerId, {
+                type: "ticket_updated",
+                payload: {
+                  submissionId: record.submissionId,
+                  ticketStatus: refreshed?.ticketStatus,
+                  vrsAiState: event.state,
+                },
+              });
+            }
+            broadcastToAdmins({
+              type: "ticket_updated",
+              payload: {
+                submissionId: record.submissionId,
+                ticketStatus: refreshed?.ticketStatus,
+                vrsAiState: event.state,
+              },
+            });
+          }
+        }
+        return outcome;
+      },
+    },
+  });
 
   // ========================================================================
   // NLA TICKET PROCESS ROUTE — NLA-specific resolution actions

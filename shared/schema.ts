@@ -726,22 +726,29 @@ export type AgentExternalCredential =
   typeof agentExternalCredentials.$inferSelect;
 
 // ============================================================================
-// VRS ↔ SASHA AI AUTHORIZATION CALL QUEUE
+// VRS EXPRESS ↔ VRS AI AUTHORIZATION BRIDGE
 // ============================================================================
-// Durable boundary for API Contract V5. The authorize endpoint only accepts
-// and queues work; a separate AI/Twilio worker will claim queued rows and drive
-// state transitions. callback_secret is never stored in request_payload or in
-// cleartext — the four callbackSecret* columns contain AES-256-GCM material.
+// Tracks a SASHA/Tech Hub request from Express intake through human approval,
+// outbound VRS AI dispatch, AI result application, and the callback forwarded
+// back to SASHA. callback_secret is never stored in request_payload or in
+// cleartext; the callbackSecret* columns contain AES-256-GCM material.
 export const vrsAiCalls = pgTable(
   "vrs_ai_calls",
   {
     id: serial("id").primaryKey(),
+    submissionId: integer("submission_id").references(() => submissions.id, {
+      onDelete: "cascade",
+    }),
     callId: varchar("call_id", { length: 100 }).notNull(),
+    providerCallId: varchar("provider_call_id", { length: 100 }),
     serviceOrder: varchar("service_order", { length: 20 }).notNull(),
     techId: varchar("tech_id", { length: 50 }).notNull(),
     techPhone: varchar("tech_phone", { length: 20 }).notNull(),
     techName: varchar("tech_name", { length: 255 }).notNull(),
-    state: text("state").notNull().default("queued"),
+    state: text("state").notNull().default("pending_review"),
+    dispatchError: text("dispatch_error"),
+    dispatchAttemptedAt: timestamp("dispatch_attempted_at"),
+    dispatchedAt: timestamp("dispatched_at"),
     requestPayload: jsonb("request_payload")
       .$type<Record<string, unknown>>()
       .notNull(),
@@ -772,6 +779,12 @@ export const vrsAiCalls = pgTable(
   },
   (table) => ({
     callIdUnique: uniqueIndex("vrs_ai_calls_call_id_uidx").on(table.callId),
+    submissionIdUnique: uniqueIndex("vrs_ai_calls_submission_id_uidx").on(
+      table.submissionId,
+    ),
+    providerCallIdUnique: uniqueIndex(
+      "vrs_ai_calls_provider_call_id_uidx",
+    ).on(table.providerCallId),
     serviceOrderStateIdx: index("vrs_ai_calls_so_state_idx").on(
       table.serviceOrder,
       table.state,
@@ -794,6 +807,54 @@ export const insertVrsAiCallSchema = createInsertSchema(vrsAiCalls).omit({
 });
 export type InsertVrsAiCall = z.infer<typeof insertVrsAiCallSchema>;
 export type VrsAiCall = typeof vrsAiCalls.$inferSelect;
+
+// Event-level ledger. A single AI call can emit `requires_info` before a
+// terminal outcome, so deduplication cannot safely live on one call-row
+// event-id column. `appliedAt` and `forwardedAt` let webhook retries resume
+// forwarding without repeating the existing ticket/SMS side effects.
+export const vrsAiCallEvents = pgTable(
+  "vrs_ai_call_events",
+  {
+    id: serial("id").primaryKey(),
+    vrsAiCallId: integer("vrs_ai_call_id")
+      .notNull()
+      .references(() => vrsAiCalls.id, { onDelete: "cascade" }),
+    eventId: varchar("event_id", { length: 100 }).notNull(),
+    state: text("state").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    processingState: text("processing_state")
+      .notNull()
+      .default("processing"),
+    appliedAt: timestamp("applied_at"),
+    forwardedAt: timestamp("forwarded_at"),
+    deliveryAttempts: integer("delivery_attempts").notNull().default(0),
+    deliveryStatus: integer("delivery_status"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("vrs_ai_call_events_event_id_uidx").on(
+      table.eventId,
+    ),
+    callCreatedIdx: index("vrs_ai_call_events_call_created_idx").on(
+      table.vrsAiCallId,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const insertVrsAiCallEventSchema = createInsertSchema(
+  vrsAiCallEvents,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertVrsAiCallEvent = z.infer<
+  typeof insertVrsAiCallEventSchema
+>;
+export type VrsAiCallEvent = typeof vrsAiCallEvents.$inferSelect;
 
 // ============================================================================
 // TECHNICIAN USER VIEW (for admin Field Technicians tab)
