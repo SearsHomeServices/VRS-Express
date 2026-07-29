@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-29 11:10
+Updated: 2026-07-29 11:34
 
 ## Decisions
 
@@ -35,3 +35,6 @@ Updated: 2026-07-29 11:10
 - [CX] 2026-07-29 - Tyler explicitly directed that the bridge and its documentation be placed on `main` for VRS Express publication and sharing. Merge the source now, while retaining the separate rule that schema/configuration/staging validation must complete before activating the live production bridge.
 - [CX] 2026-07-29 - Classify the current package as wire-contract complete but not final-send-ready. Refresh the stale draft-branch metadata first; keep live keys/secrets out of the documents, and treat the three VRS AI decisions plus joint staging evidence as required completion inputs.
 - [CX] 2026-07-29 - Distinguish source publication from bridge activation and document distribution. The deployed app contains the merged routes, but missing variables/tables keep them disabled, and repository docs are not served as downloadable files.
+- [CX] 2026-07-29 - Deliver one external ZIP containing the polished PDF, editable DOCX, and OpenAPI 3.1 contract. Keep the Markdown as the repository source instead of making the recipient sort through duplicate source formats.
+- [CX] 2026-07-29 - External handoff content identifies only VRS Express and VRS AI as the integration platforms. Exclude individual names and internal meeting, PR, commit, credential-incident, and repository-provenance details because they do not help the receiving implementation team.
+- [CX] 2026-07-29 - Classify the finalized package as ready for implementation handoff, while continuing to classify the live bridge as inactive until secure configuration, the additive development schema, the three documented VRS AI decisions, and joint staging evidence are complete.

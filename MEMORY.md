@@ -1,63 +1,31 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-29 11:10 — Verified the published app contains the bridge code but lacks activation configuration, schema, and public document routes.
+> **Last Touched:** Codex — 2026-07-29 11:34 — Finalized and validated the platform-only VRS Express/VRS AI handoff package for direct delivery.
 
 ## Current State
-- PR #1 was marked ready and merged into GitHub `main` through merge commit
-  `f1b9398` after Tyler confirmed the bridge and documentation belong on
-  `main` for publication and sharing.
-- Local `main` and the clean VRS Express Replit checkout were fast-forwarded
-  to the merged history. Replit `main` matched its updated `origin/main`.
-- Replit's raw private-GitHub fetch could not authenticate through its askpass
-  helper. A verified complete Git bundle was transferred over the existing SSH
-  connection instead; no credentials were added to the box.
-- The Markdown, OpenAPI, and DOCX handoff artifacts are present on the VRS
-  Express box. The box passed all 32 focused bridge tests and the production
-  build.
-- Fresh completeness audit: 32/32 tests pass; OpenAPI 3.1 parses with all 34
-  local references resolved; the authorize example, all five callback
-  examples, and deterministic HMAC vector match the committed implementation.
-- The package is not yet final-send-ready. Its Markdown and DOCX still identify
-  draft PR #1 and commit `6ec180f` rather than merged `main` at `3c4cee7`.
-  Actual staging keys/secrets/callback origin belong in a secure out-of-band
-  exchange, and the three VRS AI decisions plus joint staging evidence remain
-  outstanding.
-- The newly published `https://vrs-auth-tool.replit.app` is healthy and serves
-  the merged client build. Both bridge routes exist but return
-  `503 NOT_CONFIGURED`; all six bridge environment variables are missing.
-- Read-only database inspection confirms `vrs_ai_calls` and
-  `vrs_ai_call_events` are absent. No schema change was attempted.
-- Publishing did not expose the handoff artifacts. Requests for the repository
-  Markdown/OpenAPI/DOCX paths return the SPA HTML shell rather than those
-  files.
-- The corrected PR implements the meeting-confirmed flow:
-  SASHA/Tech Hub → normal VRS Express pending ticket → human
-  **Approve & Send to VRS AI** action → VRS AI → signed result callback
-  → normal VRS Express result/SMS handling → signed SASHA callback.
-- Phase 1 is AHS-only. The bridge reuses the existing submission and process
-  handlers, persists safe review context, tracks AI dispatch separately, and
-  uses an event ledger so a callback retry cannot repeat the ticket/SMS action.
-- SASHA callback secrets are encrypted with the dedicated
-  `VRS_BRIDGE_ENCRYPTION_KEY`; they are excluded from staff API projections.
-- Verification: 32/32 focused tests pass, the production build passes, and a
-  fresh `origin/main` worktree comparison produced the exact same 56 raw / 26
-  normalized pre-existing TypeScript diagnostics (zero branch delta).
-- The VRS Express-to-VRS AI partner package now exists as Markdown, OpenAPI 3.1, and a polished
-  10-page DOCX. It covers exact request/response/callback contracts, HMAC test
-  vector, retries/idempotency, staging acceptance evidence, and VRS AI's three
-  remaining decisions.
-- Platform-facing package filenames, headings, ownership language, readiness
-  checks, and test-vector identifiers now reference only VRS Express and VRS
-  AI. All 10 revised DOCX pages were rendered and visually reviewed.
-- The OpenAPI parses with all local references resolved; its authorize example
-  and all five callback examples pass the committed Zod schemas; the HMAC
-  vector matches the implementation. All DOCX pages were rendered and visually
-  inspected.
-- No production DB schema/data change and no deployment were performed.
-- Local user-owned `graphify-out/` remains untracked and untouched.
-- [HANDOFF] Final SSH verification accidentally printed the Replit environment
-  into the task tool output due to nested-shell quoting. Treat every secret
-  present on the box as exposed; rotation is pending Tyler's explicit approval.
+- The VRS Express-to-VRS AI bridge source is merged and published on `main`.
+- The external implementation handoff is ready for direct delivery as
+  `output/doc/VRS-Express-VRS-AI-Handoff-Package.zip`; it contains exactly the
+  polished PDF, editable DOCX, and OpenAPI 3.1 contract.
+- Platform-facing content identifies VRS Express and VRS AI as the two
+  platforms and excludes individual names plus internal meeting, PR, commit,
+  repository-provenance, and credential-incident details.
+- Fresh validation passed: 32/32 focused tests, 34/34 local OpenAPI references,
+  the authorize example, all five callback examples, the deterministic HMAC
+  vector, DOCX/PDF metadata and text scans, exact ZIP contents, and visual
+  review of all 10 rendered pages.
+- The published `https://vrs-auth-tool.replit.app` remains healthy and contains
+  the bridge routes, but both return `503 NOT_CONFIGURED`; all six bridge
+  variables and both additive bridge tables are absent.
+- The handoff is implementation-ready, not activation proof. Secure staging
+  configuration, the additive development schema, three VRS AI decisions, and
+  joint AHS staging evidence remain required.
+- Repository handoff paths are not public download routes in the published app;
+  deliver the finalized files directly.
+- No production database change or deployment was performed during the handoff
+  refresh. Local user-owned `graphify-out/` remains untracked and untouched.
+- [HANDOFF] Credentials exposed in the prior Replit SSH task output still
+  require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
 - [CX] 2026-04-27 - Treated Tyler's "development" wording as a request for the latest published development state, but verified GitHub branch reality before pulling. Since no `development` branch exists, fast-forwarded `main` from `origin/main`.
@@ -79,16 +47,12 @@
 - [CX] 2026-07-29 - Tyler explicitly directed that PR #1 be merged so the bridge and documentation are on VRS Express `main`. Source merge is approved; production bridge activation remains gated by the dev schema, staging configuration, and end-to-end AHS validation.
 - [CX] 2026-07-29 - Treat the handoff as wire-contract complete but not final-send-ready until the stale draft metadata is refreshed. Live secrets stay out of documents; VRS AI decisions and staging proof remain separate completion inputs.
 - [CX] 2026-07-29 - A published source build is not proof of an operational bridge or a document-delivery surface. Require live configuration/schema/staging evidence for activation, and deliver the handoff files directly or through an explicitly implemented protected route.
+- [CX] 2026-07-29 - Finalized the external handoff as one direct-delivery ZIP containing the PDF, editable DOCX, and OpenAPI contract. Keep only VRS Express and VRS AI as platform identities; omit people and internal provenance because those details do not help implementation.
+- [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Refresh Markdown/DOCX metadata to merged `main`, regenerate the DOCX,
-  and visually revalidate all pages before external delivery.
 - [CX] Prepare the secure staging key/secret/callback-origin exchange outside
   Git and collect the three VRS AI decisions plus joint acceptance evidence.
-- [CX] Choose direct file delivery or an authenticated download route; the
-  current published application does not serve the three repository artifacts.
-- [CX] Tyler can publish VRS Express after reviewing the synchronized `main`
-  source and documentation package.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
 - [CX] Apply the additive bridge schema to the VRS development database only
   through the approved dev-first pipeline; never push it directly to prod.
@@ -125,3 +89,7 @@
 - [CX] 2026-07-28 - Windows OpenSSH hung against the Replit host in this
   environment; Git's bundled `C:\Program Files\Git\usr\bin\ssh.exe` completed
   the same read-only verification successfully.
+- [CX] 2026-07-29 - Removing a DOCX hyperlink element without removing or
+  replacing its relationship can leave a dangling `rId` that Word repairs on
+  open. Flatten external hyperlink text and audit every relationship before
+  exporting the final PDF.

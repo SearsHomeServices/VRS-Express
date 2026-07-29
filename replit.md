@@ -44,7 +44,7 @@ Deep-dive operational notes for individual subsystems live under `docs/architect
 - [Dashboard Query Performance](docs/architecture/dashboard-performance.md) — SQL business-hours averages, N+1 removal, performance indexes, concurrent reads.
 - [External API v1](docs/architecture/external-api.md) — `/api/external/v1/*` machine-to-machine surface: two x-api-key keys (read/write), adapter-over-existing-handlers design, VRS_EXTERNAL_API system account, allowlisted decision actions, bounded projections.
 - [VRS Express ↔ VRS AI Bridge](docs/architecture/vrs-sasha-api-v5.md) — SASHA/Tech Hub intake, normal human review ticket, AHS-only approval/send action, outbound VRS AI client, signed result callback, and callback forwarding to SASHA.
-- [VRS Express to VRS AI Integration Handoff](docs/integration/vrs-express-vrs-ai-bridge-handoff.md) — send-ready partner guide with the matching [OpenAPI 3.1 contract](docs/integration/vrs-express-vrs-ai-bridge-openapi.yaml), HMAC test vector, callback/retry rules, and staging acceptance checklist.
+- [VRS Express to VRS AI Integration Handoff](docs/integration/vrs-express-vrs-ai-bridge-handoff.md) — canonical partner guide with the matching [OpenAPI 3.1 contract](docs/integration/vrs-express-vrs-ai-bridge-openapi.yaml), HMAC test vector, callback/retry rules, and staging acceptance checklist. The ready-to-send ZIP, PDF, and editable DOCX are in `output/doc/`.
 
 ## Schema & Data Safety
 - `drizzle.config.ts` has `strict: true` and `verbose: true` — `db:push` will prompt for confirmation on any destructive changes.

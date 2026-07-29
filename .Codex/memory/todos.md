@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-29 11:10
+Updated: 2026-07-29 11:34
 
 ## Done
 
@@ -59,20 +59,22 @@ Updated: 2026-07-29 11:10
   bridge variables are absent and both additive bridge tables are absent.
 - [x] Confirmed repository Markdown/OpenAPI/DOCX paths are not public download
   routes in the published app.
+- [x] Refreshed the external handoff to the merged/published source state and
+  removed individual names plus internal meeting/PR/commit/security-history
+  language from every platform-facing artifact.
+- [x] Regenerated the polished 10-page DOCX, exported the matching PDF, and
+  visually inspected every rendered page.
+- [x] Built `VRS-Express-VRS-AI-Handoff-Package.zip` containing exactly the
+  PDF, editable DOCX, and OpenAPI contract for direct delivery.
+- [x] Revalidated 32/32 tests, 34/34 OpenAPI references, the authorize example,
+  five callback examples, deterministic HMAC vector, external text/metadata,
+  and ZIP contents.
 
 ## Open
 
-- [ ] Update Markdown and DOCX metadata from draft PR #1 / `6ec180f` to the
-  merged `main` state, regenerate the DOCX, and visually inspect every page
-  before external delivery.
 - [ ] Package the secure out-of-band exchange for the staging API key, callback
   secret, and actual Express staging callback origin; do not place secrets in
   Git or the handoff documents.
-- [ ] Decide whether the external team receives the three files directly or
-  whether VRS Express should add an authenticated documentation download
-  surface; publishing the app alone does not expose the files.
-- [ ] Tyler publishes VRS Express after reviewing the synchronized `main`
-  source and documentation package.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential
   exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
   passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API

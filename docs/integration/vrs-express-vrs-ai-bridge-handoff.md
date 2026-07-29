@@ -3,15 +3,17 @@
 | Item | Value |
 |---|---|
 | Audience | VRS Express and VRS AI implementation teams |
-| Status | Staging integration handoff |
-| Prepared | 2026-07-28 |
-| Contract basis | SASHA API Contract V5 plus the July 24 Granola ownership decision |
-| Express implementation | Commit `6ec180f` on draft [PR #1](https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1) |
+| Status | Implementation handoff - staging activation pending |
+| Prepared | 2026-07-29 |
+| Contract basis | API Contract V5 and the approved VRS Express / VRS AI ownership model |
+| VRS Express status | Source merged and published; bridge activation pending configuration and acceptance |
 | Machine-readable contract | [vrs-express-vrs-ai-bridge-openapi.yaml](./vrs-express-vrs-ai-bridge-openapi.yaml) |
 
-No production deployment or production database change has been made. This
-document describes the interface implemented in the draft VRS Express branch
-and the corresponding interface VRS AI must provide.
+This document defines the implementation interface between VRS Express and
+VRS AI. VRS Express source is merged and published. The bridge remains disabled
+for live traffic until staging configuration, the additive development schema,
+and joint acceptance checks are complete. No live keys or secrets are included
+in this package.
 
 ## 1. What VRS AI needs to implement
 
@@ -30,13 +32,13 @@ VRS AI must:
 
 VRS Express already implements the human approval gate, outbound request,
 callback verification, ticket/SMS application, event idempotency, and final
-callback forwarding to SASHA.
+callback forwarding to the upstream workflow.
 
 ## 2. Confirmed runtime flow
 
 ```text
-SASHA / Tech Hub
-  -> VRS Express intake
+VRS Express
+  -> receives and validates the authorization request
   -> normal pending Express ticket
   -> VRS agent reviews the complete business context
   -> agent selects "Approve & Send to VRS AI"
@@ -44,7 +46,7 @@ SASHA / Tech Hub
   -> VRS AI calls AHS
   -> VRS AI POSTs signed result to Express callback_url
   -> Express applies the normal ticket outcome and technician SMS
-  -> Express signs and forwards the result to SASHA
+  -> Express signs and forwards the result to the upstream workflow
 ```
 
 The `POST /vrs/authorize` request received by VRS AI occurs only after human
@@ -55,8 +57,7 @@ asynchronous admission, not proof that dialing has started or completed.
 
 | System | Owns |
 |---|---|
-| SASHA / Tech Hub | Initial V5 data capture, initial Express intake, final result UX |
-| VRS Express | Human review, outbound AI dispatch, result verification, ticket/SMS processing, SASHA forwarding |
+| VRS Express | Authorization intake, human review, outbound AI dispatch, result verification, ticket/SMS processing, and upstream forwarding |
 | VRS AI | Admission limits, prompt construction, AHS/Twilio call, recordings, call lifecycle, signed callback production and retries |
 
 Phase 1 is American Home Shield authorization only. First American is a
@@ -94,7 +95,7 @@ never appear in source control, screenshots, tickets, or application logs.
   "service_order": "13538277",
   "tech_id": "0123456",
   "tech_phone": "+12145550199",
-  "tech_name": "Carlos Rivera",
+  "tech_name": "Example Technician",
   "reason_for_call": "authorization",
   "callback_url": "https://<express-stage-host>/api/integrations/vrs-ai/v1/webhook",
   "callback_secret": "<EXPRESS-SUPPLIED-HMAC-SECRET>",
@@ -106,7 +107,7 @@ never appear in source control, screenshots, tickets, or application logs.
       "part_function": "Controls wash cycle timing and motor speed."
     }
   ],
-  "customer_name": "Maria Gonzalez",
+  "customer_name": "Example Customer",
   "customer_address": "742 Evergreen Terrace, Hagerstown, MD 21740",
   "service_address": "742 Evergreen Terrace, Hagerstown, MD 21740",
   "brand": "Whirlpool",
@@ -138,8 +139,8 @@ never appear in source control, screenshots, tickets, or application logs.
 ```
 
 Express passes the approved V5 business payload through unchanged, except that
-it replaces SASHA's original `callback_url` and `callback_secret` with the
-Express callback endpoint and Express callback secret.
+it replaces the upstream `callback_url` and `callback_secret` with the Express
+callback endpoint and Express callback secret.
 
 ### 5.3 Required fields and constraints
 
@@ -229,8 +230,8 @@ Content-Type: application/json
 ```
 
 `call_id` is VRS AI's provider call identifier. It must be globally unique and
-stable. Express stores it separately from the public Express/SASHA bridge ID.
-Every callback from VRS AI must use this value in `callId`.
+stable. Express stores it separately from the public Express bridge ID. Every
+callback from VRS AI must use this value in `callId`.
 
 ### 6.2 Duplicate active call
 
@@ -288,7 +289,8 @@ For any non-contract response, include a safe human-readable `message`.
 ## 7. VRS AI to Express callback
 
 VRS AI must POST to the exact `callback_url` received in the authorize request.
-Do not hardcode a SASHA callback URL. Express owns the callback hop from VRS AI.
+Do not hardcode an upstream callback URL. Express owns the callback hop from
+VRS AI.
 
 ```http
 POST /api/integrations/vrs-ai/v1/webhook HTTP/1.1
@@ -425,8 +427,8 @@ endpoint.
 | `failed` | Keep ticket available for manual follow-up; surface reason/retryable flag |
 | `requires_info` | Status-only update; keep ticket pending and wait for later terminal event |
 
-Express then forwards the event to SASHA with the public Express bridge
-`callId`. VRS AI does not perform the SASHA forwarding hop.
+Express then forwards the event to the upstream workflow with the public
+Express bridge `callId`. VRS AI does not perform that forwarding hop.
 
 ## 8. Callback signing
 
@@ -540,8 +542,8 @@ repeat the ticket decision or technician SMS.
 
 ### 11.2 Express readiness
 
-- [ ] Exposed credentials from the earlier SSH-output incident are rotated
-      with authorized approval and coordination.
+- [ ] Staging credentials are newly provisioned, exchanged through an approved
+      secure channel, and verified without appearing in source control or logs.
 - [ ] Additive bridge schema is applied to the development database only.
 - [ ] `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and
       `VRS_AI_CALLBACK_URL` are configured in staging.
@@ -602,7 +604,7 @@ The integration is ready for production review only when:
 
 - both sides pass the deterministic signing vector;
 - the full AHS staging flow passes from Express human approval through the
-  SASHA callback;
+  final upstream callback;
 - duplicate and retry scenarios prove no repeated ticket/SMS side effects;
 - the three decisions above are recorded;
 - secrets are rotated/configured without appearing in source control; and

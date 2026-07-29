@@ -4,9 +4,9 @@ info:
   version: 1.0.0-v5
   summary: Machine contract between VRS Express and VRS AI for AHS authorization calls
   description: |
-    Contract implemented by the VRS Express bridge after the July 24 ownership
-    decision. VRS AI hosts POST /vrs/authorize and posts signed result events
-    to the callback_url supplied by Express. Phase 1 supports AHS only.
+    Contract implemented by the VRS Express bridge under the approved platform
+    ownership model. VRS AI hosts POST /vrs/authorize and posts signed result
+    events to the callback_url supplied by Express. Phase 1 supports AHS only.
 servers:
   - url: https://vrs-dev.stage.nextgen.shs.com
     description: Staging / development VRS AI
@@ -39,7 +39,7 @@ paths:
                   service_order: '13538277'
                   tech_id: '0123456'
                   tech_phone: '+12145550199'
-                  tech_name: Carlos Rivera
+                  tech_name: Example Technician
                   reason_for_call: authorization
                   callback_url: https://vrs-express-stage.example/api/integrations/vrs-ai/v1/webhook
                   callback_secret: express-supplied-secret-at-least-16-characters
@@ -48,7 +48,7 @@ paths:
                       part_description: Electronic Control Board
                       sell_price: 245
                       part_function: Controls wash cycle timing and motor speed.
-                  customer_name: Maria Gonzalez
+                  customer_name: Example Customer
                   customer_address: 742 Evergreen Terrace, Hagerstown, MD 21740
                   service_address: 742 Evergreen Terrace, Hagerstown, MD 21740
                   brand: Whirlpool
