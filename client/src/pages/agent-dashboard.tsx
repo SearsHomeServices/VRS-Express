@@ -120,6 +120,10 @@ import PhotoLightbox from "@/components/photo-lightbox";
 import { SmsPreview } from "@/components/sms-preview";
 import { buildSmsPreview } from "@/lib/smsPreview";
 import { parseVideoUrls } from "@/lib/videoUrls";
+import {
+  getVrsAiApprovalCopy,
+  type VrsAiBridgeStatus,
+} from "@/lib/vrsAiBridge";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
 // SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
@@ -133,6 +137,7 @@ type SubmissionWithTech = Submission & {
   technicianPhone: string | null;
   assignedAgentName: string | null;
   intakeFormCompletedAt?: Date | null;
+  vrsAi?: VrsAiBridgeStatus | null;
 };
 
 const DIVISION_LABELS: Record<string, string> = {
@@ -941,7 +946,10 @@ export default function AgentDashboard() {
   // detail panel reads here for the heavy columns. Default fetcher joins the
   // queryKey with "/" → "/api/submissions/<id>". Cache scoped per id; reasonable
   // staleTime so flipping back to the same ticket doesn't refetch.
-  const { data: selectedFullData, isLoading: isSelectedFullLoading } = useQuery<{ submission: Submission }>({
+  const { data: selectedFullData, isLoading: isSelectedFullLoading } = useQuery<{
+    submission: Submission;
+    vrsAi: VrsAiBridgeStatus | null;
+  }>({
     queryKey: ["/api/submissions", selectedId],
     enabled: !!selectedId,
     staleTime: 30000,
@@ -1058,6 +1066,7 @@ export default function AgentDashboard() {
         technicianPhone: listRow?.technicianPhone ?? null,
         assignedAgentName: listRow?.assignedAgentName ?? null,
         intakeFormCompletedAt: listRow?.intakeFormCompletedAt ?? null,
+        vrsAi: selectedFullData?.vrsAi ?? null,
       };
     }
     if (listRow) {
@@ -1111,6 +1120,9 @@ export default function AgentDashboard() {
   // Backward-compatible alias retained so any callsite still using the old
   // name continues to work; both reference the same snapshot-fallback value.
   const effectiveSelectedSubmission = selectedSubmission;
+  const vrsAiApprovalCopy = getVrsAiApprovalCopy(
+    selectedSubmission?.vrsAi,
+  );
 
   // Tyler 2026-07-08 (perf) — batch-prefetch media tokens the moment the
   // selected ticket's media list is known (slim row carries photos/thumbs/
@@ -1378,11 +1390,17 @@ export default function AgentDashboard() {
       // immediately so action buttons and stage badges flip correctly
       // while the agent is still mid-intake-form on the right panel.
       if (data?.submission) {
-        selectedSubmissionSnapshotRef.current = data.submission;
+        selectedSubmissionSnapshotRef.current = {
+          ...(selectedSubmissionSnapshotRef.current ??
+            selectedSubmission ??
+            data.submission),
+          ...data.submission,
+          vrsAi: data.vrsAi ?? selectedSubmission?.vrsAi ?? null,
+        };
       }
 
-      const actionLabel = selectedAction === "approve_submission" ? "Submission Approved" : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : "Approved") : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Rejected") : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
-      const actionDesc = selectedAction === "approve_submission" ? "Technician has been notified. Enter the authorization code to complete this ticket." : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : selectedAction === "b2b_approved_replacement" ? "Technician has been notified. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
+      const actionLabel = selectedAction === "approve_submission" ? (selectedSubmission?.vrsAi ? "Sent to VRS AI" : "Submission Approved") : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : "Approved") : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Rejected") : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
+      const actionDesc = selectedAction === "approve_submission" ? (selectedSubmission?.vrsAi ? "VRS AI accepted the authorization request and the technician has been notified." : "Technician has been notified. Enter the authorization code to complete this ticket.") : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : selectedAction === "b2b_approved_replacement" ? "Technician has been notified. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
       toast({ title: actionLabel, description: actionDesc });
 
       // Tyler 2026-04-28 (REQUIREMENT CHANGE — overrides prior post-Authorize-
@@ -4019,6 +4037,111 @@ export default function AgentDashboard() {
                           )}
                         </CardHeader>
                         <CardContent className="space-y-5">
+                          {selectedSubmission.vrsAi && (
+                            <div
+                              className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
+                              data-testid="vrs-ai-bridge-status"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="font-medium">VRS AI bridge</span>
+                                <Badge variant="secondary">
+                                  {selectedSubmission.vrsAi.state.replace(/_/g, " ")}
+                                </Badge>
+                              </div>
+                              {selectedSubmission.vrsAi.dispatchError && (
+                                <p className="mt-2 text-xs text-destructive">
+                                  Last send failed: {selectedSubmission.vrsAi.dispatchError}
+                                </p>
+                              )}
+                              {selectedSubmission.vrsAi.state === "failed" && (
+                                <p className="mt-2 text-xs text-destructive">
+                                  VRS AI could not complete the call
+                                  {selectedSubmission.vrsAi.failureReason
+                                    ? ` (${selectedSubmission.vrsAi.failureReason})`
+                                    : ""}
+                                  . Use the existing manual authorization flow.
+                                  {selectedSubmission.vrsAi.retryable
+                                    ? " VRS AI marked this failure as retryable."
+                                    : ""}
+                                </p>
+                              )}
+                              {selectedSubmission.vrsAi.reviewContext && (
+                                <details className="mt-3 border-t border-blue-200 pt-3 dark:border-blue-900">
+                                  <summary className="cursor-pointer text-xs font-medium text-blue-800 dark:text-blue-300">
+                                    Review SASHA / Tech Hub details
+                                  </summary>
+                                  <div className="mt-3 space-y-3 text-xs">
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                      <div>
+                                        <span className="text-muted-foreground">Customer</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.customer_name}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Service address</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.service_address}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Appliance</span>
+                                        <p className="font-medium">
+                                          {selectedSubmission.vrsAi.reviewContext.brand}{" "}
+                                          {selectedSubmission.vrsAi.reviewContext.appliance_type} ·{" "}
+                                          {selectedSubmission.vrsAi.reviewContext.appliance_age} years
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Model / serial</span>
+                                        <p className="font-mono font-medium">
+                                          {selectedSubmission.vrsAi.reviewContext.model_number} /{" "}
+                                          {selectedSubmission.vrsAi.reviewContext.serial_number}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Failure / recommendation</span>
+                                        <p className="font-medium">
+                                          {selectedSubmission.vrsAi.reviewContext.failure_cause.replace(/-/g, " ")} ·{" "}
+                                          {selectedSubmission.vrsAi.reviewContext.tech_recommendation}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Requested estimate</span>
+                                        <p className="font-medium">
+                                          Labor ${selectedSubmission.vrsAi.reviewContext.labor_amount.toFixed(2)} · Parts ${selectedSubmission.vrsAi.reviewContext.part_price.toFixed(2)} · Tax ${selectedSubmission.vrsAi.reviewContext.tax_amount.toFixed(2)}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted-foreground">Repair / replace rationale</span>
+                                      <p className="mt-1 whitespace-pre-wrap">{selectedSubmission.vrsAi.reviewContext.repair_replace_rationale}</p>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted-foreground">Parts</span>
+                                      <div className="mt-1 space-y-1">
+                                        {selectedSubmission.vrsAi.reviewContext.parts.map((part) => (
+                                          <p key={part.part_id}>
+                                            <span className="font-mono font-medium">{part.part_id}</span>
+                                            {" — "}{part.part_description} (${part.sell_price.toFixed(2)}): {part.part_function}
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    {selectedSubmission.vrsAi.reviewContext.comments?.length ? (
+                                      <div>
+                                        <span className="text-muted-foreground">Technician comments</span>
+                                        <div className="mt-1 space-y-1">
+                                          {selectedSubmission.vrsAi.reviewContext.comments.map((comment, index) => (
+                                            <p key={`${comment.timestamp}-${index}`}>
+                                              <span className="font-medium">{comment.work_item.replace(/_/g, " ")}:</span>{" "}
+                                              {comment.text}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </details>
+                              )}
+                            </div>
+                          )}
                           {(
                             <>
                               <div className={`grid ${isTwoStageWarranty(selectedSubmission) ? "grid-cols-3" : "grid-cols-3"} gap-3`}>
@@ -4047,7 +4170,7 @@ export default function AgentDashboard() {
                                     <Square className="w-8 h-8 text-muted-foreground" />
                                   )}
                                   <span className={`text-sm font-medium ${selectedAction === "approve" || selectedAction === "approve_submission" ? "text-green-700 dark:text-green-400" : ""}`}>
-                                    {isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : isTwoStageWarranty(selectedSubmission) ? "Approve Submission" : "Approved to Repair"}
+                                    {isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : isTwoStageWarranty(selectedSubmission) ? vrsAiApprovalCopy.button : "Approved to Repair"}
                                   </span>
                                 </button>
                                 <button
@@ -4534,9 +4657,13 @@ export default function AgentDashboard() {
 
                               {selectedAction === "approve_submission" && (
                                 <div className="space-y-2 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
-                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Submission Approval</p>
+                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                                    {selectedSubmission.vrsAi ? "Human approval to VRS AI" : "Submission Approval"}
+                                  </p>
                                   <p className="text-sm text-muted-foreground">
-                                    Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket.
+                                    {selectedSubmission.vrsAi
+                                      ? "Approving confirms the request is ready, sends its V5 payload to VRS AI for the AHS authorization call, and keeps this ticket pending until VRS AI returns the result."
+                                      : "Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket."}
                                   </p>
                                 </div>
                               )}
@@ -4651,7 +4778,7 @@ export default function AgentDashboard() {
                                 data-testid="button-process-submit"
                               >
                                 <Send className="w-4 h-4 mr-2" />
-                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "approve" && isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair & Notify" : selectedAction === "reject" && isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair & Notify" : "Process & Send"}
+                                {processMutation.isPending ? "Processing..." : selectedAction === "approve_submission" ? vrsAiApprovalCopy.confirmAction : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "approve" && isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair & Notify" : selectedAction === "reject" && isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair & Notify" : "Process & Send"}
                               </Button>
                             </>
                           )}
@@ -5057,11 +5184,13 @@ export default function AgentDashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle data-testid="text-confirm-title">
-              {selectedAction === "approve_submission" ? "Approve Submission" : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Reject Ticket") : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
+              {selectedAction === "approve_submission" ? vrsAiApprovalCopy.confirmTitle : selectedAction === "approve" ? "Approved to Repair" : selectedAction === "approve_replacement_review" ? "Send to Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Reject Ticket") : selectedAction === "reject_and_close" ? "Reject & Close Permanently" : "Mark as Invalid"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
-                <>The technician will be notified via SMS that their submission has been approved and VRS is working on obtaining authorization. The ticket will remain pending for you to enter the authorization code.</>
+                selectedSubmission?.vrsAi
+                  ? <>This sends the approved AHS request to VRS AI. The technician will receive the existing approval SMS, and VRS AI will return the authorization result to this ticket.</>
+                  : <>The technician will be notified via SMS that their submission has been approved and VRS is working on obtaining authorization. The ticket will remain pending for you to enter the authorization code.</>
               )}
               {selectedAction === "approve" && (
                 <>The technician will be notified via SMS with the authorization code. This action completes the ticket.</>
@@ -5128,7 +5257,7 @@ export default function AgentDashboard() {
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >
-              {selectedAction === "approve_submission" ? "Approve Submission & Notify" : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "Send to Technician" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair & Notify" : "Reject & Notify") : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
+              {selectedAction === "approve_submission" ? vrsAiApprovalCopy.confirmAction : selectedAction === "approve" ? "Approved to Repair & Notify" : selectedAction === "approve_replacement_review" ? "Send to Technician" : selectedAction === "b2b_approved_replacement" ? "Send to Technician" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair & Notify" : "Reject & Notify") : selectedAction === "reject_and_close" ? "Reject, Close & Notify" : "Mark Invalid & Notify"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

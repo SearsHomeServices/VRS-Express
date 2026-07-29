@@ -1,34 +1,94 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-05-08 00:00
+Updated: 2026-07-29 09:08
 
 ## Current Session
 
-- Implemented and shipped a first-pass performance hot-path patch set focused on sluggishness and lag:
-  - Bounded-concurrency photo uploads (3 workers) in tech submit/resubmit flows.
-  - Safe upload MIME fallback when `File.type` is empty (common iPhone edge case).
-  - Lazy image loading in agent/admin media grids.
-  - Reduced logging overhead in `server/index.ts` by disabling full API body serialization unless explicitly enabled.
-- Updated `CHANGELOG.md` under `[Unreleased]` with the shipped performance fixes.
-- Implemented business-hours policy wording update requested by Tyler:
-  - Agents/admins are not implied to be blocked outside business hours.
-  - Technician after-hours messaging still includes business-hours notice.
-  - Added legacy-template normalization in `server/sms.ts` so existing production template rows stop saying "next business day only".
-  - Updated help-center copy and seed defaults to match.
+- Rechecked distribution after VRS Express Git Sync showed no changes:
+  - GitHub `main` is still `98542cf`.
+  - The clean VRS Express Replit checkout is on `main` at `98542cf`, matching
+    its `origin/main`.
+  - The bridge work is committed and pushed only to
+    `codex/vrs-sasha-api-v5`; its latest implementation/artifact commit is
+    `4d00c29`.
+  - Draft PR #1 is open and mergeable but remains unmerged, so `main` has
+    nothing new for Replit Git Sync to pull.
+- Reconciled source before changing code:
+  - Replit `main` was clean and 14 commits ahead of GitHub.
+  - GitHub was 181 commits ahead of the stale local checkout.
+  - Replit tip `98542cf` was transferred over SSH, pushed to GitHub, and used
+    to fast-forward local `main`.
+- Created `codex/vrs-sasha-api-v5` from synchronized commit `98542cf`.
+- Earlier AI-side admission work was pushed for review, then explicitly
+  superseded after the July 24 Granola meeting clarified ownership.
+- Opened draft PR #1:
+  `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
+- Located and reviewed the July 24 Granola meeting:
+  "VRS Express API integration — tech hub, Sasha, and AI system endpoints."
+- The meeting confirms the intended flow is:
+  SASHA/Tech Hub → VRS Express → human approval → VRS AI → VRS Express result,
+  with the existing technician SMS retained for now.
+- Reworked the implementation to the confirmed bridge:
+  - strict authenticated SASHA/Tech Hub V5 intake
+  - normal pending VRS Express ticket through `createSubmissionHandler`
+  - AHS-only gate and district/SO/appliance mapping
+  - **Approve & Send to VRS AI** human action
+  - outbound `/vrs/authorize` client
+  - signed/timestamped VRS AI callback receiver
+  - result application through `processSubmissionHandler`
+  - signed callback forwarding to SASHA with the Express call ID
+  - event-level idempotency checkpoints
+- Callback secrets now use `VRS_BRIDGE_ENCRYPTION_KEY`, not `SESSION_SECRET`.
+- Final verification: 32/32 bridge tests pass and the production build passes.
+  Branch and a fresh `origin/main` worktree each have the same 56 raw / 26
+  normalized pre-existing TypeScript diagnostics, with zero branch delta.
+- Added the VRS Express-to-VRS AI integration package:
+  - `docs/integration/vrs-express-vrs-ai-bridge-handoff.md`
+  - `docs/integration/vrs-express-vrs-ai-bridge-openapi.yaml`
+  - `output/doc/VRS-Express-VRS-AI-Bridge-Integration-Handoff.docx`
+- The package documents the exact Express-to-AI request and response contract,
+  five Phase 1 callback shapes, raw-body HMAC and retry rules, a deterministic
+  signing vector, ownership, business effects, staging evidence, and three
+  decisions VRS AI must return.
+- Documentation validation passes: OpenAPI 3.1 parses with all local schema
+  references resolved; its authorize example and all five callback examples
+  pass the committed Zod schemas; the HMAC vector matches the implementation.
+  The DOCX was rendered through Word and all 10 pages were visually inspected.
+- Removed the individual owner's name from every platform-facing integration
+  artifact, filename, heading, ownership table, readiness checklist, and HMAC
+  test secret. The package now identifies the parties only as VRS Express and
+  VRS AI.
 
-## Technician Submission Flow Verified
+## Scope Boundary
 
-- `client/src/pages/tech-submit.tsx` request types:
-  - `authorization` -> Authorization
-  - `infestation_non_accessible` -> Infestation / Non-Accessible
-  - `parts_nla` -> Parts - No Longer Available (NLA)
-- NLA path includes separate NLA part numbers and other available parts.
-- NLA guidance says Sears Protect / Sears PA / Sears Home Warranty (Cinch) only.
-- AHS / First American NLA displays a warning to use TechHub.
+- Do not describe the bridge as present on VRS Express `main` until PR #1 is
+  approved, merged, and the Replit checkout is verified at the resulting
+  `origin/main` commit.
+- Draft PR #1 remains unmergeable until the additive dev schema and staging
+  configuration are applied and a complete AHS staging transaction passes.
+- The supplied V5 contract defines the wire shape; the Granola meeting defines
+  the extra Express human-approval boundary and system ownership.
+- Phase 1 is AHS phone authorization. First American's portal automation is a
+  separate, incompletely validated execution path; Choice/OEM are excluded and
+  Assurance is later.
+- No production database schema or data changes were made.
+- Security incident: the final nested-shell SSH verification printed the Replit
+  environment into task tool output. No values were saved to files or Git, but
+  all box credentials must be treated as exposed pending Tyler-approved
+  rotation.
 
 ## Notes
 
-- `rg.exe` failed with Access denied in this Windows/Codex bundle; use `Select-String` if it recurs.
-- Root `AGENTS.md` is currently untracked.
-- Current modified files from performance patch: `client/src/pages/tech-submit.tsx`, `client/src/pages/tech-resubmit.tsx`, `client/src/pages/agent-dashboard.tsx`, `client/src/pages/admin-dashboard.tsx`, `server/index.ts`, plus changelog/memory files.
-- Additional modified files for policy wording: `server/sms.ts`, `server/seed.ts`, `client/src/pages/help-center.tsx`.
+- Required staging variables are documented in
+  `docs/architecture/vrs-sasha-api-v5.md`.
+- The integration package deliberately contains no live keys, callback secrets, or
+  customer data. Actual staging values must be exchanged securely.
+- Additive `vrs_ai_calls` / `vrs_ai_call_events` schema remains unapplied.
+- A `failed` AI callback remains pending for the existing manual authorization
+  flow; `retryable` is surfaced to the agent, but automatic redial is owned by
+  VRS AI and is not claimed here.
+- The local user-owned `graphify-out/` directory remains untracked and was not
+  staged or modified.
+- Full `npm run check` has a pre-existing TypeScript baseline: 56 raw
+  diagnostics collapse to 26 unique diagnostics after line/column
+  normalization. The branch and fresh `origin/main` outputs match exactly.
