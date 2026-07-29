@@ -1,4 +1,5 @@
 - [Test fixtures & login quirks](testing-fixtures.md) — dev seed purges tmorri1/testtech1 submissions on restart; all passwords reset to VRS2026!; tech form needs photos so test duplicate logic via API.
+- [Schema push before publish](schema-push-before-publish.md) — publish diffs dev DB vs prod DB, not code; a schema.ts table never db:push'd in dev silently never reaches prod → 500s on every use.
 - [Seed column-migration ordering](seed-migration-ordering.md) — a new Drizzle column must be ensured before the first query on that table, or boot crashes (Drizzle selects all columns).
 - [Dead-code scan false positives](dead-code-scan-false-positives.md) — automated "unused" lists are unreliable (miss dynamic import()/types); grep-verify zero refs before deleting; dead code ≠ slow.
 - [Business-hours elapsed math JS↔SQL](business-hours-sql-port.md) — port getBusinessElapsedMs to SQL bit-equivalently (ms-trunc + generate_series over ET days + AT TIME ZONE); Node & PG both UTC.
