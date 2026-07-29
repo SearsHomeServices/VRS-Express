@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added — VRS Express ↔ VRS AI AHS bridge (2026-07-28)
+- **Distribution state clarified (2026-07-29).** Live verification confirmed the bridge commits are pushed to `codex/vrs-sasha-api-v5` at `4d00c29` in draft PR #1, but are not merged into `main`. GitHub `main` and the clean VRS Express Replit checkout both remain at `98542cf`, so Git Sync on `main` correctly has nothing to pull. No merge or deployment was performed.
 - **Sync first.** Reconciled the live Replit `main` with GitHub before implementation: Replit's clean 14-commit lead was transferred over SSH and pushed, then the local checkout was fast-forwarded. All three sources were confirmed at `98542cf` before this branch began.
 - **Architecture source corrected.** Used the July 24 Granola meeting as the ownership source of truth: SASHA/Tech Hub → VRS Express pending review → human approval → VRS AI → result back through Express, while the existing technician SMS remains in place. Removed the earlier AI-owned admission/rate-limit/worker design from the Express side.
 - **V5 intake.** `POST /vrs/authorize` now authenticates with `VRS_SASHA_API_KEY`, strictly validates the V5 request, gates Phase 1 to AHS, resolves the technician/district, maps the bare SO and appliance into the normal VRS ticket shape, and invokes the existing submission handler so duplicate rules, routing, broadcasts, ProcID lookup, and SMS stay shared.

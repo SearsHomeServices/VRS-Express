@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-28 15:11
+Updated: 2026-07-29 09:08
 
 ## Done
 
@@ -43,9 +43,15 @@ Updated: 2026-07-28 15:11
 - [x] Removed the individual owner's name from the platform-facing package,
   renamed all three deliverables, recalculated the neutral HMAC test vector,
   and re-rendered/reviewed all 10 DOCX pages.
+- [x] Verified why VRS Express Git Sync showed no changes: Replit and GitHub
+  `main` match at `98542cf`, while the pushed bridge is isolated in draft PR #1
+  at `4d00c29`.
 
 ## Open
 
+- [ ] After Tyler explicitly approves the merge and the dev/staging gates are
+  satisfied, merge PR #1 into `main`, sync VRS Express, and verify the exact
+  resulting commit on the box.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential
   exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
   passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API

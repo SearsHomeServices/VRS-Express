@@ -1,9 +1,18 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-28 15:11
+Updated: 2026-07-29 09:08
 
 ## Current Session
 
+- Rechecked distribution after VRS Express Git Sync showed no changes:
+  - GitHub `main` is still `98542cf`.
+  - The clean VRS Express Replit checkout is on `main` at `98542cf`, matching
+    its `origin/main`.
+  - The bridge work is committed and pushed only to
+    `codex/vrs-sasha-api-v5`; its latest implementation/artifact commit is
+    `4d00c29`.
+  - Draft PR #1 is open and mergeable but remains unmerged, so `main` has
+    nothing new for Replit Git Sync to pull.
 - Reconciled source before changing code:
   - Replit `main` was clean and 14 commits ahead of GitHub.
   - GitHub was 181 commits ahead of the stale local checkout.
@@ -52,6 +61,9 @@ Updated: 2026-07-28 15:11
 
 ## Scope Boundary
 
+- Do not describe the bridge as present on VRS Express `main` until PR #1 is
+  approved, merged, and the Replit checkout is verified at the resulting
+  `origin/main` commit.
 - Draft PR #1 remains unmergeable until the additive dev schema and staging
   configuration are applied and a complete AHS staging transaction passes.
 - The supplied V5 contract defines the wire shape; the Granola meeting defines

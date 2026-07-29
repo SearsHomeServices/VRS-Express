@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-28 15:11 — Converted the integration package to platform-only VRS Express and VRS AI naming.
+> **Last Touched:** Codex — 2026-07-29 09:08 — Verified the bridge is pushed to a draft feature PR, not merged into the Replit-synced main branch.
 
 ## Current State
 - Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf`
@@ -9,6 +9,10 @@
 - Current branch is `codex/vrs-sasha-api-v5`; its corrected bridge
   implementation is pushed for review in draft PR #1.
 - Draft PR #1 is open: `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
+- Live 2026-07-29 verification confirmed GitHub `main` and the clean VRS
+  Express Replit checkout both remain at `98542cf`; the latest bridge
+  implementation/artifact commit on the feature branch is `4d00c29`. Git Sync
+  on Replit `main` therefore has nothing to pull until the PR is merged.
 - The corrected PR implements the meeting-confirmed flow:
   SASHA/Tech Hub → normal VRS Express pending ticket → human
   **Approve & Send to VRS AI** action → VRS AI → signed result callback
@@ -54,8 +58,12 @@
 - [CX] 2026-07-28 - Use a paired human-readable handoff plus OpenAPI 3.1 as the Enzo integration source, with the committed Express schemas authoritative over older narrative examples.
 - [CX] 2026-07-28 - Do not include Phase 2 intermediate call-state callbacks in the Enzo Phase 1 contract; Express currently accepts only the five implemented V5 result shapes.
 - [CX] 2026-07-28 - Use only the VRS Express and VRS AI platform names in external integration artifacts; individual owner names remain internal context only.
+- [CX] 2026-07-29 - Do not treat a pushed feature branch as deployed or present on VRS Express `main`. Keep PR #1 unmerged until Tyler explicitly approves and the documented dev-schema/staging gates are satisfied.
 
 ## Open Threads
+- [CX] After explicit merge approval and completion of the dev/staging gates,
+  merge PR #1 into `main`, sync VRS Express, and verify the exact resulting
+  commit on the box.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
 - [CX] Apply the additive bridge schema to the VRS development database only
   through the approved dev-first pipeline; never push it directly to prod.
