@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-29 09:19 — Merged the bridge and documentation into main and synchronized the VRS Express checkout.
+> **Last Touched:** Codex — 2026-07-29 11:10 — Verified the published app contains the bridge code but lacks activation configuration, schema, and public document routes.
 
 ## Current State
 - PR #1 was marked ready and merged into GitHub `main` through merge commit
@@ -14,6 +14,22 @@
 - The Markdown, OpenAPI, and DOCX handoff artifacts are present on the VRS
   Express box. The box passed all 32 focused bridge tests and the production
   build.
+- Fresh completeness audit: 32/32 tests pass; OpenAPI 3.1 parses with all 34
+  local references resolved; the authorize example, all five callback
+  examples, and deterministic HMAC vector match the committed implementation.
+- The package is not yet final-send-ready. Its Markdown and DOCX still identify
+  draft PR #1 and commit `6ec180f` rather than merged `main` at `3c4cee7`.
+  Actual staging keys/secrets/callback origin belong in a secure out-of-band
+  exchange, and the three VRS AI decisions plus joint staging evidence remain
+  outstanding.
+- The newly published `https://vrs-auth-tool.replit.app` is healthy and serves
+  the merged client build. Both bridge routes exist but return
+  `503 NOT_CONFIGURED`; all six bridge environment variables are missing.
+- Read-only database inspection confirms `vrs_ai_calls` and
+  `vrs_ai_call_events` are absent. No schema change was attempted.
+- Publishing did not expose the handoff artifacts. Requests for the repository
+  Markdown/OpenAPI/DOCX paths return the SPA HTML shell rather than those
+  files.
 - The corrected PR implements the meeting-confirmed flow:
   SASHA/Tech Hub → normal VRS Express pending ticket → human
   **Approve & Send to VRS AI** action → VRS AI → signed result callback
@@ -61,8 +77,16 @@
 - [CX] 2026-07-28 - Use only the VRS Express and VRS AI platform names in external integration artifacts; individual owner names remain internal context only.
 - [CX] 2026-07-29 - Do not treat a pushed feature branch as deployed or present on VRS Express `main`. Keep PR #1 unmerged until Tyler explicitly approves and the documented dev-schema/staging gates are satisfied.
 - [CX] 2026-07-29 - Tyler explicitly directed that PR #1 be merged so the bridge and documentation are on VRS Express `main`. Source merge is approved; production bridge activation remains gated by the dev schema, staging configuration, and end-to-end AHS validation.
+- [CX] 2026-07-29 - Treat the handoff as wire-contract complete but not final-send-ready until the stale draft metadata is refreshed. Live secrets stay out of documents; VRS AI decisions and staging proof remain separate completion inputs.
+- [CX] 2026-07-29 - A published source build is not proof of an operational bridge or a document-delivery surface. Require live configuration/schema/staging evidence for activation, and deliver the handoff files directly or through an explicitly implemented protected route.
 
 ## Open Threads
+- [CX] Refresh Markdown/DOCX metadata to merged `main`, regenerate the DOCX,
+  and visually revalidate all pages before external delivery.
+- [CX] Prepare the secure staging key/secret/callback-origin exchange outside
+  Git and collect the three VRS AI decisions plus joint acceptance evidence.
+- [CX] Choose direct file delivery or an authenticated download route; the
+  current published application does not serve the three repository artifacts.
 - [CX] Tyler can publish VRS Express after reviewing the synchronized `main`
   source and documentation package.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.

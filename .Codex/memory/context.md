@@ -1,9 +1,45 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-29 09:19
+Updated: 2026-07-29 11:10
 
 ## Current Session
 
+- Audited whether the three integration artifacts contain everything needed for
+  a VRS AI handoff.
+- Fresh evidence:
+  - 32/32 focused bridge tests passed.
+  - OpenAPI 3.1 parsed; all 34 local references resolve.
+  - The authorize example and all five callback examples pass the committed
+    runtime schemas.
+  - The deterministic HMAC vector matches the implementation.
+  - The DOCX contains all three explicitly requested VRS AI decisions and has
+    zero individual-owner-name references.
+- The wire-level contract is sufficient to implement against, but the package
+  is not yet final-send-ready:
+  - Markdown and DOCX still say draft PR #1 / commit `6ec180f`.
+  - They do not reflect merged `main` at `3c4cee7`.
+  - Actual API keys, callback secrets, and the real Express staging callback
+    origin must be exchanged securely outside the documents.
+  - Prompt placement, retryable-failure ownership, and recording access
+    retention/expiry still require VRS AI decisions.
+  - Endpoint reachability and joint staging evidence have not been completed.
+- Verified Tyler's newly published Replit deployment:
+  - `https://vrs-auth-tool.replit.app/` returns `200`.
+  - `/api/healthz` reports healthy with a successful database check.
+  - The live client bundle is `assets/index-CFNuQpM-.js`, matching the merged
+    build produced on the VRS Express box.
+  - `/vrs/authorize` exists but returns `503 NOT_CONFIGURED` because
+    `VRS_SASHA_API_KEY` is missing.
+  - `/api/integrations/vrs-ai/v1/webhook` exists but returns
+    `503 NOT_CONFIGURED` because `VRS_AI_WEBHOOK_SECRET` is missing.
+  - All six bridge variables are absent:
+    `VRS_SASHA_API_KEY`, `VRS_BRIDGE_ENCRYPTION_KEY`, `VRS_AI_BASE_URL`,
+    `VRS_AI_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and `VRS_AI_CALLBACK_URL`.
+  - Read-only DB inspection confirms `vrs_ai_calls` and
+    `vrs_ai_call_events` do not exist.
+  - Direct URLs under `/docs/integration/*` and `/output/doc/*` return the SPA
+    HTML shell, not the Markdown/OpenAPI/DOCX files; publishing the app did not
+    make the handoff package downloadable.
 - Tyler confirmed the bridge and handoff documentation belong on `main` so VRS
   Express can be published and the package shared.
 - Marked PR #1 ready and merged it into GitHub `main` through merge commit
@@ -71,6 +107,11 @@ Updated: 2026-07-29 09:19
 - Source merge does not activate a working live bridge by itself. The additive
   dev schema, staging secrets/URLs, and complete AHS staging transaction remain
   required before production activation.
+- The currently published app contains the bridge code but the bridge is
+  disabled by missing configuration and schema. Do not represent it as an
+  operational VRS Express-to-VRS AI connection.
+- Do not send the current DOCX as a final merged-state handoff until its stale
+  draft-branch metadata is updated and the regenerated pages are revalidated.
 - The supplied V5 contract defines the wire shape; the Granola meeting defines
   the extra Express human-approval boundary and system ownership.
 - Phase 1 is AHS phone authorization. First American's portal automation is a

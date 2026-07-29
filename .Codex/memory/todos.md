@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-29 09:19
+Updated: 2026-07-29 11:10
 
 ## Done
 
@@ -50,9 +50,27 @@ Updated: 2026-07-29 09:19
   fast-forwarded local and VRS Express `main` to the merged history.
 - [x] Verified all three handoff files on the VRS Express box and reran the
   focused suite (32/32) plus the production build successfully.
+- [x] Audited handoff completeness against the merged implementation: 32/32
+  tests, 34/34 OpenAPI references, authorize example, five callback examples,
+  and deterministic HMAC vector all validated.
+- [x] Verified the newly published Replit app is healthy and contains the
+  merged bridge routes/client build.
+- [x] Confirmed the published bridge is intentionally non-operational: all six
+  bridge variables are absent and both additive bridge tables are absent.
+- [x] Confirmed repository Markdown/OpenAPI/DOCX paths are not public download
+  routes in the published app.
 
 ## Open
 
+- [ ] Update Markdown and DOCX metadata from draft PR #1 / `6ec180f` to the
+  merged `main` state, regenerate the DOCX, and visually inspect every page
+  before external delivery.
+- [ ] Package the secure out-of-band exchange for the staging API key, callback
+  secret, and actual Express staging callback origin; do not place secrets in
+  Git or the handoff documents.
+- [ ] Decide whether the external team receives the three files directly or
+  whether VRS Express should add an authenticated documentation download
+  surface; publishing the app alone does not expose the files.
 - [ ] Tyler publishes VRS Express after reviewing the synchronized `main`
   source and documentation package.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential

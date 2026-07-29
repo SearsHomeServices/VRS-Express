@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-29 09:19
+Updated: 2026-07-29 11:10
 
 ## Decisions
 
@@ -33,3 +33,5 @@ Updated: 2026-07-29 09:19
 - [CX] 2026-07-28 - Platform-facing integration documentation names only VRS Express and VRS AI. Individual owners must not appear in filenames, titles, ownership tables, readiness sections, examples, or test-vector identifiers.
 - [CX] 2026-07-29 - Keep draft PR #1 unmerged until Tyler explicitly approves and the documented dev-schema/staging gates are satisfied. A VRS Express Git Sync while the box remains on `main` cannot pull commits that exist only on `codex/vrs-sasha-api-v5`.
 - [CX] 2026-07-29 - Tyler explicitly directed that the bridge and its documentation be placed on `main` for VRS Express publication and sharing. Merge the source now, while retaining the separate rule that schema/configuration/staging validation must complete before activating the live production bridge.
+- [CX] 2026-07-29 - Classify the current package as wire-contract complete but not final-send-ready. Refresh the stale draft-branch metadata first; keep live keys/secrets out of the documents, and treat the three VRS AI decisions plus joint staging evidence as required completion inputs.
+- [CX] 2026-07-29 - Distinguish source publication from bridge activation and document distribution. The deployed app contains the merged routes, but missing variables/tables keep them disabled, and repository docs are not served as downloadable files.
