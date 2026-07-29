@@ -1,18 +1,23 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-29 09:08
+Updated: 2026-07-29 09:19
 
 ## Current Session
 
-- Rechecked distribution after VRS Express Git Sync showed no changes:
-  - GitHub `main` is still `98542cf`.
-  - The clean VRS Express Replit checkout is on `main` at `98542cf`, matching
-    its `origin/main`.
-  - The bridge work is committed and pushed only to
-    `codex/vrs-sasha-api-v5`; its latest implementation/artifact commit is
-    `4d00c29`.
-  - Draft PR #1 is open and mergeable but remains unmerged, so `main` has
-    nothing new for Replit Git Sync to pull.
+- Tyler confirmed the bridge and handoff documentation belong on `main` so VRS
+  Express can be published and the package shared.
+- Marked PR #1 ready and merged it into GitHub `main` through merge commit
+  `f1b9398`.
+- Fast-forwarded local `main` and the clean VRS Express Replit checkout to the
+  merged history.
+- Replit's raw private-GitHub fetch could not authenticate through its askpass
+  helper, so the verified complete Git history was transferred over the
+  existing SSH connection and used to update `origin/main` and `main`.
+- Verified on the VRS Express box:
+  - `main` matched `origin/main` at the merged commit.
+  - Markdown, OpenAPI, and DOCX handoff artifacts were present.
+  - 32/32 focused tests passed.
+  - The production build passed.
 - Reconciled source before changing code:
   - Replit `main` was clean and 14 commits ahead of GitHub.
   - GitHub was 181 commits ahead of the stale local checkout.
@@ -61,11 +66,11 @@ Updated: 2026-07-29 09:08
 
 ## Scope Boundary
 
-- Do not describe the bridge as present on VRS Express `main` until PR #1 is
-  approved, merged, and the Replit checkout is verified at the resulting
-  `origin/main` commit.
-- Draft PR #1 remains unmergeable until the additive dev schema and staging
-  configuration are applied and a complete AHS staging transaction passes.
+- The bridge source and handoff package are now present on VRS Express `main`.
+  Publication/deployment remains Tyler's action.
+- Source merge does not activate a working live bridge by itself. The additive
+  dev schema, staging secrets/URLs, and complete AHS staging transaction remain
+  required before production activation.
 - The supplied V5 contract defines the wire shape; the Granola meeting defines
   the extra Express human-approval boundary and system ownership.
 - Phase 1 is AHS phone authorization. First American's portal automation is a

@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-29 09:08
+Updated: 2026-07-29 09:19
 
 ## Decisions
 
@@ -32,3 +32,4 @@ Updated: 2026-07-29 09:08
 - [CX] 2026-07-28 - Explicitly exclude Phase 2 `queued`, `dialing`, `connected`, and `awaiting_decision` callbacks from the Enzo Phase 1 contract; the Express receiver currently accepts only `approved`, `partial`, `denied`, `failed`, and `requires_info`.
 - [CX] 2026-07-28 - Platform-facing integration documentation names only VRS Express and VRS AI. Individual owners must not appear in filenames, titles, ownership tables, readiness sections, examples, or test-vector identifiers.
 - [CX] 2026-07-29 - Keep draft PR #1 unmerged until Tyler explicitly approves and the documented dev-schema/staging gates are satisfied. A VRS Express Git Sync while the box remains on `main` cannot pull commits that exist only on `codex/vrs-sasha-api-v5`.
+- [CX] 2026-07-29 - Tyler explicitly directed that the bridge and its documentation be placed on `main` for VRS Express publication and sharing. Merge the source now, while retaining the separate rule that schema/configuration/staging validation must complete before activating the live production bridge.

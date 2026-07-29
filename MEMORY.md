@@ -1,18 +1,19 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-29 09:08 — Verified the bridge is pushed to a draft feature PR, not merged into the Replit-synced main branch.
+> **Last Touched:** Codex — 2026-07-29 09:19 — Merged the bridge and documentation into main and synchronized the VRS Express checkout.
 
 ## Current State
-- Replit `main`, GitHub `main`, and local `main` were reconciled at `98542cf`
-  before new work. A fresh post-implementation SSH check confirmed Replit is
-  still clean on `main...origin/main` at `98542cf`.
-- Current branch is `codex/vrs-sasha-api-v5`; its corrected bridge
-  implementation is pushed for review in draft PR #1.
-- Draft PR #1 is open: `https://github.com/jtmorgan0513-alt/VRS-Agent-Core/pull/1`.
-- Live 2026-07-29 verification confirmed GitHub `main` and the clean VRS
-  Express Replit checkout both remain at `98542cf`; the latest bridge
-  implementation/artifact commit on the feature branch is `4d00c29`. Git Sync
-  on Replit `main` therefore has nothing to pull until the PR is merged.
+- PR #1 was marked ready and merged into GitHub `main` through merge commit
+  `f1b9398` after Tyler confirmed the bridge and documentation belong on
+  `main` for publication and sharing.
+- Local `main` and the clean VRS Express Replit checkout were fast-forwarded
+  to the merged history. Replit `main` matched its updated `origin/main`.
+- Replit's raw private-GitHub fetch could not authenticate through its askpass
+  helper. A verified complete Git bundle was transferred over the existing SSH
+  connection instead; no credentials were added to the box.
+- The Markdown, OpenAPI, and DOCX handoff artifacts are present on the VRS
+  Express box. The box passed all 32 focused bridge tests and the production
+  build.
 - The corrected PR implements the meeting-confirmed flow:
   SASHA/Tech Hub → normal VRS Express pending ticket → human
   **Approve & Send to VRS AI** action → VRS AI → signed result callback
@@ -59,11 +60,11 @@
 - [CX] 2026-07-28 - Do not include Phase 2 intermediate call-state callbacks in the Enzo Phase 1 contract; Express currently accepts only the five implemented V5 result shapes.
 - [CX] 2026-07-28 - Use only the VRS Express and VRS AI platform names in external integration artifacts; individual owner names remain internal context only.
 - [CX] 2026-07-29 - Do not treat a pushed feature branch as deployed or present on VRS Express `main`. Keep PR #1 unmerged until Tyler explicitly approves and the documented dev-schema/staging gates are satisfied.
+- [CX] 2026-07-29 - Tyler explicitly directed that PR #1 be merged so the bridge and documentation are on VRS Express `main`. Source merge is approved; production bridge activation remains gated by the dev schema, staging configuration, and end-to-end AHS validation.
 
 ## Open Threads
-- [CX] After explicit merge approval and completion of the dev/staging gates,
-  merge PR #1 into `main`, sync VRS Express, and verify the exact resulting
-  commit on the box.
+- [CX] Tyler can publish VRS Express after reviewing the synchronized `main`
+  source and documentation package.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
 - [CX] Apply the additive bridge schema to the VRS development database only
   through the approved dev-first pipeline; never push it directly to prod.
