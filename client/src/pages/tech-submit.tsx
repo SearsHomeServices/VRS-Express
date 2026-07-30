@@ -1736,45 +1736,6 @@ export default function TechSubmitPage() {
                       <p className={`text-xs ${descriptionLength >= 20 ? "text-green-600" : "text-muted-foreground"}`} data-testid="text-char-count">
                         {descriptionLength}/20 minimum {descriptionLength >= 20 ? "✓" : ""}
                       </p>
-                      <div className="flex items-center gap-2 pt-1">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={aiButtonDisabled}
-                          onClick={() => {
-                            const desc = form.getValues("issueDescription");
-                            const appliance = form.getValues("applianceType") || "appliance";
-                            if (!desc || desc.length < 20) return;
-                            const seen = localStorage.getItem("ai_tooltip_seen");
-                            if (!seen) {
-                              localStorage.setItem("ai_tooltip_seen", "true");
-                              toast({
-                                title: "Experimental Feature",
-                                description: "This AI tool helps clarify your description without changing the meaning. Always review the result before submitting.",
-                              });
-                            }
-                            aiEnhanceMutation.mutate({
-                              description: desc,
-                              applianceType: appliance,
-                            });
-                          }}
-                          data-testid="button-ai-enhance"
-                        >
-                          {aiEnhanceMutation.isPending ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                              Improving...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                              Improve with AI
-                            </>
-                          )}
-                        </Button>
-                        <Badge variant="secondary" className="text-xs">Experimental</Badge>
-                      </div>
                       {aiPreview && (
                         <div className="mt-3 space-y-2">
                           <p className="text-xs font-medium text-muted-foreground">AI-Improved Version (review and edit as needed)</p>
