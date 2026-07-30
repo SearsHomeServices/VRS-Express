@@ -66,7 +66,8 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
-import { fetchTechniciansFromSnowflake, fetchProcIdForServiceOrder } from "./services/snowflake";
+import { fetchProcIdForServiceOrder } from "./services/snowflake";
+import { runTechnicianSync } from "./services/tech-sync";
 import { seedDatabase } from "./seed";
 import {
   loadConfig as loadBusinessHoursConfig,
@@ -6545,41 +6546,8 @@ export async function registerRoutes(
 
   app.post("/api/admin/sync-technicians", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
-      const snowflakeData = await fetchTechniciansFromSnowflake();
-
-      let added = 0;
-      let updated = 0;
-      const syncedLdapIds: string[] = [];
-
-      for (const tech of snowflakeData) {
-        const existing = await storage.getTechnicianByLdapId(tech.ldapId);
-        await storage.upsertTechnician({
-          ldapId: tech.ldapId,
-          name: tech.name,
-          phone: tech.phone,
-          district: tech.district,
-          state: tech.state,
-          managerName: tech.managerName,
-          techUnNo: tech.techUnNo,
-          isActive: true,
-          lastSyncedAt: new Date(),
-        });
-        syncedLdapIds.push(tech.ldapId);
-        if (existing) {
-          updated++;
-        } else {
-          added++;
-        }
-      }
-
-      const deactivated = await storage.deactivateTechniciansNotIn(syncedLdapIds);
-
-      return res.status(200).json({
-        synced: snowflakeData.length,
-        added,
-        updated,
-        deactivated,
-      });
+      const result = await runTechnicianSync();
+      return res.status(200).json(result);
     } catch (error: any) {
       console.error("Snowflake sync error:", error);
       return res.status(500).json({ error: `Sync failed: ${error.message || "Unknown error"}` });

@@ -155,6 +155,14 @@ app.use((req, res, next) => {
     setInterval(runActivityLogPrune, ACTIVITY_LOG_PRUNE_INTERVAL_MS);
   }
 
+  // Daily technician sync from Snowflake at 6:00 AM ET, production only —
+  // the Snowflake SDK is not loadable in the dev image, and the admin
+  // "Sync Now" button remains available everywhere for manual syncs.
+  if (process.env.NODE_ENV === "production") {
+    const { scheduleDailyTechnicianSync } = await import("./services/tech-sync");
+    scheduleDailyTechnicianSync(log);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
