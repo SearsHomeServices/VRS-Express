@@ -1073,21 +1073,10 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
   );
 }
 
-// hamedjabarkhail 2026-08-06 — Svc Unit = districtCode with a fallback to
-// the SO prefix for any legacy rows saved before districtCode existed.
-function svcUnitOf(t: any): string | null {
-  return t.districtCode || (typeof t.serviceOrder === "string" && t.serviceOrder.includes("-") ? t.serviceOrder.split("-")[0] : null);
-}
-
 function TicketOverviewSection() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
-  // hamedjabarkhail 2026-08-06 — Svc Unit filter. The unit is the 4-digit
-  // prefix of the service order (also stored as districtCode); options are
-  // derived from whatever rows are currently loaded, filtering is client-side
-  // like the status/request-type filters.
-  const [svcUnitFilter, setSvcUnitFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   // Tyler 2026-07-08 — search covers ALL tickets, not just the visible
   // window. The table defaults to the last 30 days ("auto-archive"), but
@@ -1231,22 +1220,11 @@ function TicketOverviewSection() {
   // below still runs over whichever source is active — it matches the same
   // fields the server search does, so it only ever narrows, never hides.
   const rawTickets = (searchActive ? searchData?.submissions : allData?.submissions) || [];
-  const svcUnitOptions = useMemo(() => {
-    const units = new Set<string>();
-    for (const t of rawTickets) {
-      const u = svcUnitOf(t);
-      if (u) units.add(u);
-    }
-    return Array.from(units).sort();
-  }, [rawTickets]);
-  const typeFiltered = requestTypeFilter === "all"
+  const allTickets = requestTypeFilter === "all"
     ? rawTickets
     : requestTypeFilter === "nla"
     ? rawTickets.filter((t: any) => t.requestType === "parts_nla")
     : rawTickets.filter((t: any) => t.requestType !== "parts_nla");
-  const allTickets = svcUnitFilter === "all"
-    ? typeFiltered
-    : typeFiltered.filter((t: any) => svcUnitOf(t) === svcUnitFilter);
 
   const statusCounts = {
     all: allTickets.length,
@@ -1375,20 +1353,6 @@ function TicketOverviewSection() {
               <SelectItem value="60d" data-testid="option-created-window-60d">Last 60 days</SelectItem>
               <SelectItem value="90d" data-testid="option-created-window-90d">Last 90 days</SelectItem>
               <SelectItem value="all" data-testid="option-created-window-all">All time</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground whitespace-nowrap">Svc Unit</Label>
-          <Select value={svcUnitFilter} onValueChange={setSvcUnitFilter}>
-            <SelectTrigger className="h-8 w-[130px] text-xs" data-testid="select-svc-unit">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all" data-testid="option-svc-unit-all">All Svc Units</SelectItem>
-              {svcUnitOptions.map((u) => (
-                <SelectItem key={u} value={u} data-testid={`option-svc-unit-${u}`}>{u}</SelectItem>
-              ))}
             </SelectContent>
           </Select>
         </div>
