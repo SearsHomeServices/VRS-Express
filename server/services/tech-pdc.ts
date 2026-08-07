@@ -2,8 +2,8 @@
 //
 // Transmits rejection + coaching records to the external Tech PDC system.
 // Configured entirely via env:
-//   TECH_PDC_API_URL  — full endpoint URL records are POSTed to
-//   TECH_PDC_API_KEY  — sent as `Authorization: Bearer <key>` and `X-API-Key`
+//   TECH_PDC_API_URL  — https://tech-pdc.replit.app/api/external/coaching-intake
+//   TECH_PDC_API_KEY  — sent as the `X-API-Key` header (per their API guide)
 // When either is missing the API routes return 503 TECH_PDC_NOT_CONFIGURED
 // (same gating pattern as the VRS AI bridge).
 //
@@ -31,28 +31,45 @@ export function rejectionTimestampOf(s: Submission): Date | null {
   return s.stage2ReviewedAt || s.stage1ReviewedAt || s.statusChangedAt || null;
 }
 
+// Payload per the "Tech PDC — Universal Coaching Intake API" guide
+// (attached_assets/Tech-PDC-Universal-Coaching-Intake-API-Guide_08042026):
+//   POST <TECH_PDC_API_URL> with X-API-Key header.
+//   surveyId is OUR identifier — Tech PDC dedupes on it per source, so
+//   retries after a timeout can never create duplicate coaching records.
+//   enterpriseId is roster-validated on their side; when valid it overrides
+//   technicianName, when invalid the submission is rejected with HTTP 400
+//   (generic message) which we surface verbatim in the Failed badge.
 export function buildTechPdcPayload(s: Submission, technicianName: string | null) {
-  // supportingDetails: rejection reasons + agent notes + technician-facing
-  // message, joined into the single free-text field Tech PDC expects.
   let reasons: string[] = [];
   try {
     if (s.rejectionReasons) reasons = JSON.parse(s.rejectionReasons);
   } catch { /* keep empty */ }
-  const parts: string[] = [];
   const reason = reasons.length > 0 ? reasons.join(", ") : (s.stage1RejectionReason || s.invalidReason || "");
+  const parts: string[] = [];
+  parts.push(`VRS Service Order ${s.serviceOrder} — video authorization ${s.ticketStatus === "invalid" ? "marked invalid" : "rejected"}.`);
+  if (reason) parts.push(`Rejection reason(s): ${reason}`);
+  if (s.expectedVsActual) parts.push(`Expected vs actual: ${s.expectedVsActual}`);
+  if (s.coachingNotes) parts.push(`Coaching notes: ${s.coachingNotes}`);
   if (s.agentNotes) parts.push(`Agent notes: ${s.agentNotes}`);
   if (s.technicianMessage) parts.push(`Message to technician: ${s.technicianMessage}`);
   if (s.invalidInstructions) parts.push(`Instructions: ${s.invalidInstructions}`);
-  const supportingDetails = [reason, ...parts].filter(Boolean).join(" | ");
+
+  const rejectedAt = rejectionTimestampOf(s);
+  const enterpriseId = (s.technicianLdapId || s.racId || "").trim().toUpperCase();
 
   return {
-    serviceOrder: s.serviceOrder,
-    technicianId: s.technicianLdapId || s.racId,
+    // Their roster is keyed by enterprise ID; VRS technician LDAP is that ID.
+    ...(enterpriseId ? { enterpriseId } : {}),
     technicianName: technicianName || undefined,
-    supportingDetails,
-    expectedVsActual: s.expectedVsActual || "",
-    coachingNotes: s.coachingNotes || "",
-    rejectedAt: rejectionTimestampOf(s)?.toISOString() || null,
+    department: "Other",
+    incidentDate: (rejectedAt || new Date()).toISOString().slice(0, 10),
+    primaryCategory: "Documentation",
+    severity: "Moderate",
+    rootCause: "Knowledge Gap",
+    incidentDescription: parts.join("\n"),
+    sourceSystem: "VRS Authorization Tool",
+    // Unique + stable per VRS ticket → safe idempotent retries.
+    surveyId: `VRS-${s.id}`,
   };
 }
 
@@ -103,7 +120,6 @@ export async function pushSubmissionToTechPdc(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
           "X-API-Key": apiKey,
         },
         body: JSON.stringify(buildTechPdcPayload(submission, technicianName)),
