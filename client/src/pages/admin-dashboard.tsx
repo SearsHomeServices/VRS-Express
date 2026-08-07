@@ -139,6 +139,7 @@ import {
   Headset,
   Check,
   ChevronsUpDown,
+  Send,
 } from "lucide-react";
 import {
   Command,
@@ -561,6 +562,48 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
     } catch { rejectionReasonsList = []; }
   }
 
+  // 2026-08-06 (Rejection & Coaching Report) — editable coaching fields +
+  // Tech PDC delivery status/retry, shown for negative-outcome tickets.
+  const { toast: coachingToast } = useToast();
+  const isNegativeOutcome = sub && ["rejected", "rejected_closed", "invalid"].includes(sub.ticketStatus);
+  const [coachingDraft, setCoachingDraft] = useState("");
+  const [expectedDraft, setExpectedDraft] = useState("");
+  useEffect(() => {
+    setCoachingDraft(sub?.coachingNotes || "");
+    setExpectedDraft(sub?.expectedVsActual || "");
+  }, [sub?.id, sub?.coachingNotes, sub?.expectedVsActual]);
+  const coachingDirty = sub && (coachingDraft !== (sub.coachingNotes || "") || expectedDraft !== (sub.expectedVsActual || ""));
+  const saveCoachingMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/submissions/${sub.id}/coaching`, {
+        coachingNotes: coachingDraft || null,
+        expectedVsActual: expectedDraft || null,
+      });
+      return await res.json();
+    },
+    onSuccess: () => {
+      coachingToast({ title: "Coaching Notes Saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/submissions", ticketId, "audit"] });
+    },
+    onError: (error: Error) => {
+      coachingToast({ title: "Save Failed", description: error.message, variant: "destructive" });
+    },
+  });
+  const techPdcPushMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/submissions/${sub.id}/tech-pdc-push`, {});
+      return await res.json();
+    },
+    onSuccess: () => {
+      coachingToast({ title: "Sent to Tech PDC" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/submissions", ticketId, "audit"] });
+    },
+    onError: (error: Error) => {
+      coachingToast({ title: "Tech PDC Push Failed", description: error.message, variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/submissions", ticketId, "audit"] });
+    },
+  });
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent
@@ -732,6 +775,82 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                   <div className="rounded-lg border p-3 bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Agent Notes</p>
                     <p className="text-sm whitespace-pre-wrap" data-testid="text-detail-agent-notes">{sub.agentNotes}</p>
+                  </div>
+                )}
+
+                {isNegativeOutcome && (
+                  <div className="rounded-lg border p-3 bg-amber-50/50 dark:bg-amber-950/10 border-amber-200 dark:border-amber-900 space-y-3" data-testid="section-coaching">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <p className="text-xs uppercase tracking-wider font-medium text-amber-800 dark:text-amber-300">Coaching & Tech PDC</p>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            sub.techPdcStatus === "sent"
+                              ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                              : sub.techPdcStatus === "failed"
+                              ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                              : sub.techPdcStatus === "pending"
+                              ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                              : "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                          }`}
+                          data-testid="badge-tech-pdc-status"
+                          title={sub.techPdcStatus === "failed" && sub.techPdcError ? sub.techPdcError : undefined}
+                        >
+                          {sub.techPdcStatus === "sent"
+                            ? `Sent to Tech PDC${sub.techPdcSentAt ? ` · ${formatTsFull(sub.techPdcSentAt)}` : ""}`
+                            : sub.techPdcStatus === "failed"
+                            ? "Tech PDC Failed"
+                            : sub.techPdcStatus === "pending"
+                            ? "Sending to Tech PDC…"
+                            : "Not sent to Tech PDC"}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={techPdcPushMutation.isPending}
+                          onClick={() => techPdcPushMutation.mutate()}
+                          data-testid="button-tech-pdc-push"
+                        >
+                          {techPdcPushMutation.isPending ? "Sending…" : sub.techPdcStatus === "failed" ? "Retry Push" : "Push to Tech PDC"}
+                        </Button>
+                      </div>
+                    </div>
+                    {sub.techPdcStatus === "failed" && sub.techPdcError && (
+                      <p className="text-xs text-red-700 dark:text-red-400" data-testid="text-tech-pdc-error">{sub.techPdcError}</p>
+                    )}
+                    <div>
+                      <Label className="text-xs text-muted-foreground mb-1 block">Expected vs. Actual Behavior</Label>
+                      <Textarea
+                        value={expectedDraft}
+                        onChange={(e) => setExpectedDraft(e.target.value)}
+                        placeholder="What the technician should have done vs. what they did..."
+                        className="resize-none bg-background"
+                        rows={2}
+                        data-testid="input-detail-expected-vs-actual"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground mb-1 block">Coaching Notes</Label>
+                      <Textarea
+                        value={coachingDraft}
+                        onChange={(e) => setCoachingDraft(e.target.value)}
+                        placeholder="Coaching guidance for this technician — included in the Coaching & Rejection report and Tech PDC push..."
+                        className="resize-none bg-background"
+                        rows={3}
+                        data-testid="input-detail-coaching-notes"
+                      />
+                    </div>
+                    {coachingDirty && (
+                      <Button
+                        size="sm"
+                        disabled={saveCoachingMutation.isPending}
+                        onClick={() => saveCoachingMutation.mutate()}
+                        data-testid="button-save-coaching"
+                      >
+                        {saveCoachingMutation.isPending ? "Saving…" : "Save Coaching Notes"}
+                      </Button>
+                    )}
                   </div>
                 )}
 
@@ -1305,6 +1424,64 @@ function TicketOverviewSection() {
     { key: "rejected", label: "Rejected", color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
   ];
 
+  // 2026-08-06 (Rejection & Coaching Report) — export the coaching/rejection
+  // report honoring the active table filters (created window, status tab,
+  // request-type toggle, search). Server limits rows to negative outcomes.
+  const [coachingExporting, setCoachingExporting] = useState(false);
+  const [pdcPushing, setPdcPushing] = useState(false);
+  const coachingFilterParams = () => {
+    const params = new URLSearchParams();
+    if (createdAfterIso) params.set("createdAfter", createdAfterIso);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (requestTypeFilter !== "all") params.set("requestType", requestTypeFilter);
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    return params;
+  };
+  const handleCoachingExport = async (format: "csv" | "xlsx") => {
+    try {
+      setCoachingExporting(true);
+      const params = coachingFilterParams();
+      params.set("format", format);
+      const res = await fetch(`/api/admin/export-coaching?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.headers.get("Content-Disposition")?.match(/filename="(.+)"/)?.[1] || `coaching-report.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast({ title: "Export Complete", description: `Coaching & Rejection report downloaded (${format.toUpperCase()}).` });
+    } catch {
+      toast({ title: "Export Failed", description: "Could not export the coaching report.", variant: "destructive" });
+    } finally {
+      setCoachingExporting(false);
+    }
+  };
+  const handlePushToTechPdc = async () => {
+    try {
+      setPdcPushing(true);
+      const body: Record<string, string> = {};
+      coachingFilterParams().forEach((v, k) => { body[k] = v; });
+      const res = await apiRequest("POST", "/api/tech-pdc/export", body);
+      const json = await res.json();
+      toast({
+        title: "Tech PDC Push Complete",
+        description: `${json.sent} sent, ${json.failed} failed${json.skippedAlreadySent ? `, ${json.skippedAlreadySent} already delivered` : ""}.`,
+        variant: json.failed > 0 ? "destructive" : undefined,
+      });
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+    } catch (error: any) {
+      toast({ title: "Tech PDC Push Failed", description: error?.message || "Could not push records.", variant: "destructive" });
+    } finally {
+      setPdcPushing(false);
+    }
+  };
+
   // Tyler 2026-04-29 (VRS business-hours timer): when we're outside the
   // configured ET window, surface a small inline indicator at the top of the
   // tickets view so admins understand the column timers aren't ticking. The
@@ -1355,6 +1532,41 @@ function TicketOverviewSection() {
               <SelectItem value="all" data-testid="option-created-window-all">All time</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={coachingExporting}
+            onClick={() => handleCoachingExport("csv")}
+            data-testid="button-export-coaching-csv"
+          >
+            {coachingExporting ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+            Coaching Report CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={coachingExporting}
+            onClick={() => handleCoachingExport("xlsx")}
+            data-testid="button-export-coaching-xlsx"
+          >
+            {coachingExporting ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+            XLSX
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={pdcPushing}
+            onClick={handlePushToTechPdc}
+            data-testid="button-push-tech-pdc"
+          >
+            {pdcPushing ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Send className="w-3 h-3 mr-1.5" />}
+            Push to Tech PDC
+          </Button>
         </div>
         {!businessHoursActive && (
           <div

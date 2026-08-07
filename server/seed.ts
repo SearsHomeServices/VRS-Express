@@ -92,6 +92,9 @@ export async function seedDatabase() {
   // cleanupTestSubmissions below select all columns). Awaited, not
   // fire-and-forget, for the same reason as ensureProviderCompanyColumn.
   await ensurePhotoThumbnailsColumn();
+  // 2026-08-06 — coaching/Tech PDC columns: referenced by the Drizzle schema,
+  // so they must exist BEFORE the first submissions query (same reasoning).
+  await ensureCoachingColumns();
   for (const seedUser of SEED_USERS) {
     let user = seedUser.racId ? await storage.getUserByRacId(seedUser.racId) : null;
 
@@ -376,6 +379,27 @@ async function ensureB2bApprovedReplacementColumn() {
     console.log("[b2b-approved-replacement] submissions.b2b_approved_replacement ensured (default false)");
   } catch (err: any) {
     console.warn(`[b2b-approved-replacement] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// 2026-08-06 (Rejection & Coaching Report) — coaching + Tech PDC delivery
+// columns on submissions. Same one-shot idempotent pattern as the other
+// ensure* helpers. Must be awaited before the first submissions query on
+// boot (Drizzle selects all columns). Safe to re-run.
+async function ensureCoachingColumns() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS expected_vs_actual TEXT,
+        ADD COLUMN IF NOT EXISTS coaching_notes TEXT,
+        ADD COLUMN IF NOT EXISTS tech_pdc_status TEXT,
+        ADD COLUMN IF NOT EXISTS tech_pdc_sent_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS tech_pdc_error TEXT,
+        ADD COLUMN IF NOT EXISTS tech_pdc_attempts INTEGER NOT NULL DEFAULT 0
+    `));
+    console.log("[coaching] submissions coaching/tech-pdc columns ensured");
+  } catch (err: any) {
+    console.warn(`[coaching] Failed to ensure columns: ${err?.message || err}`);
   }
 }
 

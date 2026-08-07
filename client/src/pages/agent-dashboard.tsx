@@ -289,6 +289,10 @@ export default function AgentDashboard() {
   const [rejectedVoiceNote, setRejectedVoiceNote] = useState<{rejected: boolean; reason: string}>({rejected: false, reason: ""});
   const [technicianMessage, setTechnicianMessage] = useState("");
   const [agentNotes, setAgentNotes] = useState("");
+  // 2026-08-06 (Rejection & Coaching Report) — optional coaching capture on
+  // negative outcomes (reject / reject & close / invalid).
+  const [expectedVsActual, setExpectedVsActual] = useState("");
+  const [coachingNotes, setCoachingNotes] = useState("");
   const [authCode, setAuthCode] = useState("");
   const [selectedInvalidReasons, setSelectedInvalidReasons] = useState<string[]>([]);
   const [invalidMessage, setInvalidMessage] = useState("");
@@ -840,6 +844,8 @@ export default function AgentDashboard() {
     setRejectedVoiceNote({rejected: false, reason: ""});
     setTechnicianMessage("");
     setAgentNotes("");
+    setExpectedVsActual("");
+    setCoachingNotes("");
     setAuthCode("");
     setSelectedInvalidReasons([]);
     setInvalidMessage("");
@@ -1690,6 +1696,10 @@ export default function AgentDashboard() {
       action: selectedAction,
       agentNotes: agentNotes || undefined,
     };
+    if (selectedAction === "reject" || selectedAction === "reject_and_close" || selectedAction === "invalid") {
+      if (expectedVsActual.trim()) body.expectedVsActual = expectedVsActual.trim();
+      if (coachingNotes.trim()) body.coachingNotes = coachingNotes.trim();
+    }
     if (selectedAction === "reject") {
       const allRejectReasons = [...selectedRejectionReasons];
       if (allRejectReasons.includes("Other") && otherRejectionText.trim()) {
@@ -4712,6 +4722,33 @@ export default function AgentDashboard() {
                                   data-testid="input-agent-notes"
                                 />
                               </div>
+
+                              {(selectedAction === "reject" || selectedAction === "reject_and_close" || selectedAction === "invalid") && (
+                                <>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground mb-1 block">Expected vs. Actual Behavior (internal, optional)</Label>
+                                    <Textarea
+                                      placeholder="What the technician should have done vs. what they did..."
+                                      value={expectedVsActual}
+                                      onChange={(e) => setExpectedVsActual(e.target.value)}
+                                      className="resize-none"
+                                      rows={2}
+                                      data-testid="input-expected-vs-actual"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground mb-1 block">Coaching Notes (internal, optional)</Label>
+                                    <Textarea
+                                      placeholder="Coaching guidance for this technician — included in the Coaching & Rejection report..."
+                                      value={coachingNotes}
+                                      onChange={(e) => setCoachingNotes(e.target.value)}
+                                      className="resize-none"
+                                      rows={2}
+                                      data-testid="input-coaching-notes"
+                                    />
+                                  </div>
+                                </>
+                              )}
 
                               <Button
                                 className="w-full"

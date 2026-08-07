@@ -68,6 +68,7 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { fetchProcIdForServiceOrder } from "./services/snowflake";
 import { runTechnicianSync } from "./services/tech-sync";
+import { isTechPdcConfigured, pushSubmissionToTechPdc, rejectionTimestampOf, TECH_PDC_NOT_CONFIGURED_MESSAGE } from "./services/tech-pdc";
 import { seedDatabase } from "./seed";
 import {
   loadConfig as loadBusinessHoursConfig,
@@ -2752,6 +2753,10 @@ export async function registerRoutes(
     authCode: z.string().optional(),
     invalidReason: z.string().optional(),
     invalidInstructions: z.string().optional(),
+    // 2026-08-06 (Rejection & Coaching Report) — optional coaching capture on
+    // negative outcomes (reject / reject_and_close / invalid).
+    expectedVsActual: z.string().max(5000).optional(),
+    coachingNotes: z.string().max(5000).optional(),
   });
 
   // Named handler (2026-07-21): also invoked by the external v1 decision
@@ -2782,7 +2787,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "This ticket is not assigned to you" });
       }
 
-      const { action, rejectionReasons, rejectedMedia, agentNotes, technicianMessage, invalidReason, invalidInstructions } = parsed.data;
+      const { action, rejectionReasons, rejectedMedia, agentNotes, technicianMessage, invalidReason, invalidInstructions, expectedVsActual, coachingNotes } = parsed.data;
       let { authCode } = parsed.data;
 
       // Tyler 2026-06-27 (Stage-2 six outcomes): previously, once a submission
@@ -2898,6 +2903,14 @@ export async function registerRoutes(
         agentNotes: agentNotes || null,
         updatedAt: new Date(),
       };
+
+      // 2026-08-06 (Rejection & Coaching Report) — persist coaching fields on
+      // negative outcomes only; never null-out existing values when the fields
+      // are omitted (they're also editable later via the coaching PATCH).
+      if (action === "reject" || action === "reject_and_close" || action === "invalid") {
+        if (expectedVsActual !== undefined) updateData.expectedVsActual = expectedVsActual || null;
+        if (coachingNotes !== undefined) updateData.coachingNotes = coachingNotes || null;
+      }
 
       let smsMessage: string;
       let smsType: string;
@@ -6537,6 +6550,207 @@ export async function registerRoutes(
     } catch (error) {
       console.error("XLSX export error:", error);
       return res.status(500).json({ error: "Failed to export XLSX" });
+    }
+  });
+
+  // ========================================================================
+  // REJECTION & COACHING REPORT + TECH PDC INTEGRATION (2026-08-06)
+  // ========================================================================
+
+  const NEGATIVE_STATUSES = ["rejected", "rejected_closed", "invalid"] as const;
+
+  // Shared query logic for the coaching export + bulk Tech PDC push: mirrors
+  // the admin Ticket Overview's active filters (createdAfter window, status
+  // tab, request-type toggle, search text) so the export matches the table.
+  const getCoachingRecords = async (query: any) => {
+    const createdAfter = query.createdAfter ? new Date(query.createdAfter as string) : null;
+    const status = (query.status as string) || "all";
+    const requestType = (query.requestType as string) || "all";
+    const search = ((query.search as string) || "").toLowerCase().trim();
+
+    const all = await storage.getAllSubmissions(
+      createdAfter && !isNaN(createdAfter.getTime()) ? createdAfter : null,
+      null,
+      null,
+    );
+    const allUsers = await storage.getUsers();
+    const userName: Record<number, string> = {};
+    for (const u of allUsers) userName[u.id] = u.name || "";
+
+    let rows = all.filter(s =>
+      (NEGATIVE_STATUSES as readonly string[]).includes(s.ticketStatus)
+    );
+    if ((NEGATIVE_STATUSES as readonly string[]).includes(status)) {
+      rows = rows.filter(s => s.ticketStatus === status);
+    }
+    if (requestType === "nla") rows = rows.filter(s => s.requestType === "parts_nla");
+    else if (requestType === "auth") rows = rows.filter(s => s.requestType !== "parts_nla");
+    if (search) {
+      rows = rows.filter(s =>
+        s.serviceOrder?.toLowerCase().includes(search) ||
+        s.technicianLdapId?.toLowerCase().includes(search) ||
+        (userName[s.technicianId] || "").toLowerCase().includes(search) ||
+        (s.reviewedBy ? (userName[s.reviewedBy] || "").toLowerCase() : "").includes(search)
+      );
+    }
+    return { rows, userName };
+  };
+
+  // Editable coaching fields on a ticket — agents and admins can log or
+  // revise coaching guidance after the fact from the detail view.
+  const coachingPatchSchema = z.object({
+    coachingNotes: z.string().max(5000).nullable().optional(),
+    expectedVsActual: z.string().max(5000).nullable().optional(),
+  });
+  app.patch("/api/submissions/:id/coaching", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid submission ID" });
+      const parsed = coachingPatchSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+      const submission = await storage.getSubmission(id);
+      if (!submission) return res.status(404).json({ error: "Submission not found" });
+      // Agents may only edit coaching on tickets they worked (assigned to
+      // them or reviewed by them); admins can edit any.
+      const requester = (req as AuthenticatedRequest).user!;
+      if (requester.role === "vrs_agent" &&
+          submission.assignedTo !== requester.id && submission.reviewedBy !== requester.id) {
+        return res.status(403).json({ error: "You can only edit coaching notes on tickets you worked." });
+      }
+      const update: Record<string, unknown> = { updatedAt: new Date() };
+      if (parsed.data.coachingNotes !== undefined) update.coachingNotes = parsed.data.coachingNotes || null;
+      if (parsed.data.expectedVsActual !== undefined) update.expectedVsActual = parsed.data.expectedVsActual || null;
+      const updated = await storage.updateSubmission(id, update as any);
+      return res.json({ submission: updated });
+    } catch (error) {
+      console.error("Coaching update error:", error);
+      return res.status(500).json({ error: "Failed to update coaching notes" });
+    }
+  });
+
+  // Export Coaching & Rejection Report (CSV or XLSX), honoring the active
+  // Ticket Overview filters passed as query params.
+  app.get("/api/admin/export-coaching", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const format = (req.query.format as string) === "xlsx" ? "xlsx" : "csv";
+      const { rows, userName } = await getCoachingRecords(req.query);
+
+      const headers = [
+        "Service Order", "Technician Name", "Technician ID",
+        "Rejection Reason", "Supporting Details", "Expected vs Actual",
+        "Coaching Notes", "Rejection Timestamp", "Ticket Status",
+        "Rejected By", "Tech PDC Status", "Tech PDC Sent At",
+      ];
+      // Spreadsheet formula-injection guard: user-controlled text starting
+      // with = + - @ (or tab/CR) would execute as a formula in Excel. Prefix
+      // a single quote so both CSV and XLSX render it as literal text.
+      const deFormula = (v: any) => {
+        if (typeof v !== "string" || v.length === 0) return v;
+        return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+      };
+      const toRow = (s: any) => {
+        let reasons = "";
+        if (s.rejectionReasons) {
+          try { reasons = JSON.parse(s.rejectionReasons).join("; "); } catch { reasons = s.rejectionReasons; }
+        }
+        if (!reasons) reasons = s.stage1RejectionReason || s.invalidReason || "";
+        const supporting = [
+          s.agentNotes ? `Agent notes: ${s.agentNotes}` : "",
+          s.technicianMessage ? `Message to technician: ${s.technicianMessage}` : "",
+          s.invalidInstructions ? `Instructions: ${s.invalidInstructions}` : "",
+        ].filter(Boolean).join(" | ");
+        const rejectedAt = rejectionTimestampOf(s);
+        return [
+          s.serviceOrder, userName[s.technicianId] || "", s.technicianLdapId || s.racId,
+          reasons, supporting, s.expectedVsActual || "",
+          s.coachingNotes || "", rejectedAt ? new Date(rejectedAt).toISOString() : "", s.ticketStatus,
+          s.reviewedBy ? (userName[s.reviewedBy] || "") : "", s.techPdcStatus || "",
+          s.techPdcSentAt ? new Date(s.techPdcSentAt).toISOString() : "",
+        ].map(deFormula);
+      };
+
+      const filename = `coaching-rejection-report-${getEtDateString(new Date())}`;
+      if (format === "xlsx") {
+        const ExcelJS = (await import("exceljs")).default;
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet("Coaching & Rejections");
+        sheet.addRow(headers);
+        const headerRow = sheet.getRow(1);
+        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFC0504D" } };
+        for (const s of rows) sheet.addRow(toRow(s));
+        headers.forEach((_h, i) => { sheet.getColumn(i + 1).width = 24; });
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
+        await workbook.xlsx.write(res);
+        return res.end();
+      }
+
+      const esc = (v: any) => {
+        const str = v === null || v === undefined ? "" : String(v);
+        return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+      };
+      const csv = [headers, ...rows.map(toRow)].map(r => r.map(esc).join(",")).join("\r\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
+      return res.send(csv);
+    } catch (error) {
+      console.error("Coaching export error:", error);
+      return res.status(500).json({ error: "Failed to export coaching report" });
+    }
+  });
+
+  // Bulk push: transmit all currently-filtered rejection/coaching records to
+  // Tech PDC. Sequential sends (volume is small) so status columns stay
+  // accurate; returns a summary the UI toasts.
+  app.post("/api/tech-pdc/export", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      if (!isTechPdcConfigured()) {
+        return res.status(503).json({ error: TECH_PDC_NOT_CONFIGURED_MESSAGE, code: "TECH_PDC_NOT_CONFIGURED" });
+      }
+      const { rows, userName } = await getCoachingRecords(req.body || {});
+      // Skip records already delivered unless the caller asks to resend.
+      const resend = Boolean((req.body || {}).resendDelivered);
+      const toSend = resend ? rows : rows.filter(s => s.techPdcStatus !== "sent");
+      let sent = 0, failed = 0;
+      for (const s of toSend) {
+        const result = await pushSubmissionToTechPdc(s, userName[s.technicianId] || null);
+        if (result.ok) sent++; else failed++;
+      }
+      return res.json({ total: rows.length, attempted: toSend.length, sent, failed, skippedAlreadySent: rows.length - toSend.length });
+    } catch (error) {
+      console.error("Tech PDC bulk push error:", error);
+      return res.status(500).json({ error: "Failed to push records to Tech PDC" });
+    }
+  });
+
+  // Single-ticket push / retry from the detail view.
+  app.post("/api/submissions/:id/tech-pdc-push", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
+    try {
+      if (!isTechPdcConfigured()) {
+        return res.status(503).json({ error: TECH_PDC_NOT_CONFIGURED_MESSAGE, code: "TECH_PDC_NOT_CONFIGURED" });
+      }
+      const id = parseInt(req.params.id as string);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid submission ID" });
+      const submission = await storage.getSubmission(id);
+      if (!submission) return res.status(404).json({ error: "Submission not found" });
+      if (!(NEGATIVE_STATUSES as readonly string[]).includes(submission.ticketStatus)) {
+        return res.status(400).json({ error: "Only rejected, closed, or invalid tickets can be sent to Tech PDC" });
+      }
+      // Agents may only push tickets they worked; admins can push any.
+      const requester = (req as AuthenticatedRequest).user!;
+      if (requester.role === "vrs_agent" &&
+          submission.assignedTo !== requester.id && submission.reviewedBy !== requester.id) {
+        return res.status(403).json({ error: "You can only send tickets you worked to Tech PDC." });
+      }
+      const tech = await storage.getUser(submission.technicianId);
+      const result = await pushSubmissionToTechPdc(submission, tech?.name || null);
+      const updated = await storage.getSubmission(id);
+      if (result.ok) return res.json({ ok: true, submission: updated });
+      return res.status(502).json({ ok: false, error: result.error, submission: updated });
+    } catch (error) {
+      console.error("Tech PDC push error:", error);
+      return res.status(500).json({ error: "Failed to push record to Tech PDC" });
     }
   });
 

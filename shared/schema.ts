@@ -154,6 +154,19 @@ export const submissions = pgTable("submissions", {
   technicianMessage: text("technician_message"),
   rejectionReasons: text("rejection_reasons"),
   rejectedMedia: text("rejected_media"),
+  // 2026-08-06 (Rejection & Coaching Report) — coaching capture on rejections.
+  // expectedVsActual: agent's description of expected vs. actual technician
+  // behavior; coachingNotes: editable coaching guidance (agents at reject
+  // time, agents/admins later via PATCH /api/submissions/:id/coaching).
+  // Migrated idempotently in seed.ts (ensureCoachingColumns).
+  expectedVsActual: text("expected_vs_actual"),
+  coachingNotes: text("coaching_notes"),
+  // Tech PDC delivery tracking for coaching pushes. techPdcStatus:
+  // null (never pushed) | 'pending' | 'sent' | 'failed'.
+  techPdcStatus: text("tech_pdc_status"),
+  techPdcSentAt: timestamp("tech_pdc_sent_at"),
+  techPdcError: text("tech_pdc_error"),
+  techPdcAttempts: integer("tech_pdc_attempts").notNull().default(0),
   reassignmentNotes: text("reassignment_notes"),
   appealNotes: text("appeal_notes"),
   resubmissionOf: integer("resubmission_of"),
