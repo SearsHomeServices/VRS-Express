@@ -22,6 +22,7 @@ import BusinessHoursSection from "@/components/business-hours-section";
 import { useWebSocket, loadNotificationSettings, playNotificationDing, showBrowserNotification } from "@/lib/websocket";
 import NotificationSettings from "@/components/notification-settings";
 import type { User, TechnicianUserView, SubmissionListItemWithTech } from "@shared/schema";
+import { TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { PROVIDER_1099_COMPANIES } from "@shared/provider1099";
 import { deriveIntakeFormStatus } from "@shared/intake-form-config";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
@@ -568,16 +569,19 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
   const isNegativeOutcome = sub && ["rejected", "rejected_closed", "invalid"].includes(sub.ticketStatus);
   const [coachingDraft, setCoachingDraft] = useState("");
   const [expectedDraft, setExpectedDraft] = useState("");
+  const [rootCauseDraft, setRootCauseDraft] = useState("");
   useEffect(() => {
     setCoachingDraft(sub?.coachingNotes || "");
     setExpectedDraft(sub?.expectedVsActual || "");
-  }, [sub?.id, sub?.coachingNotes, sub?.expectedVsActual]);
-  const coachingDirty = sub && (coachingDraft !== (sub.coachingNotes || "") || expectedDraft !== (sub.expectedVsActual || ""));
+    setRootCauseDraft(sub?.techPdcRootCause || "");
+  }, [sub?.id, sub?.coachingNotes, sub?.expectedVsActual, sub?.techPdcRootCause]);
+  const coachingDirty = sub && (coachingDraft !== (sub.coachingNotes || "") || expectedDraft !== (sub.expectedVsActual || "") || rootCauseDraft !== (sub.techPdcRootCause || ""));
   const saveCoachingMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("PATCH", `/api/submissions/${sub.id}/coaching`, {
         coachingNotes: coachingDraft || null,
         expectedVsActual: expectedDraft || null,
+        rootCause: rootCauseDraft || null,
       });
       return await res.json();
     },
@@ -808,7 +812,8 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs"
-                          disabled={techPdcPushMutation.isPending}
+                          disabled={techPdcPushMutation.isPending || !sub.techPdcRootCause || coachingDirty}
+                          title={!sub.techPdcRootCause ? "Select and save a Root Cause first" : coachingDirty ? "Save your coaching changes first" : undefined}
                           onClick={() => techPdcPushMutation.mutate()}
                           data-testid="button-tech-pdc-push"
                         >
@@ -819,6 +824,24 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                     {sub.techPdcStatus === "failed" && sub.techPdcError && (
                       <p className="text-xs text-red-700 dark:text-red-400" data-testid="text-tech-pdc-error">{sub.techPdcError}</p>
                     )}
+                    <div>
+                      <Label className="text-xs text-muted-foreground mb-1 block">
+                        Root Cause <span className="text-red-600">*</span>
+                        <span className="ml-1 normal-case font-normal">(required for Tech PDC push)</span>
+                      </Label>
+                      <Select value={rootCauseDraft} onValueChange={setRootCauseDraft}>
+                        <SelectTrigger className="h-8 text-xs bg-background" data-testid="select-tech-pdc-root-cause">
+                          <SelectValue placeholder="Select a root cause…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TECH_PDC_ROOT_CAUSES.map((rc) => (
+                            <SelectItem key={rc} value={rc} className="text-xs">
+                              {rc.split("_").map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(" ")}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div>
                       <Label className="text-xs text-muted-foreground mb-1 block">Expected vs. Actual Behavior</Label>
                       <Textarea

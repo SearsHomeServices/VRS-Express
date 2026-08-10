@@ -24,6 +24,9 @@ export function isTechPdcConfigured(): boolean {
 export const TECH_PDC_NOT_CONFIGURED_MESSAGE =
   "Tech PDC integration is not configured. Set TECH_PDC_API_URL and TECH_PDC_API_KEY.";
 
+export const TECH_PDC_ROOT_CAUSE_REQUIRED_MESSAGE =
+  "Select a Root Cause before pushing to Tech PDC.";
+
 // The rejection timestamp: prefer the stage that actually recorded the
 // negative outcome (Stage-2 audit stamp when a post-approval reversal),
 // falling back to Stage 1 review time, then the status-change time.
@@ -65,7 +68,8 @@ export function buildTechPdcPayload(s: Submission, technicianName: string | null
     incidentDate: (rejectedAt || new Date()).toISOString().slice(0, 10),
     primaryCategory: "Documentation",
     severity: "Moderate",
-    rootCause: "Knowledge Gap",
+    // Required by the live API's enum; selected per-ticket in the admin UI.
+    rootCause: s.techPdcRootCause,
     incidentDescription: parts.join("\n"),
     sourceSystem: "VRS Authorization Tool",
     // Unique + stable per VRS ticket → safe idempotent retries.
@@ -87,6 +91,11 @@ export async function pushSubmissionToTechPdc(
   const apiKey = process.env.TECH_PDC_API_KEY;
   if (!url || !apiKey) {
     return { ok: false, error: TECH_PDC_NOT_CONFIGURED_MESSAGE };
+  }
+  if (!submission.techPdcRootCause) {
+    // Don't claim/attempt — the live API requires rootCause; surface a
+    // clear actionable error instead of a 400 round-trip.
+    return { ok: false, error: TECH_PDC_ROOT_CAUSE_REQUIRED_MESSAGE };
   }
 
   // Atomic claim: only one caller may move the row into 'pending' at a time.

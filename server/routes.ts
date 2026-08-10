@@ -46,7 +46,7 @@ import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
-import { submissions } from "@shared/schema";
+import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import { is1099PortalEnabled, isTechHubPhotosEnabled } from "./featureFlags";
@@ -6601,6 +6601,7 @@ export async function registerRoutes(
   const coachingPatchSchema = z.object({
     coachingNotes: z.string().max(5000).nullable().optional(),
     expectedVsActual: z.string().max(5000).nullable().optional(),
+    rootCause: z.enum(TECH_PDC_ROOT_CAUSES).nullable().optional(),
   });
   app.patch("/api/submissions/:id/coaching", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
     try {
@@ -6620,6 +6621,7 @@ export async function registerRoutes(
       const update: Record<string, unknown> = { updatedAt: new Date() };
       if (parsed.data.coachingNotes !== undefined) update.coachingNotes = parsed.data.coachingNotes || null;
       if (parsed.data.expectedVsActual !== undefined) update.expectedVsActual = parsed.data.expectedVsActual || null;
+      if (parsed.data.rootCause !== undefined) update.techPdcRootCause = parsed.data.rootCause || null;
       const updated = await storage.updateSubmission(id, update as any);
       return res.json({ submission: updated });
     } catch (error) {
@@ -6711,13 +6713,24 @@ export async function registerRoutes(
       const { rows, userName } = await getCoachingRecords(req.body || {});
       // Skip records already delivered unless the caller asks to resend.
       const resend = Boolean((req.body || {}).resendDelivered);
-      const toSend = resend ? rows : rows.filter(s => s.techPdcStatus !== "sent");
+      const notSent = resend ? rows : rows.filter(s => s.techPdcStatus !== "sent");
+      // Root cause is required by the Tech PDC API — skip (don't fail) rows
+      // where nobody has selected one yet, and report the count so the UI
+      // can prompt the admin.
+      const toSend = notSent.filter(s => s.techPdcRootCause);
       let sent = 0, failed = 0;
       for (const s of toSend) {
         const result = await pushSubmissionToTechPdc(s, userName[s.technicianId] || null);
         if (result.ok) sent++; else failed++;
       }
-      return res.json({ total: rows.length, attempted: toSend.length, sent, failed, skippedAlreadySent: rows.length - toSend.length });
+      return res.json({
+        total: rows.length,
+        attempted: toSend.length,
+        sent,
+        failed,
+        skippedAlreadySent: rows.length - notSent.length,
+        skippedMissingRootCause: notSent.length - toSend.length,
+      });
     } catch (error) {
       console.error("Tech PDC bulk push error:", error);
       return res.status(500).json({ error: "Failed to push records to Tech PDC" });

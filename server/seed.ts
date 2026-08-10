@@ -392,6 +392,7 @@ async function ensureCoachingColumns() {
       ALTER TABLE submissions
         ADD COLUMN IF NOT EXISTS expected_vs_actual TEXT,
         ADD COLUMN IF NOT EXISTS coaching_notes TEXT,
+        ADD COLUMN IF NOT EXISTS tech_pdc_root_cause TEXT,
         ADD COLUMN IF NOT EXISTS tech_pdc_status TEXT,
         ADD COLUMN IF NOT EXISTS tech_pdc_sent_at TIMESTAMP,
         ADD COLUMN IF NOT EXISTS tech_pdc_error TEXT,

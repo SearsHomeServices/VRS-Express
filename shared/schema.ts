@@ -96,6 +96,26 @@ export type VrsAgentSpecialization =
 // ============================================================================
 // SUBMISSIONS TABLE
 // ============================================================================
+// Valid rootCause values accepted by the Tech PDC coaching-intake API
+// (live enum from its 400 validation response, 2026-08-07 — supersedes the
+// outdated list in the attached PDF guide). Shared so the admin UI dropdown
+// and the server payload/validation can never drift apart.
+export const TECH_PDC_ROOT_CAUSES = [
+  "LACK_OF_KNOWLEDGE",
+  "LACK_OF_TRAINING",
+  "PROCESS_CONFUSION",
+  "SYSTEM_ISSUE",
+  "TIME_PRESSURE",
+  "NEGLIGENCE",
+  "INTENTIONAL_MISCONDUCT",
+  "MISCOMMUNICATION",
+  "WORKLOAD_ROUTING_ISSUE",
+  "RETURN_SAMSARA_CAMERA",
+  "RETURN_PHONE",
+  "RETURN_OTHER_ASSET",
+] as const;
+export type TechPdcRootCause = (typeof TECH_PDC_ROOT_CAUSES)[number];
+
 export const submissions = pgTable("submissions", {
   id: serial("id").primaryKey(),
   technicianId: integer("technician_id")
@@ -163,6 +183,11 @@ export const submissions = pgTable("submissions", {
   coachingNotes: text("coaching_notes"),
   // Tech PDC delivery tracking for coaching pushes. techPdcStatus:
   // null (never pushed) | 'pending' | 'sent' | 'failed'.
+  // (valid values in TECH_PDC_ROOT_CAUSES below)
+  // Root cause selected by the agent/admin — required by the Tech PDC
+  // intake API (its live enum, discovered 2026-08-07; the PDF guide's list
+  // was outdated). See TECH_PDC_ROOT_CAUSES.
+  techPdcRootCause: text("tech_pdc_root_cause"),
   techPdcStatus: text("tech_pdc_status"),
   techPdcSentAt: timestamp("tech_pdc_sent_at"),
   techPdcError: text("tech_pdc_error"),
