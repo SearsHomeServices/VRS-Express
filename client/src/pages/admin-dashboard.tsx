@@ -3029,6 +3029,17 @@ export default function AdminDashboard() {
       scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
+    // 2026-08-07 — admins are notified when a VRS agent (not an admin)
+    // sends a coaching record to Tech PDC.
+    const unsubTechPdc = subscribe("tech_pdc_pushed", (payload: any) => {
+      playNotificationDing();
+      const title = `Coaching sent to Tech PDC`;
+      const desc = `${payload.agentName} sent SO #${payload.serviceOrder} (${payload.technicianName})`;
+      toast({ title, description: desc, duration: 8000 });
+      showBrowserNotification(title, desc);
+      scheduleWsInvalidate(["/api/submissions"]);
+    });
+
     const unsub4 = subscribe("pending_tickets", (payload: any) => {
       const title = `Queued ${payload.applianceLabel} ticket, ${payload.warrantyLabel}`;
       const desc = `SO #${payload.serviceOrder} waiting in queue`;
@@ -3087,7 +3098,7 @@ export default function AdminDashboard() {
       ]);
     });
 
-    return () => { unsub(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
+    return () => { unsub(); unsub2(); unsub3(); unsubTechPdc(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
   }, [subscribe]);
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");

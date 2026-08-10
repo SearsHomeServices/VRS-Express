@@ -6759,7 +6759,23 @@ export async function registerRoutes(
       const tech = await storage.getUser(submission.technicianId);
       const result = await pushSubmissionToTechPdc(submission, tech?.name || null);
       const updated = await storage.getSubmission(id);
-      if (result.ok) return res.json({ ok: true, submission: updated });
+      if (result.ok) {
+        // Notify admins in real time when an AGENT (not an admin) sends a
+        // coaching record to Tech PDC.
+        if (requester.role === "vrs_agent") {
+          broadcastToAdmins({
+            type: "tech_pdc_pushed",
+            payload: {
+              submissionId: submission.id,
+              serviceOrder: submission.serviceOrder,
+              technicianName: tech?.name || submission.technicianLdapId || submission.racId,
+              agentName: requester.name,
+              rootCause: submission.techPdcRootCause,
+            },
+          });
+        }
+        return res.json({ ok: true, submission: updated });
+      }
       return res.status(502).json({ ok: false, error: result.error, submission: updated });
     } catch (error) {
       console.error("Tech PDC push error:", error);
