@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import * as contractModule from "../server/vrs-sasha-contract";
 import {
   signedTinaPhotoUrl,
@@ -51,7 +52,19 @@ const safeParseVrsAuthorizeRequest = (input: unknown): VersionedParseResult =>
 const getVrsAuthorizeContractVersion = (input: unknown): "v5" | "v8" =>
   candidateContractModule.getVrsAuthorizeContractVersion?.(input) ?? "v5";
 
+// @ts-expect-error Effects schemas must not advertise object-only mutators.
+void contractModule.vrsAuthorizeV5RequestSchema.extend;
+
 describe("VRS authorize V5/V8 contract selection", () => {
+  it("exports the V5 validator as its actual effects schema class", () => {
+    expect(contractModule.vrsAuthorizeV5RequestSchema).toBeInstanceOf(
+      z.ZodEffects,
+    );
+    expect(contractModule.vrsAuthorizeV5RequestSchema).not.toHaveProperty(
+      "extend",
+    );
+  });
+
   it("exports the canonical V8 intent keys", () => {
     expect(candidateContractModule.VRS_V8_ONLY_KEYS).toEqual(v8OnlyKeys);
   });

@@ -133,7 +133,7 @@ export const vrsAuthorizeV5RequestSchema = vrsAuthorizeV5ShapeSchema
         });
       }
     }
-  }) as unknown as typeof vrsAuthorizeV5ShapeSchema;
+  });
 
 // Keep the original export bound to V5 until callers move to the explicit
 // version-aware parser. This preserves the existing V5 route behavior.
@@ -231,7 +231,7 @@ export const VRS_V8_ONLY_KEYS = [
 ] as const;
 
 export type VrsAuthorizeContractVersion = "v5" | "v8";
-export type VrsAuthorizeV5Request = z.infer<typeof vrsAuthorizeV5RequestSchema>;
+export type VrsAuthorizeV5Request = z.infer<typeof vrsAuthorizeV5ShapeSchema>;
 export type VrsAuthorizeV8Request = z.infer<typeof vrsAuthorizeV8RequestSchema>;
 export type VrsAuthorizeRequest =
   | VrsAuthorizeV5Request

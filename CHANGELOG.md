@@ -19,8 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   body limit remains the outer bound. No database schema, seed, startup,
   route, or deployment change was made in this increment.
 - Added the new contract suite to `test:vrs-ai-bridge`. The focused bridge
-  suite now passes 77/77, the production build passes, and TypeScript remains
+  suite now passes 78/78, the production build passes, and TypeScript remains
   at the captured 56-raw-diagnostic baseline with no changed-file diagnostic.
+- **Review correction.** Removed an unsound type cast that advertised the V5
+  `ZodEffects` validator as a `ZodObject`. The exported schema now exposes its
+  actual runtime class, while `VrsAuthorizeV5Request` is derived separately
+  from the clean shape schema to preserve consumer types and the diagnostic
+  baseline.
 
 ### Planned — VRS V5/V8 development integration (2026-08-11)
 - **Execution plan recorded.** Added the test-first implementation and DEV

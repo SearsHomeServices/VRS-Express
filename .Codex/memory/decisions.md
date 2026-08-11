@@ -1,9 +1,13 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 18:36
+Updated: 2026-08-11 18:41
 
 ## Decisions
 
+- [CX] 2026-08-11 - An exported Zod validator must retain its actual runtime
+  class in TypeScript. For the V5 passthrough-plus-refinement validator,
+  derive the payload type from the clean shape schema rather than falsely
+  casting `ZodEffects` to `ZodObject`.
 - [CX] 2026-08-11 - Keep `vrsAuthorizeRequestSchema` bound to the unchanged V5
   runtime validator for compatibility while introducing explicit V5/V8
   schemas and `safeParseVrsAuthorizeRequest` for staged caller adoption. Any

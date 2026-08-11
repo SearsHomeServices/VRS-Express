@@ -1,9 +1,15 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 18:36
+Updated: 2026-08-11 18:41
 
 ## Current Session
 
+- Corrected the Task 1 review finding test-first: the exported V5 validator is
+  now truthfully typed as its runtime `ZodEffects` class instead of being cast
+  to `ZodObject`. `VrsAuthorizeV5Request` is derived separately from the clean
+  shape schema, preserving payload types and the 56-diagnostic baseline.
+- Added runtime and compile-time regression coverage that prevents object-only
+  APIs such as `.extend` from being exposed on the effects validator.
 - Implemented Task 1 test-first: canonical V5/V8 authorize fixtures, strict
   separate schemas, deterministic V8 intent selection from the four V8-only
   keys, a version-bearing safe parser, and same-version outbound source

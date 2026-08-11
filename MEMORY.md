@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:36 — Added exact-contract V5/V8 fixtures and strict version-aware authorize schemas test-first.
+> **Last Touched:** Codex — 2026-08-11 18:41 — Corrected the exported V5 Zod schema class contract test-first.
 
 ## Current State
 - Task 1 of the V5/V8 integration is implemented in the isolated worktree:
@@ -8,7 +8,11 @@
   selection, versioned safe parsing, and version-aware outbound source
   validation. The existing `vrsAuthorizeRequestSchema` remains the V5
   compatibility export until the API task adopts the version-aware parser.
-- Task 1 verification is 77/77 focused bridge tests, a passing production
+- Task 1 review correction removed the false `ZodObject` cast from the actual
+  V5 `ZodEffects` validator. The clean V5 request type is derived separately,
+  so consumers keep the intended payload type without nonexistent `.extend`,
+  `.shape`, or `.strict` runtime APIs being advertised.
+- Task 1 verification is 78/78 focused bridge tests, a passing production
   build, and the unchanged 56-raw TypeScript diagnostic baseline. No schema,
   seed, startup, database, remote, configuration, or publication action ran.
 - Local `main` was fast-forwarded to current GitHub `origin/main` at
@@ -64,6 +68,10 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Export the V5 validator with its actual `ZodEffects`
+  runtime type. Derive `VrsAuthorizeV5Request` from the clean object-shape
+  schema separately; never cast an effects schema to `ZodObject` merely to
+  influence payload inference.
 - [CX] 2026-08-11 - Preserve the legacy `vrsAuthorizeRequestSchema` as the V5
   compatibility export while adding explicit V5/V8 schemas and a four-key
   intent selector. V8 nonblank checks inspect trimmed length without applying

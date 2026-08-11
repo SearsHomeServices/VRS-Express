@@ -1,9 +1,12 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 18:36
+Updated: 2026-08-11 18:41
 
 ## Done
 
+- [x] Corrected the Task 1 review finding: removed the false V5 `ZodObject`
+  cast, derived the clean request type separately, and added runtime/type-level
+  regression coverage for the exported schema API.
 - [x] Added canonical V5/V8 authorize fixtures, strict separate schemas,
   four-key V8 intent selection, non-mutating V8 validation, and version-aware
   outbound source validation with RED/GREEN evidence, including proof that
