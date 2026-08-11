@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-07-29 11:34
+Updated: 2026-08-10 22:55
 
 ## Decisions
 
@@ -38,3 +38,14 @@ Updated: 2026-07-29 11:34
 - [CX] 2026-07-29 - Deliver one external ZIP containing the polished PDF, editable DOCX, and OpenAPI 3.1 contract. Keep the Markdown as the repository source instead of making the recipient sort through duplicate source formats.
 - [CX] 2026-07-29 - External handoff content identifies only VRS Express and VRS AI as the integration platforms. Exclude individual names and internal meeting, PR, commit, credential-incident, and repository-provenance details because they do not help the receiving implementation team.
 - [CX] 2026-07-29 - Classify the finalized package as ready for implementation handoff, while continuing to classify the live bridge as inactive until secure configuration, the additive development schema, the three documented VRS AI decisions, and joint staging evidence are complete.
+- [CX] 2026-08-10 - Treat API Contract V8 as the authoritative contract that
+  should have been implemented originally. Retrofit the existing bridge in
+  place; do not create a parallel V8 endpoint or retain V5 as the handoff
+  source of truth.
+- [CX] 2026-08-10 - Preserve the VRS Express human Stage 1 boundary around the
+  V8 wire contract. Store and forward the accepted V8 business payload
+  unchanged except for the bridge-owned callback URL and secret.
+- [CX] 2026-08-10 - Implement V8 retryable terminal failure as a new public
+  call ID on the same Express ticket, preserving the previous attempt in the
+  existing event ledger and requiring another Stage 1 review; avoid a schema
+  change and acknowledge late callbacks for superseded terminal attempts.

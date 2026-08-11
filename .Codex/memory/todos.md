@@ -1,9 +1,17 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-07-29 11:34
+Updated: 2026-08-10 22:55
 
 ## Done
 
+- [x] Fast-forwarded local `main` to current GitHub `origin/main` at
+  `1433f43` without touching user-owned untracked output.
+- [x] Compared API Contract V8 with the implemented V5 bridge and identified
+  the V6/V7/V8 fields, always-present placeholders, UI gaps, partner mismatch,
+  and retryable-terminal retry gap.
+- [x] Confirmed V8 is the authoritative contract that should have been
+  implemented originally.
+- [x] Approved and documented the V8 in-place retrofit design.
 - [x] Shipped bounded-concurrency photo uploads in `tech-submit`.
 - [x] Shipped bounded-concurrency photo uploads in `tech-resubmit`.
 - [x] Added safe content-type fallback for upload requests with empty MIME type.
@@ -72,6 +80,18 @@ Updated: 2026-07-29 11:34
 
 ## Open
 
+- [ ] Implement the approved V8 contract changes test-first on the existing
+  `POST /vrs/authorize` bridge.
+- [ ] Update the Stage 1 review panel to show all decision-relevant V8 fields
+  and appliance photos.
+- [ ] Implement the same-ticket, new-call-ID retry path after a retryable
+  terminal failure, including late-callback deduplication.
+- [ ] Replace V5 handoff/architecture/OpenAPI/examples with V8 and regenerate
+  the platform-only DOCX/PDF/ZIP package.
+- [ ] Run focused tests, build, TypeScript-baseline comparison, OpenAPI/example
+  validation, metadata/text scans, and visual document review.
+- [ ] Obtain explicit approval before pushing, syncing Replit, applying any
+  development configuration, or publishing.
 - [ ] Package the secure out-of-band exchange for the staging API key, callback
   secret, and actual Express staging callback origin; do not place secrets in
   Git or the handoff documents.

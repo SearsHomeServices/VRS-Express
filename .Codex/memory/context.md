@@ -1,8 +1,25 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-07-29 11:34
+Updated: 2026-08-10 22:55
 
 ## Current Session
+
+- Fast-forwarded local `main` from `397dc29` to current GitHub
+  `origin/main` at `1433f43`; user-owned `graphify-out/` and `output/audio/`
+  remain untracked and untouched.
+- Reviewed the supplied API Contract V8 against the implemented V5 bridge.
+- Confirmed that V8 is the contract that should have been implemented
+  originally and is now the authoritative wire contract.
+- Approved and recorded the in-place retrofit design at
+  `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`.
+- The design keeps the existing endpoint and VRS Express human Stage 1 gate,
+  makes all V8 fields/placeholders authoritative, displays and forwards the
+  complete V8 context, and implements new-request behavior after retryable
+  terminal failure without a schema change.
+- No runtime implementation, schema operation, push, Replit sync, deployment,
+  or publication has occurred in this V8 design step.
+
+## Previous Handoff Snapshot (2026-07-29)
 
 - Finalized the external VRS Express-to-VRS AI implementation handoff.
 - External deliverables:
@@ -33,8 +50,11 @@ Updated: 2026-07-29 11:34
 
 ## Scope Boundary
 
-- The published VRS Express app contains the merged bridge source, but the live
-  bridge is not operational yet.
+- The published VRS Express state and bridge activation status have not been
+  revalidated in this V8 design step. Statements below are the 2026-07-29
+  snapshot and may be stale.
+- At that snapshot, the published VRS Express app contained the merged bridge
+  source, but the live bridge was not operational yet.
 - All six bridge environment variables remain absent, both bridge routes return
   `503 NOT_CONFIGURED`, and the additive `vrs_ai_calls` /
   `vrs_ai_call_events` tables are absent.

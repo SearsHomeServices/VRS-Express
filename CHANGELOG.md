@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Planned — VRS API Contract V8 retrofit (2026-08-10)
+- **V8 is authoritative.** Approved the in-place retrofit of the existing
+  V5 bridge to the complete V8 authorize contract. The same
+  `POST /vrs/authorize` route and VRS Express Stage 1 human gate remain; V8
+  fields, placeholders, review context, forwarding, and retryable-terminal
+  retry behavior replace the earlier V5 assumptions.
+- **Design locked.** Added
+  `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`
+  with validation, mapping, review UI, callback, retry, test, documentation,
+  and rollout boundaries. No runtime code, schema, deployment, or production
+  state changed in this design step.
+
 ### Added — VRS Express ↔ VRS AI AHS bridge (2026-07-28)
 - **External handoff finalized (2026-07-29).** Refreshed the human-readable handoff and OpenAPI contract to the merged/published VRS Express state, regenerated the polished 10-page DOCX, exported a matching PDF, and bundled the PDF, editable DOCX, and OpenAPI file in `output/doc/VRS-Express-VRS-AI-Handoff-Package.zip`. The external package names only VRS Express and VRS AI as the platforms and excludes individual names, internal meeting/PR/commit history, and internal security-incident language. Fresh validation passed: 32/32 bridge tests, 34/34 local OpenAPI references, the authorize example, all five callback examples, the deterministic HMAC vector, DOCX/PDF metadata scans, exact ZIP contents, and visual review of every rendered page. The package is ready for direct implementation handoff; bridge activation still requires secure staging configuration, the additive development schema, the three documented VRS AI decisions, and joint end-to-end evidence.
 - **Initial handoff and publication audit (2026-07-29).** Revalidated 32/32 bridge tests, all 34 local OpenAPI references, the authorize example, all five callback examples, and the deterministic HMAC vector. The published app is healthy and serves the merged client bundle, but both bridge routes correctly return `503 NOT_CONFIGURED`: all six bridge variables are absent and the read-only schema check confirms `vrs_ai_calls` / `vrs_ai_call_events` do not exist. Repository handoff files are not public download routes. This audit identified stale draft metadata, which the finalized external handoff entry above resolves. Live keys/URLs, three VRS AI decisions, and staging evidence remain intentionally external or unresolved.

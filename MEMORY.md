@@ -1,8 +1,22 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-07-29 11:34 — Finalized and validated the platform-only VRS Express/VRS AI handoff package for direct delivery.
+> **Last Touched:** Codex — 2026-08-10 22:55 — Approved and documented the authoritative V8 retrofit after syncing local main to current GitHub.
 
 ## Current State
+- Local `main` was fast-forwarded to current GitHub `origin/main` at
+  `1433f43`. User-owned `graphify-out/` and `output/audio/` remain untracked
+  and untouched.
+- API Contract V8 is now the authoritative wire contract by explicit project
+  direction; V5 was the incomplete contract supplied during the original
+  implementation.
+- The approved implementation design is
+  `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`.
+  It keeps the same endpoint and VRS Express Stage 1 gate, adopts all V8
+  fields/placeholders, and adds same-ticket retryable-failure rearming with a
+  new call ID and existing-ledger audit preservation.
+- No V8 runtime code, schema operation, push, Replit sync, deployment, or
+  publication has occurred yet. The prior live/published status below is a
+  2026-07-29 snapshot and was not revalidated in this design step.
 - The VRS Express-to-VRS AI bridge source is merged and published on `main`.
 - The external implementation handoff is ready for direct delivery as
   `output/doc/VRS-Express-VRS-AI-Handoff-Package.zip`; it contains exactly the
@@ -28,6 +42,13 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-10 - V8 supersedes V5 as the single contract source. Retrofit
+  the existing `/vrs/authorize` bridge in place while preserving the VRS
+  Express Stage 1 human gate and unrelated manual workflows.
+- [CX] 2026-08-10 - Use the existing bridge row and event ledger for a
+  retryable terminal-failure rearm: new Express call ID, new payload/secret,
+  same requeued ticket, prior-attempt audit snapshot, and late old-callback
+  acknowledgement. No schema change.
 - [CX] 2026-04-27 - Treated Tyler's "development" wording as a request for the latest published development state, but verified GitHub branch reality before pulling. Since no `development` branch exists, fast-forwarded `main` from `origin/main`.
 - [CX] 2026-04-27 - Recommended one 7-9 minute technician-only screen walkthrough for the 2026-04-28 East Coast meeting, scoped to the three technician request types and excluding agent/admin flows.
 - [CX] 2026-07-28 - Kept the SASHA AI-call contract separate from the existing `/api/external/v1/*` human-ticket API.
@@ -51,6 +72,10 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
+- [CX] Implement the approved V8 retrofit test-first, update all platform-only
+  handoff artifacts, and complete local verification.
+- [CX] Obtain explicit approval before push, Replit sync, configuration change,
+  or publication.
 - [CX] Prepare the secure staging key/secret/callback-origin exchange outside
   Git and collect the three VRS AI decisions plus joint acceptance evidence.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.
