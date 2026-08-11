@@ -1,9 +1,16 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:08
+Updated: 2026-08-11 19:17
 
 ## Done
 
+- [x] Locked bridge-backed Stage 1 dispatch behind the human approval
+  boundary. Manual/PWA tickets now stop after the first bridge lookup without
+  configuration/client/dispatch work, and bridge errors cannot reach the
+  unchanged update/SMS block.
+- [x] Verified Task 4 with 8/8 boundary tests, 105/105 focused bridge tests, a
+  passing production build, and the unchanged 56-diagnostic TypeScript
+  baseline with zero Task 4 diagnostics.
 - [x] Preserved V5/V8 through durable bridge JSON and outbound dispatch;
   added V8-only operational phone/rationale fallbacks, placeholder-only
   same-field enrichment, signed TINA pass-through, authenticated-object-path

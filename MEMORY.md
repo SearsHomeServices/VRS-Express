@@ -1,15 +1,25 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:08 — Closed Task 3 route-wiring and explicit-validation review gaps test-first.
+> **Last Touched:** Codex — 2026-08-11 19:17 — Locked bridge-backed Stage 1 dispatch ahead of the unchanged human approval mutation.
 
 ## Current State
-- Tasks 1-3 of the V5/V8 integration are implemented in the isolated
+- Tasks 1-4 of the V5/V8 integration are implemented in the isolated
   worktree. V8 gap values now map safely into the normal Express ticket/SMS
   path without mutating durable wire JSON, V5 dispatch remains unchanged,
   and V8 dispatch fills only eligible existing phone/name/empty-photo
   placeholders from valid authoritative values. Signed TINA URLs remain
   byte-identical, authenticated `/objects/` paths and `cta_no` are excluded,
   and the inferred stored version is revalidated before the client.
+- Task 4 isolates the Stage 1 bridge decision behind injected boundaries.
+  `getBySubmissionId` is the first operation; manual/PWA tickets never read
+  VRS AI configuration, construct a client, resolve bridge enrichment, or
+  dispatch. Bridge configuration/dispatch failures return before the existing
+  Stage 1 update/SMS block, while accepted and already-dispatched calls fall
+  through to that legacy block exactly once.
+- Task 4 verification is 8/8 boundary tests, 105/105 focused bridge tests, a
+  passing production build, and the unchanged 56-raw TypeScript baseline with
+  zero Task 4 diagnostics. No schema, seed, startup, database, remote,
+  configuration, sync, deployment, or publication action ran.
 - Task 3 review now proves the actual route projections: intake derives the
   normal ticket/resolved phone and immutable sanitized request JSON together,
   while Stage 1 candidates come from submission phone, resolved user name,
@@ -92,6 +102,11 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Make the durable bridge-row lookup the first Stage 1
+  integration operation. Resolve configuration, construct the outbound
+  client, and load enrichment only after that row exists; map bridge errors to
+  bounded HTTP decisions and leave the legacy update/SMS implementation after
+  the decision unchanged.
 - [CX] 2026-08-11 - Keep route mapping testable through focused pure helpers
   that `server/routes.ts` actually consumes. Let enrichment operate only on
   the typed clone, then make dispatch's explicit safe-parse/version comparison
@@ -194,6 +209,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - Passing a preloaded bridge row through a narrow dispatcher
+  store adapter avoids a second database lookup while preserving dispatch's
+  existing store contract. Without the outer lookup, manual tickets can read
+  configuration or construct an outbound client before isolation is known.
 - [CX] 2026-08-11 - V8 permits operationally unusable gap values such as an
   empty rationale, `tech_phone: "N/A"`, `symptom: "N/A"`, and
   `failure_cause: "other"`. Keep their wire representation intact, but derive

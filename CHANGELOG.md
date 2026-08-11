@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Stage 1 VRS AI dispatch gate (2026-08-11)
+- Extracted the bridge-only Stage 1 decision behind injected store,
+  configuration, client-construction, enrichment, and dispatcher boundaries.
+  Manual/PWA tickets now prove the bridge lookup returns `not_applicable`
+  before configuration is read or a VRS AI client is constructed.
+- Bridge-backed approval now returns the existing bounded 503/409/429/502
+  errors before the unchanged legacy Stage 1 update/SMS block. Only accepted
+  or already-dispatched calls fall through; dispatch still occurs before the
+  Stage 1 mutation.
+- Added 8 focused boundary tests to the bridge suite. The boundary passes 8/8,
+  the focused suite passes 105/105, the production build passes, and
+  TypeScript remains at the known 56-diagnostic baseline with zero Task 4
+  diagnostics. No schema, seed, startup, database, configuration, remote,
+  sync, deployment, or publication action ran.
+
 ### Changed — Safe V8 mapping and same-version dispatch (2026-08-11)
 - V8 `tech_phone: "N/A"` now uses the resolved technician phone only for the
   normal Express ticket/SMS path while the durable parsed wire JSON retains

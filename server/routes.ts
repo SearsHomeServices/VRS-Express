@@ -43,6 +43,7 @@ import {
   decryptVrsCallbackSecret,
   encryptVrsCallbackSecret,
 } from "./vrs-sasha-secret";
+import { decideVrsStageOneBridge } from "./vrs-stage-one-bridge";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -2857,69 +2858,56 @@ export async function registerRoutes(
       // flow. For a bridge ticket, do not mark Stage 1 approved or notify the
       // technician until VRS AI has durably accepted the outbound request.
       if (action === "approve_submission") {
-        const bridge = await vrsBridgeStore.getBySubmissionId(id);
-        if (bridge) {
-          const aiBaseUrl = process.env.VRS_AI_BASE_URL;
-          const aiApiKey = process.env.VRS_AI_API_KEY;
-          const aiWebhookSecret = process.env.VRS_AI_WEBHOOK_SECRET;
-          let callbackUrl = process.env.VRS_AI_CALLBACK_URL;
-          if (!callbackUrl && process.env.VRS_EXPRESS_PUBLIC_URL) {
-            try {
-              callbackUrl = new URL(
-                "/api/integrations/vrs-ai/v1/webhook",
-                process.env.VRS_EXPRESS_PUBLIC_URL,
-              ).toString();
-            } catch {
-              callbackUrl = undefined;
+        const bridgeDecision = await decideVrsStageOneBridge({
+          submissionId: id,
+          store: vrsBridgeStore,
+          resolveConfig: () => {
+            const baseUrl = process.env.VRS_AI_BASE_URL;
+            const apiKey = process.env.VRS_AI_API_KEY;
+            const callbackSecret = process.env.VRS_AI_WEBHOOK_SECRET;
+            let callbackUrl = process.env.VRS_AI_CALLBACK_URL;
+            if (!callbackUrl && process.env.VRS_EXPRESS_PUBLIC_URL) {
+              try {
+                callbackUrl = new URL(
+                  "/api/integrations/vrs-ai/v1/webhook",
+                  process.env.VRS_EXPRESS_PUBLIC_URL,
+                ).toString();
+              } catch {
+                callbackUrl = undefined;
+              }
             }
-          }
-          if (!aiBaseUrl || !aiApiKey || !aiWebhookSecret || !callbackUrl) {
-            return res.status(503).json({
-              error:
-                "VRS AI bridge is not configured. Set VRS_AI_BASE_URL, VRS_AI_API_KEY, VRS_AI_WEBHOOK_SECRET, and VRS_AI_CALLBACK_URL (or VRS_EXPRESS_PUBLIC_URL).",
-              code: "VRS_AI_NOT_CONFIGURED",
+            if (!baseUrl || !apiKey || !callbackSecret || !callbackUrl) {
+              return undefined;
+            }
+            return { baseUrl, apiKey, callbackUrl, callbackSecret };
+          },
+          createClient: ({ baseUrl, apiKey, callbackUrl, callbackSecret }) => ({
+            authorize: ({ payload }) =>
+              sendVrsAuthorizeRequest({
+                baseUrl,
+                apiKey,
+                callbackUrl,
+                callbackSecret,
+                payload,
+              }),
+          }),
+          resolveEnrichment: async () => {
+            const technicianUser = await storage.getUser(
+              submission.technicianId,
+            );
+            return buildVrsAuthorizeEnrichmentCandidates({
+              submissionPhone: submission.phone,
+              technicianName: technicianUser?.name,
+              submissionPhotos: submission.photos,
             });
-          }
-
-          const technicianUser = await storage.getUser(
-            submission.technicianId,
-          );
-          const enrichment = buildVrsAuthorizeEnrichmentCandidates({
-            submissionPhone: submission.phone,
-            technicianName: technicianUser?.name,
-            submissionPhotos: submission.photos,
+          },
+          dispatch: dispatchVrsAiForSubmission,
+        });
+        if (bridgeDecision.kind === "http_error") {
+          return res.status(bridgeDecision.status).json({
+            error: bridgeDecision.message,
+            code: bridgeDecision.code,
           });
-
-          const dispatch = await dispatchVrsAiForSubmission({
-            submissionId: id,
-            store: vrsBridgeStore,
-            callbackUrl,
-            callbackSecret: aiWebhookSecret,
-            enrichment,
-            client: {
-              authorize: ({ payload }) =>
-                sendVrsAuthorizeRequest({
-                  baseUrl: aiBaseUrl,
-                  apiKey: aiApiKey,
-                  callbackUrl,
-                  callbackSecret: aiWebhookSecret,
-                  payload,
-                }),
-            },
-          });
-          if (dispatch.kind === "busy") {
-            return res.status(409).json({
-              error:
-                "This ticket is already being sent to VRS AI. Wait a moment and refresh.",
-              code: "VRS_AI_DISPATCH_IN_PROGRESS",
-            });
-          }
-          if (dispatch.kind === "failed") {
-            return res.status(dispatch.status === 429 ? 429 : 502).json({
-              error: dispatch.message,
-              code: "VRS_AI_DISPATCH_FAILED",
-            });
-          }
         }
       }
 

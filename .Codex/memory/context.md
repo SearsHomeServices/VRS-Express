@@ -1,9 +1,22 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:08
+Updated: 2026-08-11 19:17
 
 ## Current Session
 
+- Completed Task 4 test-first. The Stage 1 bridge helper performs the durable
+  bridge-row lookup before reading VRS AI configuration, constructing a
+  client, resolving enrichment, or dispatching. Manual/PWA tickets return
+  `not_applicable` with none of those bridge-only operations.
+- Missing configuration, busy dispatch, rate limiting, and other dispatch
+  failures return the existing 503/409/429/502 error contracts before the
+  legacy Stage 1 update/SMS path. Accepted and already-dispatched results fall
+  through to the byte-equivalent legacy block exactly once.
+- Task 4 verification: 8/8 boundary tests, 105/105 focused bridge tests, and
+  the production build pass. `npm run check` remains at the known 56 raw
+  diagnostics with zero Task 4 diagnostics. No schema, seed, startup,
+  database, remote, configuration, sync, deployment, or publication action
+  ran.
 - Completed Task 3 test-first. V8 wire `tech_phone: "N/A"` and blank rationale
   now receive bridge-only operational fallbacks without mutating durable JSON.
   Review projection retains every V8 business field and removes both callback

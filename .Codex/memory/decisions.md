@@ -1,9 +1,14 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:08
+Updated: 2026-08-11 19:17
 
 ## Decisions
 
+- [CX] 2026-08-11 - Keep Stage 1 mutation and SMS in the existing route block
+  and extract only the bridge decision. That decision must load the bridge row
+  first, lazily resolve configuration/client/enrichment, dispatch through the
+  existing queue, and return bounded HTTP errors; `not_applicable`, accepted,
+  and already-dispatched outcomes preserve the legacy fall-through.
 - [CX] 2026-08-11 - Route wiring for V8 operational values must consume the
   same focused pure projections covered by tests: one projects sanitized
   intake JSON plus the normal ticket body/phone, and one projects Stage 1
