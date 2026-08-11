@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:18 — Corrected the design to preserve V5 alongside V8 and define the DEV-only two-role integration test.
+> **Last Touched:** Codex — 2026-08-11 18:31 — Recorded the test-first V5/V8 implementation plan and isolated-worktree rollout gates.
 
 ## Current State
 - Local `main` was fast-forwarded to current GitHub `origin/main` at
@@ -17,6 +17,9 @@
 - No V8 runtime code, schema operation, push, Replit sync, deployment, or
   publication has occurred yet. The prior live/published status below is a
   2026-07-29 snapshot and was not revalidated in this design step.
+- The executable plan is
+  `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md`; runtime
+  changes will use ignored worktree `.worktrees/vrs-v5-v8-dev-integration`.
 - Read-only reconciliation found the clean Replit publish source at `972409d`,
   six commits ahead of GitHub `1433f43`. Local V8 design work is now rebased on
   `972409d`; no Replit file or live configuration was changed.
@@ -53,6 +56,10 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Execute in an isolated
+  `codex/vrs-v5-v8-dev-integration` worktree and require local regression,
+  final review, read-only Replit reconciliation, and an explicit rollout
+  checkpoint before source sync, config changes, or publication.
 - [CX] 2026-08-11 - Supersede the 2026-08-10 single-version conclusion. Keep
   strict V5 and add strict V8 on the same endpoint, infer the version from the
   stored strict payload, and never up-convert V5.

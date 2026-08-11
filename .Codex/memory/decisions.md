@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 18:18
+Updated: 2026-08-11 18:31
 
 ## Decisions
 
@@ -71,3 +71,7 @@ Updated: 2026-08-11 18:18
   Express ticket, and Express sends the same-version request to VRS AI DEV.
   Shared source does not permit use of the production database or publication
   without separate evidence and approval.
+- [CX] 2026-08-11 - Implement runtime changes on an isolated
+  `codex/vrs-v5-v8-dev-integration` worktree. Require focused/full regression,
+  build, normalized type-diagnostic, final review, and read-only Replit
+  reconciliation evidence before any source transfer or configuration change.

@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 18:18
+Updated: 2026-08-11 18:31
 
 ## Done
 
@@ -13,6 +13,8 @@ Updated: 2026-08-11 18:18
   meeting: V5 remains Tech Hub-compatible while V8 is the complete SASHA
   contract; both must coexist.
 - [x] Corrected and approved the dual V5/V8 bridge and DEV test design.
+- [x] Wrote the task-by-task test-first implementation/verification plan and
+  prepared ignored `.worktrees/` isolation.
 - [x] Fetched the clean Replit publish source at `972409d`, confirmed it is a
   six-commit fast-forward of GitHub, and rebased the local design onto it.
 - [x] Captured the pre-change production baseline: root/health healthy, 32/32

@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Planned — VRS V5/V8 development integration (2026-08-11)
+- **Execution plan recorded.** Added the test-first implementation and DEV
+  rollout plan at
+  `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md`, including
+  strict version selection, manual-workflow isolation, retry safety, document
+  generation, regression evidence, Replit reconciliation, and explicit
+  pre-sync/pre-publication gates.
 - **V5 and V8 coexist.** Corrected the earlier replacement assumption after
   the integration meeting. The existing strict V5 Tech Hub-compatible payload
   remains accepted; the complete strict V8 SASHA payload is added on the same
