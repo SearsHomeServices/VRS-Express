@@ -1,14 +1,21 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:17
+Updated: 2026-08-11 19:26
 
 ## Done
 
+- [x] Closed the Task 4 review gap by removing the test-owned continuation
+  wrapper, dynamically testing the production route-gate adapter, and proving
+  its actual `approve_submission` call/early-return ordering before all Stage
+  1 mutation in `server/routes.ts`.
+- [x] Verified the Task 4 correction with 12/12 boundary tests, 109/109 focused
+  bridge tests, a passing production build, and the unchanged 56-diagnostic
+  baseline with zero Task 4 diagnostics.
 - [x] Locked bridge-backed Stage 1 dispatch behind the human approval
   boundary. Manual/PWA tickets now stop after the first bridge lookup without
   configuration/client/dispatch work, and bridge errors cannot reach the
   unchanged update/SMS block.
-- [x] Verified Task 4 with 8/8 boundary tests, 105/105 focused bridge tests, a
+- [x] Verified initial Task 4 with 8/8 boundary tests, 105/105 focused bridge tests, a
   passing production build, and the unchanged 56-diagnostic TypeScript
   baseline with zero Task 4 diagnostics.
 - [x] Preserved V5/V8 through durable bridge JSON and outbound dispatch;

@@ -107,3 +107,21 @@ export async function decideVrsStageOneBridge(
 
   return { kind: "accepted", dispatch };
 }
+
+type VrsStageOneHttpError = Extract<
+  VrsStageOneBridgeResult,
+  { kind: "http_error" }
+>;
+
+export async function runVrsStageOneRouteGate(
+  options: VrsStageOneBridgeOptions,
+  respond: (
+    error: VrsStageOneHttpError,
+  ) => unknown | Promise<unknown>,
+): Promise<"continue" | "responded"> {
+  const result = await decideVrsStageOneBridge(options);
+  if (result.kind !== "http_error") return "continue";
+
+  await respond(result);
+  return "responded";
+}

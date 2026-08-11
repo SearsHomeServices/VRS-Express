@@ -1,9 +1,21 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:17
+Updated: 2026-08-11 19:26
 
 ## Current Session
 
+- Closed the Task 4 review gap test-first. The original test-owned
+  continuation wrapper did not prove route consumption, so it was removed.
+  `processSubmissionHandler` now consumes a small production route-gate
+  adapter whose stop/continue behavior is dynamically tested.
+- A bounded regression reads only the real process-handler region and proves
+  the gate remains inside `approve_submission`, the responded branch returns
+  before `updateData`, and Stage 1 approval remains after both. The legacy
+  update/SMS suffix remains byte-equivalent.
+- Review-fix verification: 12/12 boundary tests, 109/109 focused bridge tests,
+  and the production build pass; TypeScript remains at 56 raw diagnostics
+  with zero Task 4 diagnostics. No schema, seed, startup, database, remote,
+  configuration, sync, deployment, or publication action ran.
 - Completed Task 4 test-first. The Stage 1 bridge helper performs the durable
   bridge-row lookup before reading VRS AI configuration, constructing a
   client, resolving enrichment, or dispatching. Manual/PWA tickets return
@@ -12,7 +24,7 @@ Updated: 2026-08-11 19:17
   failures return the existing 503/409/429/502 error contracts before the
   legacy Stage 1 update/SMS path. Accepted and already-dispatched results fall
   through to the byte-equivalent legacy block exactly once.
-- Task 4 verification: 8/8 boundary tests, 105/105 focused bridge tests, and
+- Initial Task 4 verification: 8/8 boundary tests, 105/105 focused bridge tests, and
   the production build pass. `npm run check` remains at the known 56 raw
   diagnostics with zero Task 4 diagnostics. No schema, seed, startup,
   database, remote, configuration, sync, deployment, or publication action

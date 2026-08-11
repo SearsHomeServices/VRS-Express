@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:17 — Locked bridge-backed Stage 1 dispatch ahead of the unchanged human approval mutation.
+> **Last Touched:** Codex — 2026-08-11 19:26 — Closed the Task 4 review gap with production route-gate ordering coverage.
 
 ## Current State
 - Tasks 1-4 of the V5/V8 integration are implemented in the isolated
@@ -16,7 +16,12 @@
   dispatch. Bridge configuration/dispatch failures return before the existing
   Stage 1 update/SMS block, while accepted and already-dispatched calls fall
   through to that legacy block exactly once.
-- Task 4 verification is 8/8 boundary tests, 105/105 focused bridge tests, a
+- Task 4 review coverage now exercises the production route-gate adapter used
+  by `processSubmissionHandler` and checks the real route structure: the gate
+  is inside `approve_submission`, its responded branch returns early, and
+  `updateData` plus Stage 1 approval remain afterward. The test-owned
+  continuation wrapper was removed.
+- Task 4 verification is 12/12 boundary tests, 109/109 focused bridge tests, a
   passing production build, and the unchanged 56-raw TypeScript baseline with
   zero Task 4 diagnostics. No schema, seed, startup, database, remote,
   configuration, sync, deployment, or publication action ran.
@@ -102,6 +107,11 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Route-order safety needs proof at the production consumer,
+  not only at the isolated decision helper. Use a small route-gate adapter for
+  dynamic stop/continue behavior plus a bounded structural assertion on the
+  actual process handler; keep the byte-equivalent legacy mutation/SMS block
+  outside and after that gate.
 - [CX] 2026-08-11 - Make the durable bridge-row lookup the first Stage 1
   integration operation. Resolve configuration, construct the outbound
   client, and load enrichment only after that row exists; map bridge errors to
@@ -209,6 +219,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - A test-owned continuation wrapper can prove its own branch
+  logic while missing a deleted or reordered production route guard. Coverage
+  of ordering invariants must include the actual route consumer or another
+  production seam that the route demonstrably uses.
 - [CX] 2026-08-11 - Passing a preloaded bridge row through a narrow dispatcher
   store adapter avoids a second database lookup while preserving dispatch's
   existing store contract. Without the outer lookup, manual tickets can read

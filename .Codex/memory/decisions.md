@@ -1,9 +1,14 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:17
+Updated: 2026-08-11 19:26
 
 ## Decisions
 
+- [CX] 2026-08-11 - Prove Stage 1 ordering through a production adapter that
+  `processSubmissionHandler` actually consumes. Pair dynamic stop/continue
+  tests with one bounded source-structure regression so deleting the call,
+  deleting its early return, or moving legacy mutation ahead of it fails.
+  Do not move or edit the legacy Stage 1 update/SMS block.
 - [CX] 2026-08-11 - Keep Stage 1 mutation and SMS in the existing route block
   and extract only the bridge decision. That decision must load the bridge row
   first, lazily resolve configuration/client/enrichment, dispatch through the

@@ -43,7 +43,7 @@ import {
   decryptVrsCallbackSecret,
   encryptVrsCallbackSecret,
 } from "./vrs-sasha-secret";
-import { decideVrsStageOneBridge } from "./vrs-stage-one-bridge";
+import { runVrsStageOneRouteGate } from "./vrs-stage-one-bridge";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -2858,7 +2858,7 @@ export async function registerRoutes(
       // flow. For a bridge ticket, do not mark Stage 1 approved or notify the
       // technician until VRS AI has durably accepted the outbound request.
       if (action === "approve_submission") {
-        const bridgeDecision = await decideVrsStageOneBridge({
+        const stageOneGate = await runVrsStageOneRouteGate({
           submissionId: id,
           store: vrsBridgeStore,
           resolveConfig: () => {
@@ -2902,12 +2902,14 @@ export async function registerRoutes(
             });
           },
           dispatch: dispatchVrsAiForSubmission,
-        });
-        if (bridgeDecision.kind === "http_error") {
-          return res.status(bridgeDecision.status).json({
-            error: bridgeDecision.message,
-            code: bridgeDecision.code,
+        }, (bridgeError) => {
+          res.status(bridgeError.status).json({
+            error: bridgeError.message,
+            code: bridgeError.code,
           });
+        });
+        if (stageOneGate === "responded") {
+          return;
         }
       }
 

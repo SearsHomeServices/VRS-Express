@@ -15,11 +15,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   errors before the unchanged legacy Stage 1 update/SMS block. Only accepted
   or already-dispatched calls fall through; dispatch still occurs before the
   Stage 1 mutation.
-- Added 8 focused boundary tests to the bridge suite. The boundary passes 8/8,
-  the focused suite passes 105/105, the production build passes, and
+- Added focused boundary tests to the bridge suite. The boundary passes 12/12,
+  the focused suite passes 109/109, the production build passes, and
   TypeScript remains at the known 56-diagnostic baseline with zero Task 4
   diagnostics. No schema, seed, startup, database, configuration, remote,
   sync, deployment, or publication action ran.
+- **Review correction.** Replaced the test-only Stage 1 continuation wrapper
+  with a production route-gate adapter consumed by `processSubmissionHandler`.
+  Dynamic tests prove its stop/continue behavior, while a bounded route-source
+  regression proves the gate call and early return stay inside
+  `approve_submission` and ahead of all legacy Stage 1 mutation.
 
 ### Changed — Safe V8 mapping and same-version dispatch (2026-08-11)
 - V8 `tech_phone: "N/A"` now uses the resolved technician phone only for the

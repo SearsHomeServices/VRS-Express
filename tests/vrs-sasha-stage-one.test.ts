@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   decideVrsStageOneBridge,
+  runVrsStageOneRouteGate,
   type VrsStageOneBridgeOptions,
-  type VrsStageOneBridgeResult,
 } from "../server/vrs-stage-one-bridge";
 import type { DispatchVrsAiResult, VrsBridgeRecord } from "../server/vrs-sasha-queue";
 
@@ -76,17 +77,6 @@ function makeBoundary(overrides: {
   };
 }
 
-async function runStageOneBoundary(
-  options: VrsStageOneBridgeOptions,
-  legacyStageOne: () => Promise<void>,
-): Promise<VrsStageOneBridgeResult> {
-  const result = await decideVrsStageOneBridge(options);
-  if (result.kind === "not_applicable" || result.kind === "accepted") {
-    await legacyStageOne();
-  }
-  return result;
-}
-
 describe("VRS Stage 1 bridge boundary", () => {
   it("returns not_applicable before reading config or constructing a client for a manual ticket", async () => {
     const boundary = makeBoundary({});
@@ -101,14 +91,10 @@ describe("VRS Stage 1 bridge boundary", () => {
     expect(boundary.client.authorize).not.toHaveBeenCalled();
   });
 
-  it("returns a 503 without legacy Stage 1 mutation when bridge configuration is missing", async () => {
+  it("returns a 503 when bridge configuration is missing", async () => {
     const boundary = makeBoundary({ bridge: bridgeRecord });
-    const legacyStageOne = vi.fn();
 
-    const result = await runStageOneBoundary(
-      boundary.options,
-      legacyStageOne,
-    );
+    const result = await decideVrsStageOneBridge(boundary.options);
 
     expect(result).toEqual({
       kind: "http_error",
@@ -120,24 +106,16 @@ describe("VRS Stage 1 bridge boundary", () => {
     expect(boundary.events).toEqual(["bridge_lookup", "config"]);
     expect(boundary.createClient).not.toHaveBeenCalled();
     expect(boundary.dispatch).not.toHaveBeenCalled();
-    expect(legacyStageOne).not.toHaveBeenCalled();
   });
 
-  it("dispatches before allowing the legacy Stage 1 update and SMS exactly once", async () => {
+  it("finishes dispatch before returning an accepted decision", async () => {
     const events: string[] = [];
     const boundary = makeBoundary({
       bridge: bridgeRecord,
       config: configuredBridge,
       events,
     });
-    const legacyStageOne = vi.fn(async () => {
-      events.push("legacy_stage_one_update_and_sms");
-    });
-
-    const result = await runStageOneBoundary(
-      boundary.options,
-      legacyStageOne,
-    );
+    const result = await decideVrsStageOneBridge(boundary.options);
 
     expect(result).toEqual({
       kind: "accepted",
@@ -153,12 +131,10 @@ describe("VRS Stage 1 bridge boundary", () => {
       "config",
       "client",
       "dispatch",
-      "legacy_stage_one_update_and_sms",
     ]);
-    expect(legacyStageOne).toHaveBeenCalledTimes(1);
   });
 
-  it("allows an already-dispatched bridge through the legacy Stage 1 mutation exactly once", async () => {
+  it("returns accepted for an already-dispatched bridge", async () => {
     const boundary = makeBoundary({
       bridge: bridgeRecord,
       config: configuredBridge,
@@ -168,12 +144,7 @@ describe("VRS Stage 1 bridge boundary", () => {
         state: "queued",
       },
     });
-    const legacyStageOne = vi.fn(async () => undefined);
-
-    const result = await runStageOneBoundary(
-      boundary.options,
-      legacyStageOne,
-    );
+    const result = await decideVrsStageOneBridge(boundary.options);
 
     expect(result).toEqual({
       kind: "accepted",
@@ -183,21 +154,15 @@ describe("VRS Stage 1 bridge boundary", () => {
         state: "queued",
       },
     });
-    expect(legacyStageOne).toHaveBeenCalledTimes(1);
   });
 
-  it("maps a busy dispatch to 409 and leaves Stage 1 unapproved", async () => {
+  it("maps a busy dispatch to 409", async () => {
     const boundary = makeBoundary({
       bridge: bridgeRecord,
       config: configuredBridge,
       dispatchResult: { kind: "busy" },
     });
-    const legacyStageOne = vi.fn();
-
-    const result = await runStageOneBoundary(
-      boundary.options,
-      legacyStageOne,
-    );
+    const result = await decideVrsStageOneBridge(boundary.options);
 
     expect(result).toEqual({
       kind: "http_error",
@@ -206,7 +171,6 @@ describe("VRS Stage 1 bridge boundary", () => {
       message:
         "This ticket is already being sent to VRS AI. Wait a moment and refresh.",
     });
-    expect(legacyStageOne).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -214,7 +178,7 @@ describe("VRS Stage 1 bridge boundary", () => {
     [503, 502],
     [undefined, 502],
   ] as const)(
-    "maps failed dispatch status %s to HTTP %s and leaves Stage 1 unapproved",
+    "maps failed dispatch status %s to HTTP %s",
     async (dispatchStatus, expectedStatus) => {
       const boundary = makeBoundary({
         bridge: bridgeRecord,
@@ -225,12 +189,7 @@ describe("VRS Stage 1 bridge boundary", () => {
           message: "VRS AI dispatch failed",
         },
       });
-      const legacyStageOne = vi.fn();
-
-      const result = await runStageOneBoundary(
-        boundary.options,
-        legacyStageOne,
-      );
+      const result = await decideVrsStageOneBridge(boundary.options);
 
       expect(result).toEqual({
         kind: "http_error",
@@ -238,7 +197,87 @@ describe("VRS Stage 1 bridge boundary", () => {
         code: "VRS_AI_DISPATCH_FAILED",
         message: "VRS AI dispatch failed",
       });
-      expect(legacyStageOne).not.toHaveBeenCalled();
     },
   );
+
+  it("forwards an HTTP error through the production route gate and stops continuation", async () => {
+    const boundary = makeBoundary({ bridge: bridgeRecord });
+    const respond = vi.fn();
+
+    const result = await runVrsStageOneRouteGate(
+      boundary.options,
+      respond,
+    );
+
+    expect(result).toBe("responded");
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith({
+      kind: "http_error",
+      status: 503,
+      code: "VRS_AI_NOT_CONFIGURED",
+      message:
+        "VRS AI bridge is not configured. Set VRS_AI_BASE_URL, VRS_AI_API_KEY, VRS_AI_WEBHOOK_SECRET, and VRS_AI_CALLBACK_URL (or VRS_EXPRESS_PUBLIC_URL).",
+    });
+  });
+
+  it.each([
+    ["manual", makeBoundary({})],
+    [
+      "accepted",
+      makeBoundary({ bridge: bridgeRecord, config: configuredBridge }),
+    ],
+  ])("lets the %s outcome continue through the production route gate", async (_kind, boundary) => {
+    const respond = vi.fn();
+
+    const result = await runVrsStageOneRouteGate(
+      boundary.options,
+      respond,
+    );
+
+    expect(result).toBe("continue");
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("wires the production route gate and early return before all Stage 1 mutation", () => {
+    const source = readFileSync(
+      new URL("../server/routes.ts", import.meta.url),
+      "utf8",
+    );
+    const handlerStart = source.indexOf(
+      "const processSubmissionHandler = async",
+    );
+    const handlerEnd = source.indexOf(
+      'app.patch("/api/submissions/:id/process"',
+      handlerStart,
+    );
+    const handler = source.slice(handlerStart, handlerEnd);
+
+    const approvalGateStart = handler.indexOf(
+      'if (action === "approve_submission") {',
+    );
+    const gateIndex = handler.indexOf("await runVrsStageOneRouteGate(");
+    const earlyReturnIndex = handler.indexOf(
+      'if (stageOneGate === "responded")',
+    );
+    const updateDataIndex = handler.indexOf(
+      "const updateData: Record<string, unknown>",
+    );
+    const stageOneApprovalIndex = handler.indexOf(
+      'updateData.stage1Status = "approved"',
+    );
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(approvalGateStart).toBeGreaterThanOrEqual(0);
+    expect(gateIndex).toBeGreaterThan(approvalGateStart);
+    expect(handler.slice(approvalGateStart, gateIndex)).toMatch(
+      /if \(action === "approve_submission"\) \{\s*const stageOneGate = $/,
+    );
+    expect(earlyReturnIndex).toBeGreaterThan(gateIndex);
+    expect(handler.slice(earlyReturnIndex, updateDataIndex).trimEnd()).toMatch(
+      /if \(stageOneGate === "responded"\) \{\s*return;\s*\}\s*\}$/,
+    );
+    expect(updateDataIndex).toBeGreaterThan(earlyReturnIndex);
+    expect(stageOneApprovalIndex).toBeGreaterThan(updateDataIndex);
+  });
 });
