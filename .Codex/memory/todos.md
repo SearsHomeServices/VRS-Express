@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-10 23:03
+Updated: 2026-08-11 18:18
 
 ## Done
 
@@ -9,9 +9,10 @@ Updated: 2026-08-10 23:03
 - [x] Compared API Contract V8 with the implemented V5 bridge and identified
   the V6/V7/V8 fields, always-present placeholders, UI gaps, partner mismatch,
   and retryable-terminal retry gap.
-- [x] Confirmed V8 is the authoritative contract that should have been
-  implemented originally.
-- [x] Approved and documented the V8 in-place retrofit design.
+- [x] Corrected the contract ownership after the 2026-08-11 integration
+  meeting: V5 remains Tech Hub-compatible while V8 is the complete SASHA
+  contract; both must coexist.
+- [x] Corrected and approved the dual V5/V8 bridge and DEV test design.
 - [x] Fetched the clean Replit publish source at `972409d`, confirmed it is a
   six-commit fast-forward of GitHub, and rebased the local design onto it.
 - [x] Captured the pre-change production baseline: root/health healthy, 32/32
@@ -87,22 +88,26 @@ Updated: 2026-08-10 23:03
 
 ## Open
 
-- [ ] Implement the approved V8 contract changes test-first on the existing
-  `POST /vrs/authorize` bridge.
+- [ ] Implement strict V5/V8 union parsing test-first on the existing
+  `POST /vrs/authorize` bridge while preserving current V5 behavior.
+- [ ] Preserve the accepted contract version through storage and dispatch,
+  and fill only eligible existing V8 placeholders from authoritative Express
+  values without adding keys.
 - [ ] Update the Stage 1 review panel to show all decision-relevant V8 fields
   and appliance photos.
 - [ ] Implement the same-ticket, new-call-ID retry path after a retryable
   terminal failure, including late-callback deduplication.
-- [ ] Replace V5 handoff/architecture/OpenAPI/examples with V8 and regenerate
-  the platform-only DOCX/PDF/ZIP package.
+- [ ] Update the handoff/architecture/OpenAPI/examples for both V5 and V8 and
+  regenerate the platform-only DOCX/PDF/ZIP package.
 - [ ] Run focused tests, build, TypeScript-baseline comparison, OpenAPI/example
   validation, metadata/text scans, and visual document review.
 - [ ] Prove every change in shared route/UI files is bridge-guarded and run the
   existing technician, agent, manual AHS, NLA, admin, media, WebSocket, and SMS
   workflows in a non-production environment before calling V8 publish-ready.
 - [ ] Record the rollback commit and post-change production smoke checklist.
-- [ ] Obtain explicit approval before pushing, syncing Replit, applying any
-  development configuration, or publishing.
+- [ ] Obtain explicit approval before source sync, development configuration,
+  or production publication; never use production credentials/database for
+  the VRS AI simulator test.
 - [ ] Package the secure out-of-band exchange for the staging API key, callback
   secret, and actual Express staging callback origin; do not place secrets in
   Git or the handoff documents.

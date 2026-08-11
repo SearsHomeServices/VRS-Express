@@ -6,22 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Planned — VRS API Contract V8 retrofit (2026-08-10)
-- **V8 is authoritative.** Approved the in-place retrofit of the existing
-  V5 bridge to the complete V8 authorize contract. The same
-  `POST /vrs/authorize` route and VRS Express Stage 1 human gate remain; V8
-  fields, placeholders, review context, forwarding, and retryable-terminal
-  retry behavior replace the earlier V5 assumptions.
-- **Design locked.** Added
+### Planned — VRS V5/V8 development integration (2026-08-11)
+- **V5 and V8 coexist.** Corrected the earlier replacement assumption after
+  the integration meeting. The existing strict V5 Tech Hub-compatible payload
+  remains accepted; the complete strict V8 SASHA payload is added on the same
+  `POST /vrs/authorize` route and each accepted request keeps its version
+  through VRS Express Stage 1 review and VRS AI dispatch.
+- **Development test flow.** VRS AI first acts as a SASHA simulator by sending
+  a V8 dummy payload to VRS Express DEV, then receives that same-version
+  payload from VRS Express DEV after human approval. Development and
+  production use separate database/configuration bindings; this design does
+  not publish or alter production.
+- **Design corrected.** Updated
   `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`
-  with validation, mapping, review UI, callback, retry, test, documentation,
-  and rollout boundaries. No runtime code, schema, deployment, or production
-  state changed in this design step.
+  with strict dual-schema parsing, same-version dispatch, permitted
+  placeholder-only enrichment, TINA/signed-photo pass-through, review UI,
+  V8 retry, test, documentation, and rollout boundaries. No runtime code,
+  schema, deployment, or production state changed in this correction.
 - **Production preservation gate.** Rebased the design on the clean Replit
   publish source at `972409d` after discovering it was six commits ahead of
   GitHub. Captured the live HTTP/health response, 32/32 bridge tests, passing
   production build, full-test environment baseline, and 56-raw/26-normalized
-  TypeScript baseline. V8 cannot be marked publish-ready with any regression,
+  TypeScript baseline. The integration cannot be marked publish-ready with any regression,
   schema/startup migration, unguarded manual-flow change, missing staged
   workflow evidence, or unapproved sync/publication.
 

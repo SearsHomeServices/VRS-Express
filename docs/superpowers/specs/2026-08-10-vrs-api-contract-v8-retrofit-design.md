@@ -1,364 +1,378 @@
-# VRS API Contract V8 Retrofit Design
+# VRS Express V5/V8 Bridge and Development Test Design
 
-**Status:** Approved for implementation on 2026-08-10
+**Status:** Corrected after the 2026-08-11 integration meeting; approved for test-first implementation
 
-**Authoritative input:** `vrs-api-contract-v8.md` received 2026-08-10
+**Contract inputs:** SASHA Contract V8 received 2026-08-10 and the already-implemented V5 bridge contract
 
-**Supersedes:** The V5 wire-contract assumptions in the existing bridge
+**Operational source:** “VRS Express and VRS AI integration testing” meeting, 2026-08-11
 
 ## Decision
 
-V8 is the contract VRS Express should have implemented originally. It is not a
-parallel feature, optional extension, or separate endpoint. The existing V5
-bridge will be retrofitted in place so `POST /vrs/authorize` accepts and
-forwards the V8 request shape while preserving the established VRS Express
-human-review workflow.
+V5 and V8 must coexist. V8 does not replace the functioning V5 path:
 
-The V8 document is authoritative for wire fields, placeholder behavior,
-responses, callback events, idempotency, and retry semantics. The existing
-VRS Express architecture remains authoritative for system topology:
+- V5 remains the accepted Tech Hub-compatible contract.
+- V8 is the complete SASHA contract, carrying forward V5 plus the V6, V7,
+  and V8 additions.
+- Both use the existing authenticated `POST /vrs/authorize` route.
+- VRS Express records which strict schema accepted each request and forwards
+  that same contract version to VRS AI after human approval.
+- No database schema change is required. The two payload shapes are
+  distinguishable from the durable JSON request payload because every V8-only
+  field is required in V8 and forbidden by V5's strict schema.
+
+The integration is a bridge, not a direct SASHA-to-AI call:
 
 ```text
-SASHA / Tech Hub
-    -> POST /vrs/authorize
+Normal production ownership
+
+SASHA or Tech Hub
+    -> POST /vrs/authorize on VRS Express
 VRS Express
     -> normal pending authorization ticket
-    -> human Stage 1 approval
-    -> POST /vrs/authorize
+    -> human Stage 1 review and approval
+    -> POST /vrs/authorize on VRS AI
 VRS AI
-    -> signed result webhook
+    -> AHS test/phone workflow
+    -> signed result webhook to VRS Express
 VRS Express
-    -> existing ticket/SMS effects
-    -> signed callback using the original Express call ID
-SASHA / Tech Hub
+    -> existing result, SMS, and signed upstream callback behavior
 ```
 
-The contract's direct SASHA-to-VRS diagram is therefore implemented as two
-wire-compatible hops around the required VRS Express approval boundary. VRS
-Express changes only callback ownership and credentials for the VRS AI hop;
-it does not reinterpret or discard V8 business fields.
+For the development integration test, VRS AI first acts as a SASHA simulator
+and later as the real VRS AI receiver. Those are two roles in one test, not a
+request loop:
+
+```text
+VRS AI SASHA simulator
+    -> V8 dummy request to VRS Express DEV
+VRS Express DEV + development database
+    -> pending ticket and human approval
+    -> same V8 payload, with permitted enrichment, to VRS AI DEV
+VRS AI DEV
+    -> verifies receipt and continues its AHS test workflow
+```
+
+Production stays on its current URL, database, secrets, and published build
+until the development evidence is complete and publication is separately
+approved.
 
 ## Goals
 
-- Make the existing endpoint conform to the complete V8 request contract.
-- Preserve every V8 business field in durable bridge storage and forward it
-  to VRS AI after Stage 1 approval.
-- Make the V8 context visible to the reviewing VRS Express agent.
-- Implement the contract's new-request behavior after a retryable terminal
-  failure without creating a duplicate Express ticket.
-- Keep callbacks, HMAC validation, idempotency, and normal ticket/SMS effects
-  compatible with the established bridge.
-- Replace V5-oriented handoff material with a single V8 implementation package
-  that names only VRS Express and VRS AI.
-- Avoid changes to manual technician submissions, First American, NLA,
-  infestation, replacement-review, and unrelated authorization workflows.
+- Preserve every request currently accepted by the V5 bridge.
+- Accept the complete strict V8 request, including documented gap values.
+- Preserve the incoming version and every valid business field through
+  intake, review, storage, and outbound dispatch.
+- Let VRS Express fill an existing placeholder only when it has an
+  authoritative value for that exact field.
+- Expose the complete V8 decision context, including TINA/signed photo URLs,
+  to the human reviewer.
+- Support V8's new-request behavior after a retryable terminal failure without
+  creating a second Express ticket.
+- Prove the integration in the development runtime and database before any
+  production publication.
+- Keep platform-facing handoff material limited to VRS Express and VRS AI.
 
 ## Non-goals
 
-- VRS Express will not fetch SIS, Tina, HomeSpy, or Tech Assist enrichment.
-  V8 assigns that work to the SASHA BFF.
-- VRS Express will not generate missing wire values. It validates the V8
-  placeholders supplied by SASHA and preserves them.
-- VRS Express will not add Phase 2 `dialing`, `connected`, or
-  `awaiting_decision` callbacks.
-- No production database command, deployment, secret rotation, or publication
-  is part of implementation verification.
-- No separate `/v8` route or V5/V8 mode switch will be introduced.
+- Do not remove, loosen, or reinterpret V5.
+- Do not add `/v5`, `/v8`, or environment-specific route aliases.
+- Do not make VRS Express fetch SIS, TINA, HomeSpy, or Tech Assist data that the
+  sender owns.
+- Do not invent business values, translate one field into an unrelated field,
+  add `cta_no`, or add any other outbound key.
+- Do not turn an internal `/objects/` path into a purported TINA URL.
+- Do not change callback event schemas or add Phase 2 call-state events.
+- Do not change manual technician, First American, NLA, infestation,
+  replacement-review, admin, upload, WebSocket, or SMS behavior.
+- Do not run a production database command, change a production secret, or
+  publish production as part of implementation.
 
-## Production Non-Regression Contract
+## Versioned Authorize Boundary
 
-Publishing V8 must not change the behavior of the currently functioning VRS
-Express application outside bridge-backed authorization tickets. This is a
-hard acceptance gate, not a best-effort goal.
+Authentication is evaluated before request validation with the existing
+timing-safe `X-API-Key` comparison. An unauthenticated sender must not learn
+which contract version or fields are valid.
 
-### Production-source baseline
+After authentication, contract intent is selected from the body and then only
+that strict schema is used:
 
-The Replit workspace is the publish source. Before implementation, its clean
-`main` at `972409d` was fetched read-only and made the parent of this design;
-the desktop copy is not being treated as authoritative over newer Replit work.
-The pre-change baseline captured on 2026-08-10 is:
+1. If any V8-only key is present (`appliance_color`, `contract_number`,
+   `purchase_year`, or `symptom`), validate the complete strict V8 schema.
+2. Otherwise validate the unchanged strict V5 schema.
+3. Return the existing bounded `400 VALIDATION_ERROR` when the selected schema
+   does not match.
 
-- published root: HTTP `200`, title `VRS Express`;
-- published `/api/healthz`: `ok: true`, including a successful database check;
-- focused bridge suite: 32 of 32 passing;
-- production build: passing;
-- all locally runnable Vitest tests: 45 passing; the 17 server-backed intake
-  tests skip/fail at setup because this desktop has no app on port 5000 and no
-  PostgreSQL on port 5432, which is the recorded pre-change environment
-  baseline rather than a V8 regression; and
-- TypeScript baseline: 56 raw diagnostics / 26 normalized unique diagnostics.
+This prevents a partial V8 request containing one or more new keys from
+falling through to V5. The contracts do not define a version header or body
+discriminator, so a body omitting every V8-only key is, by definition,
+indistinguishable from V5 and is handled as V5. The version is an internal
+projection only; the existing `202`, `409`, `422`, and error response bodies
+remain unchanged.
 
-Post-change verification must equal or improve these results. Any new test,
-build, runtime, or TypeScript failure blocks publication.
+### V5 preservation
 
-### Isolation rules
+The committed V5 schema and fixtures are a compatibility contract. Existing
+valid V5 payloads, optional V5 fields, partner handling, storage, dashboard
+projection, dispatch shape, callbacks, and errors must retain their current
+observable behavior.
 
-- V8 parsing, storage, dispatch, and retry logic execute only for
-  `POST /vrs/authorize` or a submission with a durable VRS bridge row.
-- A manual/PWA submission with no bridge row must never call VRS AI and must
-  continue through the existing Stage 1 and Stage 2 behavior.
-- New agent-dashboard content renders only when `selectedSubmission.vrsAi`
-  exists. Standard authorization, First American, NLA, infestation,
-  replacement-review, admin, technician, upload, WebSocket, and SMS views keep
-  their current branches.
-- Missing bridge variables continue to fail only the bridge route/action with
-  the existing `503`; they must not prevent application startup or affect
-  normal submissions.
-- Retry rearming requires a bridge row whose current terminal state is exactly
-  `failed` with `retryable: true`. It cannot reset or requeue a manual ticket.
-- No `shared/schema.ts`, startup migration, seed behavior, or production
-  database change is permitted for this retrofit.
-- Shared files such as `server/routes.ts` and the agent dashboard require a
-  focused diff review proving every new branch is guarded by bridge state.
+### V8 schema
 
-### Publish gates
-
-The change is not publish-ready until all of the following are recorded:
-
-1. The final branch still contains every production-source commit through
-   `972409d`, with no dropped or overwritten Replit work.
-2. Existing 32 bridge tests plus the new V8 tests pass.
-3. The production build passes and TypeScript reports no diagnostics beyond
-   the recorded 56 raw / 26 normalized baseline.
-4. The full local test run has no regression from its recorded baseline.
-5. In a non-production environment, the existing technician login/submission,
-   agent claim, manual authorization, two-stage AHS, NLA, admin dashboard,
-   media, WebSocket, and SMS paths pass smoke checks.
-6. The V8 flow passes intake, Stage 1 review, VRS AI dispatch, signed result,
-   SASHA forwarding, and retryable-failure retry end to end.
-7. A rollback target and the exact pre-publish Replit commit are recorded.
-8. Source sync, configuration, and publication each receive explicit approval.
-
-If staging cannot exercise the existing workflows and the V8 flow, the result
-must be reported as not publish-ready rather than inferred safe from unit tests.
-
-## V8 Authorize Schema
-
-The runtime schema remains strict: fields not defined by V8, including
-`cta_no`, are rejected. All keys described as always present by V8 become
-required at the Express boundary.
-
-### Added fields
+V8 carries forward the V5 keys and adds these required fields:
 
 | Field | Accepted value |
 |---|---|
 | `appliance_color` | Non-empty string up to 40 characters, including `"N/A"` |
 | `contract_number` | Non-empty bounded string, including `"N/A"` |
 | `purchase_year` | Positive integer year, `"TBD"`, or `"N/A"`; never `0` |
-| `symptom` | Non-empty bounded string, including `"N/A"` |
+| `symptom` | Non-empty bounded string, including `"N/A"`; never `""` |
 
-### V8 always-present changes
+V8 also changes these carried-forward keys:
 
 | Field | V8 behavior |
 |---|---|
 | `tech_phone` | E.164 or exactly `"N/A"` |
-| `appliance_grade` | `entry`, `mid`, `top`, or `"N/A"` |
-| `partner_id` | Non-empty string or `"N/A"`; no longer optional |
-| `appliance_photos` | Required array, zero to ten URLs |
-| `comments` | Required array, zero to twenty structured comments |
+| `appliance_grade` | Required: `entry`, `mid`, `top`, or `"N/A"` |
+| `partner_id` | Required non-empty string, including `"N/A"` |
+| `appliance_photos` | Required array of zero to ten valid URLs |
+| `comments` | Required array of zero to twenty structured comments |
 
-### Gap-fill compatibility
+V8 intentionally permits documented gap fills:
 
-V8 deliberately sends placeholders instead of blocking upstream. Express must
-accept the documented fallback values:
+- `""` for fields such as `tech_name`, `customer_name`,
+  `parts[].part_function`, and `repair_replace_rationale`;
+- `0` for labor, tax, part price, appliance age, and
+  `parts[].sell_price` where documented;
+- `other` / `repair` for missing location, failure, or recommendation;
+- `N/A`, `TBD`, and empty arrays only in the fields that define them.
 
-- Empty strings where V8 permits them, including `tech_name`,
-  `customer_name`, `part_function`, and `repair_replace_rationale`.
-- Zero for documented numeric gap-fill fields, including labor, tax,
-  appliance age, part price, and `parts[].sell_price`.
-- `other` / `repair` for missing location, failure, or recommendation input.
-- `N/A`, `TBD`, and empty arrays only in the fields defined by V8.
+Unknown keys remain rejected. In particular, `cta_no` is never a wire key.
+Parsing must not trim or otherwise mutate an accepted business payload.
 
-Validation must not trim or otherwise mutate the accepted payload. The exact
-business payload, minus the cleartext callback secret, is stored and later
-forwarded.
+## Intake and Ticket Creation
 
-## Intake and Internal Ticket Mapping
+Both versions continue through the existing intake transaction:
 
-1. Authenticate with the existing timing-safe `X-API-Key` check.
-2. Validate the complete V8 body.
-3. Continue exact SASHA callback URL allowlisting.
-4. Treat `partner_id` as V8 business context, not the old routing enum.
-   Phase 1 accepts the verified AHS labels `ahs`, `american_home_shield`,
-   `American Home Shield`, `Sears Home Warranty`, and the contract-approved
-   `N/A` placeholder. Explicit non-AHS partner values remain rejected so an
-   unsupported workflow cannot be silently processed as AHS.
-5. Resolve `tech_id` against the existing technician directory and district.
-6. Create the normal VRS Express authorization ticket through the shared
+1. Authenticate and parse the versioned payload.
+2. Enforce the exact upstream callback allowlist.
+3. Limit this phone-automation lane to AHS-compatible labels. The V8
+   placeholder `N/A` is accepted like V5's absent optional partner because V8
+   requires that placeholder when upstream identity is unavailable; the
+   dedicated route/API key remains the AHS integration boundary. Explicit
+   non-AHS partner names are rejected with `422`.
+4. Resolve `tech_id` against the existing technician directory and district.
+5. Create the normal pending Express authorization ticket through the shared
    submission handler.
-7. Store all V8 fields in `request_payload`; continue encrypting the original
-   SASHA callback secret separately with AES-256-GCM.
-8. Return `202` with an Express-owned call ID. An active call for the same
-   service order returns the existing `409` response.
+6. Store the full sanitized request JSON and separately encrypt the original
+   callback secret.
+7. Return the existing Express-owned call ID with `202 queued`.
 
-The internal ticket mapper may derive safe display/operational fallbacks but
-must not alter the stored or forwarded V8 payload:
+`202` means the Express review ticket exists. It does not claim that VRS AI
+has accepted the request or called AHS.
 
-- Use the directory technician phone for Express SMS when the wire phone is
-  `N/A`; never send SMS to the literal placeholder.
-- If both sources lack a usable phone, retain the ticket and skip invalid SMS
-  attempts with an explicit diagnostic log.
-- Build the required Express issue description from the first available value
-  among rationale, symptom, failure cause, and a neutral authorization label.
-- Keep raw V8 photo URLs in bridge context rather than rewriting them as
-  VRS Express object-storage paths.
+Operational ticket fallbacks never rewrite the durable wire payload. If V8
+sends `tech_phone: "N/A"`, Express may use the directory phone for its own SMS
+workflow but must preserve `"N/A"` until the controlled outbound enrichment
+step. A missing usable phone must not cause an SMS attempt to the literal
+placeholder.
+
+## Controlled Outbound Enrichment
+
+Immediately before VRS AI dispatch, Express may replace a placeholder only
+when all of these are true:
+
+1. The key already exists in the received contract version.
+2. The current value is a placeholder allowed for that field (`""`, `"N/A"`,
+   `"TBD"`, `0`, or an empty array as applicable).
+3. Express holds an authoritative value for that same semantic field.
+4. The replacement itself satisfies the received version's schema.
+
+The first implementation is deliberately narrow:
+
+- fill `tech_phone` from the resolved Express technician/ticket phone when V8
+  carries `"N/A"` and the Express value is valid E.164;
+- fill `tech_name` from the resolved technician identity when V8 carries an
+  empty value;
+- retain sender-provided `appliance_photos` exactly, including TINA or signed
+  media URLs; and
+- use additional Express photo URLs only if they are already absolute HTTPS
+  URLs that VRS AI can retrieve without Express session authentication.
+
+No non-placeholder is overwritten. No key is appended. V5 dispatch remains
+unchanged except for the callback URL/secret replacement it already performs.
+The completed outbound payload is validated again against its original schema
+before network dispatch.
 
 ## Stage 1 Review
 
-Bridge-backed tickets continue to require a human **Approve & Send to VRS AI**
-action. Manual/PWA tickets continue through their existing action path.
+Only a submission with a durable bridge row shows **Approve & Send to VRS AI**.
+A manual/PWA ticket without that row uses the existing action path and cannot
+call VRS AI.
 
-The bridge detail panel will expose the complete decision-relevant V8 context:
+For V8, the bridge panel shows:
 
-- partner and contract number;
+- contract version, partner, and contract number;
 - symptom and repair/replace rationale;
-- purchase year, derived appliance age, grade, color, brand, type, model, and
-  serial;
-- technician identity and usable/missing phone state;
-- labor, tax, total part price, per-part price/function;
+- purchase year, appliance age, grade, color, brand, type, model, and serial;
+- technician identity and phone availability;
+- labor, tax, total part price, and each part's price/function;
 - structured comments; and
-- up to ten appliance photo links/previews.
+- up to ten sender-provided appliance photo links/previews.
 
-Placeholder values remain visible as `N/A` or `TBD` so reviewers can
-distinguish unavailable information from an omitted UI element.
+`N/A` and `TBD` stay visible so a reviewer can distinguish missing source data
+from a UI omission. Rendering remains guarded by `selectedSubmission.vrsAi`.
 
-## VRS AI Dispatch and Callback
+## Dispatch and Callback
 
-After Stage 1 approval, Express sends the stored V8 body to the configured VRS
-AI `POST /vrs/authorize` endpoint. It replaces only:
+After human approval, Express sends the stored payload to the configured VRS
+AI development or production base URL. It changes only:
 
-- `callback_url` with the VRS Express result receiver; and
-- `callback_secret` with the Express-to-VRS-AI HMAC secret.
+- permitted placeholder values described above;
+- `callback_url` to the VRS Express result receiver; and
+- `callback_secret` to the Express-to-VRS-AI HMAC secret.
 
-The provider call ID remains separate from the public Express call ID. VRS AI
-callbacks continue to be verified against the exact raw body and five-minute
-timestamp window. When forwarding the event to SASHA, Express restores the
-public Express call ID and signs the exact forwarded bytes with the original
-SASHA callback secret.
+The provider call ID remains separate from the public Express call ID. The
+existing signed callback receiver, timestamp window, event-ID idempotency,
+ticket/SMS effects, and signed upstream forwarding stay unchanged. Express
+restores its public call ID when forwarding the final event upstream.
 
-The V8 event shapes are unchanged from the implemented callback union:
-`approved`, `partial`, `denied`, `failed`, and `requires_info`. Existing
-terminal ticket/SMS effects and event-level idempotency remain shared with the
-normal submission process handler.
+The implemented event union remains `approved`, `partial`, `denied`, `failed`,
+and `requires_info` for both request versions.
 
-## Retryable Terminal Failure
+The V8 contract's ten-per-tech/hour and 100-concurrent admission limits remain
+owned by VRS AI, which owns the call queue and execution capacity. Express
+continues its active-service-order duplicate guard. A VRS AI `429` received
+after Stage 1 is recorded as a dispatch failure and surfaced to the reviewer;
+Express's earlier `202` never represents VRS AI rate-limit admission.
 
-V8 defines `failed` as terminal and permits the user to submit a new authorize
-request when `retryable: true`. Express will implement that behavior on the
-same endpoint:
+## V8 Retryable Failure
 
-1. A normal active attempt still returns `409`.
-2. A new request for a service order whose latest bridge result is terminal
-   `failed` with `retryable: true` rearms the existing Express ticket.
-3. Rearming runs under the existing service-order advisory lock.
-4. Before reset, an internal event-ledger snapshot records the prior Express
-   call ID, provider call ID, terminal result, and retry transition.
-5. The bridge row receives a new Express call ID, new V8 payload, new encrypted
-   SASHA callback secret, cleared provider/result/delivery fields, and
-   `pending_review` state.
-6. The same Express ticket is requeued for another human Stage 1 review. This
-   avoids duplicate tickets while preserving the prior attempt in the ledger.
-7. The endpoint returns a fresh `202` response and call ID, matching V8.
-8. Late callbacks for the superseded provider call ID are recognized from the
-   event ledger, acknowledged with `200`, and ignored as post-terminal events.
+V8 permits a new authorize request after terminal `failed` with
+`retryable: true`. This applies only when the new request is valid V8:
 
-A terminal non-retryable failure, approval, partial approval, or denial is not
-rearmed automatically. A pre-acceptance Express-to-AI dispatch failure remains
-retryable from the existing Stage 1 action because no provider call exists.
+1. Active calls and all V5 duplicates keep returning `409`.
+2. Under the existing service-order advisory lock, a valid V8 request may
+   rearm the same bridge-backed Express ticket only when its latest state is
+   terminal `failed` and retryable.
+3. The ledger records the prior Express call ID, provider call ID, terminal
+   result, and retry transition before reset.
+4. The bridge row receives a new Express call ID, new V8 payload, newly
+   encrypted upstream callback secret, cleared provider/result/delivery data,
+   and `pending_review` state.
+5. The same ticket returns to the human queue; a second ticket is not created.
+6. Late callbacks for the superseded provider call are acknowledged and
+   ignored from ledger evidence rather than applied to the rearmed ticket.
 
-This design uses the existing bridge and event tables; it requires no database
-schema change.
+This uses existing JSON and event-ledger storage. It adds no schema or startup
+migration.
 
-## Error Semantics
+## Production Non-Regression Contract
 
-- `400`: V8 body validation failure.
-- `401`: missing or invalid SASHA API key.
-- `409`: an active call already exists, or the service order cannot be safely
-  rearmed.
-- `422`: technician/district resolution failure or explicit unsupported
-  partner.
-- `503`: bridge configuration is incomplete.
-- `202`: a new pending-review attempt was durably accepted; it does not claim
-  that VRS AI has dialed AHS.
+The captured publish-source baseline is Replit commit `972409d`:
 
-No response includes callback secrets, encryption material, API keys, or the
-VRS AI provider call ID.
+- published root HTTP 200 and `/api/healthz` healthy with DB check;
+- 32/32 focused bridge tests passing;
+- production build passing;
+- 45 locally runnable Vitest tests passing, with 17 server/database-backed
+  tests unavailable on the desktop baseline; and
+- 56 raw / 26 normalized pre-existing TypeScript diagnostics.
+
+Post-change results must equal or improve that baseline. Publication is
+blocked by any of the following:
+
+- a new schema, seed, startup migration, or production DB operation;
+- any new behavior outside the authenticated bridge route or a durable bridge
+  row;
+- a V5 regression;
+- a manual/PWA ticket reaching VRS AI;
+- a build, focused-test, full-test, or normalized type-diagnostic regression;
+- missing development evidence for the current manual workflows and the new
+  V8 flow; or
+- missing explicit approval for source sync, configuration, or publication.
+
+The development and production runtimes may share one Replit project/source,
+but they must use their separate database bindings and environment-specific
+credentials. Test documentation must use a supplied development base URL, not
+the published production URL.
 
 ## Documentation Deliverables
 
-The V8 implementation will update:
+Update the platform-only handoff so it gives VRS AI exactly:
 
-- runtime schemas and TypeScript types;
-- the architecture document, renamed/reframed as V8;
-- the human-readable VRS Express/VRS AI handoff;
-- the OpenAPI 3.1 contract and all examples;
-- the editable DOCX and matching PDF; and
-- the single drag-and-drop handoff package.
+- the VRS Express development `POST /vrs/authorize` URL placeholder;
+- the request API-key header requirement;
+- complete V5 and V8 request examples and strict field rules;
+- the Stage 1/human-approval behavior and `202` meaning;
+- the VRS AI development `/vrs/authorize` destination that Express must be
+  configured to call;
+- callback/HMAC rules and examples;
+- photo behavior: sender-provided TINA/signed URLs are passed through and need
+  no Replit access; authenticated Express object paths are not silently
+  exposed; and
+- a development acceptance checklist covering both directions.
 
-The external package will identify only VRS Express and VRS AI. It will not
-contain personal names, internal meeting history, repository history, live
-credentials, or obsolete V5 implementation instructions.
+The final external files name only VRS Express and VRS AI. They contain no
+individual names, internal meeting or repository history, or live credentials.
 
 ## Test Strategy
 
-Implementation follows red-green-refactor. Tests will first prove the existing
-code fails V8 requirements, then drive each change.
+Implementation follows red-green-refactor.
 
-### Contract tests
+### Contract and API
 
-- Accept the complete V8 example.
-- Accept every documented placeholder and zero/empty gap-fill combination.
-- Require all always-present V8 keys.
-- Reject `purchase_year: 0`, invalid placeholder placement, excess arrays,
-  invalid URLs, invalid callback destinations, and unknown keys such as
-  `cta_no`.
-- Prove `appliance_color`, `contract_number`, `purchase_year`, and `symptom`
-  survive parse, storage projection, review projection, and outbound dispatch.
+- Existing V5 fixtures remain green and retain their outbound key set.
+- A complete V8 example and every documented V8 gap fill are accepted.
+- The presence of any V8-only key selects strict V8 validation; incomplete V8
+  cannot fall through to V5. A body with none is the defined V5 shape because
+  the external contracts provide no version discriminator.
+- `purchase_year: 0`, invalid placeholder placement, oversized arrays,
+  unapproved callback destinations, invalid URLs, and unknown keys are
+  rejected.
+- Authentication is proven to run before version/schema feedback.
 
-### Workflow tests
+### Mapping and dispatch
 
-- Accept verified AHS labels and `partner_id: "N/A"`; reject explicit
-  unsupported partners.
-- Use directory phone operationally while preserving wire `tech_phone: "N/A"`.
-- Preserve the manual/PWA Stage 1 behavior.
-- Require Stage 1 approval before VRS AI dispatch.
-- Preserve callback ID replacement, signature verification, event
-  idempotency, and result application.
-- Rearm only retryable terminal failures, issue a new Express call ID, preserve
-  audit history, requeue the same ticket, and ignore old late callbacks.
+- Intake stores every V8 field without mutation.
+- Dispatch preserves the received version and does not add keys.
+- Controlled enrichment fills only eligible existing placeholders, never
+  overwrites a real value, and revalidates the result.
+- TINA/signed photo URLs survive intake, review projection, and dispatch.
+- Human approval is required before any VRS AI request.
+- Manual tickets without bridge rows never dispatch.
 
-### UI and documentation tests
+### Retry, callbacks, and UI
 
-- Assert the V8 review fields and photo context appear in the agent dashboard.
-- Parse the OpenAPI document and resolve every local reference.
-- Validate authorize and callback examples against runtime schemas.
-- Recalculate and verify the deterministic HMAC example.
-- Scan generated handoff files and metadata for personal names, obsolete V5
-  claims, secrets, and mismatched version labels.
-- Render and visually inspect every final PDF/DOCX page.
+- V8 alone may rearm a retryable terminal failure with a new Express call ID
+  and the same ticket.
+- Non-retryable/active/V5 duplicates remain conflicts.
+- Late old callbacks cannot apply to the new attempt.
+- Existing callback signature, ID replacement, result idempotency, and ticket
+  effects remain green.
+- The V8 review fields and photos render only for bridge-backed tickets.
 
-### Regression verification
+### Verification and development evidence
 
-- Run the focused bridge suite.
-- Run the production build.
-- Compare TypeScript diagnostics with a fresh `main` baseline when the
-  repository-wide check is not clean.
-- Confirm the worktree contains no unrelated edits and the user-owned
-  `graphify-out/` and `output/audio/` paths remain untouched.
+- Run the focused bridge suite and production build.
+- Run the repository suite and compare its environment-limited baseline.
+- Compare normalized TypeScript diagnostics with the captured baseline.
+- Prove no unrelated/user-owned files changed.
+- On the development runtime/database, smoke-test technician intake, manual
+  authorization, agent claim/decision, AHS two-stage, NLA, admin, media,
+  WebSocket, and SMS behavior.
+- Run the V8 simulator flow through Express intake, human approval, outbound
+  VRS AI receipt, signed result, and upstream callback.
 
 ## Rollout Boundary
 
-Implementation and local verification do not activate production. After code
-review, the approved rollout sequence is:
+Implementation is not production activation. The sequence is:
 
-1. Commit the verified source and handoff artifacts on top of the captured
-   Replit production-source baseline.
-2. Push only with explicit approval.
-3. Sync the VRS Express Replit checkout without overwriting newer box work.
-4. Apply any required schema/configuration only through the approved
-   development-first pipeline. This design adds no schema change.
-5. Configure staging secrets outside Git.
-6. Run a joint V8 transaction through intake, Stage 1, VRS AI, callback, and
-   SASHA receipt, including one retryable-failure test.
-7. Publish or activate production only after explicit approval and captured
-   staging evidence.
+1. Implement and review in an isolated worktree based on `972409d` plus the
+   corrected design.
+2. Pass local regression gates and inspect every shared-file diff.
+3. Sync only after confirming the Replit checkout is still clean and has not
+   advanced unexpectedly.
+4. Configure only development credentials and the development database.
+5. Run the two-role VRS AI/SASHA simulator test and the manual-workflow smoke
+   matrix against the development URL.
+6. Record the exact rollback commit and test evidence.
+7. Publish production only after a separate explicit approval.

@@ -1,34 +1,29 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-10 23:03
+Updated: 2026-08-11 18:18
 
 ## Current Session
 
-- Fast-forwarded local `main` from `397dc29` to current GitHub
-  `origin/main` at `1433f43`; user-owned `graphify-out/` and `output/audio/`
-  remain untracked and untouched.
-- Reviewed the supplied API Contract V8 against the implemented V5 bridge.
-- Confirmed that V8 is the contract that should have been implemented
-  originally and is now the authoritative wire contract.
-- Approved and recorded the in-place retrofit design at
+- Reconciled the 2026-08-11 integration meeting with the supplied V8 contract
+  and corrected two earlier assumptions: V5 remains supported alongside V8,
+  and Express may fill only an existing placeholder with authoritative data
+  for that exact field.
+- Corrected the implementation design at
   `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`.
-- The design keeps the existing endpoint and VRS Express human Stage 1 gate,
-  makes all V8 fields/placeholders authoritative, displays and forwards the
-  complete V8 context, and implements new-request behavior after retryable
-  terminal failure without a schema change.
-- No runtime implementation, schema operation, push, Replit sync, deployment,
-  or publication has occurred in this V8 design step.
-- A production-safety review found the clean Replit publish source at
-  `972409d`, six commits ahead of GitHub `1433f43`. Fetched it read-only and
-  rebased the local design commit onto it; no box file was edited.
-- Captured the pre-change production/regression baseline: public root 200,
-  `/api/healthz` healthy with DB check, 32/32 bridge tests, production build
-  passing, 45 locally runnable tests passing, and TypeScript at 56 raw / 26
-  normalized existing diagnostics. The 17 intake tests require local port
-  5000/PostgreSQL 5432 and are recorded as an environment limitation.
-- Added hard non-regression and publish gates to the design. No V8 change may
-  touch schema/startup migration behavior or alter a non-bridge workflow; any
-  regression or missing staged evidence blocks publication.
+  Both strict contracts use `POST /vrs/authorize`; V8-only required keys make
+  version detection deterministic, and the durable JSON payload records the
+  shape without a schema change.
+- The development test has two explicit VRS AI roles: it first sends a V8
+  dummy request as a SASHA simulator, then receives the V8 payload from VRS
+  Express after a human approves the DEV ticket. This is not a call loop.
+- The same Replit project may serve development and production, but the test
+  must use the development URL, development database binding, and development
+  credentials. Production remains unchanged and unpublished.
+- The implementation baseline remains clean Replit publish source `972409d`,
+  32/32 focused bridge tests, a passing production build, 45 locally runnable
+  tests, and 56 raw / 26 normalized pre-existing TypeScript diagnostics.
+- No runtime implementation, schema operation, push, Replit sync,
+  configuration change, deployment, or publication has occurred yet.
 
 ## Previous Handoff Snapshot (2026-07-29)
 

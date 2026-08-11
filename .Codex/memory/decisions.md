@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-10 23:03
+Updated: 2026-08-11 18:18
 
 ## Decisions
 
@@ -57,3 +57,17 @@ Updated: 2026-08-10 23:03
   no schema/startup migration, no unguarded non-bridge branch, no new test,
   build, TypeScript, or runtime failure, and no publish without staged legacy
   plus V8 evidence and explicit approval.
+- [CX] 2026-08-11 - Supersede the 2026-08-10 single-version decision after the
+  integration meeting: retain strict V5 for Tech Hub-compatible requests and
+  add strict V8 for SASHA on the same `POST /vrs/authorize` endpoint. Detect
+  and preserve the received version from its strict JSON shape; do not add a
+  schema column or up-convert V5.
+- [CX] 2026-08-11 - VRS Express may enrich outbound V8 only by replacing an
+  allowed placeholder in an already-present key with authoritative data for
+  that exact field. Never overwrite real input, append keys, invent values, or
+  convert authenticated Express object paths into purported TINA URLs.
+- [CX] 2026-08-11 - Run the initial two-role integration entirely in DEV: VRS
+  AI sends a dummy V8 request as a SASHA simulator, a human approves the DEV
+  Express ticket, and Express sends the same-version request to VRS AI DEV.
+  Shared source does not permit use of the production database or publication
+  without separate evidence and approval.

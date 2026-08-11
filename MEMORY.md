@@ -1,19 +1,19 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-10 23:03 — Rebased the V8 design on current Replit production source and added hard non-regression publish gates.
+> **Last Touched:** Codex — 2026-08-11 18:18 — Corrected the design to preserve V5 alongside V8 and define the DEV-only two-role integration test.
 
 ## Current State
 - Local `main` was fast-forwarded to current GitHub `origin/main` at
   `1433f43`. User-owned `graphify-out/` and `output/audio/` remain untracked
   and untouched.
-- API Contract V8 is now the authoritative wire contract by explicit project
-  direction; V5 was the incomplete contract supplied during the original
-  implementation.
-- The approved implementation design is
+- V5 and V8 now coexist by the 2026-08-11 integration-meeting correction: V5
+  remains Tech Hub-compatible and V8 is the complete SASHA contract. Both use
+  the existing authenticated `POST /vrs/authorize` route.
+- The corrected implementation design is
   `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`.
-  It keeps the same endpoint and VRS Express Stage 1 gate, adopts all V8
-  fields/placeholders, and adds same-ticket retryable-failure rearming with a
-  new call ID and existing-ledger audit preservation.
+  It uses strict dual-schema parsing, same-version dispatch, controlled
+  placeholder-only V8 enrichment, TINA/signed-photo pass-through, and
+  same-ticket V8 retryable-failure rearming without a schema change.
 - No V8 runtime code, schema operation, push, Replit sync, deployment, or
   publication has occurred yet. The prior live/published status below is a
   2026-07-29 snapshot and was not revalidated in this design step.
@@ -25,7 +25,7 @@
   passing, and a 56-raw/26-normalized pre-existing TypeScript baseline. The 17
   remaining intake tests require a local server/database and are not silently
   counted as product failures.
-- V8 is blocked from publication if it changes schema/startup migrations,
+- The V5/V8 integration is blocked from publication if it changes schema/startup migrations,
   leaks into a non-bridge workflow, adds any regression, lacks staged legacy
   and V8 evidence, or lacks explicit sync/publish approval.
 - The VRS Express-to-VRS AI bridge source is merged and published on `main`.
@@ -53,6 +53,16 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Supersede the 2026-08-10 single-version conclusion. Keep
+  strict V5 and add strict V8 on the same endpoint, infer the version from the
+  stored strict payload, and never up-convert V5.
+- [CX] 2026-08-11 - Permit outbound enrichment only for an existing V8 key
+  whose value is a documented placeholder and only from authoritative Express
+  data for that exact field. Never add keys or rewrite TINA/signed photo URLs.
+- [CX] 2026-08-11 - The first integration test is DEV-only: VRS AI acts as a
+  SASHA simulator for intake, then receives the approved payload as VRS AI.
+  Use the development URL/database/configuration and leave production
+  unpublished.
 - [CX] 2026-08-10 - V8 supersedes V5 as the single contract source. Retrofit
   the existing `/vrs/authorize` bridge in place while preserving the VRS
   Express Stage 1 human gate and unrelated manual workflows.
@@ -88,8 +98,8 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Implement the approved V8 retrofit test-first, update all platform-only
-  handoff artifacts, and complete local verification.
+- [CX] Implement the corrected strict dual V5/V8 bridge test-first, update all
+  platform-only handoff artifacts, and complete local verification.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
 - [CX] Run the staged non-bridge workflow matrix and record a rollback target
