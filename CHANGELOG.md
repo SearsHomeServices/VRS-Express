@@ -23,9 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   known 56-raw-diagnostic baseline, so Task 5 added zero diagnostics. No
   schema, seed, startup, database, configuration, remote, sync, deployment,
   or publication action ran.
-- **Review correction.** Replaced the source-string UI checks with server-
-  rendered tests of the production `VrsAiBridgeReview` component consumed by
-  the guarded dashboard panel. The component now includes raw request,
+- **Review correction.** Replaced source-string checks as the primary UI proof
+  with server-rendered tests of the production `VrsAiBridgeReview` component;
+  retained only a narrow dashboard-wiring/manual-copy assertion. The component
+  now includes raw request,
   technician, customer, address/location, appliance, problem, financial,
   part, full comment-metadata, and sender-photo context. V8-only rows are
   version-gated; absent optional V5 partner/grade rows do not render.
@@ -35,6 +36,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   enters stored payload or review context. Follow-up verification is 6/6 UI,
   30/30 queue, 116/116 focused bridge tests, a passing build, and the unchanged
   56-diagnostic baseline.
+- **Final review correction.** Moved the outer null guard, state, dispatch
+  error, retryable-failure copy, and review composition into the production
+  `VrsAiBridgePanel` consumed directly by the dashboard. Runtime rendering now
+  proves null/manual state produces no panel while V5/V8 state produces the
+  expected status and review. Every review field uses a distinct fixture and
+  is asserted against its exact rendered row, preventing field swaps.
+- Final Task 5 verification is 8/8 UI, 30/30 queue, and 118/118 focused bridge
+  tests plus a passing production build and unchanged 56-diagnostic baseline.
 
 ### Changed — Stage 1 VRS AI dispatch gate (2026-08-11)
 - Extracted the bridge-only Stage 1 decision behind injected store,

@@ -124,7 +124,7 @@ import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
-import { VrsAiBridgeReview } from "@/components/vrs-ai-bridge-review";
+import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
 // SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
@@ -4048,37 +4048,7 @@ export default function AgentDashboard() {
                           )}
                         </CardHeader>
                         <CardContent className="space-y-5">
-                          {selectedSubmission.vrsAi && (
-                            <div
-                              className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
-                              data-testid="vrs-ai-bridge-status"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="font-medium">VRS AI bridge</span>
-                                <Badge variant="secondary">
-                                  {selectedSubmission.vrsAi.state.replace(/_/g, " ")}
-                                </Badge>
-                              </div>
-                              {selectedSubmission.vrsAi.dispatchError && (
-                                <p className="mt-2 text-xs text-destructive">
-                                  Last send failed: {selectedSubmission.vrsAi.dispatchError}
-                                </p>
-                              )}
-                              {selectedSubmission.vrsAi.state === "failed" && (
-                                <p className="mt-2 text-xs text-destructive">
-                                  VRS AI could not complete the call
-                                  {selectedSubmission.vrsAi.failureReason
-                                    ? ` (${selectedSubmission.vrsAi.failureReason})`
-                                    : ""}
-                                  . Use the existing manual authorization flow.
-                                  {selectedSubmission.vrsAi.retryable
-                                    ? " VRS AI marked this failure as retryable."
-                                    : ""}
-                                </p>
-                              )}
-                              <VrsAiBridgeReview bridge={selectedSubmission.vrsAi} />
-                            </div>
-                          )}
+                          <VrsAiBridgePanel bridge={selectedSubmission.vrsAi} />
                           {(
                             <>
                               <div className={`grid ${isTwoStageWarranty(selectedSubmission) ? "grid-cols-3" : "grid-cols-3"} gap-3`}>

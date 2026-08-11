@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { VrsAiBridgeReview } from "../client/src/components/vrs-ai-bridge-review";
+import * as reviewComponents from "../client/src/components/vrs-ai-bridge-review";
 import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
@@ -23,44 +23,44 @@ const v8Bridge: VrsAiBridgeStatus = {
   retryable: null,
   dispatchedAt: null,
   reviewContext: {
-    service_order: "13538277",
-    reason_for_call: "authorization",
-    tech_id: "0123456",
+    service_order: "service-order-13538277",
+    reason_for_call: "reason-authorization",
+    tech_id: "tech-id-0123456",
     tech_phone: "N/A",
     tech_name: "",
     parts: [{
-      part_id: "WPW10503278",
-      part_description: "Electronic Control Board",
-      sell_price: 245,
-      part_function: "Controls wash cycle timing and motor speed.",
+      part_id: "part-id-WPW10503278",
+      part_description: "part-description-control-board",
+      sell_price: 222.22,
+      part_function: "part-function-controls-cycle-timing",
     }],
-    customer_name: "Maria Gonzalez",
-    customer_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
-    service_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
-    brand: "Whirlpool",
-    model_number: "WTW5000DW1",
-    serial_number: "C31290822",
-    appliance_type: "Washer",
-    appliance_age: 0,
-    labor_amount: 0,
-    tax_amount: 0,
-    part_price: 245,
-    appliance_location: "laundry room",
-    failure_cause: "other",
-    tech_recommendation: "replace",
+    customer_name: "customer-name-Maria",
+    customer_address: "customer-address-742-Evergreen",
+    service_address: "service-address-901-Repair-Lane",
+    brand: "brand-Whirlpool",
+    model_number: "model-WTW5000DW1",
+    serial_number: "serial-C31290822",
+    appliance_type: "appliance-type-Washer",
+    appliance_age: 7,
+    labor_amount: 123.45,
+    tax_amount: 6.78,
+    part_price: 245.67,
+    appliance_location: "appliance-location-laundry-room",
+    failure_cause: "failure-cause-other",
+    tech_recommendation: "recommendation-replace",
     repair_replace_rationale: "",
-    appliance_grade: "N/A",
-    appliance_color: "N/A",
-    contract_number: "CN-0008",
+    appliance_grade: "appliance-grade-mid",
+    appliance_color: "appliance-color-stainless",
+    contract_number: "contract-number-CN-0008",
     purchase_year: "TBD",
-    symptom: "N/A",
-    partner_id: "American Home Shield",
+    symptom: "symptom-not-draining",
+    partner_id: "partner-American-Home-Shield",
     appliance_photos: [signedPhotoUrl],
     comments: [{
-      tech_id: "comment-tech-99",
-      work_item: "failure_diagnosis",
-      text: "Diagnostic code F7E1 observed.",
-      timestamp: "2026-08-11T13:55:00Z",
+      tech_id: "comment-tech-id-99",
+      work_item: "comment-work-item-failure-diagnosis",
+      text: "comment-text-diagnostic-F7E1",
+      timestamp: "comment-timestamp-2026-08-11T13:55:00Z",
     }],
   },
 };
@@ -83,7 +83,9 @@ const v5Bridge: VrsAiBridgeStatus = {
 };
 
 function renderReview(bridge: VrsAiBridgeStatus): string {
-  return renderToStaticMarkup(createElement(VrsAiBridgeReview, { bridge }));
+  return renderToStaticMarkup(
+    createElement(reviewComponents.VrsAiBridgeReview, { bridge }),
+  );
 }
 
 function expectField(html: string, field: string, value: string): void {
@@ -112,7 +114,7 @@ describe("VRS AI bridge agent approval copy", () => {
 });
 
 describe("VRS AI bridge review rendering", () => {
-  it("renders the complete V8 business context with exact placeholders, zeroes, totals, and comment metadata", () => {
+  it("renders every V8 field into its exact row with placeholders, totals, and comment metadata", () => {
     const html = renderReview(v8Bridge);
 
     for (const label of [
@@ -151,38 +153,50 @@ describe("VRS AI bridge review rendering", () => {
       expect(html, `missing rendered label: ${label}`).toContain(label);
     }
 
-    for (const value of [
-      "13538277",
-      "authorization",
-      "0123456",
-      "Maria Gonzalez",
-      "742 Evergreen Terrace, Hagerstown, MD 21740",
-      "laundry room",
-      "Whirlpool",
-      "WTW5000DW1",
-      "C31290822",
-      "comment-tech-99",
-      "failure_diagnosis",
-      "Diagnostic code F7E1 observed.",
-      "2026-08-11T13:55:00Z",
-      "WPW10503278",
-      "Electronic Control Board",
-      "Controls wash cycle timing and motor speed.",
-    ]) {
-      expect(html, `missing rendered value: ${value}`).toContain(value);
-    }
-
-    expect(html).toMatch(/data-field="tech-name"[^>]*><\/p>/);
-    expect(html).toMatch(/data-field="repair-replace-rationale"[^>]*><\/p>/);
+    expectField(html, "contract-version", "v8");
+    expectField(html, "service-order", "service-order-13538277");
+    expectField(html, "reason-for-call", "reason-authorization");
+    expectField(html, "partner", "partner-American-Home-Shield");
+    expectField(html, "contract-number", "contract-number-CN-0008");
+    expectField(html, "symptom", "symptom-not-draining");
+    expectField(html, "tech-id", "tech-id-0123456");
+    expectField(html, "tech-name", "");
     expectField(html, "tech-phone", "N/A");
-    expectField(html, "symptom", "N/A");
+    expectField(html, "customer-name", "customer-name-Maria");
+    expectField(html, "customer-address", "customer-address-742-Evergreen");
+    expectField(html, "service-address", "service-address-901-Repair-Lane");
+    expectField(html, "appliance-location", "appliance-location-laundry-room");
+    expectField(html, "failure-cause", "failure-cause-other");
+    expectField(html, "recommendation", "recommendation-replace");
+    expectField(html, "repair-replace-rationale", "");
     expectField(html, "purchase-year", "TBD");
-    expectField(html, "appliance-age", "0");
-    expectField(html, "labor", "$0.00");
-    expectField(html, "tax", "$0.00");
-    expectField(html, "parts-total", "$245.00");
-    expectField(html, "total", "$245.00");
-    expectField(html, "part-0-price", "$245.00");
+    expectField(html, "appliance-age", "7");
+    expectField(html, "appliance-grade", "appliance-grade-mid");
+    expectField(html, "appliance-color", "appliance-color-stainless");
+    expectField(html, "brand", "brand-Whirlpool");
+    expectField(html, "appliance-type", "appliance-type-Washer");
+    expectField(html, "model", "model-WTW5000DW1");
+    expectField(html, "serial", "serial-C31290822");
+    expectField(html, "labor", "$123.45");
+    expectField(html, "tax", "$6.78");
+    expectField(html, "parts-total", "$245.67");
+    expectField(html, "total", "$375.90");
+    expectField(html, "part-0-id", "part-id-WPW10503278");
+    expectField(html, "part-0-description", "part-description-control-board");
+    expectField(html, "part-0-price", "$222.22");
+    expectField(html, "part-0-function", "part-function-controls-cycle-timing");
+    expectField(html, "comment-0-tech-id", "comment-tech-id-99");
+    expectField(
+      html,
+      "comment-0-work-item",
+      "comment-work-item-failure-diagnosis",
+    );
+    expectField(html, "comment-0-text", "comment-text-diagnostic-F7E1");
+    expectField(
+      html,
+      "comment-0-timestamp",
+      "comment-timestamp-2026-08-11T13:55:00Z",
+    );
   });
 
   it("renders the exact sender URL as a safe direct link and no-referrer preview", () => {
@@ -197,6 +211,30 @@ describe("VRS AI bridge review rendering", () => {
     expect(html).not.toMatch(
       /buildMediaUrl|buildMediaUrls|prefetchMediaTokens|PhotoLightbox/,
     );
+  });
+
+  it("preserves valid numeric zeroes instead of replacing them with business values", () => {
+    const html = renderReview({
+      ...v8Bridge,
+      reviewContext: {
+        ...v8Bridge.reviewContext!,
+        appliance_age: 0,
+        labor_amount: 0,
+        tax_amount: 0,
+        part_price: 0,
+        parts: [{
+          ...v8Bridge.reviewContext!.parts[0],
+          sell_price: 0,
+        }],
+      },
+    });
+
+    expectField(html, "appliance-age", "0");
+    expectField(html, "labor", "$0.00");
+    expectField(html, "tax", "$0.00");
+    expectField(html, "parts-total", "$0.00");
+    expectField(html, "total", "$0.00");
+    expectField(html, "part-0-price", "$0.00");
   });
 
   it("keeps V8-only and absent optional V5 rows out of the V5 review", () => {
@@ -224,20 +262,55 @@ describe("VRS AI bridge review rendering", () => {
     expectField(withV5OptionalRows, "appliance-grade", "mid");
   });
 
-  it("is consumed only inside the dashboard bridge guard and keeps manual wording", () => {
+  it("runtime-gates the complete production panel for manual and bridge tickets", () => {
+    const candidate = reviewComponents as typeof reviewComponents & {
+      VrsAiBridgePanel?: (props: {
+        bridge: VrsAiBridgeStatus | null | undefined;
+      }) => React.ReactNode;
+    };
+    expect(typeof candidate.VrsAiBridgePanel).toBe("function");
+    if (!candidate.VrsAiBridgePanel) return;
+
+    const renderPanel = (bridge: VrsAiBridgeStatus | null | undefined) =>
+      renderToStaticMarkup(
+        createElement(candidate.VrsAiBridgePanel!, { bridge }),
+      );
+
+    expect(renderPanel(null)).toBe("");
+    expect(renderPanel(undefined)).toBe("");
+
+    const v8Panel = renderPanel({
+      ...v8Bridge,
+      dispatchError: "dispatch-error-unique",
+    });
+    expect(v8Panel).toContain('data-testid="vrs-ai-bridge-status"');
+    expect(v8Panel).toContain("pending review");
+    expect(v8Panel).toContain("Last send failed: dispatch-error-unique");
+    expectField(v8Panel, "contract-version", "v8");
+
+    const v5Panel = renderPanel({
+      ...v5Bridge,
+      state: "failed",
+      failureReason: "failure-reason-unique",
+      retryable: true,
+    });
+    expect(v5Panel).toContain("VRS AI could not complete the call");
+    expect(v5Panel).toContain("failure-reason-unique");
+    expect(v5Panel).toContain("Use the existing manual authorization flow.");
+    expect(v5Panel).toContain("VRS AI marked this failure as retryable.");
+    expectField(v5Panel, "contract-version", "v5");
+  });
+
+  it("passes dashboard bridge state to the runtime-tested panel and keeps manual wording", () => {
     const dashboardSource = readFileSync(
       new URL("../client/src/pages/agent-dashboard.tsx", import.meta.url),
       "utf8",
     ).replace(/\r\n/g, "\n");
-    const guardStart = dashboardSource.indexOf("{selectedSubmission.vrsAi && (");
     const componentUse = dashboardSource.indexOf(
-      "<VrsAiBridgeReview bridge={selectedSubmission.vrsAi} />",
+      "<VrsAiBridgePanel bridge={selectedSubmission.vrsAi} />",
     );
-    const guardEnd = dashboardSource.indexOf("{(\n", guardStart);
 
-    expect(guardStart).toBeGreaterThan(-1);
-    expect(componentUse).toBeGreaterThan(guardStart);
-    expect(componentUse).toBeLessThan(guardEnd);
+    expect(componentUse).toBeGreaterThan(-1);
     expect(dashboardSource).toContain(
       "Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket.",
     );

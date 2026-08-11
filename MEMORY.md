@@ -1,14 +1,22 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:46 — Corrected Task 5 with rendered production UI tests and complete version-gated review context.
+> **Last Touched:** Codex — 2026-08-11 19:56 — Hardened Task 5 with an actual runtime panel guard and exact field-to-row assertions.
 
 ## Current State
 - Tasks 1-5 of the V5/V8 integration are implemented in the isolated
-  worktree. The guarded dashboard now consumes a server-render-tested
-  production review component with complete raw request, technician,
+  worktree. The dashboard directly consumes a server-render-tested production
+  panel whose runtime null guard owns status/errors/failure copy and the
+  complete review component. The review includes raw request, technician,
   customer/address, appliance/problem, financial/part, full comment metadata,
   and direct sender-photo context. V8-only rows are version-gated; optional V5
   partner/grade rows render only when present, and manual approval is unchanged.
+- Final Task 5 UI coverage renders null, V5, and V8 through the production
+  panel. Every potentially swappable review value is distinct and asserted
+  against its exact `data-field`, including both addresses, all financial and
+  part values, and all four comment metadata fields. Manual/null state renders
+  no bridge panel or bridge copy. Final verification is 8/8 UI, 30/30 queue,
+  118/118 focused bridge tests, a passing production build, and the unchanged
+  56-diagnostic baseline.
 - `getStatusBySubmissionId` now consumes an injectable production row-loader
   before deriving `v5`/`v8`; neither `contract_version` nor `contractVersion`
   enters stored request JSON or review context. Task 5 follow-up verification
@@ -120,6 +128,11 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Put the bridge null guard and full outer status/error/
+  failure composition in `VrsAiBridgePanel`, then have the dashboard always
+  pass its nullable `selectedSubmission.vrsAi`. Runtime rendering, not a JSX
+  source conditional, is authoritative for manual isolation. Use distinct
+  field fixtures plus exact row assertions so swapped fields fail tests.
 - [CX] 2026-08-11 - Test bridge review behavior by rendering the exact
   production component consumed inside the dashboard's `vrsAi` guard. Keep
   only narrow source assertions for guard placement/manual copy. Gate the four
@@ -246,6 +259,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - A rendered page containing all expected values can still
+  pass after two fields are swapped when fixture values overlap or assertions
+  search the whole markup. Give swappable fields unique values and assert each
+  against its own stable rendered row.
 - [CX] 2026-08-11 - Source containment tests can prove labels exist while
   missing incomplete rendering, blank V5-only rows, and lost comment metadata.
   Render the production presentational component and assert its values,

@@ -1,8 +1,15 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:46
+Updated: 2026-08-11 19:56
 
 ## Done
+
+- [x] Hardened final Task 5 regression coverage with distinct exact-row
+  assertions for every review field and a runtime-tested production panel
+  that owns null/manual isolation plus V5/V8 status/review composition.
+- [x] Verified the final Task 5 rigor pass with 8/8 UI, 30/30 queue, 118/118
+  focused bridge tests, a passing build, and the unchanged 56-diagnostic
+  baseline.
 
 - [x] Closed the Task 5 review findings with a rendered production review
   component, complete V8/common fields and comment metadata, V8-only row

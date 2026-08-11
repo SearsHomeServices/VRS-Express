@@ -235,3 +235,41 @@ export function VrsAiBridgeReview({
     </details>
   );
 }
+
+export function VrsAiBridgePanel({
+  bridge,
+}: {
+  bridge: VrsAiBridgeStatus | null | undefined;
+}) {
+  if (!bridge) return null;
+
+  return (
+    <div
+      className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
+      data-testid="vrs-ai-bridge-status"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-medium">VRS AI bridge</span>
+        <span className="whitespace-nowrap rounded-md bg-secondary px-2.5 py-0.5 text-xs font-semibold text-secondary-foreground">
+          {bridge.state.replace(/_/g, " ")}
+        </span>
+      </div>
+      {bridge.dispatchError && (
+        <p className="mt-2 text-xs text-destructive">
+          Last send failed: {bridge.dispatchError}
+        </p>
+      )}
+      {bridge.state === "failed" && (
+        <p className="mt-2 text-xs text-destructive">
+          VRS AI could not complete the call
+          {bridge.failureReason ? ` (${bridge.failureReason})` : ""}. Use the
+          existing manual authorization flow.
+          {bridge.retryable
+            ? " VRS AI marked this failure as retryable."
+            : ""}
+        </p>
+      )}
+      <VrsAiBridgeReview bridge={bridge} />
+    </div>
+  );
+}

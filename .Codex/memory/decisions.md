@@ -1,8 +1,14 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:46
+Updated: 2026-08-11 19:56
 
 ## Decisions
+
+- [CX] 2026-08-11 - Make `VrsAiBridgePanel` the production owner of nullable
+  bridge isolation and the complete status/error/failure/review composition.
+  Dashboard source should only pass `selectedSubmission.vrsAi`; runtime panel
+  tests prove the conditional behavior. Exact `data-field` assertions with
+  distinct fixtures protect against cross-field swaps.
 
 - [CX] 2026-08-11 - Make UI behavior tests render the same presentational
   component used by `agent-dashboard`. Source inspection remains only for the
