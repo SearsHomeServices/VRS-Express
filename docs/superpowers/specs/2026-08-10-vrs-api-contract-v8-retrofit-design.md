@@ -65,6 +65,73 @@ it does not reinterpret or discard V8 business fields.
   is part of implementation verification.
 - No separate `/v8` route or V5/V8 mode switch will be introduced.
 
+## Production Non-Regression Contract
+
+Publishing V8 must not change the behavior of the currently functioning VRS
+Express application outside bridge-backed authorization tickets. This is a
+hard acceptance gate, not a best-effort goal.
+
+### Production-source baseline
+
+The Replit workspace is the publish source. Before implementation, its clean
+`main` at `972409d` was fetched read-only and made the parent of this design;
+the desktop copy is not being treated as authoritative over newer Replit work.
+The pre-change baseline captured on 2026-08-10 is:
+
+- published root: HTTP `200`, title `VRS Express`;
+- published `/api/healthz`: `ok: true`, including a successful database check;
+- focused bridge suite: 32 of 32 passing;
+- production build: passing;
+- all locally runnable Vitest tests: 45 passing; the 17 server-backed intake
+  tests skip/fail at setup because this desktop has no app on port 5000 and no
+  PostgreSQL on port 5432, which is the recorded pre-change environment
+  baseline rather than a V8 regression; and
+- TypeScript baseline: 56 raw diagnostics / 26 normalized unique diagnostics.
+
+Post-change verification must equal or improve these results. Any new test,
+build, runtime, or TypeScript failure blocks publication.
+
+### Isolation rules
+
+- V8 parsing, storage, dispatch, and retry logic execute only for
+  `POST /vrs/authorize` or a submission with a durable VRS bridge row.
+- A manual/PWA submission with no bridge row must never call VRS AI and must
+  continue through the existing Stage 1 and Stage 2 behavior.
+- New agent-dashboard content renders only when `selectedSubmission.vrsAi`
+  exists. Standard authorization, First American, NLA, infestation,
+  replacement-review, admin, technician, upload, WebSocket, and SMS views keep
+  their current branches.
+- Missing bridge variables continue to fail only the bridge route/action with
+  the existing `503`; they must not prevent application startup or affect
+  normal submissions.
+- Retry rearming requires a bridge row whose current terminal state is exactly
+  `failed` with `retryable: true`. It cannot reset or requeue a manual ticket.
+- No `shared/schema.ts`, startup migration, seed behavior, or production
+  database change is permitted for this retrofit.
+- Shared files such as `server/routes.ts` and the agent dashboard require a
+  focused diff review proving every new branch is guarded by bridge state.
+
+### Publish gates
+
+The change is not publish-ready until all of the following are recorded:
+
+1. The final branch still contains every production-source commit through
+   `972409d`, with no dropped or overwritten Replit work.
+2. Existing 32 bridge tests plus the new V8 tests pass.
+3. The production build passes and TypeScript reports no diagnostics beyond
+   the recorded 56 raw / 26 normalized baseline.
+4. The full local test run has no regression from its recorded baseline.
+5. In a non-production environment, the existing technician login/submission,
+   agent claim, manual authorization, two-stage AHS, NLA, admin dashboard,
+   media, WebSocket, and SMS paths pass smoke checks.
+6. The V8 flow passes intake, Stage 1 review, VRS AI dispatch, signed result,
+   SASHA forwarding, and retryable-failure retry end to end.
+7. A rollback target and the exact pre-publish Replit commit are recorded.
+8. Source sync, configuration, and publication each receive explicit approval.
+
+If staging cannot exercise the existing workflows and the V8 flow, the result
+must be reported as not publish-ready rather than inferred safe from unit tests.
+
 ## V8 Authorize Schema
 
 The runtime schema remains strict: fields not defined by V8, including
@@ -284,9 +351,10 @@ code fails V8 requirements, then drive each change.
 Implementation and local verification do not activate production. After code
 review, the approved rollout sequence is:
 
-1. Commit the verified source and handoff artifacts.
+1. Commit the verified source and handoff artifacts on top of the captured
+   Replit production-source baseline.
 2. Push only with explicit approval.
-3. Sync the VRS Express Replit checkout.
+3. Sync the VRS Express Replit checkout without overwriting newer box work.
 4. Apply any required schema/configuration only through the approved
    development-first pipeline. This design adds no schema change.
 5. Configure staging secrets outside Git.

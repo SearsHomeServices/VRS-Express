@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-10 22:55 — Approved and documented the authoritative V8 retrofit after syncing local main to current GitHub.
+> **Last Touched:** Codex — 2026-08-10 23:03 — Rebased the V8 design on current Replit production source and added hard non-regression publish gates.
 
 ## Current State
 - Local `main` was fast-forwarded to current GitHub `origin/main` at
@@ -17,6 +17,17 @@
 - No V8 runtime code, schema operation, push, Replit sync, deployment, or
   publication has occurred yet. The prior live/published status below is a
   2026-07-29 snapshot and was not revalidated in this design step.
+- Read-only reconciliation found the clean Replit publish source at `972409d`,
+  six commits ahead of GitHub `1433f43`. Local V8 design work is now rebased on
+  `972409d`; no Replit file or live configuration was changed.
+- Pre-change evidence: published root 200, health/DB check healthy, 32/32
+  focused bridge tests, production build passing, 45 locally runnable tests
+  passing, and a 56-raw/26-normalized pre-existing TypeScript baseline. The 17
+  remaining intake tests require a local server/database and are not silently
+  counted as product failures.
+- V8 is blocked from publication if it changes schema/startup migrations,
+  leaks into a non-bridge workflow, adds any regression, lacks staged legacy
+  and V8 evidence, or lacks explicit sync/publish approval.
 - The VRS Express-to-VRS AI bridge source is merged and published on `main`.
 - The external implementation handoff is ready for direct delivery as
   `output/doc/VRS-Express-VRS-AI-Handoff-Package.zip`; it contains exactly the
@@ -49,6 +60,11 @@
   retryable terminal-failure rearm: new Express call ID, new payload/secret,
   same requeued ticket, prior-attempt audit snapshot, and late old-callback
   acknowledgement. No schema change.
+- [CX] 2026-08-10 - The Replit workspace is the publish source. Base V8 on
+  clean Replit commit `972409d`, not the six-commit-older GitHub mirror.
+- [CX] 2026-08-10 - Require zero regression from the captured baseline plus
+  staged legacy-workflow and V8 end-to-end proof before publication. Keep all
+  new runtime behavior behind integration-route or bridge-row guards.
 - [CX] 2026-04-27 - Treated Tyler's "development" wording as a request for the latest published development state, but verified GitHub branch reality before pulling. Since no `development` branch exists, fast-forwarded `main` from `origin/main`.
 - [CX] 2026-04-27 - Recommended one 7-9 minute technician-only screen walkthrough for the 2026-04-28 East Coast meeting, scoped to the three technician request types and excluding agent/admin flows.
 - [CX] 2026-07-28 - Kept the SASHA AI-call contract separate from the existing `/api/external/v1/*` human-ticket API.
@@ -76,6 +92,8 @@
   handoff artifacts, and complete local verification.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
+- [CX] Run the staged non-bridge workflow matrix and record a rollback target
+  before classifying V8 as safe to publish.
 - [CX] Prepare the secure staging key/secret/callback-origin exchange outside
   Git and collect the three VRS AI decisions plus joint acceptance evidence.
 - [CX] Resolve V5 O-V5-3 for `repair_replace_rationale` prompt placement.

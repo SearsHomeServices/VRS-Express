@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-10 22:55
+Updated: 2026-08-10 23:03
 
 ## Done
 
@@ -12,6 +12,13 @@ Updated: 2026-08-10 22:55
 - [x] Confirmed V8 is the authoritative contract that should have been
   implemented originally.
 - [x] Approved and documented the V8 in-place retrofit design.
+- [x] Fetched the clean Replit publish source at `972409d`, confirmed it is a
+  six-commit fast-forward of GitHub, and rebased the local design onto it.
+- [x] Captured the pre-change production baseline: root/health healthy, 32/32
+  bridge tests, production build passing, 45 locally runnable tests passing,
+  and 56-raw/26-normalized existing TypeScript diagnostics.
+- [x] Added explicit production non-regression, isolation, staging, rollback,
+  approval, and publication gates to the V8 design.
 - [x] Shipped bounded-concurrency photo uploads in `tech-submit`.
 - [x] Shipped bounded-concurrency photo uploads in `tech-resubmit`.
 - [x] Added safe content-type fallback for upload requests with empty MIME type.
@@ -90,6 +97,10 @@ Updated: 2026-08-10 22:55
   the platform-only DOCX/PDF/ZIP package.
 - [ ] Run focused tests, build, TypeScript-baseline comparison, OpenAPI/example
   validation, metadata/text scans, and visual document review.
+- [ ] Prove every change in shared route/UI files is bridge-guarded and run the
+  existing technician, agent, manual AHS, NLA, admin, media, WebSocket, and SMS
+  workflows in a non-production environment before calling V8 publish-ready.
+- [ ] Record the rollback commit and post-change production smoke checklist.
 - [ ] Obtain explicit approval before pushing, syncing Replit, applying any
   development configuration, or publishing.
 - [ ] Package the secure out-of-band exchange for the staging API key, callback

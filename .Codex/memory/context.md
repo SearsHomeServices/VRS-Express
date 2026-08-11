@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-10 22:55
+Updated: 2026-08-10 23:03
 
 ## Current Session
 
@@ -18,6 +18,17 @@ Updated: 2026-08-10 22:55
   terminal failure without a schema change.
 - No runtime implementation, schema operation, push, Replit sync, deployment,
   or publication has occurred in this V8 design step.
+- A production-safety review found the clean Replit publish source at
+  `972409d`, six commits ahead of GitHub `1433f43`. Fetched it read-only and
+  rebased the local design commit onto it; no box file was edited.
+- Captured the pre-change production/regression baseline: public root 200,
+  `/api/healthz` healthy with DB check, 32/32 bridge tests, production build
+  passing, 45 locally runnable tests passing, and TypeScript at 56 raw / 26
+  normalized existing diagnostics. The 17 intake tests require local port
+  5000/PostgreSQL 5432 and are recorded as an environment limitation.
+- Added hard non-regression and publish gates to the design. No V8 change may
+  touch schema/startup migration behavior or alter a non-bridge workflow; any
+  regression or missing staged evidence blocks publication.
 
 ## Previous Handoff Snapshot (2026-07-29)
 

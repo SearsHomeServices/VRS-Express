@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with validation, mapping, review UI, callback, retry, test, documentation,
   and rollout boundaries. No runtime code, schema, deployment, or production
   state changed in this design step.
+- **Production preservation gate.** Rebased the design on the clean Replit
+  publish source at `972409d` after discovering it was six commits ahead of
+  GitHub. Captured the live HTTP/health response, 32/32 bridge tests, passing
+  production build, full-test environment baseline, and 56-raw/26-normalized
+  TypeScript baseline. V8 cannot be marked publish-ready with any regression,
+  schema/startup migration, unguarded manual-flow change, missing staged
+  workflow evidence, or unapproved sync/publication.
 
 ### Added — VRS Express ↔ VRS AI AHS bridge (2026-07-28)
 - **External handoff finalized (2026-07-29).** Refreshed the human-readable handoff and OpenAPI contract to the merged/published VRS Express state, regenerated the polished 10-page DOCX, exported a matching PDF, and bundled the PDF, editable DOCX, and OpenAPI file in `output/doc/VRS-Express-VRS-AI-Handoff-Package.zip`. The external package names only VRS Express and VRS AI as the platforms and excludes individual names, internal meeting/PR/commit history, and internal security-incident language. Fresh validation passed: 32/32 bridge tests, 34/34 local OpenAPI references, the authorize example, all five callback examples, the deterministic HMAC vector, DOCX/PDF metadata scans, exact ZIP contents, and visual review of every rendered page. The package is ready for direct implementation handoff; bridge activation still requires secure staging configuration, the additive development schema, the three documented VRS AI decisions, and joint end-to-end evidence.

@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-10 22:55
+Updated: 2026-08-10 23:03
 
 ## Decisions
 
@@ -49,3 +49,11 @@ Updated: 2026-08-10 22:55
   call ID on the same Express ticket, preserving the previous attempt in the
   existing event ledger and requiring another Stage 1 review; avoid a schema
   change and acknowledge late callbacks for superseded terminal attempts.
+- [CX] 2026-08-10 - Use clean Replit `main` at `972409d` as the current
+  production publish-source baseline because it contains six valid commits
+  beyond GitHub. Rebase V8 work on that history; never overwrite the box with
+  the older GitHub snapshot.
+- [CX] 2026-08-10 - Treat production non-regression as a hard V8 release gate:
+  no schema/startup migration, no unguarded non-bridge branch, no new test,
+  build, TypeScript, or runtime failure, and no publish without staged legacy
+  plus V8 evidence and explicit approval.
