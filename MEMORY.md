@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:41 — Corrected the exported V5 Zod schema class contract test-first.
+> **Last Touched:** Codex — 2026-08-11 18:44 — Reconciled Task 1 schema implementation records with inactive API-route state.
 
 ## Current State
 - Task 1 of the V5/V8 integration is implemented in the isolated worktree:
@@ -26,9 +26,12 @@
   It uses strict dual-schema parsing, same-version dispatch, controlled
   placeholder-only V8 enrichment, TINA/signed-photo pass-through, and
   same-ticket V8 retryable-failure rearming without a schema change.
-- No V8 runtime code, schema operation, push, Replit sync, deployment, or
-  publication has occurred yet. The prior live/published status below is a
-  2026-07-29 snapshot and was not revalidated in this design step.
+- Task 1 V5/V8 schemas, selection helpers, and outbound source validation now
+  exist in the isolated worktree. The authenticated API route has not adopted
+  the version-aware parser, so V8 intake/activation is not implemented yet.
+  No schema operation, push, Replit sync, deployment, or publication has
+  occurred. The prior live/published status below is a 2026-07-29 snapshot and
+  was not revalidated during Task 1.
 - The executable plan is
   `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md`; runtime
   changes will use ignored worktree `.worktrees/vrs-v5-v8-dev-integration`.

@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 18:41
+Updated: 2026-08-11 18:44
 
 ## Current Session
 
@@ -18,7 +18,7 @@ Updated: 2026-08-11 18:41
 - Confirmed against the source V8 contract that `contract_number` and
   `symptom` have no `maxLength`; they are nonblank/nonmutating without an
   invented cap. `appliance_color` retains the contract's explicit max 40.
-- Added the contract suite to `test:vrs-ai-bridge`. Fresh evidence: 77/77
+- Added the contract suite to `test:vrs-ai-bridge`. Fresh evidence: 78/78
   focused tests, production build passing, and the original 56 raw TypeScript
   diagnostics with no changed-file diagnostic. No database/schema/seed/
   startup/remote/deployment action occurred.
@@ -41,8 +41,11 @@ Updated: 2026-08-11 18:41
 - The implementation baseline remains clean Replit publish source `972409d`,
   32/32 focused bridge tests, a passing production build, 45 locally runnable
   tests, and 56 raw / 26 normalized pre-existing TypeScript diagnostics.
-- No runtime implementation, schema operation, push, Replit sync,
-  configuration change, deployment, or publication has occurred yet.
+- Task 1 V5/V8 schemas, selection helpers, and outbound source validation are
+  implemented in the isolated worktree. The authenticated API route has not
+  adopted the version-aware parser, so V8 intake/activation is not implemented
+  yet. No schema operation, push, Replit sync, configuration change,
+  deployment, or publication has occurred.
 - Wrote the executable red-green plan at
   `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md` and ignored
   `.worktrees/` so runtime work stays isolated from `main` and user output.
