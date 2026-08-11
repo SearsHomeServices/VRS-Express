@@ -21,6 +21,24 @@ type EnrichForDispatch = (
 
 const candidateBridgeModule = bridgeModule as typeof bridgeModule & {
   enrichVrsAuthorizeForDispatch?: EnrichForDispatch;
+  projectVrsBridgeIntake?: (
+    payload: VrsAuthorizeRequest,
+    districtCode: string,
+    operational?: { technicianPhone?: string | null },
+  ) => {
+    operationalPhone: string;
+    requestPayload: Record<string, unknown>;
+    submissionBody: ReturnType<typeof bridgeModule.mapVrsPayloadToSubmission>;
+  };
+  buildVrsAuthorizeEnrichmentCandidates?: (input: {
+    submissionPhone?: string | null;
+    technicianName?: string | null;
+    submissionPhotos?: string | null;
+  }) => {
+    techPhone?: string | null;
+    techName?: string | null;
+    appliancePhotos?: string[] | null;
+  };
 };
 
 const requestPayload: VrsAuthorizeRequest = {
@@ -99,6 +117,35 @@ describe("VRS Express bridge orchestration", () => {
     expect(submission.issueDescription).toBe("Washer will not drain");
     expect(payload).toEqual(wireSnapshot);
     expect(payload.tech_phone).toBe("N/A");
+  });
+
+  it("projects the route intake body and sanitized durable payload from one immutable V8 source", () => {
+    const project = candidateBridgeModule.projectVrsBridgeIntake;
+    expect(typeof project).toBe("function");
+    if (!project) return;
+    const payload: VrsAuthorizeRequest = {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A",
+      repair_replace_rationale: "",
+      symptom: "Washer will not drain",
+    };
+    const wireSnapshot = structuredClone(payload);
+
+    const projected = project(payload, "8175", {
+      technicianPhone: "+17045550125",
+    });
+
+    expect(projected.operationalPhone).toBe("+17045550125");
+    expect(projected.submissionBody.phone).toBe("+17045550125");
+    expect(projected.submissionBody.phone).not.toBe("N/A");
+    expect(projected.requestPayload).toEqual(
+      Object.fromEntries(
+        Object.entries(payload).filter(([key]) => key !== "callback_secret"),
+      ),
+    );
+    expect(projected.requestPayload.tech_phone).toBe("N/A");
+    expect(projected.requestPayload).not.toHaveProperty("callback_secret");
+    expect(payload).toEqual(wireSnapshot);
   });
 
   it.each([
@@ -270,6 +317,37 @@ describe("VRS Express bridge orchestration", () => {
       techName: "X".repeat(256),
       appliancePhotos: ["http://cdn.example.test/insecure.jpg"],
     })).toEqual(payload);
+  });
+
+  it("builds the Stage 1 route enrichment candidates from submission, user, and parsed photos", () => {
+    const build = candidateBridgeModule.buildVrsAuthorizeEnrichmentCandidates;
+    expect(typeof build).toBe("function");
+    if (!build) return;
+
+    expect(build({
+      submissionPhone: "+17045550125",
+      technicianName: "Resolved Technician",
+      submissionPhotos: JSON.stringify({
+        estimate: ["https://cdn.example.test/estimate.jpg"],
+        issue: [
+          "/objects/session-auth/private.jpg",
+          "https://cdn.example.test/issue.jpg",
+        ],
+      }),
+    })).toEqual({
+      techPhone: "+17045550125",
+      techName: "Resolved Technician",
+      appliancePhotos: [
+        "https://cdn.example.test/estimate.jpg",
+        "/objects/session-auth/private.jpg",
+        "https://cdn.example.test/issue.jpg",
+      ],
+    });
+    expect(build({
+      submissionPhone: "+17045550125",
+      technicianName: "Resolved Technician",
+      submissionPhotos: "not-json",
+    }).appliancePhotos).toEqual([]);
   });
 
   it("maps common appliance names to the VRS Express routing divisions", () => {
@@ -488,7 +566,9 @@ describe("VRS Express bridge orchestration", () => {
     expect(client.authorize).not.toHaveBeenCalled();
     expect(store.markDispatchFailed).toHaveBeenCalledWith(
       12,
-      expect.stringContaining("contract_number"),
+      expect.stringContaining(
+        "Stored VRS V8 payload failed revalidation: contract_number",
+      ),
     );
   });
 

@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:00
+Updated: 2026-08-11 19:08
 
 ## Done
 
@@ -8,7 +8,10 @@ Updated: 2026-08-11 19:00
   added V8-only operational phone/rationale fallbacks, placeholder-only
   same-field enrichment, signed TINA pass-through, authenticated-object-path
   rejection, exact key-set checks, and pre-client same-version revalidation.
-- [x] Verified Task 3 with 25/25 queue tests, 95/95 focused bridge tests, a
+- [x] Closed Task 3 review gaps by testing route-consumed intake/candidate
+  projection helpers and directly exercising dispatch's explicit pre-client
+  same-version validation path.
+- [x] Verified Task 3 with 27/27 queue tests, 97/97 focused bridge tests, a
   passing production build, and the unchanged 56-diagnostic TypeScript
   baseline with no new Task 3 file diagnostic.
 - [x] Adopted the version-aware V5/V8 parser in authenticated

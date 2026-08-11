@@ -1,9 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:00
+Updated: 2026-08-11 19:08
 
 ## Decisions
 
+- [CX] 2026-08-11 - Route wiring for V8 operational values must consume the
+  same focused pure projections covered by tests: one projects sanitized
+  intake JSON plus the normal ticket body/phone, and one projects Stage 1
+  phone/name/photo enrichment candidates. Enrichment only transforms the
+  typed clone; dispatch owns the single explicit same-version validation gate
+  immediately before its client call.
 - [CX] 2026-08-11 - Keep operational ticket values separate from durable V8
   wire JSON. A directory/user phone may replace wire `N/A` for the normal
   ticket and SMS path, but the stored request keeps `N/A`; if no usable phone

@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:00 — Completed Task 3 safe V8 operational mapping and same-version outbound enrichment.
+> **Last Touched:** Codex — 2026-08-11 19:08 — Closed Task 3 route-wiring and explicit-validation review gaps test-first.
 
 ## Current State
 - Tasks 1-3 of the V5/V8 integration are implemented in the isolated
@@ -10,7 +10,12 @@
   placeholders from valid authoritative values. Signed TINA URLs remain
   byte-identical, authenticated `/objects/` paths and `cta_no` are excluded,
   and the inferred stored version is revalidated before the client.
-- Task 3 verification is 25/25 queue tests, 95/95 focused bridge tests, a
+- Task 3 review now proves the actual route projections: intake derives the
+  normal ticket/resolved phone and immutable sanitized request JSON together,
+  while Stage 1 candidates come from submission phone, resolved user name,
+  and parsed submission photos. Enrichment no longer validates early;
+  dispatch's explicit same-version guard is the single tested pre-client gate.
+- Task 3 verification is 27/27 queue tests, 97/97 focused bridge tests, a
   passing production build, and the unchanged 56-raw TypeScript baseline
   with no new Task 3 file diagnostic. No schema, seed, startup, database,
   remote, configuration, sync, deployment, or publication action ran.
@@ -87,6 +92,10 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Keep route mapping testable through focused pure helpers
+  that `server/routes.ts` actually consumes. Let enrichment operate only on
+  the typed clone, then make dispatch's explicit safe-parse/version comparison
+  the single validation gate immediately before the client.
 - [CX] 2026-08-11 - Separate V8 operational fallbacks from durable wire JSON:
   resolved phone/name may support the normal ticket and eligible outbound
   placeholders, but stored request fields stay as received. Keep V5

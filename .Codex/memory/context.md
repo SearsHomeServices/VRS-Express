@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:00
+Updated: 2026-08-11 19:08
 
 ## Current Session
 
@@ -14,7 +14,14 @@ Updated: 2026-08-11 19:00
   ignored, populated input and signed TINA URLs are retained, no key or
   `cta_no` is appended, and the original contract version is revalidated
   before the VRS AI client.
-- Task 3 verification: 25/25 queue tests and 95/95 focused bridge tests pass;
+- Task 3 review correction extracted route-consumed pure helpers for intake
+  operational projection and Stage 1 candidate projection. Tests now prove
+  the route inputs keep `tech_phone: "N/A"` in sanitized durable JSON while
+  using the resolved ticket phone, and source candidate phone/name/photos
+  from the actual submission/user/photo fields. Dispatch's explicit
+  same-version guard is now the single pre-client validation path and is
+  directly exercised by invalid stored V8.
+- Task 3 verification: 27/27 queue tests and 97/97 focused bridge tests pass;
   the production build passes; TypeScript remains at the 56 raw pre-existing
   diagnostic baseline with no new Task 3 file diagnostic. No schema, seed,
   startup, database, remote, configuration, sync, deployment, or publication

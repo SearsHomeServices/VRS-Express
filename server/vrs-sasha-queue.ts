@@ -1,12 +1,12 @@
 import type {
   VrsAiAuthorizeResult,
   VrsAuthorizeRequest,
+  VrsAuthorizeV8Request,
   VrsWebhookEvent,
 } from "./vrs-sasha-contract";
 import {
   getVrsAuthorizeContractVersion,
   safeParseVrsAuthorizeRequest,
-  vrsAuthorizeV8RequestSchema,
 } from "./vrs-sasha-contract";
 
 export type VrsExpressApplianceDivision =
@@ -104,6 +104,28 @@ export type VrsBridgeReviewContext = DistributiveOmit<
   "callback_url" | "callback_secret"
 >;
 
+export function projectVrsBridgeIntake(
+  payload: VrsAuthorizeRequest,
+  districtCode: string,
+  operational?: VrsSubmissionOperationalValues,
+): {
+  operationalPhone: string;
+  requestPayload: VrsStoredAuthorizeRequest;
+  submissionBody: ReturnType<typeof mapVrsPayloadToSubmission>;
+} {
+  const submissionBody = mapVrsPayloadToSubmission(
+    payload,
+    districtCode,
+    operational,
+  );
+  const { callback_secret: _callbackSecret, ...requestPayload } = payload;
+  return {
+    operationalPhone: submissionBody.phone,
+    requestPayload: requestPayload as VrsStoredAuthorizeRequest,
+    submissionBody,
+  };
+}
+
 export function projectVrsBridgeReviewContext(
   payload:
     | VrsAuthorizeRequest
@@ -124,6 +146,35 @@ export interface VrsAuthorizeEnrichment {
   techPhone?: string | null;
   techName?: string | null;
   appliancePhotos?: string[] | null;
+}
+
+export function buildVrsAuthorizeEnrichmentCandidates(input: {
+  submissionPhone?: string | null;
+  technicianName?: string | null;
+  submissionPhotos?: string | null;
+}): VrsAuthorizeEnrichment {
+  let appliancePhotos: string[] = [];
+  if (input.submissionPhotos) {
+    try {
+      const parsed = JSON.parse(input.submissionPhotos) as unknown;
+      if (Array.isArray(parsed)) {
+        appliancePhotos = parsed.filter(
+          (value): value is string => typeof value === "string",
+        );
+      } else if (parsed && typeof parsed === "object") {
+        appliancePhotos = Object.values(parsed)
+          .flatMap((value) => Array.isArray(value) ? value : [])
+          .filter((value): value is string => typeof value === "string");
+      }
+    } catch {
+      appliancePhotos = [];
+    }
+  }
+  return {
+    techPhone: input.submissionPhone,
+    techName: input.technicianName,
+    appliancePhotos,
+  };
 }
 
 const E164_PHONE = /^\+[1-9]\d{7,14}$/;
@@ -150,7 +201,7 @@ export function enrichVrsAuthorizeForDispatch(
 ): VrsAuthorizeRequest {
   if (getVrsAuthorizeContractVersion(payload) === "v5") return payload;
 
-  const enriched = { ...vrsAuthorizeV8RequestSchema.parse(payload) };
+  const enriched = { ...payload } as VrsAuthorizeV8Request;
   if (
     enriched.tech_phone === "N/A" &&
     typeof enrichment.techPhone === "string" &&
@@ -175,7 +226,7 @@ export function enrichVrsAuthorizeForDispatch(
       .slice(0, 10);
   }
 
-  return vrsAuthorizeV8RequestSchema.parse(enriched);
+  return enriched;
 }
 
 export interface VrsBridgeRecord {

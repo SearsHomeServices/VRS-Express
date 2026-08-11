@@ -28,10 +28,11 @@ import {
 } from "./vrs-sasha-api";
 import { vrsBridgeStore } from "./vrs-sasha-store";
 import {
+  buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
   mapVrsAiWebhookToSubmissionDecision,
-  mapVrsPayloadToSubmission,
   processVrsAiWebhookEvent,
+  projectVrsBridgeIntake,
 } from "./vrs-sasha-queue";
 import {
   deliverVrsWebhook,
@@ -1656,22 +1657,21 @@ export async function registerRoutes(
       const safeUserPhone = userPhone && userPhone.toUpperCase() !== "N/A"
         ? userPhone
         : "";
-      const operationalPhone =
-        safeDirectoryPhone || safeUserPhone || safeWirePhone;
-
       // Fail configuration validation before creating a user-visible ticket;
       // otherwise a missing encryption key would leave an orphaned manual
       // ticket after the bridge intake itself returned 500.
-      const { callback_secret: _callbackSecret, ...requestPayload } = payload;
       const encryptedSecret = encryptVrsCallbackSecret(
         payload.callback_secret,
       );
       const bridgeCallId = `vrs_call_${randomUUID()}`;
+      const intakeProjection = projectVrsBridgeIntake(
+        payload,
+        technician.district,
+        { technicianPhone: safeDirectoryPhone || safeUserPhone },
+      );
 
       const internalRequest = {
-        body: mapVrsPayloadToSubmission(payload, technician.district, {
-          technicianPhone: operationalPhone,
-        }),
+        body: intakeProjection.submissionBody,
       } as Request;
       (internalRequest as AuthenticatedRequest).user = {
         id: techUser.id,
@@ -1708,9 +1708,9 @@ export async function registerRoutes(
         callId: bridgeCallId,
         serviceOrder: payload.service_order,
         techId: payload.tech_id,
-        techPhone: operationalPhone,
+        techPhone: intakeProjection.operationalPhone,
         techName: techUser.name,
-        requestPayload,
+        requestPayload: intakeProjection.requestPayload,
         callbackUrl: payload.callback_url,
         callbackSecretCipher: encryptedSecret.cipher,
         callbackSecretIv: encryptedSecret.iv,
@@ -2884,39 +2884,18 @@ export async function registerRoutes(
           const technicianUser = await storage.getUser(
             submission.technicianId,
           );
-          let submissionPhotoCandidates: string[] = [];
-          if (submission.photos) {
-            try {
-              const parsedPhotos = JSON.parse(submission.photos) as unknown;
-              if (Array.isArray(parsedPhotos)) {
-                submissionPhotoCandidates = parsedPhotos.filter(
-                  (value): value is string => typeof value === "string",
-                );
-              } else if (
-                parsedPhotos &&
-                typeof parsedPhotos === "object"
-              ) {
-                submissionPhotoCandidates = Object.values(parsedPhotos)
-                  .flatMap((value) => Array.isArray(value) ? value : [])
-                  .filter(
-                    (value): value is string => typeof value === "string",
-                  );
-              }
-            } catch {
-              submissionPhotoCandidates = [];
-            }
-          }
+          const enrichment = buildVrsAuthorizeEnrichmentCandidates({
+            submissionPhone: submission.phone,
+            technicianName: technicianUser?.name,
+            submissionPhotos: submission.photos,
+          });
 
           const dispatch = await dispatchVrsAiForSubmission({
             submissionId: id,
             store: vrsBridgeStore,
             callbackUrl,
             callbackSecret: aiWebhookSecret,
-            enrichment: {
-              techPhone: submission.phone,
-              techName: technicianUser?.name,
-              appliancePhotos: submissionPhotoCandidates,
-            },
+            enrichment,
             client: {
               authorize: ({ payload }) =>
                 sendVrsAuthorizeRequest({

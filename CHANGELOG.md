@@ -17,10 +17,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   preserved byte-for-byte; authenticated `/objects/` paths and `cta_no` are
   never sent. The stored contract version is revalidated before the client.
 - Added mapping/dispatch regression coverage. The focused bridge suite passes
-  95/95, the production build passes, and TypeScript remains at the captured
+  97/97, the production build passes, and TypeScript remains at the captured
   56-raw-diagnostic baseline with no new Task 3 file diagnostic. No schema,
   seed, startup, database, configuration, remote, sync, deployment, or
   publication action ran.
+- **Review correction.** Extracted the intake operational projection and
+  Stage 1 enrichment-candidate projection into focused helpers consumed by
+  `server/routes.ts`, then covered their exact phone, immutable sanitized
+  payload, technician-name, and parsed-photo outputs. Removed redundant V8
+  parsing inside enrichment so dispatch's explicit same-version validator is
+  the single tested pre-client enforcement gate.
 
 ### Changed — Authenticated V5/V8 authorize API boundary (2026-08-11)
 - `POST /vrs/authorize` now selects the strict V5 or V8 validator only after
