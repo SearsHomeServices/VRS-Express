@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Authenticated V5/V8 authorize API boundary (2026-08-11)
+- `POST /vrs/authorize` now selects the strict V5 or V8 validator only after
+  its existing configuration and timing-safe API-key checks. Authenticated V5
+  and V8 payloads reach intake unchanged, partial V8 requests return bounded
+  V8 validation fields, and the existing `202`/active-duplicate `409` bodies
+  remain unchanged without exposing callback secrets or provider call IDs.
+- Added route-boundary coverage for V5/V8 intake fidelity, 401/503-before-
+  parsing order, partial V8 errors, unchanged response shapes, and secret
+  exclusion. The focused bridge suite passes 83/83 and the production build
+  passes. TypeScript remains at the 56-raw-diagnostic baseline with no
+  changed-file diagnostic. No schema, database, configuration, remote, sync,
+  deployment, or publication action ran.
+
 ### Added — Strict V5/V8 authorize contract schemas (2026-08-11)
 - Added canonical V5 and complete V8 authorize fixtures plus version-aware
   contract tests. Any `appliance_color`, `contract_number`, `purchase_year`,

@@ -1,10 +1,11 @@
 import { timingSafeEqual } from "crypto";
 import type { Express } from "express";
 import {
+  safeParseVrsAuthorizeRequest,
   verifyVrsWebhookSignature,
-  vrsAuthorizeRequestSchema,
   vrsWebhookEventSchema,
 } from "./vrs-sasha-contract";
+import type { VrsAuthorizeRequest } from "./vrs-sasha-contract";
 
 export type ReceiveVrsIntakeResult =
   | {
@@ -30,9 +31,7 @@ export type ReceiveVrsIntakeResult =
     };
 
 export interface VrsExpressIntake {
-  receive(
-    input: ReturnType<typeof vrsAuthorizeRequestSchema.parse>,
-  ): Promise<ReceiveVrsIntakeResult>;
+  receive(input: VrsAuthorizeRequest): Promise<ReceiveVrsIntakeResult>;
 }
 
 export function registerVrsSashaApi(
@@ -61,7 +60,7 @@ export function registerVrsSashaApi(
       });
     }
 
-    const parsed = vrsAuthorizeRequestSchema.safeParse(req.body);
+    const parsed = safeParseVrsAuthorizeRequest(req.body);
     if (!parsed.success) {
       const fields = Array.from(
         new Set(

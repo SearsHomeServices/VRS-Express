@@ -1,9 +1,19 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 18:44
+Updated: 2026-08-11 18:50
 
 ## Current Session
 
+- Completed Task 2 test-first: authenticated `POST /vrs/authorize` now runs
+  `safeParseVrsAuthorizeRequest` only after its existing 503 configuration and
+  timing-safe 401 API-key gates, then passes the accepted V5/V8 union
+  unchanged to intake without a wire version field. The response contract is
+  unchanged; tests prove V5/V8 202 and duplicate 409 shapes, secret/provider
+  ID exclusion, partial V8 validation fields, and authentication ordering.
+- Verification: 22/22 route tests and 83/83 focused bridge tests pass; the
+  production build passes; TypeScript remains at the 56 raw pre-existing
+  diagnostic baseline with no changed-file diagnostic. No schema/database,
+  remote, configuration, sync, deployment, or publication action ran.
 - Corrected the Task 1 review finding test-first: the exported V5 validator is
   now truthfully typed as its runtime `ZodEffects` class instead of being cast
   to `ZodObject`. `VrsAuthorizeV5Request` is derived separately from the clean
@@ -41,10 +51,9 @@ Updated: 2026-08-11 18:44
 - The implementation baseline remains clean Replit publish source `972409d`,
   32/32 focused bridge tests, a passing production build, 45 locally runnable
   tests, and 56 raw / 26 normalized pre-existing TypeScript diagnostics.
-- Task 1 V5/V8 schemas, selection helpers, and outbound source validation are
-  implemented in the isolated worktree. The authenticated API route has not
-  adopted the version-aware parser, so V8 intake/activation is not implemented
-  yet. No schema operation, push, Replit sync, configuration change,
+- Tasks 1 and 2 provide strict V5/V8 schemas, authenticated version-aware
+  intake, and same-version outbound source validation in the isolated
+  worktree. No schema operation, push, Replit sync, configuration change,
   deployment, or publication has occurred.
 - Wrote the executable red-green plan at
   `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md` and ignored

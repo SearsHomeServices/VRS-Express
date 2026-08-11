@@ -7,52 +7,12 @@ import {
   decryptVrsCallbackSecret,
   encryptVrsCallbackSecret,
 } from "../server/vrs-sasha-secret";
+import {
+  validV5AuthorizePayload,
+  validV8AuthorizePayload,
+} from "./fixtures/vrs-authorize-payloads";
 
-const validPayload = {
-  service_order: "13538277",
-  tech_id: "0123456",
-  tech_phone: "+12145550199",
-  tech_name: "Carlos Rivera",
-  reason_for_call: "authorization",
-  callback_url:
-    "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
-  callback_secret: "sasha-test-secret-with-at-least-32-characters",
-  parts: [
-    {
-      part_id: "WPW10503278",
-      part_description: "Electronic Control Board",
-      sell_price: 245,
-      part_function: "Controls wash cycle timing and motor speed.",
-    },
-  ],
-  customer_name: "Maria Gonzalez",
-  customer_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
-  service_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
-  brand: "Whirlpool",
-  model_number: "WTW5000DW1",
-  serial_number: "C31290822",
-  appliance_type: "Washer",
-  appliance_age: 4,
-  labor_amount: 120,
-  tax_amount: 15.6,
-  part_price: 245,
-  appliance_location: "laundry room",
-  failure_cause: "normal-wear",
-  tech_recommendation: "repair",
-  repair_replace_rationale:
-    "Board failure is isolated and repair is within the coverage threshold.",
-  appliance_grade: "mid",
-  partner_id: "ahs",
-  appliance_photos: ["https://srdm.example.com/photo_1.jpg"],
-  comments: [
-    {
-      tech_id: "0123456",
-      work_item: "failure_diagnosis",
-      text: "Diagnostic code F7E1.",
-      timestamp: "2026-05-12T13:55:00Z",
-    },
-  ],
-};
+const validPayload = validV5AuthorizePayload;
 
 type IntakeResult =
   | {
@@ -90,11 +50,20 @@ class FakeIntake {
 
 function makeIntakeApp(
   intake: FakeIntake,
-  apiKey = "test-vrs-api-key",
 ) {
   const app = express();
   app.use(express.json());
-  (apiModule.registerVrsSashaApi as any)(app, { apiKey, intake });
+  (apiModule.registerVrsSashaApi as any)(app, {
+    apiKey: "test-vrs-api-key",
+    intake,
+  });
+  return app;
+}
+
+function makeUnconfiguredIntakeApp(intake: FakeIntake) {
+  const app = express();
+  app.use(express.json());
+  (apiModule.registerVrsSashaApi as any)(app, { intake });
   return app;
 }
 
@@ -184,10 +153,94 @@ describe("VRS Express bridge — V5 contract boundary", () => {
       state: "queued",
       created_at: "2026-07-24T17:01:52.000Z",
     });
-    expect(intake.received).toMatchObject({
-      service_order: "13538277",
-      partner_id: "ahs",
+    expect(intake.received).toEqual(validPayload);
+  });
+
+  it("passes an authenticated V8 payload to intake unchanged", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "vrs_call_bridge_v8",
+      serviceOrder: "13538277",
+      createdAt: new Date("2026-08-11T18:00:00.000Z"),
     });
+
+    const response = await request(makeIntakeApp(intake))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "test-vrs-api-key")
+      .send(validV8AuthorizePayload);
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      call_id: "vrs_call_bridge_v8",
+      service_order: "13538277",
+      state: "queued",
+      created_at: "2026-08-11T18:00:00.000Z",
+    });
+    expect(intake.received).toEqual(validV8AuthorizePayload);
+  });
+
+  it("returns 401 before parsing a malformed body with a wrong API key", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+
+    const response = await request(makeIntakeApp(intake))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "wrong-key")
+      .send({ appliance_color: "stainless steel" });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: "UNAUTHORIZED",
+      message: "Invalid or missing API key",
+    });
+    expect(intake.received).toBeUndefined();
+  });
+
+  it("returns 503 before parsing a malformed body when the API key is not configured", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+
+    const response = await request(makeUnconfiguredIntakeApp(intake))
+      .post("/vrs/authorize")
+      .send({ appliance_color: "stainless steel" });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: "NOT_CONFIGURED",
+      message: "VRS SASHA API key is not configured",
+    });
+    expect(intake.received).toBeUndefined();
+  });
+
+  it("returns V8 validation fields for an authenticated partial V8 request", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+    const { contract_number: _contractNumber, purchase_year: _purchaseYear, symptom: _symptom, ...partialV8 } =
+      validV8AuthorizePayload;
+
+    const response = await request(makeIntakeApp(intake))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "test-vrs-api-key")
+      .send(partialV8);
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("VALIDATION_ERROR");
+    expect(response.body.fields).toEqual(
+      expect.arrayContaining(["contract_number", "purchase_year", "symptom"]),
+    );
+    expect(intake.received).toBeUndefined();
   });
 
   it("returns the existing bridge call for a duplicate service order", async () => {
@@ -210,6 +263,32 @@ describe("VRS Express bridge — V5 contract boundary", () => {
       existing_call_id: "vrs_call_bridge_existing",
       state: "in_progress",
     });
+  });
+
+  it("keeps V8 duplicate responses identical to V5 and excludes secrets", async () => {
+    const intake = new FakeIntake({
+      kind: "duplicate",
+      existingCallId: "vrs_call_bridge_existing",
+      state: "pending_review",
+    });
+
+    const response = await request(makeIntakeApp(intake))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "test-vrs-api-key")
+      .send(validV8AuthorizePayload);
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: "DUPLICATE_CALL",
+      message:
+        "A call is already in progress for service order 13538277",
+      existing_call_id: "vrs_call_bridge_existing",
+      state: "in_progress",
+    });
+    expect(JSON.stringify(response.body)).not.toContain(
+      validV8AuthorizePayload.callback_secret,
+    );
+    expect(JSON.stringify(response.body)).not.toContain("provider_call_id");
   });
 
   it("rejects First American at the AHS-only Phase 1 bridge gate", async () => {

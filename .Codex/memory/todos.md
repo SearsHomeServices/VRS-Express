@@ -4,6 +4,12 @@ Updated: 2026-08-11 18:41
 
 ## Done
 
+- [x] Adopted the version-aware V5/V8 parser in authenticated
+  `POST /vrs/authorize` after 503 configuration and timing-safe 401 checks;
+  preserved V5 behavior, response bodies, and no-wire-version intake.
+- [x] Added Task 2 route coverage and verified 22/22 API tests, 83/83 focused
+  bridge tests, a passing production build, and the 56-diagnostic TypeScript
+  baseline with no changed-file diagnostic.
 - [x] Corrected the Task 1 review finding: removed the false V5 `ZodObject`
   cast, derived the clean request type separately, and added runtime/type-level
   regression coverage for the exported schema API.
@@ -98,9 +104,6 @@ Updated: 2026-08-11 18:41
 
 ## Open
 
-- [ ] Adopt the version-aware V5/V8 parser in the authenticated
-  `POST /vrs/authorize` route while preserving current V5 behavior and proving
-  authentication runs before schema/version feedback.
 - [ ] Preserve the accepted contract version through storage and dispatch,
   and fill only eligible existing V8 placeholders from authoritative Express
   values without adding keys.

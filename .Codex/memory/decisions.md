@@ -1,9 +1,14 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 18:41
+Updated: 2026-08-11 18:50
 
 ## Decisions
 
+- [CX] 2026-08-11 - The existing authenticated `/vrs/authorize` route adopts
+  the shared V5/V8 selector only after its existing 503 configuration and
+  timing-safe API-key checks. Its intake type is the V5/V8 request union, not
+  a new wire version wrapper, so its endpoint, headers, bounded errors, and
+  response shapes remain stable.
 - [CX] 2026-08-11 - An exported Zod validator must retain its actual runtime
   class in TypeScript. For the V5 passthrough-plus-refinement validator,
   derive the payload type from the clean shape schema rather than falsely

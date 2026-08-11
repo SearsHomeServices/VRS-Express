@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:44 — Reconciled Task 1 schema implementation records with inactive API-route state.
+> **Last Touched:** Codex — 2026-08-11 18:50 — Completed Task 2 authenticated V5/V8 API-boundary adoption with local verification.
 
 ## Current State
 - Task 1 of the V5/V8 integration is implemented in the isolated worktree:
@@ -26,12 +26,17 @@
   It uses strict dual-schema parsing, same-version dispatch, controlled
   placeholder-only V8 enrichment, TINA/signed-photo pass-through, and
   same-ticket V8 retryable-failure rearming without a schema change.
-- Task 1 V5/V8 schemas, selection helpers, and outbound source validation now
-  exist in the isolated worktree. The authenticated API route has not adopted
-  the version-aware parser, so V8 intake/activation is not implemented yet.
-  No schema operation, push, Replit sync, deployment, or publication has
-  occurred. The prior live/published status below is a 2026-07-29 snapshot and
-  was not revalidated during Task 1.
+- Tasks 1 and 2 now provide strict V5/V8 schemas, version-aware authenticated
+  intake, and same-version outbound source validation in the isolated
+  worktree. `POST /vrs/authorize` keeps its existing 503 configuration and
+  timing-safe 401 checks before selecting a schema, then passes the accepted
+  V5/V8 payload unchanged to intake; no wire version field was added. Route
+  tests prove V8 activation, V5 compatibility, bounded V8 errors, unchanged
+  202/409 responses, and response-secret exclusion. The focused suite is
+  83/83, the production build passes, and TypeScript remains at the 56-raw
+  baseline with no changed-file diagnostic. No schema operation, push, Replit
+  sync, deployment, configuration, or publication has occurred. The prior
+  live/published status below is a 2026-07-29 snapshot and was not revalidated.
 - The executable plan is
   `docs/superpowers/plans/2026-08-11-vrs-v5-v8-dev-integration.md`; runtime
   changes will use ignored worktree `.worktrees/vrs-v5-v8-dev-integration`.
@@ -71,6 +76,11 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Adopt `safeParseVrsAuthorizeRequest` at the existing
+  authenticated `/vrs/authorize` boundary only after the existing missing-
+  configuration and timing-safe API-key gates. Intake receives the accepted
+  V5/V8 union with no added wire version; response status codes and bodies
+  remain compatibility behavior.
 - [CX] 2026-08-11 - Export the V5 validator with its actual `ZodEffects`
   runtime type. Derive `VrsAuthorizeV5Request` from the clean object-shape
   schema separately; never cast an effects schema to `ZodObject` merely to
