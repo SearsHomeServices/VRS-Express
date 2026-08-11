@@ -6,11 +6,9 @@ import {
   type VrsBridgeRecord,
   type VrsBridgeReviewContext,
   type VrsBridgeStore,
+  type VrsStoredAuthorizeRequest,
 } from "./vrs-sasha-queue";
-import type {
-  VrsAuthorizeRequest,
-  VrsWebhookEvent,
-} from "./vrs-sasha-contract";
+import type { VrsWebhookEvent } from "./vrs-sasha-contract";
 
 export const ACTIVE_VRS_BRIDGE_STATES = [
   "pending_review",
@@ -38,7 +36,7 @@ export interface NewVrsBridgeIntake {
   techId: string;
   techPhone: string;
   techName: string;
-  requestPayload: Omit<VrsAuthorizeRequest, "callback_secret">;
+  requestPayload: VrsStoredAuthorizeRequest;
   callbackUrl: string;
   callbackSecretCipher: string;
   callbackSecretIv: string;
@@ -66,10 +64,7 @@ function toBridgeRecord(row: typeof vrsAiCalls.$inferSelect): VrsBridgeRecord {
     state: row.state,
     dispatchError: row.dispatchError,
     dispatchedAt: row.dispatchedAt,
-    requestPayload: row.requestPayload as Omit<
-      VrsAuthorizeRequest,
-      "callback_secret"
-    >,
+    requestPayload: row.requestPayload as VrsStoredAuthorizeRequest,
     callbackUrl: row.callbackUrl,
     callbackSecretCipher: row.callbackSecretCipher,
     callbackSecretIv: row.callbackSecretIv,
@@ -208,10 +203,7 @@ export class DrizzleVrsBridgeStore implements VrsBridgeStore {
           retryable: row.retryable,
           dispatchedAt: row.dispatchedAt,
           reviewContext: projectVrsBridgeReviewContext(
-            row.requestPayload as Omit<
-              VrsAuthorizeRequest,
-              "callback_secret"
-            >,
+            row.requestPayload as VrsStoredAuthorizeRequest,
           ),
         }
       : null;

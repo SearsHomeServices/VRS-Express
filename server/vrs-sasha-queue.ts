@@ -3,6 +3,11 @@ import type {
   VrsAuthorizeRequest,
   VrsWebhookEvent,
 } from "./vrs-sasha-contract";
+import {
+  getVrsAuthorizeContractVersion,
+  safeParseVrsAuthorizeRequest,
+  vrsAuthorizeV8RequestSchema,
+} from "./vrs-sasha-contract";
 
 export type VrsExpressApplianceDivision =
   | "cooking"
@@ -31,10 +36,38 @@ export function mapVrsApplianceType(
 export function mapVrsPayloadToSubmission(
   payload: VrsAuthorizeRequest,
   districtCode: string,
-) {
+  operational?: VrsSubmissionOperationalValues,
+): {
+  serviceOrder: string;
+  applianceType: VrsExpressApplianceDivision;
+  requestType: "authorization";
+  warrantyType: "american_home_shield";
+  warrantyProvider: "American Home Shield";
+  issueDescription: string;
+  estimateAmount: string;
+  partNumbers: string;
+  phone: string;
+} {
   if (!/^\d{4}$/.test(districtCode)) {
     throw new Error("Technician district must be exactly four digits");
   }
+
+  const rationale = payload.repair_replace_rationale.trim();
+  const symptom = "symptom" in payload ? payload.symptom.trim() : "";
+  const comment = payload.comments
+    ?.find((entry) => entry.text.trim().length > 0)
+    ?.text.trim() ?? "";
+  const issueDescription = rationale ||
+    (symptom && symptom !== "N/A" ? symptom : "") ||
+    comment ||
+    (payload.failure_cause !== "other" ? payload.failure_cause : "") ||
+    "Authorization review requested";
+  const resolvedPhone = operational?.technicianPhone?.trim();
+  const phone = payload.tech_phone === "N/A"
+    ? resolvedPhone && resolvedPhone !== "N/A"
+      ? resolvedPhone
+      : ""
+    : payload.tech_phone;
 
   return {
     serviceOrder: `${districtCode}-${payload.service_order}`,
@@ -42,18 +75,31 @@ export function mapVrsPayloadToSubmission(
     requestType: "authorization" as const,
     warrantyType: "american_home_shield" as const,
     warrantyProvider: "American Home Shield",
-    issueDescription: payload.repair_replace_rationale,
+    issueDescription,
     estimateAmount: (
       payload.labor_amount +
       payload.tax_amount +
       payload.part_price
     ).toFixed(2),
     partNumbers: JSON.stringify(payload.parts.map((part) => part.part_id)),
-    phone: payload.tech_phone,
+    phone,
   };
 }
 
-export type VrsBridgeReviewContext = Omit<
+export interface VrsSubmissionOperationalValues {
+  technicianPhone?: string | null;
+}
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, Extract<keyof T, K>>
+  : never;
+
+export type VrsStoredAuthorizeRequest = DistributiveOmit<
+  VrsAuthorizeRequest,
+  "callback_secret"
+>;
+
+export type VrsBridgeReviewContext = DistributiveOmit<
   VrsAuthorizeRequest,
   "callback_url" | "callback_secret"
 >;
@@ -61,7 +107,7 @@ export type VrsBridgeReviewContext = Omit<
 export function projectVrsBridgeReviewContext(
   payload:
     | VrsAuthorizeRequest
-    | Omit<VrsAuthorizeRequest, "callback_secret">,
+    | VrsStoredAuthorizeRequest,
 ): VrsBridgeReviewContext {
   const {
     callback_url: _callbackUrl,
@@ -71,7 +117,65 @@ export function projectVrsBridgeReviewContext(
     callback_secret: _callbackSecret,
     ...safeReviewContext
   } = reviewContext as VrsAuthorizeRequest;
-  return safeReviewContext;
+  return safeReviewContext as VrsBridgeReviewContext;
+}
+
+export interface VrsAuthorizeEnrichment {
+  techPhone?: string | null;
+  techName?: string | null;
+  appliancePhotos?: string[] | null;
+}
+
+const E164_PHONE = /^\+[1-9]\d{7,14}$/;
+
+function isDispatchablePhotoUrl(value: string): boolean {
+  if (value !== value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hostname.length > 0 &&
+      url.hash === "" &&
+      url.pathname !== "/objects" &&
+      !url.pathname.startsWith("/objects/");
+  } catch {
+    return false;
+  }
+}
+
+export function enrichVrsAuthorizeForDispatch(
+  payload: VrsAuthorizeRequest,
+  enrichment: VrsAuthorizeEnrichment,
+): VrsAuthorizeRequest {
+  if (getVrsAuthorizeContractVersion(payload) === "v5") return payload;
+
+  const enriched = { ...vrsAuthorizeV8RequestSchema.parse(payload) };
+  if (
+    enriched.tech_phone === "N/A" &&
+    typeof enrichment.techPhone === "string" &&
+    E164_PHONE.test(enrichment.techPhone)
+  ) {
+    enriched.tech_phone = enrichment.techPhone;
+  }
+  if (
+    enriched.tech_name === "" &&
+    typeof enrichment.techName === "string" &&
+    enrichment.techName.trim().length > 0 &&
+    enrichment.techName.length <= 255
+  ) {
+    enriched.tech_name = enrichment.techName;
+  }
+  if (
+    enriched.appliance_photos.length === 0 &&
+    Array.isArray(enrichment.appliancePhotos)
+  ) {
+    enriched.appliance_photos = enrichment.appliancePhotos
+      .filter(isDispatchablePhotoUrl)
+      .slice(0, 10);
+  }
+
+  return vrsAuthorizeV8RequestSchema.parse(enriched);
 }
 
 export interface VrsBridgeRecord {
@@ -82,7 +186,7 @@ export interface VrsBridgeRecord {
   state: string;
   dispatchError?: string | null;
   dispatchedAt?: Date | null;
-  requestPayload: Omit<VrsAuthorizeRequest, "callback_secret">;
+  requestPayload: VrsStoredAuthorizeRequest;
   callbackUrl?: string;
   callbackSecretCipher?: string;
   callbackSecretIv?: string;
@@ -166,6 +270,7 @@ export async function dispatchVrsAiForSubmission(options: {
   client: VrsAiClient;
   callbackUrl: string;
   callbackSecret: string;
+  enrichment?: VrsAuthorizeEnrichment;
 }): Promise<DispatchVrsAiResult> {
   const record = await options.store.getBySubmissionId(options.submissionId);
   if (!record) return { kind: "not_applicable" };
@@ -182,13 +287,33 @@ export async function dispatchVrsAiForSubmission(options: {
     return { kind: "busy" };
   }
 
-  const payload = {
-    ...record.requestPayload,
-    callback_url: options.callbackUrl,
-    callback_secret: options.callbackSecret,
-  } as VrsAuthorizeRequest;
   let result: VrsAiAuthorizeResult;
   try {
+    const sourcePayload = {
+      ...record.requestPayload,
+      callback_secret: "stored-callback-secret-redacted",
+    } as VrsAuthorizeRequest;
+    const sourceVersion = getVrsAuthorizeContractVersion(sourcePayload);
+    const enrichedPayload = enrichVrsAuthorizeForDispatch(
+      sourcePayload,
+      options.enrichment ?? {},
+    );
+    const revalidated = safeParseVrsAuthorizeRequest(enrichedPayload);
+    if (!revalidated.success || revalidated.version !== sourceVersion) {
+      const fields = revalidated.success
+        ? "contract version"
+        : revalidated.error.issues
+          .map((issue) => issue.path.join(".") || "body")
+          .join(", ");
+      throw new Error(
+        `Stored VRS ${sourceVersion.toUpperCase()} payload failed revalidation: ${fields}`,
+      );
+    }
+    const payload = {
+      ...enrichedPayload,
+      callback_url: options.callbackUrl,
+      callback_secret: options.callbackSecret,
+    } as VrsAuthorizeRequest;
     result = await options.client.authorize({ payload });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

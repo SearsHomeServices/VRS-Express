@@ -1587,7 +1587,7 @@ export async function registerRoutes(
         .trim()
         .toLowerCase()
         .replace(/[\s-]+/g, "_");
-      if (!["ahs", "american_home_shield"].includes(partnerId)) {
+      if (!["ahs", "american_home_shield", "n/a"].includes(partnerId)) {
         return {
           kind: "unsupported_partner",
           partnerId: payload.partner_id ?? "unknown",
@@ -1631,10 +1631,18 @@ export async function registerRoutes(
         };
       }
 
+      const directoryPhone = technician.phone?.trim();
+      const safeDirectoryPhone =
+        directoryPhone && directoryPhone.toUpperCase() !== "N/A"
+          ? directoryPhone
+          : "";
+      const safeWirePhone = payload.tech_phone === "N/A"
+        ? ""
+        : payload.tech_phone;
       const techUser = await storage.getOrCreateTechUser(
         technician.ldapId,
         technician.name || payload.tech_name,
-        technician.phone || payload.tech_phone,
+        safeDirectoryPhone || safeWirePhone,
       );
       if (techUser.role !== "technician") {
         return {
@@ -1644,6 +1652,12 @@ export async function registerRoutes(
           message: "The resolved account is not a technician account",
         };
       }
+      const userPhone = techUser.phone?.trim();
+      const safeUserPhone = userPhone && userPhone.toUpperCase() !== "N/A"
+        ? userPhone
+        : "";
+      const operationalPhone =
+        safeDirectoryPhone || safeUserPhone || safeWirePhone;
 
       // Fail configuration validation before creating a user-visible ticket;
       // otherwise a missing encryption key would leave an orphaned manual
@@ -1655,7 +1669,9 @@ export async function registerRoutes(
       const bridgeCallId = `vrs_call_${randomUUID()}`;
 
       const internalRequest = {
-        body: mapVrsPayloadToSubmission(payload, technician.district),
+        body: mapVrsPayloadToSubmission(payload, technician.district, {
+          technicianPhone: operationalPhone,
+        }),
       } as Request;
       (internalRequest as AuthenticatedRequest).user = {
         id: techUser.id,
@@ -1692,8 +1708,8 @@ export async function registerRoutes(
         callId: bridgeCallId,
         serviceOrder: payload.service_order,
         techId: payload.tech_id,
-        techPhone: payload.tech_phone,
-        techName: payload.tech_name,
+        techPhone: operationalPhone,
+        techName: techUser.name,
         requestPayload,
         callbackUrl: payload.callback_url,
         callbackSecretCipher: encryptedSecret.cipher,
@@ -2865,11 +2881,42 @@ export async function registerRoutes(
             });
           }
 
+          const technicianUser = await storage.getUser(
+            submission.technicianId,
+          );
+          let submissionPhotoCandidates: string[] = [];
+          if (submission.photos) {
+            try {
+              const parsedPhotos = JSON.parse(submission.photos) as unknown;
+              if (Array.isArray(parsedPhotos)) {
+                submissionPhotoCandidates = parsedPhotos.filter(
+                  (value): value is string => typeof value === "string",
+                );
+              } else if (
+                parsedPhotos &&
+                typeof parsedPhotos === "object"
+              ) {
+                submissionPhotoCandidates = Object.values(parsedPhotos)
+                  .flatMap((value) => Array.isArray(value) ? value : [])
+                  .filter(
+                    (value): value is string => typeof value === "string",
+                  );
+              }
+            } catch {
+              submissionPhotoCandidates = [];
+            }
+          }
+
           const dispatch = await dispatchVrsAiForSubmission({
             submissionId: id,
             store: vrsBridgeStore,
             callbackUrl,
             callbackSecret: aiWebhookSecret,
+            enrichment: {
+              techPhone: submission.phone,
+              techName: technicianUser?.name,
+              appliancePhotos: submissionPhotoCandidates,
+            },
             client: {
               authorize: ({ payload }) =>
                 sendVrsAuthorizeRequest({

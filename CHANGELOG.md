@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Safe V8 mapping and same-version dispatch (2026-08-11)
+- V8 `tech_phone: "N/A"` now uses the resolved technician phone only for the
+  normal Express ticket/SMS path while the durable parsed wire JSON retains
+  the placeholder. Blank rationale receives an internal-only description in
+  symptom, structured-comment, specific-failure-cause, then neutral order.
+- Stage 1 dispatch keeps V5 unchanged and enriches V8 only for existing
+  `tech_phone`, `tech_name`, and empty `appliance_photos` placeholders from
+  valid same-field Express values. Populated values and signed TINA URLs are
+  preserved byte-for-byte; authenticated `/objects/` paths and `cta_no` are
+  never sent. The stored contract version is revalidated before the client.
+- Added mapping/dispatch regression coverage. The focused bridge suite passes
+  95/95, the production build passes, and TypeScript remains at the captured
+  56-raw-diagnostic baseline with no new Task 3 file diagnostic. No schema,
+  seed, startup, database, configuration, remote, sync, deployment, or
+  publication action ran.
+
 ### Changed — Authenticated V5/V8 authorize API boundary (2026-08-11)
 - `POST /vrs/authorize` now selects the strict V5 or V8 validator only after
   its existing configuration and timing-safe API-key checks. Authenticated V5

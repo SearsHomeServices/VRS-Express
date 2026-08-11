@@ -1,9 +1,16 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 18:41
+Updated: 2026-08-11 19:00
 
 ## Done
 
+- [x] Preserved V5/V8 through durable bridge JSON and outbound dispatch;
+  added V8-only operational phone/rationale fallbacks, placeholder-only
+  same-field enrichment, signed TINA pass-through, authenticated-object-path
+  rejection, exact key-set checks, and pre-client same-version revalidation.
+- [x] Verified Task 3 with 25/25 queue tests, 95/95 focused bridge tests, a
+  passing production build, and the unchanged 56-diagnostic TypeScript
+  baseline with no new Task 3 file diagnostic.
 - [x] Adopted the version-aware V5/V8 parser in authenticated
   `POST /vrs/authorize` after 503 configuration and timing-safe 401 checks;
   preserved V5 behavior, response bodies, and no-wire-version intake.
@@ -104,9 +111,6 @@ Updated: 2026-08-11 18:41
 
 ## Open
 
-- [ ] Preserve the accepted contract version through storage and dispatch,
-  and fill only eligible existing V8 placeholders from authoritative Express
-  values without adding keys.
 - [ ] Update the Stage 1 review panel to show all decision-relevant V8 fields
   and appliance photos.
 - [ ] Implement the same-ticket, new-call-ID retry path after a retryable

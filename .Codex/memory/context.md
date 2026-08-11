@@ -1,9 +1,24 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 18:50
+Updated: 2026-08-11 19:00
 
 ## Current Session
 
+- Completed Task 3 test-first. V8 wire `tech_phone: "N/A"` and blank rationale
+  now receive bridge-only operational fallbacks without mutating durable JSON.
+  Review projection retains every V8 business field and removes both callback
+  fields.
+- Stage 1 keeps V5 byte-for-byte compatible and applies narrow V8 enrichment
+  only to existing `tech_phone`, `tech_name`, and empty `appliance_photos`
+  placeholders. Invalid candidates and authenticated `/objects/` paths are
+  ignored, populated input and signed TINA URLs are retained, no key or
+  `cta_no` is appended, and the original contract version is revalidated
+  before the VRS AI client.
+- Task 3 verification: 25/25 queue tests and 95/95 focused bridge tests pass;
+  the production build passes; TypeScript remains at the 56 raw pre-existing
+  diagnostic baseline with no new Task 3 file diagnostic. No schema, seed,
+  startup, database, remote, configuration, sync, deployment, or publication
+  action ran.
 - Completed Task 2 test-first: authenticated `POST /vrs/authorize` now runs
   `safeParseVrsAuthorizeRequest` only after its existing 503 configuration and
   timing-safe 401 API-key gates, then passes the accepted V5/V8 union

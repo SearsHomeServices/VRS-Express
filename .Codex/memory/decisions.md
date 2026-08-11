@@ -1,9 +1,20 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 18:50
+Updated: 2026-08-11 19:00
 
 ## Decisions
 
+- [CX] 2026-08-11 - Keep operational ticket values separate from durable V8
+  wire JSON. A directory/user phone may replace wire `N/A` for the normal
+  ticket and SMS path, but the stored request keeps `N/A`; if no usable phone
+  exists, the normal submission validator blocks ticket creation rather than
+  attempting SMS to a placeholder.
+- [CX] 2026-08-11 - V8 dispatch enrichment is limited to existing documented
+  placeholders in `tech_phone`, `tech_name`, and `appliance_photos`, using
+  valid same-field values from the resolved technician and submission.
+  Populated sender values and signed URLs win; `/objects/` paths, invalid
+  candidates, added keys, and `cta_no` are forbidden. Revalidate the inferred
+  stored version before invoking the client; V5 remains unenriched.
 - [CX] 2026-08-11 - The existing authenticated `/vrs/authorize` route adopts
   the shared V5/V8 selector only after its existing 503 configuration and
   timing-safe API-key checks. Its intake type is the V5/V8 request union, not

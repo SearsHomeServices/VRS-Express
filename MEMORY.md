@@ -1,8 +1,19 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:50 — Completed Task 2 authenticated V5/V8 API-boundary adoption with local verification.
+> **Last Touched:** Codex — 2026-08-11 19:00 — Completed Task 3 safe V8 operational mapping and same-version outbound enrichment.
 
 ## Current State
+- Tasks 1-3 of the V5/V8 integration are implemented in the isolated
+  worktree. V8 gap values now map safely into the normal Express ticket/SMS
+  path without mutating durable wire JSON, V5 dispatch remains unchanged,
+  and V8 dispatch fills only eligible existing phone/name/empty-photo
+  placeholders from valid authoritative values. Signed TINA URLs remain
+  byte-identical, authenticated `/objects/` paths and `cta_no` are excluded,
+  and the inferred stored version is revalidated before the client.
+- Task 3 verification is 25/25 queue tests, 95/95 focused bridge tests, a
+  passing production build, and the unchanged 56-raw TypeScript baseline
+  with no new Task 3 file diagnostic. No schema, seed, startup, database,
+  remote, configuration, sync, deployment, or publication action ran.
 - Task 1 of the V5/V8 integration is implemented in the isolated worktree:
   canonical fixtures, strict separate V5/V8 schemas, four-key V8 intent
   selection, versioned safe parsing, and version-aware outbound source
@@ -76,6 +87,12 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Separate V8 operational fallbacks from durable wire JSON:
+  resolved phone/name may support the normal ticket and eligible outbound
+  placeholders, but stored request fields stay as received. Keep V5
+  unenriched; for V8, never overwrite populated values, append keys, expose
+  authenticated `/objects/` media, or alter sender-provided signed URLs, and
+  revalidate the inferred version before client dispatch.
 - [CX] 2026-08-11 - Adopt `safeParseVrsAuthorizeRequest` at the existing
   authenticated `/vrs/authorize` boundary only after the existing missing-
   configuration and timing-safe API-key gates. Intake receives the accepted
@@ -140,8 +157,9 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Implement the corrected strict dual V5/V8 bridge test-first, update all
-  platform-only handoff artifacts, and complete local verification.
+- [CX] Continue the corrected V5/V8 bridge with the V8 review panel,
+  retryable-failure rearm, platform-only handoff updates, and final local/DEV
+  evidence.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
 - [CX] Run the staged non-bridge workflow matrix and record a rollback target
@@ -167,6 +185,11 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - V8 permits operationally unusable gap values such as an
+  empty rationale, `tech_phone: "N/A"`, `symptom: "N/A"`, and
+  `failure_cause: "other"`. Keep their wire representation intact, but derive
+  nonempty internal ticket values and reject/ignore invalid enrichment
+  candidates so placeholders never become SMS recipients or outbound facts.
 - [CX] 2026-04-27 - Bundled `rg.exe` failed with Windows `Access is denied`; PowerShell `Select-String` worked as the fallback.
 - [CX] 2026-04-27 - Project root had no `MEMORY.md` and no `.Codex/memory` directory at session start, despite repo instructions requiring both to be maintained.
 - [CX] 2026-07-28 - `git push` from the Replit shell hung on an HTTPS credential prompt. Safe path: fetch the Replit branch over SSH into the authenticated local checkout, verify fast-forward ancestry, then push locally.

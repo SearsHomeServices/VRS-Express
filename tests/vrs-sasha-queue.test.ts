@@ -4,6 +4,24 @@ import type {
   VrsAuthorizeRequest,
   VrsWebhookEvent,
 } from "../server/vrs-sasha-contract";
+import {
+  signedTinaPhotoUrl,
+  validV5AuthorizePayload,
+  validV8AuthorizePayload,
+} from "./fixtures/vrs-authorize-payloads";
+
+type EnrichForDispatch = (
+  payload: VrsAuthorizeRequest,
+  enrichment: {
+    techPhone?: string | null;
+    techName?: string | null;
+    appliancePhotos?: string[] | null;
+  },
+) => VrsAuthorizeRequest;
+
+const candidateBridgeModule = bridgeModule as typeof bridgeModule & {
+  enrichVrsAuthorizeForDispatch?: EnrichForDispatch;
+};
 
 const requestPayload: VrsAuthorizeRequest = {
   service_order: "13538277",
@@ -60,6 +78,90 @@ describe("VRS Express bridge orchestration", () => {
     });
   });
 
+  it("uses the resolved phone operationally without mutating the durable V8 wire payload", () => {
+    const payload: VrsAuthorizeRequest = {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A",
+      tech_name: "",
+      repair_replace_rationale: "",
+      symptom: "Washer will not drain",
+    };
+    const wireSnapshot = structuredClone(payload);
+
+    const submission = bridgeModule.mapVrsPayloadToSubmission(
+      payload,
+      "8175",
+      { technicianPhone: "+17045550125" },
+    );
+
+    expect(submission.phone).toBe("+17045550125");
+    expect(submission.phone).not.toBe("N/A");
+    expect(submission.issueDescription).toBe("Washer will not drain");
+    expect(payload).toEqual(wireSnapshot);
+    expect(payload.tech_phone).toBe("N/A");
+  });
+
+  it.each([
+    {
+      label: "real symptom",
+      payload: {
+        ...validV8AuthorizePayload,
+        repair_replace_rationale: "",
+        symptom: "Washer stops during drain",
+        comments: [{
+          tech_id: "0123456",
+          work_item: "tech_observation" as const,
+          text: "Water remains in the basket",
+          timestamp: "2026-08-11T12:00:00Z",
+        }],
+        failure_cause: "normal-wear" as const,
+      },
+      expected: "Washer stops during drain",
+    },
+    {
+      label: "structured comment",
+      payload: {
+        ...validV8AuthorizePayload,
+        repair_replace_rationale: "",
+        symptom: "N/A",
+        comments: [{
+          tech_id: "0123456",
+          work_item: "tech_observation" as const,
+          text: "Water remains in the basket",
+          timestamp: "2026-08-11T12:00:00Z",
+        }],
+        failure_cause: "normal-wear" as const,
+      },
+      expected: "Water remains in the basket",
+    },
+    {
+      label: "specific failure cause",
+      payload: {
+        ...validV8AuthorizePayload,
+        repair_replace_rationale: "",
+        symptom: "N/A",
+        comments: [],
+        failure_cause: "normal-wear" as const,
+      },
+      expected: "normal-wear",
+    },
+    {
+      label: "neutral fallback",
+      payload: {
+        ...validV8AuthorizePayload,
+        repair_replace_rationale: "",
+        symptom: "N/A",
+        comments: [],
+        failure_cause: "other" as const,
+      },
+      expected: "Authorization review requested",
+    },
+  ])("uses the $label for a blank V8 rationale", ({ payload, expected }) => {
+    expect(
+      bridgeModule.mapVrsPayloadToSubmission(payload, "8175").issueDescription,
+    ).toBe(expected);
+  });
+
   it("projects the human review context without callback credentials or routing", () => {
     const context = bridgeModule.projectVrsBridgeReviewContext(requestPayload);
 
@@ -78,6 +180,96 @@ describe("VRS Express bridge orchestration", () => {
     expect(context.parts).toHaveLength(1);
     expect(JSON.stringify(context)).not.toContain("callback_url");
     expect(JSON.stringify(context)).not.toContain("callback_secret");
+  });
+
+  it("projects every V8 review field while removing both callback fields", () => {
+    const context = bridgeModule.projectVrsBridgeReviewContext(
+      validV8AuthorizePayload,
+    );
+    const {
+      callback_url: _callbackUrl,
+      callback_secret: _callbackSecret,
+      ...expected
+    } = validV8AuthorizePayload;
+
+    expect(context).toEqual(expected);
+    expect(Object.keys(context)).toEqual(Object.keys(expected));
+    expect(context).not.toHaveProperty("callback_url");
+    expect(context).not.toHaveProperty("callback_secret");
+  });
+
+  it("fills only eligible V8 placeholders from valid same-field candidates", () => {
+    const enrich = candidateBridgeModule.enrichVrsAuthorizeForDispatch;
+    expect(typeof enrich).toBe("function");
+    if (!enrich) return;
+    const payload: VrsAuthorizeRequest = {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A",
+      tech_name: "",
+      appliance_photos: [],
+    };
+    const wireSnapshot = structuredClone(payload);
+
+    const enriched = enrich(payload, {
+      techPhone: "+17045550125",
+      techName: "Resolved Technician",
+      appliancePhotos: [
+        "http://cdn.example.test/insecure.jpg",
+        "/objects/session-auth/photo.jpg",
+        "https://vrs-express.example.test/objects/session-auth/photo.jpg",
+        "https://vrs-express.example.test/objects/uploads/private.jpg",
+        "https://cdn.example.test/authorized.jpg",
+      ],
+    });
+
+    expect(enriched).toEqual({
+      ...payload,
+      tech_phone: "+17045550125",
+      tech_name: "Resolved Technician",
+      appliance_photos: ["https://cdn.example.test/authorized.jpg"],
+    });
+    expect(Object.keys(enriched)).toEqual(Object.keys(payload));
+    expect(enriched).not.toHaveProperty("cta_no");
+    expect(payload).toEqual(wireSnapshot);
+  });
+
+  it("leaves V5 and populated V8 business values byte-for-byte unchanged", () => {
+    const enrich = candidateBridgeModule.enrichVrsAuthorizeForDispatch;
+    expect(typeof enrich).toBe("function");
+    if (!enrich) return;
+    const v5 = structuredClone(validV5AuthorizePayload);
+    const populatedV8 = structuredClone(validV8AuthorizePayload);
+
+    expect(enrich(v5, {
+      techPhone: "+17045550125",
+      techName: "Different Technician",
+      appliancePhotos: ["https://cdn.example.test/different.jpg"],
+    })).toEqual(v5);
+    expect(enrich(populatedV8, {
+      techPhone: "+17045550125",
+      techName: "Different Technician",
+      appliancePhotos: ["https://cdn.example.test/different.jpg"],
+    })).toEqual(populatedV8);
+    expect(enrich(v5, {})).not.toHaveProperty("cta_no");
+    expect(enrich(populatedV8, {})).not.toHaveProperty("cta_no");
+  });
+
+  it("ignores invalid placeholder candidates instead of breaking a valid V8 payload", () => {
+    const enrich = candidateBridgeModule.enrichVrsAuthorizeForDispatch;
+    expect(typeof enrich).toBe("function");
+    if (!enrich) return;
+    const payload: VrsAuthorizeRequest = {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A",
+      tech_name: "",
+      appliance_photos: [],
+    };
+
+    expect(enrich(payload, {
+      techPhone: "704-555-0125",
+      techName: "X".repeat(256),
+      appliancePhotos: ["http://cdn.example.test/insecure.jpg"],
+    })).toEqual(payload);
   });
 
   it("maps common appliance names to the VRS Express routing divisions", () => {
@@ -153,6 +345,150 @@ describe("VRS Express bridge orchestration", () => {
       9,
       "vrs_ai_call_456",
       "queued",
+    );
+  });
+
+  it("dispatches V5 with exactly its received key set and no V8 additions", async () => {
+    const { callback_secret: _callbackSecret, ...storedPayload } =
+      validV5AuthorizePayload;
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted" as const,
+        callId: "vrs_ai_call_v5",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 10,
+        submissionId: 50,
+        callId: "vrs_call_v5",
+        state: "pending_review",
+        requestPayload: storedPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 50,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: {
+        techPhone: "+17045550125",
+        techName: "Different Technician",
+        appliancePhotos: ["https://cdn.example.test/different.jpg"],
+      },
+    });
+
+    const sent = client.authorize.mock.calls[0]?.[0].payload;
+    expect(Object.keys(sent).sort()).toEqual(
+      Object.keys(validV5AuthorizePayload).sort(),
+    );
+    expect(sent).not.toHaveProperty("appliance_color");
+    expect(sent).not.toHaveProperty("contract_number");
+    expect(sent).not.toHaveProperty("purchase_year");
+    expect(sent).not.toHaveProperty("symptom");
+    expect(sent).not.toHaveProperty("cta_no");
+  });
+
+  it("dispatches V8 with the same key set and preserves a signed TINA URL byte-for-byte", async () => {
+    const { callback_secret: _callbackSecret, ...storedPayload } = {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A" as const,
+      tech_name: "",
+      appliance_photos: [signedTinaPhotoUrl],
+    };
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted" as const,
+        callId: "vrs_ai_call_v8",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 11,
+        submissionId: 51,
+        callId: "vrs_call_v8",
+        state: "pending_review",
+        requestPayload: storedPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 51,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: {
+        techPhone: "+17045550125",
+        techName: "Resolved Technician",
+        appliancePhotos: ["https://cdn.example.test/unused.jpg"],
+      },
+    });
+
+    const sent = client.authorize.mock.calls[0]?.[0].payload;
+    expect(Object.keys(sent).sort()).toEqual(
+      Object.keys(validV8AuthorizePayload).sort(),
+    );
+    expect(sent.tech_phone).toBe("+17045550125");
+    expect(sent.tech_name).toBe("Resolved Technician");
+    expect(sent.appliance_photos).toEqual([signedTinaPhotoUrl]);
+    expect(sent.appliance_photos[0]).toBe(signedTinaPhotoUrl);
+    expect(sent).not.toHaveProperty("cta_no");
+  });
+
+  it("rejects a stored payload that no longer validates as its original version before client dispatch", async () => {
+    const { callback_secret: _callbackSecret, contract_number: _contract, ...invalidStoredPayload } =
+      validV8AuthorizePayload;
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted" as const,
+        callId: "must_not_dispatch",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 12,
+        submissionId: 52,
+        callId: "vrs_call_invalid_v8",
+        state: "pending_review",
+        requestPayload: invalidStoredPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn(),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 52,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: {},
+    });
+
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(client.authorize).not.toHaveBeenCalled();
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      12,
+      expect.stringContaining("contract_number"),
     );
   });
 
