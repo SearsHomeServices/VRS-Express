@@ -1,8 +1,21 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 18:31
+Updated: 2026-08-11 18:36
 
 ## Current Session
+
+- Implemented Task 1 test-first: canonical V5/V8 authorize fixtures, strict
+  separate schemas, deterministic V8 intent selection from the four V8-only
+  keys, a version-bearing safe parser, and same-version outbound source
+  validation. V8 validation does not transform accepted strings or signed
+  photo URLs; V5 retains its existing schema export and trimming behavior.
+- Confirmed against the source V8 contract that `contract_number` and
+  `symptom` have no `maxLength`; they are nonblank/nonmutating without an
+  invented cap. `appliance_color` retains the contract's explicit max 40.
+- Added the contract suite to `test:vrs-ai-bridge`. Fresh evidence: 77/77
+  focused tests, production build passing, and the original 56 raw TypeScript
+  diagnostics with no changed-file diagnostic. No database/schema/seed/
+  startup/remote/deployment action occurred.
 
 - Reconciled the 2026-08-11 integration meeting with the supplied V8 contract
   and corrected two earlier assumptions: V5 remains supported alongside V8,

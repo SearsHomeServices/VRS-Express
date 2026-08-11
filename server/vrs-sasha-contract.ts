@@ -27,6 +27,17 @@ export function isAllowedVrsCallbackUrl(value: string): boolean {
 const requiredText = (field: string, max: number) =>
   z.string().trim().min(1, `${field} is required`).max(max);
 
+const nonblankText = (field: string, max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => value.trim().length > 0, `${field} is required`);
+
+const nonblankString = (field: string) =>
+  z
+    .string()
+    .refine((value) => value.trim().length > 0, `${field} is required`);
+
 const money = z
   .number()
   .finite()
@@ -34,7 +45,7 @@ const money = z
   .max(1_000_000)
   .multipleOf(0.01, "USD amounts must have at most two decimal places");
 
-const vrsPartSchema = z
+const vrsV5PartSchema = z
   .object({
     part_id: requiredText("part_id", 100),
     part_description: requiredText("part_description", 500),
@@ -43,7 +54,7 @@ const vrsPartSchema = z
   })
   .strict();
 
-const vrsCommentSchema = z
+const vrsV5CommentSchema = z
   .object({
     tech_id: requiredText("comments[].tech_id", 50),
     work_item: z.enum([
@@ -59,7 +70,7 @@ const vrsCommentSchema = z
   })
   .strict();
 
-const vrsAuthorizeRequestShape = {
+const vrsAuthorizeV5RequestShape = {
     service_order: z.string().regex(/^\d{8}$/, "service_order must be 8 digits"),
     tech_id: requiredText("tech_id", 50),
     tech_phone: z
@@ -75,7 +86,7 @@ const vrsAuthorizeRequestShape = {
         "callback_url must be a confirmed SASHA webhook URL",
       ),
     callback_secret: z.string().min(16).max(512),
-    parts: z.array(vrsPartSchema).min(1),
+    parts: z.array(vrsV5PartSchema).min(1),
     customer_name: requiredText("customer_name", 255),
     customer_address: requiredText("customer_address", 1_000),
     service_address: requiredText("service_address", 1_000),
@@ -105,15 +116,16 @@ const vrsAuthorizeRequestShape = {
     appliance_grade: z.enum(["entry", "mid", "top"]).optional(),
     partner_id: requiredText("partner_id", 50).optional(),
     appliance_photos: z.array(z.string().url()).max(10).optional(),
-    comments: z.array(vrsCommentSchema).max(20).optional(),
+    comments: z.array(vrsV5CommentSchema).max(20).optional(),
 };
 
-export const vrsAuthorizeRequestSchema = z
-  .object(vrsAuthorizeRequestShape)
+const vrsAuthorizeV5ShapeSchema = z.object(vrsAuthorizeV5RequestShape);
+
+export const vrsAuthorizeV5RequestSchema = vrsAuthorizeV5ShapeSchema
   .passthrough()
   .superRefine((value, context) => {
     for (const key of Object.keys(value)) {
-      if (!(key in vrsAuthorizeRequestShape)) {
+      if (!(key in vrsAuthorizeV5RequestShape)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: [key],
@@ -121,24 +133,175 @@ export const vrsAuthorizeRequestSchema = z
         });
       }
     }
-  });
+  }) as unknown as typeof vrsAuthorizeV5ShapeSchema;
 
-export type VrsAuthorizeRequest = z.infer<typeof vrsAuthorizeRequestSchema>;
+// Keep the original export bound to V5 until callers move to the explicit
+// version-aware parser. This preserves the existing V5 route behavior.
+export const vrsAuthorizeRequestSchema = vrsAuthorizeV5RequestSchema;
 
-const vrsOutboundSourceRequestShape = {
-  ...vrsAuthorizeRequestShape,
+const vrsV8PartSchema = z
+  .object({
+    part_id: nonblankText("part_id", 100),
+    part_description: nonblankText("part_description", 500),
+    sell_price: money,
+    part_function: z.string().max(200),
+  })
+  .strict();
+
+const vrsV8CommentSchema = z
+  .object({
+    tech_id: nonblankText("comments[].tech_id", 50),
+    work_item: z.enum([
+      "failure_diagnosis",
+      "tech_recommendation",
+      "appliance_features",
+      "customer_history",
+      "tech_observation",
+      "other",
+    ]),
+    text: nonblankText("comments[].text", 2_000),
+    timestamp: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+const vrsAuthorizeV8RequestShape = {
+  service_order: z.string().regex(/^\d{8}$/, "service_order must be 8 digits"),
+  tech_id: nonblankText("tech_id", 50),
+  tech_phone: z.union([
+    z.string().regex(/^\+[1-9]\d{7,14}$/, "tech_phone must use E.164 format"),
+    z.literal("N/A"),
+  ]),
+  tech_name: z.string().max(255),
+  reason_for_call: z.literal("authorization"),
+  callback_url: z
+    .string()
+    .url()
+    .refine(
+      isAllowedVrsCallbackUrl,
+      "callback_url must be a confirmed SASHA webhook URL",
+    ),
+  callback_secret: z.string().min(16).max(512),
+  parts: z.array(vrsV8PartSchema).min(1),
+  customer_name: z.string().max(255),
+  customer_address: nonblankText("customer_address", 1_000),
+  service_address: nonblankText("service_address", 1_000),
+  brand: nonblankText("brand", 100),
+  model_number: nonblankText("model_number", 100),
+  serial_number: nonblankText("serial_number", 100),
+  appliance_type: nonblankText("appliance_type", 100),
+  appliance_age: z.number().finite().nonnegative().max(100),
+  labor_amount: money,
+  tax_amount: money,
+  part_price: money,
+  appliance_location: nonblankText("appliance_location", 100),
+  failure_cause: z.enum([
+    "normal-wear",
+    "power-surge",
+    "impact",
+    "installation-error",
+    "abuse",
+    "age",
+    "other",
+  ]),
+  tech_recommendation: z.enum(["repair", "replace"]),
+  repair_replace_rationale: z.string(),
+  appliance_grade: z.enum(["entry", "mid", "top", "N/A"]),
+  partner_id: nonblankText("partner_id", 50),
+  appliance_photos: z.array(z.string().url()).max(10),
+  comments: z.array(vrsV8CommentSchema).max(20),
+  appliance_color: nonblankText("appliance_color", 40),
+  contract_number: nonblankString("contract_number"),
+  purchase_year: z.union([
+    z.number().int().positive(),
+    z.literal("TBD"),
+    z.literal("N/A"),
+  ]),
+  symptom: nonblankString("symptom"),
+};
+
+export const vrsAuthorizeV8RequestSchema = z
+  .object(vrsAuthorizeV8RequestShape)
+  .strict();
+
+export const VRS_V8_ONLY_KEYS = [
+  "appliance_color",
+  "contract_number",
+  "purchase_year",
+  "symptom",
+] as const;
+
+export type VrsAuthorizeContractVersion = "v5" | "v8";
+export type VrsAuthorizeV5Request = z.infer<typeof vrsAuthorizeV5RequestSchema>;
+export type VrsAuthorizeV8Request = z.infer<typeof vrsAuthorizeV8RequestSchema>;
+export type VrsAuthorizeRequest =
+  | VrsAuthorizeV5Request
+  | VrsAuthorizeV8Request;
+
+export function getVrsAuthorizeContractVersion(
+  input: unknown,
+): VrsAuthorizeContractVersion {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return "v5";
+  }
+
+  return VRS_V8_ONLY_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(input, key)
+  )
+    ? "v8"
+    : "v5";
+}
+
+export function safeParseVrsAuthorizeRequest(input: unknown):
+  | {
+      success: true;
+      version: VrsAuthorizeContractVersion;
+      data: VrsAuthorizeRequest;
+    }
+  | {
+      success: false;
+      version: VrsAuthorizeContractVersion;
+      error: z.ZodError;
+    } {
+  const version = getVrsAuthorizeContractVersion(input);
+  const parsed = version === "v8"
+    ? vrsAuthorizeV8RequestSchema.safeParse(input)
+    : vrsAuthorizeV5RequestSchema.safeParse(input);
+
+  return parsed.success
+    ? { success: true, version, data: parsed.data }
+    : { success: false, version, error: parsed.error };
+}
+
+const cleanHttpsUrl = z.string().url().refine((value) => {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}, "callback_url must be a clean HTTPS URL");
+
+const vrsV5OutboundSourceRequestShape = {
+  ...vrsAuthorizeV5RequestShape,
   // The inbound schema above deliberately pins this to SASHA. Once Express
   // owns the callback, retries may already contain the Express URL, so the
   // outbound client validates the trusted replacement separately below.
-  callback_url: z.string().url(),
+  callback_url: cleanHttpsUrl,
 };
 
-const vrsOutboundSourceRequestSchema = z
-  .object(vrsOutboundSourceRequestShape)
+const vrsAuthorizeV5OutboundSourceSchema = z
+  .object(vrsV5OutboundSourceRequestShape)
   .passthrough()
   .superRefine((value, context) => {
     for (const key of Object.keys(value)) {
-      if (!(key in vrsOutboundSourceRequestShape)) {
+      if (!(key in vrsV5OutboundSourceRequestShape)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: [key],
@@ -147,6 +310,13 @@ const vrsOutboundSourceRequestSchema = z
       }
     }
   });
+
+const vrsAuthorizeV8OutboundSourceSchema = z
+  .object({
+    ...vrsAuthorizeV8RequestShape,
+    callback_url: cleanHttpsUrl,
+  })
+  .strict();
 
 export function isValidVrsExpressCallbackUrl(value: string): boolean {
   try {
@@ -286,7 +456,10 @@ export async function sendVrsAuthorizeRequest(options: {
   payload: VrsAuthorizeRequest;
   fetchImpl?: typeof fetch;
 }): Promise<VrsAiAuthorizeResult> {
-  const sourcePayload = vrsOutboundSourceRequestSchema.parse(options.payload);
+  const sourceVersion = getVrsAuthorizeContractVersion(options.payload);
+  const sourcePayload = sourceVersion === "v8"
+    ? vrsAuthorizeV8OutboundSourceSchema.parse(options.payload)
+    : vrsAuthorizeV5OutboundSourceSchema.parse(options.payload);
   const baseUrl = new URL(options.baseUrl);
   if (
     baseUrl.protocol !== "https:" ||

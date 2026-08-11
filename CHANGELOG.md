@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Strict V5/V8 authorize contract schemas (2026-08-11)
+- Added canonical V5 and complete V8 authorize fixtures plus version-aware
+  contract tests. Any `appliance_color`, `contract_number`, `purchase_year`,
+  or `symptom` key selects strict V8 validation; incomplete V8 payloads cannot
+  fall through to V5.
+- Preserved the existing V5 schema export and trimming behavior while adding
+  a non-mutating V8 schema, documented gap values, strict root/nested key
+  rejection, TINA/signed URL byte preservation, and same-version outbound
+  source validation. `contract_number` and `symptom` are nonblank but have no
+  invented `maxLength`, matching the source V8 contract; the application JSON
+  body limit remains the outer bound. No database schema, seed, startup,
+  route, or deployment change was made in this increment.
+- Added the new contract suite to `test:vrs-ai-bridge`. The focused bridge
+  suite now passes 77/77, the production build passes, and TypeScript remains
+  at the captured 56-raw-diagnostic baseline with no changed-file diagnostic.
+
 ### Planned — VRS V5/V8 development integration (2026-08-11)
 - **Execution plan recorded.** Added the test-first implementation and DEV
   rollout plan at

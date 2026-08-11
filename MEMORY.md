@@ -1,8 +1,16 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 18:31 — Recorded the test-first V5/V8 implementation plan and isolated-worktree rollout gates.
+> **Last Touched:** Codex — 2026-08-11 18:36 — Added exact-contract V5/V8 fixtures and strict version-aware authorize schemas test-first.
 
 ## Current State
+- Task 1 of the V5/V8 integration is implemented in the isolated worktree:
+  canonical fixtures, strict separate V5/V8 schemas, four-key V8 intent
+  selection, versioned safe parsing, and version-aware outbound source
+  validation. The existing `vrsAuthorizeRequestSchema` remains the V5
+  compatibility export until the API task adopts the version-aware parser.
+- Task 1 verification is 77/77 focused bridge tests, a passing production
+  build, and the unchanged 56-raw TypeScript diagnostic baseline. No schema,
+  seed, startup, database, remote, configuration, or publication action ran.
 - Local `main` was fast-forwarded to current GitHub `origin/main` at
   `1433f43`. User-owned `graphify-out/` and `output/audio/` remain untracked
   and untouched.
@@ -56,6 +64,12 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Preserve the legacy `vrsAuthorizeRequestSchema` as the V5
+  compatibility export while adding explicit V5/V8 schemas and a four-key
+  intent selector. V8 nonblank checks inspect trimmed length without applying
+  transforms, so accepted business strings and signed URLs remain unchanged.
+  Do not invent `maxLength` rules for V8 `contract_number` or `symptom`; the
+  source contract defines none, while `appliance_color` remains capped at 40.
 - [CX] 2026-08-11 - Execute in an isolated
   `codex/vrs-v5-v8-dev-integration` worktree and require local regression,
   final review, read-only Replit reconciliation, and an explicit rollout

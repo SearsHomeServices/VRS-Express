@@ -1,8 +1,18 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 18:31
+Updated: 2026-08-11 18:36
 
 ## Decisions
+
+- [CX] 2026-08-11 - Keep `vrsAuthorizeRequestSchema` bound to the unchanged V5
+  runtime validator for compatibility while introducing explicit V5/V8
+  schemas and `safeParseVrsAuthorizeRequest` for staged caller adoption. Any
+  own V8-only key selects V8 exclusively; validation-only trimmed-length
+  checks must never transform accepted V8 strings.
+- [CX] 2026-08-11 - Apply only field bounds present in the source V8
+  contract: `appliance_color` has max 40, while `contract_number` and
+  `symptom` are nonblank with no invented maximum. Rely on the existing JSON
+  request-body limit for the outer payload bound.
 
 - [CX] 2026-04-27 - Used `origin/main` as the current GitHub source because no `development` branch exists on the remote.
 - [CX] 2026-04-27 - For the urgent training need, recommend a single technician-only screen walkthrough instead of separate videos or a polished course.

@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 18:31
+Updated: 2026-08-11 18:36
 
 ## Done
+
+- [x] Added canonical V5/V8 authorize fixtures, strict separate schemas,
+  four-key V8 intent selection, non-mutating V8 validation, and version-aware
+  outbound source validation with RED/GREEN evidence, including proof that
+  `contract_number` and `symptom` do not receive invented maximum lengths.
 
 - [x] Fast-forwarded local `main` to current GitHub `origin/main` at
   `1433f43` without touching user-owned untracked output.
@@ -90,8 +95,9 @@ Updated: 2026-08-11 18:31
 
 ## Open
 
-- [ ] Implement strict V5/V8 union parsing test-first on the existing
-  `POST /vrs/authorize` bridge while preserving current V5 behavior.
+- [ ] Adopt the version-aware V5/V8 parser in the authenticated
+  `POST /vrs/authorize` route while preserving current V5 behavior and proving
+  authentication runs before schema/version feedback.
 - [ ] Preserve the accepted contract version through storage and dispatch,
   and fill only eligible existing V8 placeholders from authoritative Express
   values without adding keys.
