@@ -1,8 +1,18 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:26
+Updated: 2026-08-11 19:33
 
 ## Decisions
+
+- [CX] 2026-08-11 - Derive the review-facing `contractVersion` in the server
+  status projection from stored payload shape. Do not persist or return a
+  `contract_version` inside request JSON or `reviewContext`; V8-only client
+  fields stay optional so V5 remains compatible.
+- [CX] 2026-08-11 - Render sender-provided VRS photo URLs byte-for-byte in the
+  existing bridge-only panel using safe direct links and no-referrer previews.
+  Do not send them through Express token builders, prefetch, or the normal
+  submission lightbox because signed TINA URLs are already authorized by the
+  sender and must not be rewritten.
 
 - [CX] 2026-08-11 - Prove Stage 1 ordering through a production adapter that
   `processSubmissionHandler` actually consumes. Pair dynamic stop/continue

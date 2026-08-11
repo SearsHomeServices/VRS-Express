@@ -4083,6 +4083,18 @@ export default function AgentDashboard() {
                                   <div className="mt-3 space-y-3 text-xs">
                                     <div className="grid gap-2 sm:grid-cols-2">
                                       <div>
+                                        <span className="text-muted-foreground">Contract version</span>
+                                        <p className="font-medium uppercase">{selectedSubmission.vrsAi.contractVersion}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Partner</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.partner_id}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Contract number</span>
+                                        <p className="font-mono font-medium">{selectedSubmission.vrsAi.reviewContext.contract_number}</p>
+                                      </div>
+                                      <div>
                                         <span className="text-muted-foreground">Customer</span>
                                         <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.customer_name}</p>
                                       </div>
@@ -4091,31 +4103,73 @@ export default function AgentDashboard() {
                                         <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.service_address}</p>
                                       </div>
                                       <div>
-                                        <span className="text-muted-foreground">Appliance</span>
-                                        <p className="font-medium">
-                                          {selectedSubmission.vrsAi.reviewContext.brand}{" "}
-                                          {selectedSubmission.vrsAi.reviewContext.appliance_type} ·{" "}
-                                          {selectedSubmission.vrsAi.reviewContext.appliance_age} years
-                                        </p>
+                                        <span className="text-muted-foreground">Symptom</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.symptom}</p>
                                       </div>
                                       <div>
-                                        <span className="text-muted-foreground">Model / serial</span>
-                                        <p className="font-mono font-medium">
-                                          {selectedSubmission.vrsAi.reviewContext.model_number} /{" "}
-                                          {selectedSubmission.vrsAi.reviewContext.serial_number}
-                                        </p>
+                                        <span className="text-muted-foreground">Failure cause</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.failure_cause}</p>
                                       </div>
                                       <div>
-                                        <span className="text-muted-foreground">Failure / recommendation</span>
-                                        <p className="font-medium">
-                                          {selectedSubmission.vrsAi.reviewContext.failure_cause.replace(/-/g, " ")} ·{" "}
-                                          {selectedSubmission.vrsAi.reviewContext.tech_recommendation}
-                                        </p>
+                                        <span className="text-muted-foreground">Recommendation</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.tech_recommendation}</p>
                                       </div>
                                       <div>
-                                        <span className="text-muted-foreground">Requested estimate</span>
+                                        <span className="text-muted-foreground">Purchase year</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.purchase_year}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Appliance age</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.appliance_age}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Appliance grade</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.appliance_grade}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Color</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.appliance_color}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Brand</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.brand}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Appliance type</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.appliance_type}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Model</span>
+                                        <p className="font-mono font-medium">{selectedSubmission.vrsAi.reviewContext.model_number}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Serial</span>
+                                        <p className="font-mono font-medium">{selectedSubmission.vrsAi.reviewContext.serial_number}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Technician name</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.tech_name}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Technician phone</span>
+                                        <p className="font-medium">{selectedSubmission.vrsAi.reviewContext.tech_phone}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Labor</span>
+                                        <p className="font-medium">${selectedSubmission.vrsAi.reviewContext.labor_amount.toFixed(2)}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Tax</span>
+                                        <p className="font-medium">${selectedSubmission.vrsAi.reviewContext.tax_amount.toFixed(2)}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Parts total</span>
+                                        <p className="font-medium">${selectedSubmission.vrsAi.reviewContext.part_price.toFixed(2)}</p>
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Total</span>
                                         <p className="font-medium">
-                                          Labor ${selectedSubmission.vrsAi.reviewContext.labor_amount.toFixed(2)} · Parts ${selectedSubmission.vrsAi.reviewContext.part_price.toFixed(2)} · Tax ${selectedSubmission.vrsAi.reviewContext.tax_amount.toFixed(2)}
+                                          ${(selectedSubmission.vrsAi.reviewContext.labor_amount + selectedSubmission.vrsAi.reviewContext.tax_amount + selectedSubmission.vrsAi.reviewContext.part_price).toFixed(2)}
                                         </p>
                                       </div>
                                     </div>
@@ -4143,6 +4197,29 @@ export default function AgentDashboard() {
                                               <span className="font-medium">{comment.work_item.replace(/_/g, " ")}:</span>{" "}
                                               {comment.text}
                                             </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                    {selectedSubmission.vrsAi.reviewContext.appliance_photos?.length ? (
+                                      <div>
+                                        <span className="text-muted-foreground">Sender photos</span>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                          {selectedSubmission.vrsAi.reviewContext.appliance_photos.map((photo, index) => (
+                                            <a
+                                              key={`${photo}-${index}`}
+                                              href={photo}
+                                              target="_blank"
+                                              rel="noreferrer noopener"
+                                              className="block overflow-hidden rounded-md border bg-background"
+                                            >
+                                              <img
+                                                src={photo}
+                                                referrerPolicy="no-referrer"
+                                                alt={`Sender appliance ${index + 1}`}
+                                                className="h-36 w-full object-cover"
+                                              />
+                                            </a>
                                           ))}
                                         </div>
                                       </div>
@@ -4672,7 +4749,7 @@ export default function AgentDashboard() {
                                   </p>
                                   <p className="text-sm text-muted-foreground">
                                     {selectedSubmission.vrsAi
-                                      ? "Approving confirms the request is ready, sends its V5 payload to VRS AI for the AHS authorization call, and keeps this ticket pending until VRS AI returns the result."
+                                      ? "Approving confirms the request is ready, sends the reviewed bridge payload to VRS AI for the AHS authorization call, and keeps this ticket pending until VRS AI returns the result."
                                       : "Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket."}
                                   </p>
                                 </div>

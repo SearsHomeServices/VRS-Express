@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Complete bridge review context (2026-08-11)
+- Bridge status now derives `contractVersion` as `v5` or `v8` from the stored
+  strict payload without adding a wire/stored `contract_version` field or
+  placing version metadata inside the review context.
+- The existing bridge-only agent panel now labels the contract, partner,
+  diagnosis, appliance, technician, estimate, part, comment, and sender-photo
+  context required for V8 review while retaining V5 optionality and the
+  unchanged manual-ticket approval path.
+- Sender photo links and previews use the sender URL byte-for-byte with safe
+  new-tab/referrer attributes. The VRS photo block does not request Express
+  media tokens or use the normal submission lightbox path.
+- Added server projection and bounded UI-source regressions. The UI suite
+  passes 6/6, the affected queue suite passes 29/29, the focused bridge suite
+  passes 115/115, and the production build passes. TypeScript remains at the
+  known 56-raw-diagnostic baseline, so Task 5 added zero diagnostics. No
+  schema, seed, startup, database, configuration, remote, sync, deployment,
+  or publication action ran.
+
 ### Changed — Stage 1 VRS AI dispatch gate (2026-08-11)
 - Extracted the bridge-only Stage 1 decision behind injected store,
   configuration, client-construction, enrichment, and dispatcher boundaries.

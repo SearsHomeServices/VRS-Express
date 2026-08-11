@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as bridgeModule from "../server/vrs-sasha-queue";
+import * as storeModule from "../server/vrs-sasha-store";
 import type {
   VrsAuthorizeRequest,
   VrsWebhookEvent,
@@ -41,6 +42,19 @@ const candidateBridgeModule = bridgeModule as typeof bridgeModule & {
   };
 };
 
+const candidateStoreModule = storeModule as typeof storeModule & {
+  projectVrsAiBridgeStatus?: (row: {
+    callId: string;
+    state: string;
+    providerCallId: string | null;
+    dispatchError: string | null;
+    failureReason: string | null;
+    retryable: boolean | null;
+    dispatchedAt: Date | null;
+    requestPayload: VrsAuthorizeRequest;
+  }) => storeModule.VrsAiBridgeStatus;
+};
+
 const requestPayload: VrsAuthorizeRequest = {
   service_order: "13538277",
   tech_id: "0123456",
@@ -78,6 +92,58 @@ const requestPayload: VrsAuthorizeRequest = {
 };
 
 describe("VRS Express bridge orchestration", () => {
+  it.each([
+    ["v5", validV5AuthorizePayload],
+    ["v8", {
+      ...validV8AuthorizePayload,
+      tech_phone: "N/A",
+      tech_name: "",
+      appliance_color: "N/A",
+      purchase_year: "TBD" as const,
+      appliance_age: 0,
+      labor_amount: 0,
+      tax_amount: 0,
+      part_price: 0,
+      repair_replace_rationale: "",
+      appliance_photos: [signedTinaPhotoUrl],
+    }],
+  ] as const)("derives %s status without adding a wire version", (version, payload) => {
+    const project = candidateStoreModule.projectVrsAiBridgeStatus;
+    expect(typeof project).toBe("function");
+    if (!project) return;
+    const wireSnapshot = structuredClone(payload);
+
+    const status = project({
+      callId: `vrs_call_${version}`,
+      state: "pending_review",
+      providerCallId: null,
+      dispatchError: null,
+      failureReason: null,
+      retryable: null,
+      dispatchedAt: null,
+      requestPayload: payload,
+    });
+
+    expect(status.contractVersion).toBe(version);
+    expect(status.reviewContext).not.toHaveProperty("contract_version");
+    expect(payload).not.toHaveProperty("contract_version");
+    expect(payload).toEqual(wireSnapshot);
+    if (version === "v8") {
+      expect(status.reviewContext).toMatchObject({
+        tech_phone: "N/A",
+        tech_name: "",
+        appliance_color: "N/A",
+        purchase_year: "TBD",
+        appliance_age: 0,
+        labor_amount: 0,
+        tax_amount: 0,
+        part_price: 0,
+        repair_replace_rationale: "",
+        appliance_photos: [signedTinaPhotoUrl],
+      });
+    }
+  });
+
   it("maps the SASHA payload into the existing VRS Express ticket shape", () => {
     const map = (bridgeModule as any).mapVrsPayloadToSubmission;
     expect(typeof map).toBe("function");

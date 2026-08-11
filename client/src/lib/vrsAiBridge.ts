@@ -1,5 +1,6 @@
 export interface VrsAiBridgeStatus {
   callId: string;
+  contractVersion: "v5" | "v8";
   state: string;
   providerCallId: string | null;
   dispatchError: string | null;
@@ -33,6 +34,10 @@ export interface VrsAiBridgeStatus {
     tech_recommendation: string;
     repair_replace_rationale: string;
     appliance_grade?: string;
+    appliance_color?: string;
+    contract_number?: string;
+    purchase_year?: number | "TBD" | "N/A";
+    symptom?: string;
     partner_id?: string;
     appliance_photos?: string[];
     comments?: Array<{

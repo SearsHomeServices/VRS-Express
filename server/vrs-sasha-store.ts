@@ -8,7 +8,10 @@ import {
   type VrsBridgeStore,
   type VrsStoredAuthorizeRequest,
 } from "./vrs-sasha-queue";
-import type { VrsWebhookEvent } from "./vrs-sasha-contract";
+import {
+  getVrsAuthorizeContractVersion,
+  type VrsWebhookEvent,
+} from "./vrs-sasha-contract";
 
 export const ACTIVE_VRS_BRIDGE_STATES = [
   "pending_review",
@@ -46,6 +49,7 @@ export interface NewVrsBridgeIntake {
 
 export interface VrsAiBridgeStatus {
   callId: string;
+  contractVersion: "v5" | "v8";
   state: string;
   providerCallId: string | null;
   dispatchError: string | null;
@@ -53,6 +57,24 @@ export interface VrsAiBridgeStatus {
   retryable: boolean | null;
   dispatchedAt: Date | null;
   reviewContext: VrsBridgeReviewContext;
+}
+
+type VrsAiBridgeStatusRow = Omit<
+  VrsAiBridgeStatus,
+  "contractVersion" | "reviewContext"
+> & {
+  requestPayload: VrsStoredAuthorizeRequest;
+};
+
+export function projectVrsAiBridgeStatus(
+  row: VrsAiBridgeStatusRow,
+): VrsAiBridgeStatus {
+  const { requestPayload, ...status } = row;
+  return {
+    ...status,
+    contractVersion: getVrsAuthorizeContractVersion(requestPayload),
+    reviewContext: projectVrsBridgeReviewContext(requestPayload),
+  };
 }
 
 function toBridgeRecord(row: typeof vrsAiCalls.$inferSelect): VrsBridgeRecord {
@@ -194,18 +216,10 @@ export class DrizzleVrsBridgeStore implements VrsBridgeStore {
       .where(eq(vrsAiCalls.submissionId, submissionId))
       .limit(1);
     return row
-      ? {
-          callId: row.callId,
-          state: row.state,
-          providerCallId: row.providerCallId,
-          dispatchError: row.dispatchError,
-          failureReason: row.failureReason,
-          retryable: row.retryable,
-          dispatchedAt: row.dispatchedAt,
-          reviewContext: projectVrsBridgeReviewContext(
-            row.requestPayload as VrsStoredAuthorizeRequest,
-          ),
-        }
+      ? projectVrsAiBridgeStatus({
+          ...row,
+          requestPayload: row.requestPayload as VrsStoredAuthorizeRequest,
+        })
       : null;
   }
 

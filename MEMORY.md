@@ -1,8 +1,18 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:26 — Closed the Task 4 review gap with production route-gate ordering coverage.
+> **Last Touched:** Codex — 2026-08-11 19:33 — Completed the bridge-only V8 review context with direct sender-photo rendering.
 
 ## Current State
+- Tasks 1-5 of the V5/V8 integration are implemented in the isolated
+  worktree. Bridge status derives `v5`/`v8` outside the wire payload and
+  review context; the existing guarded panel shows the complete review
+  contract, direct sender-photo links/previews, and unchanged manual approval
+  behavior.
+- Task 5 verification is 6/6 UI tests, 29/29 affected queue tests, 115/115
+  focused bridge tests, a passing production build, and the unchanged 56-raw
+  TypeScript baseline, which means zero new Task 5 diagnostics. No schema,
+  seed, startup, database, remote, configuration, sync, deployment, or
+  publication action ran.
 - Tasks 1-4 of the V5/V8 integration are implemented in the isolated
   worktree. V8 gap values now map safely into the normal Express ticket/SMS
   path without mutating durable wire JSON, V5 dispatch remains unchanged,
@@ -107,6 +117,11 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Derive bridge `contractVersion` from the stored strict
+  payload only in the status projection. Keep version out of both durable
+  request JSON and `reviewContext`; keep V8-only review keys optional for V5.
+  Render sender photo URLs directly in the existing bridge guard with safe
+  link/referrer attributes and no Express media-token or lightbox path.
 - [CX] 2026-08-11 - Route-order safety needs proof at the production consumer,
   not only at the isolated decision helper. Use a small route-gate adapter for
   dynamic stop/continue behavior plus a bounded structural assertion on the
@@ -219,6 +234,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - `agent-dashboard.tsx` already owns four diagnostics in
+  the 56-raw TypeScript baseline. A changed-file name filter alone therefore
+  cannot classify Task 5 regressions; the unchanged total of 56 is the
+  relevant zero-new-diagnostic comparison.
 - [CX] 2026-08-11 - A test-owned continuation wrapper can prove its own branch
   logic while missing a deleted or reordered production route guard. Coverage
   of ordering invariants must include the actual route consumer or another

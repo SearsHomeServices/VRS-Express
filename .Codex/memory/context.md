@@ -1,8 +1,23 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:26
+Updated: 2026-08-11 19:33
 
 ## Current Session
+
+- Completed Task 5 test-first. `VrsAiBridgeStatus` now exposes a derived
+  `v5`/`v8` contract version outside both stored request JSON and the review
+  context. Server tests prove V5/V8 derivation, payload immutability, exact
+  V8 placeholders/zeroes, and signed TINA URL preservation.
+- Expanded only the existing `selectedSubmission.vrsAi` panel with labeled
+  contract, diagnosis, appliance, technician, estimate, part, comment, and
+  sender-photo details. Sender URLs go directly to safe links/previews with no
+  Express token helper or shared lightbox. Manual tickets remain `vrsAi:null`
+  and keep the existing approval copy; bridge wording is version-neutral.
+- Task 5 verification: 6/6 UI tests, 29/29 affected queue tests, 115/115
+  focused bridge tests, and the production build pass. `npm run check`
+  remains at the 56-raw pre-existing baseline, so Task 5 added zero
+  diagnostics. No schema, seed, startup, database, remote, configuration,
+  sync, deployment, or publication action ran.
 
 - Closed the Task 4 review gap test-first. The original test-owned
   continuation wrapper did not prove route consumption, so it was removed.

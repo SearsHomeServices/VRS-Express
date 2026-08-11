@@ -1,8 +1,15 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:26
+Updated: 2026-08-11 19:33
 
 ## Done
+
+- [x] Added derived V5/V8 bridge status and the complete guarded review panel
+  with exact placeholder/zero preservation, all V8 business fields, and
+  direct safe sender-photo links/previews without Express media tokens.
+- [x] Verified Task 5 with 6/6 UI tests, 29/29 affected queue tests, 115/115
+  focused bridge tests, a passing production build, and the unchanged
+  56-diagnostic TypeScript baseline.
 
 - [x] Closed the Task 4 review gap by removing the test-owned continuation
   wrapper, dynamically testing the production route-gate adapter, and proving
@@ -128,8 +135,6 @@ Updated: 2026-08-11 19:26
 
 ## Open
 
-- [ ] Update the Stage 1 review panel to show all decision-relevant V8 fields
-  and appliance photos.
 - [ ] Implement the same-ticket, new-call-ID retry path after a retryable
   terminal failure, including late-callback deduplication.
 - [ ] Update the handoff/architecture/OpenAPI/examples for both V5 and V8 and
