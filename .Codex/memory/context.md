@@ -1,8 +1,24 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:33
+Updated: 2026-08-11 19:46
 
 ## Current Session
+
+- Closed the Task 5 review findings test-first. The guarded dashboard now
+  consumes a dedicated production review component that is rendered through
+  `react-dom/server` in tests. It displays raw service/reason, technician,
+  customer/address/location, complete appliance/problem/financial/part data,
+  full comment metadata, and direct sender photos.
+- V8-only contract/symptom/year/color rows are gated on derived `v8` status.
+  V5 keeps all common review content and renders optional partner/grade rows
+  only when present. Tests prove literal `N/A`, `TBD`, empty strings, zeroes,
+  total arithmetic, exact signed photo URLs, and safe link/image attributes.
+- `getStatusBySubmissionId` now uses an injectable production row-loader seam
+  and the shared projector. The real method is directly tested without a DB;
+  both `contract_version` and `contractVersion` remain absent from payload and
+  review context. Follow-up verification is 6/6 UI, 30/30 queue, 116/116
+  focused bridge tests, a passing build, and the unchanged 56-diagnostic
+  baseline.
 
 - Completed Task 5 test-first. `VrsAiBridgeStatus` now exposes a derived
   `v5`/`v8` contract version outside both stored request JSON and the review

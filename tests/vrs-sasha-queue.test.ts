@@ -92,6 +92,41 @@ const requestPayload: VrsAuthorizeRequest = {
 };
 
 describe("VRS Express bridge orchestration", () => {
+  it("loads status through the injectable production store path", async () => {
+    const {
+      callback_secret: _callbackSecret,
+      ...storedPayload
+    } = validV8AuthorizePayload;
+    let loadedSubmissionId: number | undefined;
+    const store = new storeModule.DrizzleVrsBridgeStore(async (submissionId) => {
+      loadedSubmissionId = submissionId;
+      return {
+        callId: "vrs_call_loaded_v8",
+        state: "pending_review",
+        providerCallId: null,
+        dispatchError: null,
+        failureReason: null,
+        retryable: null,
+        dispatchedAt: null,
+        requestPayload: storedPayload,
+      };
+    });
+
+    const status = await store.getStatusBySubmissionId(42);
+    expect(loadedSubmissionId).toBe(42);
+    expect(status).toMatchObject({
+      callId: "vrs_call_loaded_v8",
+      contractVersion: "v8",
+      reviewContext: {
+        service_order: validV8AuthorizePayload.service_order,
+      },
+    });
+    expect(storedPayload).not.toHaveProperty("contract_version");
+    expect(storedPayload).not.toHaveProperty("contractVersion");
+    expect(status?.reviewContext).not.toHaveProperty("contract_version");
+    expect(status?.reviewContext).not.toHaveProperty("contractVersion");
+  });
+
   it.each([
     ["v5", validV5AuthorizePayload],
     ["v8", {
@@ -126,7 +161,9 @@ describe("VRS Express bridge orchestration", () => {
 
     expect(status.contractVersion).toBe(version);
     expect(status.reviewContext).not.toHaveProperty("contract_version");
+    expect(status.reviewContext).not.toHaveProperty("contractVersion");
     expect(payload).not.toHaveProperty("contract_version");
+    expect(payload).not.toHaveProperty("contractVersion");
     expect(payload).toEqual(wireSnapshot);
     if (version === "v8") {
       expect(status.reviewContext).toMatchObject({

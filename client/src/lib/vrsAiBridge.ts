@@ -9,6 +9,7 @@ export interface VrsAiBridgeStatus {
   dispatchedAt: string | Date | null;
   reviewContext?: {
     service_order: string;
+    reason_for_call: string;
     tech_id: string;
     tech_phone: string;
     tech_name: string;

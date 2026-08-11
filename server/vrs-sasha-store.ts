@@ -59,7 +59,7 @@ export interface VrsAiBridgeStatus {
   reviewContext: VrsBridgeReviewContext;
 }
 
-type VrsAiBridgeStatusRow = Omit<
+export type VrsAiBridgeStatusRow = Omit<
   VrsAiBridgeStatus,
   "contractVersion" | "reviewContext"
 > & {
@@ -75,6 +75,35 @@ export function projectVrsAiBridgeStatus(
     contractVersion: getVrsAuthorizeContractVersion(requestPayload),
     reviewContext: projectVrsBridgeReviewContext(requestPayload),
   };
+}
+
+export type VrsAiBridgeStatusRowLoader = (
+  submissionId: number,
+) => Promise<VrsAiBridgeStatusRow | undefined>;
+
+async function loadVrsAiBridgeStatusRow(
+  submissionId: number,
+): Promise<VrsAiBridgeStatusRow | undefined> {
+  const [row] = await db
+    .select({
+      callId: vrsAiCalls.callId,
+      state: vrsAiCalls.state,
+      providerCallId: vrsAiCalls.providerCallId,
+      dispatchError: vrsAiCalls.dispatchError,
+      failureReason: vrsAiCalls.failureReason,
+      retryable: vrsAiCalls.retryable,
+      dispatchedAt: vrsAiCalls.dispatchedAt,
+      requestPayload: vrsAiCalls.requestPayload,
+    })
+    .from(vrsAiCalls)
+    .where(eq(vrsAiCalls.submissionId, submissionId))
+    .limit(1);
+  return row
+    ? {
+        ...row,
+        requestPayload: row.requestPayload as VrsStoredAuthorizeRequest,
+      }
+    : undefined;
 }
 
 function toBridgeRecord(row: typeof vrsAiCalls.$inferSelect): VrsBridgeRecord {
@@ -131,6 +160,12 @@ function eventResultUpdate(event: VrsWebhookEvent) {
 }
 
 export class DrizzleVrsBridgeStore implements VrsBridgeStore {
+  private readonly statusRowLoader: VrsAiBridgeStatusRowLoader;
+
+  constructor(statusRowLoader?: VrsAiBridgeStatusRowLoader) {
+    this.statusRowLoader = statusRowLoader ?? loadVrsAiBridgeStatusRow;
+  }
+
   async findActiveByServiceOrder(
     serviceOrder: string,
   ): Promise<VrsBridgeRecord | undefined> {
@@ -201,26 +236,8 @@ export class DrizzleVrsBridgeStore implements VrsBridgeStore {
   async getStatusBySubmissionId(
     submissionId: number,
   ): Promise<VrsAiBridgeStatus | null> {
-    const [row] = await db
-      .select({
-        callId: vrsAiCalls.callId,
-        state: vrsAiCalls.state,
-        providerCallId: vrsAiCalls.providerCallId,
-        dispatchError: vrsAiCalls.dispatchError,
-        failureReason: vrsAiCalls.failureReason,
-        retryable: vrsAiCalls.retryable,
-        dispatchedAt: vrsAiCalls.dispatchedAt,
-        requestPayload: vrsAiCalls.requestPayload,
-      })
-      .from(vrsAiCalls)
-      .where(eq(vrsAiCalls.submissionId, submissionId))
-      .limit(1);
-    return row
-      ? projectVrsAiBridgeStatus({
-          ...row,
-          requestPayload: row.requestPayload as VrsStoredAuthorizeRequest,
-        })
-      : null;
+    const row = await this.statusRowLoader(submissionId);
+    return row ? projectVrsAiBridgeStatus(row) : null;
   }
 
   async getByProviderCallId(

@@ -1,16 +1,19 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:33 — Completed the bridge-only V8 review context with direct sender-photo rendering.
+> **Last Touched:** Codex — 2026-08-11 19:46 — Corrected Task 5 with rendered production UI tests and complete version-gated review context.
 
 ## Current State
 - Tasks 1-5 of the V5/V8 integration are implemented in the isolated
-  worktree. Bridge status derives `v5`/`v8` outside the wire payload and
-  review context; the existing guarded panel shows the complete review
-  contract, direct sender-photo links/previews, and unchanged manual approval
-  behavior.
-- Task 5 verification is 6/6 UI tests, 29/29 affected queue tests, 115/115
-  focused bridge tests, a passing production build, and the unchanged 56-raw
-  TypeScript baseline, which means zero new Task 5 diagnostics. No schema,
+  worktree. The guarded dashboard now consumes a server-render-tested
+  production review component with complete raw request, technician,
+  customer/address, appliance/problem, financial/part, full comment metadata,
+  and direct sender-photo context. V8-only rows are version-gated; optional V5
+  partner/grade rows render only when present, and manual approval is unchanged.
+- `getStatusBySubmissionId` now consumes an injectable production row-loader
+  before deriving `v5`/`v8`; neither `contract_version` nor `contractVersion`
+  enters stored request JSON or review context. Task 5 follow-up verification
+  is 6/6 UI tests, 30/30 queue tests, 116/116 focused bridge tests, a passing
+  production build, and the unchanged 56-raw TypeScript baseline. No schema,
   seed, startup, database, remote, configuration, sync, deployment, or
   publication action ran.
 - Tasks 1-4 of the V5/V8 integration are implemented in the isolated
@@ -117,6 +120,15 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Test bridge review behavior by rendering the exact
+  production component consumed inside the dashboard's `vrsAi` guard. Keep
+  only narrow source assertions for guard placement/manual copy. Gate the four
+  V8-only rows on derived version and conditionally render optional V5
+  partner/grade rows instead of showing blank labels.
+- [CX] 2026-08-11 - Give `DrizzleVrsBridgeStore` an injectable status-row
+  loader so tests invoke the real `getStatusBySubmissionId` method, its
+  submission-ID forwarding, and the shared projection without a database.
+  The default loader retains the exact existing Drizzle query.
 - [CX] 2026-08-11 - Derive bridge `contractVersion` from the stored strict
   payload only in the status projection. Keep version out of both durable
   request JSON and `reviewContext`; keep V8-only review keys optional for V5.
@@ -234,6 +246,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - Source containment tests can prove labels exist while
+  missing incomplete rendering, blank V5-only rows, and lost comment metadata.
+  Render the production presentational component and assert its values,
+  conditional rows, arithmetic, and safe link attributes instead.
 - [CX] 2026-08-11 - `agent-dashboard.tsx` already owns four diagnostics in
   the 56-raw TypeScript baseline. A changed-file name filter alone therefore
   cannot classify Task 5 regressions; the unchanged total of 56 is the

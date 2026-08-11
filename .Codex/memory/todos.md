@@ -1,8 +1,16 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:33
+Updated: 2026-08-11 19:46
 
 ## Done
+
+- [x] Closed the Task 5 review findings with a rendered production review
+  component, complete V8/common fields and comment metadata, V8-only row
+  gating, conditional V5 optionals, and a directly tested injectable store
+  status-loading path.
+- [x] Verified the Task 5 correction with 6/6 UI tests, 30/30 queue tests,
+  116/116 focused bridge tests, a passing production build, and the unchanged
+  56-diagnostic baseline.
 
 - [x] Added derived V5/V8 bridge status and the complete guarded review panel
   with exact placeholder/zero preservation, all V8 business fields, and

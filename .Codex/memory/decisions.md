@@ -1,8 +1,17 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 19:33
+Updated: 2026-08-11 19:46
 
 ## Decisions
+
+- [CX] 2026-08-11 - Make UI behavior tests render the same presentational
+  component used by `agent-dashboard`. Source inspection remains only for the
+  enclosing bridge guard and unchanged manual copy. Derived `v8` status owns
+  the four V8-only rows; optional V5 partner/grade rows require actual values.
+- [CX] 2026-08-11 - Inject only the bridge-status row loader into
+  `DrizzleVrsBridgeStore`. This keeps the default Drizzle query unchanged while
+  allowing the real `getStatusBySubmissionId` method and projector connection
+  to run in focused tests without database access.
 
 - [CX] 2026-08-11 - Derive the review-facing `contractVersion` in the server
   status projection from stored payload shape. Do not persist or return a
