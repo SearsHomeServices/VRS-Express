@@ -1,9 +1,12 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 19:56
+Updated: 2026-08-11 20:01
 
 ## Done
 
+- [x] Separated unique field-routing proof from empty-value preservation for
+  technician name and repair/replace rationale; retained exact `N/A`, `TBD`,
+  and zero assertions in the rendered empty-field case.
 - [x] Hardened final Task 5 regression coverage with distinct exact-row
   assertions for every review field and a runtime-tested production panel
   that owns null/manual isolation plus V5/V8 status/review composition.

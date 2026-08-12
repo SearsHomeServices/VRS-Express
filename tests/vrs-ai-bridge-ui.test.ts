@@ -27,7 +27,7 @@ const v8Bridge: VrsAiBridgeStatus = {
     reason_for_call: "reason-authorization",
     tech_id: "tech-id-0123456",
     tech_phone: "N/A",
-    tech_name: "",
+    tech_name: "tech-name-Jordan",
     parts: [{
       part_id: "part-id-WPW10503278",
       part_description: "part-description-control-board",
@@ -48,7 +48,7 @@ const v8Bridge: VrsAiBridgeStatus = {
     appliance_location: "appliance-location-laundry-room",
     failure_cause: "failure-cause-other",
     tech_recommendation: "recommendation-replace",
-    repair_replace_rationale: "",
+    repair_replace_rationale: "rationale-control-board-shorted",
     appliance_grade: "appliance-grade-mid",
     appliance_color: "appliance-color-stainless",
     contract_number: "contract-number-CN-0008",
@@ -160,7 +160,7 @@ describe("VRS AI bridge review rendering", () => {
     expectField(html, "contract-number", "contract-number-CN-0008");
     expectField(html, "symptom", "symptom-not-draining");
     expectField(html, "tech-id", "tech-id-0123456");
-    expectField(html, "tech-name", "");
+    expectField(html, "tech-name", "tech-name-Jordan");
     expectField(html, "tech-phone", "N/A");
     expectField(html, "customer-name", "customer-name-Maria");
     expectField(html, "customer-address", "customer-address-742-Evergreen");
@@ -168,7 +168,11 @@ describe("VRS AI bridge review rendering", () => {
     expectField(html, "appliance-location", "appliance-location-laundry-room");
     expectField(html, "failure-cause", "failure-cause-other");
     expectField(html, "recommendation", "recommendation-replace");
-    expectField(html, "repair-replace-rationale", "");
+    expectField(
+      html,
+      "repair-replace-rationale",
+      "rationale-control-board-shorted",
+    );
     expectField(html, "purchase-year", "TBD");
     expectField(html, "appliance-age", "7");
     expectField(html, "appliance-grade", "appliance-grade-mid");
@@ -213,11 +217,15 @@ describe("VRS AI bridge review rendering", () => {
     );
   });
 
-  it("preserves valid numeric zeroes instead of replacing them with business values", () => {
+  it("preserves exact empty fields, placeholders, and numeric zeroes", () => {
     const html = renderReview({
       ...v8Bridge,
       reviewContext: {
         ...v8Bridge.reviewContext!,
+        tech_name: "",
+        tech_phone: "N/A",
+        repair_replace_rationale: "",
+        purchase_year: "TBD",
         appliance_age: 0,
         labor_amount: 0,
         tax_amount: 0,
@@ -229,6 +237,10 @@ describe("VRS AI bridge review rendering", () => {
       },
     });
 
+    expectField(html, "tech-name", "");
+    expectField(html, "tech-phone", "N/A");
+    expectField(html, "repair-replace-rationale", "");
+    expectField(html, "purchase-year", "TBD");
     expectField(html, "appliance-age", "0");
     expectField(html, "labor", "$0.00");
     expectField(html, "tax", "$0.00");

@@ -40,10 +40,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error, retryable-failure copy, and review composition into the production
   `VrsAiBridgePanel` consumed directly by the dashboard. Runtime rendering now
   proves null/manual state produces no panel while V5/V8 state produces the
-  expected status and review. Every review field uses a distinct fixture and
-  is asserted against its exact rendered row, preventing field swaps.
+  expected status and review. The primary mapping fixture gives every review
+  field its own value and asserts its exact rendered row; a separate fixture
+  proves intentional empty values, preventing equal-value field swaps.
 - Final Task 5 verification is 8/8 UI, 30/30 queue, and 118/118 focused bridge
   tests plus a passing production build and unchanged 56-diagnostic baseline.
+- **Closure proof correction.** The primary exact-row fixture now gives
+  technician name and repair/replace rationale separate nonempty sentinels, so
+  swapping those mappings fails. A separate rendered V8 case proves both rows
+  preserve exact empty strings alongside literal `N/A`, `TBD`, and numeric
+  zeroes.
 
 ### Changed — Stage 1 VRS AI dispatch gate (2026-08-11)
 - Extracted the bridge-only Stage 1 decision behind injected store,

@@ -1,17 +1,22 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 19:56
+Updated: 2026-08-11 20:01
 
 ## Current Session
 
+- Closed the final narrow Task 5 proof gap: the main rendered V8 fixture now
+  uses unique nonempty technician-name and rationale sentinels, while a
+  separate rendered V8 case asserts exact empty rows plus `N/A`, `TBD`, and
+  zero preservation. This prevents swapped mappings from passing only because
+  both source values were empty.
 - Closed the final Task 5 rigor findings test-first. A production
   `VrsAiBridgePanel` now owns the nullable guard plus outer state, dispatch
   error, failed/retryable copy, and complete review. The dashboard passes its
   nullable bridge directly; rendered tests prove null/manual state produces no
   bridge UI and V5/V8 produce their exact status/review.
-- Rebuilt the V8 fixture with unique values for every swappable field and
-  assert each against its exact `data-field`: both distinct addresses, all
-  request/technician/customer/appliance/problem fields, empty strings,
+- Rebuilt the primary V8 mapping fixture with unique nonempty values for every
+  swappable field and assert each against its exact `data-field`: both distinct
+  addresses, all request/technician/customer/appliance/problem fields,
   financial arithmetic, every part field, and every comment metadata field.
   The remaining source check is narrow dashboard-to-panel wiring/manual copy,
   not conditional behavior. Final verification is 8/8 UI, 30/30 queue,

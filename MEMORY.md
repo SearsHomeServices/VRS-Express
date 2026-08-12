@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 19:56 — Hardened Task 5 with an actual runtime panel guard and exact field-to-row assertions.
+> **Last Touched:** Codex — 2026-08-11 20:01 — Separated Task 5 unique-field mapping proof from empty-value preservation.
 
 ## Current State
 - Tasks 1-5 of the V5/V8 integration are implemented in the isolated
@@ -11,12 +11,13 @@
   and direct sender-photo context. V8-only rows are version-gated; optional V5
   partner/grade rows render only when present, and manual approval is unchanged.
 - Final Task 5 UI coverage renders null, V5, and V8 through the production
-  panel. Every potentially swappable review value is distinct and asserted
-  against its exact `data-field`, including both addresses, all financial and
-  part values, and all four comment metadata fields. Manual/null state renders
-  no bridge panel or bridge copy. Final verification is 8/8 UI, 30/30 queue,
-  118/118 focused bridge tests, a passing production build, and the unchanged
-  56-diagnostic baseline.
+  panel. The primary mapping fixture gives every potentially swappable field a
+  distinct nonempty value, including technician name and repair/replace
+  rationale, and asserts each exact `data-field`. A separate rendered case
+  proves those two fields preserve exact empty strings alongside `N/A`, `TBD`,
+  and numeric zeroes. Manual/null state renders no bridge panel or bridge copy.
+  Final verification is 8/8 UI, 30/30 queue, 118/118 focused bridge tests, a
+  passing production build, and the unchanged 56-diagnostic baseline.
 - `getStatusBySubmissionId` now consumes an injectable production row-loader
   before deriving `v5`/`v8`; neither `contract_version` nor `contractVersion`
   enters stored request JSON or review context. Task 5 follow-up verification
@@ -128,6 +129,10 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Keep field-routing proof and empty-value proof in separate
+  rendered V8 fixtures. The routing fixture uses unique nonempty sentinels for
+  every swappable field; the preservation fixture uses exact empty technician
+  name and rationale values plus `N/A`, `TBD`, and zeroes.
 - [CX] 2026-08-11 - Put the bridge null guard and full outer status/error/
   failure composition in `VrsAiBridgePanel`, then have the dashboard always
   pass its nullable `selectedSubmission.vrsAi`. Runtime rendering, not a JSX
