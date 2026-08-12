@@ -1,9 +1,21 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 20:01 — Separated Task 5 unique-field mapping proof from empty-value preservation.
+> **Last Touched:** Codex — 2026-08-11 20:18 — Implemented atomic same-ticket retryable V8 rearm and late-callback dedupe.
 
 ## Current State
-- Tasks 1-5 of the V5/V8 integration are implemented in the isolated
+- Task 6 is implemented in the isolated worktree. Production intake now uses
+  an injected orchestrator with the existing active-duplicate gate first.
+  Eligible fully-forwarded retryable V8 failures reuse the same bridge row and
+  ticket with a new public call ID, complete bridge/submission resets, an
+  immutable internal ledger snapshot, and best-effort post-commit requeue.
+  Exact superseded provider/SO callbacks dedupe before all callback effects.
+- Fresh ticket creation remains outside the locked rearm transaction; the
+  existing advisory-locked bridge insert remains the final fresh duplicate
+  check. Verification is 30/30 intake, 30/30 queue, 148/148 focused bridge,
+  passing build, and unchanged 56-raw TypeScript baseline. No database,
+  schema, seed, startup, migration, config, remote, deploy, or publish action
+  ran.
+- Tasks 1-6 of the V5/V8 integration are implemented in the isolated
   worktree. The dashboard directly consumes a server-render-tested production
   panel whose runtime null guard owns status/errors/failure copy and the
   complete review component. The review includes raw request, technician,
@@ -129,6 +141,17 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Keep active duplicate lookup ahead of technician/user/
+  encryption work for compatibility, but make the advisory-locked
+  `decideExistingOrRearm` transaction the final terminal duplicate/rearm
+  authority. Rearm requires V8 on both sides, matching tech, failed/retryable,
+  pending Stage-1-approved plus `submissionApproved=true`, and a completed,
+  applied, forwarded callback delivery with no other in-progress/unforwarded
+  event. Webhook begin locks the same call row and rechecks provider identity.
+- [CX] 2026-08-11 - Do not call the global normal-ticket handler while a
+  Drizzle transaction holds a pool connection. Commit `kind:none` first,
+  create the normal ticket outside the transaction, then use the existing
+  advisory-locked `createIntake` for the final fresh bridge insert/race check.
 - [CX] 2026-08-11 - Keep field-routing proof and empty-value proof in separate
   rendered V8 fixtures. The routing fixture uses unique nonempty sentinels for
   every swappable field; the preservation fixture uses exact empty technician
@@ -236,9 +259,8 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Continue the corrected V5/V8 bridge with the V8 review panel,
-  retryable-failure rearm, platform-only handoff updates, and final local/DEV
-  evidence.
+- [CX] Continue the corrected V5/V8 bridge with platform-only handoff updates
+  and final local/DEV evidence.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
 - [CX] Run the staged non-bridge workflow matrix and record a rollback target
@@ -264,6 +286,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - Never invoke global-DB ticket creation from inside a
+  Drizzle transaction callback. At pool saturation, outer transactions can
+  occupy every connection while each waits for nested global DB work. Commit
+  the locked existing/rearm decision before normal ticket creation.
 - [CX] 2026-08-11 - A rendered page containing all expected values can still
   pass after two fields are swapped when fixture values overlap or assertions
   search the whole markup. Give swappable fields unique values and assert each

@@ -1,8 +1,16 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 20:01
+Updated: 2026-08-11 20:18
 
 ## Done
+
+- [x] Implemented same-ticket retryable V8 rearm with locked final authority,
+  full bridge/ticket resets, immutable prior-attempt snapshot, no second
+  receipt SMS, post-commit requeue, and exact superseded callback dedupe.
+- [x] Preserved active duplicate ordering and Stage 1 `dispatch_failed`
+  resend, kept fresh ticket creation outside store transactions, and verified
+  30/30 intake, 30/30 queue, 148/148 focused bridge, build, and 56-baseline
+  TypeScript diagnostics.
 
 - [x] Separated unique field-routing proof from empty-value preservation for
   technician name and repair/replace rationale; retained exact `N/A`, `TBD`,
@@ -153,7 +161,7 @@ Updated: 2026-08-11 20:01
 
 ## Open
 
-- [ ] Implement the same-ticket, new-call-ID retry path after a retryable
+- [x] Implement the same-ticket, new-call-ID retry path after a retryable
   terminal failure, including late-callback deduplication.
 - [ ] Update the handoff/architecture/OpenAPI/examples for both V5 and V8 and
   regenerate the platform-only DOCX/PDF/ZIP package.

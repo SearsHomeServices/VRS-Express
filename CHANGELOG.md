@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Retryable terminal V8 rearm (2026-08-11)
+- Extracted the production SASHA/Tech Hub intake orchestration from the route
+  into an injected seam while retaining the existing active-duplicate,
+  partner, technician, normal ticket, receipt-SMS, and API response behavior.
+- V8 requests can rearm the same bridge row and Express submission only after
+  a fully applied and forwarded retryable `failed` callback, with matching
+  technician identity and a still-pending, Stage-1-approved submission. V5,
+  active, dispatch-failed, nonretryable, terminal-success, and inconsistent
+  attempts remain duplicate conflicts.
+- The atomic rearm transaction locks the service order, latest bridge row,
+  linked submission, and terminal event; appends an immutable prior-attempt
+  snapshot; rotates the public call ID, payload, callback encryption material,
+  URL, and technician metadata; clears provider/result/delivery state; and
+  returns the same ticket to human review without a second receipt SMS.
+- Fresh normal ticket creation remains outside the rearm transaction to avoid
+  nested pool acquisition. The existing locked bridge insert remains the final
+  fresh-race duplicate authority.
+- Late callbacks for the exact superseded provider ID/service-order pair now
+  take the existing duplicate/200 path before event claim, ticket/SMS apply,
+  secret decryption, forwarding, or broadcasts. Current callbacks and Stage 1
+  `dispatch_failed` resend behavior are unchanged.
+- Task 6 verification passes 30/30 intake/rearm tests, 30/30 queue/callback
+  tests, 148/148 focused bridge tests, and the production build. TypeScript
+  remains at the known 56-raw-diagnostic baseline with zero Task 6
+  diagnostics. No schema, seed, startup, migration, database, configuration,
+  remote, deploy, or publication action ran.
+
 ### Changed — Complete bridge review context (2026-08-11)
 - Bridge status now derives `contractVersion` as `v5` or `v8` from the stored
   strict payload without adding a wire/stored `contract_version` field or

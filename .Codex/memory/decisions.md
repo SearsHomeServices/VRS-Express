@@ -1,8 +1,22 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 20:01
+Updated: 2026-08-11 20:18
 
 ## Decisions
+
+- [CX] 2026-08-11 - Rearm only when both stored and incoming requests are V8,
+  the latest row is exactly failed/retryable, tech IDs match, the locked
+  submission remains pending with Stage 1 and submission approval true, and
+  the exact terminal event is completed, applied, forwarded, and delivered.
+  Store the superseded provider/SO pair in one centralized immutable snapshot
+  shape so late callback lookup is exact. Lock all call events during rearm,
+  and lock/revalidate the current provider at webhook begin, so apply and
+  rearm cannot cross.
+- [CX] 2026-08-11 - Preserve the cheap active duplicate lookup before any
+  technician/encryption work, then commit the locked existing/rearm decision
+  before fresh ticket creation. Use the existing separate advisory-locked
+  bridge insert after ticket creation; never nest global DB work inside a
+  Drizzle transaction that already holds a pool connection.
 
 - [CX] 2026-08-11 - Use distinct nonempty sentinels in the primary field-map
   fixture, including technician name and repair/replace rationale. Prove empty

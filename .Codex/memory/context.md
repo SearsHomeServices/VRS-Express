@@ -1,8 +1,28 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 20:01
+Updated: 2026-08-11 20:18
 
 ## Current Session
+
+- Completed Task 6 test-first. The production route now consumes an injected
+  intake orchestrator while preserving active duplicate ordering, partner and
+  technician validation, normal ticket creation, receipt SMS, and response
+  bodies. The locked store is the final terminal duplicate/rearm authority.
+- Eligible V8 rearm reuses the same bridge row/submission, rotates the public
+  call ID and encrypted callback material, stores sanitized strict V8 JSON,
+  clears every prior dispatch/provider/result/delivery field, resets the
+  ticket to human review, and appends one immutable completed prior-attempt
+  snapshot. V5, dispatch_failed, other terminal states, bad submission state,
+  tech mismatch, and incomplete upstream delivery do not rearm.
+- Fresh normal ticket creation runs only after the existing/rearm transaction
+  commits `none`; the existing advisory-locked bridge insert then handles the
+  final fresh race. This avoids nested pool acquisition under load.
+- Exact superseded provider/SO callbacks return duplicate before begin/apply/
+  decrypt/forward/broadcast. Call-row/provider revalidation closes callbacks
+  that resolved immediately before rearm, while in-flight event rows block
+  rearm. Verification is 30/30 intake, 30/30 queue, 148/148 focused bridge,
+  passing build, and unchanged 56 raw diagnostics with
+  zero Task 6 diagnostics. No prohibited environment or database action ran.
 
 - Closed the final narrow Task 5 proof gap: the main rendered V8 fixture now
   uses unique nonempty technician-name and rationale sentinels, while a

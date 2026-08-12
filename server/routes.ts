@@ -3,7 +3,12 @@ import { createServer, type Server } from "http";
 import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { storage, db, getSubmissionsDataVersion } from "./storage";
+import {
+  storage,
+  db,
+  bumpSubmissionsDataVersion,
+  getSubmissionsDataVersion,
+} from "./storage";
 import { sql, eq, and } from "drizzle-orm";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { authenticateToken, requireRole, invalidateUserStatusCache, type AuthenticatedRequest } from "./middleware/auth";
@@ -24,15 +29,14 @@ import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
 import {
   registerVrsAiWebhookApi,
   registerVrsSashaApi,
-  type VrsExpressIntake,
 } from "./vrs-sasha-api";
+import { createVrsSashaIntake } from "./vrs-sasha-intake";
 import { vrsBridgeStore } from "./vrs-sasha-store";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
   mapVrsAiWebhookToSubmissionDecision,
   processVrsAiWebhookEvent,
-  projectVrsBridgeIntake,
 } from "./vrs-sasha-queue";
 import {
   deliverVrsWebhook,
@@ -1583,156 +1587,122 @@ export async function registerRoutes(
   // request is first converted into the normal VRS Express ticket so every
   // existing queue, SMS, duplicate, and audit behavior remains in one place.
   // No AI call is made here; a human agent performs that handoff at Stage 1.
-  const vrsExpressIntake: VrsExpressIntake = {
-    async receive(payload) {
-      const partnerId = (payload.partner_id ?? "ahs")
-        .trim()
-        .toLowerCase()
-        .replace(/[\s-]+/g, "_");
-      if (!["ahs", "american_home_shield", "n/a"].includes(partnerId)) {
-        return {
-          kind: "unsupported_partner",
-          partnerId: payload.partner_id ?? "unknown",
-        };
-      }
-
-      const existing = await vrsBridgeStore.findActiveByServiceOrder(
-        payload.service_order,
-      );
-      if (existing) {
-        return {
-          kind: "duplicate",
-          existingCallId: existing.callId,
-          state: existing.state,
-        };
-      }
-
-      const technician = await storage.getTechnicianByLdapId(payload.tech_id);
-      if (!technician) {
-        return {
-          kind: "rejected",
-          status: 422,
-          code: "UNKNOWN_TECHNICIAN",
-          message: `Unknown technician LDAP id: ${payload.tech_id}`,
-        };
-      }
-      if (!technician.isActive) {
-        return {
-          kind: "rejected",
-          status: 422,
-          code: "INACTIVE_TECHNICIAN",
-          message: `Technician ${payload.tech_id} is inactive`,
-        };
-      }
-      if (!technician.district || !/^\d{4}$/.test(technician.district)) {
-        return {
-          kind: "rejected",
-          status: 422,
-          code: "INVALID_TECHNICIAN_DISTRICT",
-          message: `Technician ${payload.tech_id} does not have a four-digit district`,
-        };
-      }
-
-      const directoryPhone = technician.phone?.trim();
-      const safeDirectoryPhone =
-        directoryPhone && directoryPhone.toUpperCase() !== "N/A"
-          ? directoryPhone
-          : "";
-      const safeWirePhone = payload.tech_phone === "N/A"
-        ? ""
-        : payload.tech_phone;
-      const techUser = await storage.getOrCreateTechUser(
-        technician.ldapId,
-        technician.name || payload.tech_name,
-        safeDirectoryPhone || safeWirePhone,
-      );
-      if (techUser.role !== "technician") {
-        return {
-          kind: "rejected",
-          status: 409,
-          code: "NOT_A_TECHNICIAN",
-          message: "The resolved account is not a technician account",
-        };
-      }
-      const userPhone = techUser.phone?.trim();
-      const safeUserPhone = userPhone && userPhone.toUpperCase() !== "N/A"
-        ? userPhone
-        : "";
-      // Fail configuration validation before creating a user-visible ticket;
-      // otherwise a missing encryption key would leave an orphaned manual
-      // ticket after the bridge intake itself returned 500.
-      const encryptedSecret = encryptVrsCallbackSecret(
-        payload.callback_secret,
-      );
-      const bridgeCallId = `vrs_call_${randomUUID()}`;
-      const intakeProjection = projectVrsBridgeIntake(
-        payload,
-        technician.district,
-        { technicianPhone: safeDirectoryPhone || safeUserPhone },
-      );
-
-      const internalRequest = {
-        body: intakeProjection.submissionBody,
-      } as Request;
+  const vrsExpressIntake = createVrsSashaIntake({
+    store: vrsBridgeStore,
+    resolveTechnician: (techId) => storage.getTechnicianByLdapId(techId),
+    resolveTechUser: (ldapId, name, phone) =>
+      storage.getOrCreateTechUser(ldapId, name, phone),
+    encryptCallbackSecret: encryptVrsCallbackSecret,
+    generateCallId: () => `vrs_call_${randomUUID()}`,
+    async createTicket({ body, user }) {
+      const internalRequest = { body } as Request;
       (internalRequest as AuthenticatedRequest).user = {
-        id: techUser.id,
-        email: techUser.email ?? "",
-        name: techUser.name,
-        role: techUser.role,
-        ldapId: techUser.racId ?? undefined,
+        id: user.id,
+        email: user.email ?? "",
+        name: user.name,
+        role: user.role,
+        ldapId: user.racId ?? undefined,
         isTechnician: true,
       };
       const { res: capturedRes, captured } = makeCapturedResponse();
       await createSubmissionHandler(internalRequest, capturedRes);
       const responseBody = captured.body as any;
-      if (captured.statusCode !== 201 || !responseBody?.submission?.id) {
-        const message =
-          typeof responseBody?.error === "string"
-            ? responseBody.error
-            : "VRS Express could not create the authorization ticket";
+      if (captured.statusCode === 201 && responseBody?.submission?.id) {
         return {
-          kind: "rejected",
-          status:
-            captured.statusCode === 200 || captured.statusCode === 409
-              ? 409
-              : 422,
-          code:
-            captured.statusCode === 200
-              ? "SUBMISSION_ALREADY_EXISTS"
-              : "SUBMISSION_REJECTED",
-          message,
+          kind: "created" as const,
+          submissionId: responseBody.submission.id as number,
         };
       }
-
-      const stored = await vrsBridgeStore.createIntake({
-        submissionId: responseBody.submission.id,
-        callId: bridgeCallId,
-        serviceOrder: payload.service_order,
-        techId: payload.tech_id,
-        techPhone: intakeProjection.operationalPhone,
-        techName: techUser.name,
-        requestPayload: intakeProjection.requestPayload,
-        callbackUrl: payload.callback_url,
-        callbackSecretCipher: encryptedSecret.cipher,
-        callbackSecretIv: encryptedSecret.iv,
-        callbackSecretAuthTag: encryptedSecret.authTag,
-        callbackSecretSalt: encryptedSecret.salt,
-      });
-      if (stored.kind === "duplicate") {
-        return {
-          kind: "duplicate",
-          existingCallId: stored.record.callId,
-          state: stored.record.state,
-        };
-      }
+      const message = typeof responseBody?.error === "string"
+        ? responseBody.error
+        : "VRS Express could not create the authorization ticket";
       return {
-        kind: "accepted",
-        callId: stored.record.callId,
-        serviceOrder: payload.service_order,
-        createdAt: stored.createdAt,
+        kind: "rejected" as const,
+        status: captured.statusCode === 200 || captured.statusCode === 409
+          ? 409 as const
+          : 422 as const,
+        code: captured.statusCode === 200
+          ? "SUBMISSION_ALREADY_EXISTS"
+          : "SUBMISSION_REJECTED",
+        message,
       };
     },
-  };
+    bumpSubmissionsDataVersion,
+    async notifyRearmed(notification) {
+      if (notification.previousAssignee) {
+        try {
+          const prior = await storage.getUser(notification.previousAssignee);
+          if (
+            prior?.role === "vrs_agent" &&
+            prior.agentStatus === "working"
+          ) {
+            const [vrsPending, nlaPending] = await Promise.all([
+              storage.getPendingCount(prior.id),
+              storage.getNlaPendingCount(prior.id),
+            ]);
+            if (Number(vrsPending) + Number(nlaPending) === 0) {
+              await storage.updateUser(prior.id, {
+                agentStatus: "online",
+                updatedAt: new Date(),
+              } as any);
+              await safeLogActivity(
+                prior.id,
+                "status_change_ticket_flow",
+                {
+                  from: "working",
+                  to: "online",
+                  trigger: "v8_retry_rearm",
+                  submissionId: notification.submissionId,
+                },
+              );
+              updateClientStatus(prior.id, "online");
+              broadcastToAdmins({
+                type: "agent_status_changed",
+                payload: {
+                  userId: prior.id,
+                  name: prior.name,
+                  status: "online",
+                },
+              });
+              broadcastToAgent(prior.id, {
+                type: "own_status_changed",
+                payload: { status: "online" },
+              });
+            }
+          }
+        } catch (error) {
+          console.error(
+            `[vrs-sasha] Failed to release prior assignee after V8 rearm for submission ${notification.submissionId}:`,
+            error,
+          );
+        }
+      }
+      broadcastToDivisionAgents(notification.applianceType, {
+        type: "ticket_queued",
+        payload: {
+          submissionId: notification.submissionId,
+          serviceOrder: notification.serviceOrder,
+          applianceType: notification.applianceType,
+          applianceLabel: getDivisionLabel(notification.applianceType),
+          warrantyLabel: getWarrantyLabel(notification.warrantyType),
+        },
+      });
+      broadcastToAdmins({
+        type: "ticket_updated",
+        payload: {
+          submissionId: notification.submissionId,
+          ticketStatus: "queued",
+        },
+      });
+      await broadcastVrsAvailability();
+    },
+    logPostCommitError(error, notification) {
+      console.error(
+        `[vrs-sasha] V8 rearm committed but queue notification failed for submission ${notification.submissionId}:`,
+        error,
+      );
+    },
+  });
 
   registerVrsSashaApi(app, {
     apiKey: process.env.VRS_SASHA_API_KEY,
