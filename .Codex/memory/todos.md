@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-12 08:41
+Updated: 2026-08-12 09:04
 
 ## Done
 
@@ -48,6 +48,10 @@ Updated: 2026-08-12 08:41
   service order `99081201`.
 - [ ] Obtain the VRS AI development `X-API-Key` through a secure channel and
   save it as `VRS_AI_API_KEY`; restart only the DEV process afterward.
+- [ ] Before any future production republish, review which synchronized App
+  Secrets the deployment will capture and set deliberate production values;
+  never publish the DEV bridge URLs or assume workspace configuration is a
+  production activation decision.
 - [ ] After Tyler approves the design, add a DEV-only, admin-authenticated,
   read-only integration monitor showing intake, Stage 1, outbound dispatch,
   callback, forwarding, and failure checkpoints without secret values.

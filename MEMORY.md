@@ -1,11 +1,16 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-12 08:41 — Configured the Express-owned DEV bridge values and proved strict V8 intake; the VRS AI outbound key remains pending.
+> **Last Touched:** Codex — 2026-08-12 09:04 — Confirmed current production has no new bridge variables; hold any republish pending explicit production secret review.
 
 ## Current State
 - The verified V5/V8 branch is live in the VRS Express Replit development
-  workspace `main` and GitHub `main` at `63398c4`. Production was not
+  workspace `main` and GitHub `main` at `e72b351`. Production was not
   published or changed.
+- Connected Replit inspection confirms the live August 10 production
+  deployment contains none of the six new bridge variables. App Secrets may
+  be captured by a future republish, while the two DEV URLs remain scoped out
+  of production. Do not republish until production bridge Secrets and
+  production endpoint values are deliberately reviewed.
 - Replit Secrets now contains generated DEV-only `VRS_SASHA_API_KEY`,
   `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values. The running
   DEV process also has the confirmed `VRS_AI_BASE_URL` and

@@ -203,6 +203,11 @@ Updated: 2026-08-12 08:41
   unavailable in production, require admin authentication in DEV, redact
   secrets, and make the Stage 1 hold plus both API directions visually
   auditable without changing bridge behavior.
+- [CX] 2026-08-12 - Keep the current production deployment unchanged: live
+  inspection confirms it contains none of the new VRS bridge variables. Treat
+  any later republish as a separate approval gate because Replit may capture
+  synchronized App Secrets; review production secret selection and endpoint
+  values before publishing.
 - [CX] 2026-08-11 - Implement runtime changes on an isolated
   `codex/vrs-v5-v8-dev-integration` worktree. Require focused/full regression,
   build, normalized type-diagnostic, final review, and read-only Replit

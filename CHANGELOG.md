@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   public DEV origin under `.replit`'s development-only configuration. A
   future production publish does not inherit either DEV URL. No secret value
   was written to Git, logs, documentation, or task output.
+- Verified through the connected Replit app that the current August 10
+  production deployment contains none of the six new bridge variables. Replit
+  can capture synchronized App Secrets on a later republish, so production
+  must not be republished until its bridge-secret selection and production
+  endpoint values are deliberately reviewed.
 - Restarted only the Replit development process and confirmed its environment
   contains every Express-owned bridge value. `VRS_AI_API_KEY` remains the one
   missing value and must be supplied by the VRS AI platform through a secure

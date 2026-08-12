@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-12 08:41
+Updated: 2026-08-12 09:04
 
 ## Current Session
 
@@ -22,6 +22,11 @@ Updated: 2026-08-12 08:41
   exact environment URLs and secure credential-exchange/run sequence. A proposed
   DEV-only, admin-authenticated, read-only bridge monitor awaits Tyler's design
   approval before implementation.
+- Connected Replit inspection confirms the current August 10 production
+  deployment has none of the six new bridge variables. App Secrets can be
+  captured on a later republish, so publishing remains blocked until the
+  production secret selection and production endpoint values are explicitly
+  reviewed; the current production app remains unchanged.
 
 - Synchronized verified commit `6c69bab` to the clean VRS Express Replit
   workspace `main`, then pushed that same `main` history to GitHub. Restarted
