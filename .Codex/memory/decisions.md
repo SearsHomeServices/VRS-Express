@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 21:11
+Updated: 2026-08-11 21:31
 
 ## Decisions
 
@@ -24,32 +24,15 @@ Updated: 2026-08-11 21:11
   `422` for other submission rejections. Both use the generic error/message
   response shape.
 
-- [CX] 2026-08-11 - Impose call-before-event locking on every callback path
-  that touches both tables. Retain event-row locks in rearm to serialize
-  event-only failure updates, while using the locked call's missing delivery
-  timestamp as an early duplicate result that avoids event rows entirely.
-- [CX] 2026-08-11 - A retryable terminal callback is rearm evidence only when
-  payload `eventId`, `callId`, `soNo`, `state=failed`, and `retryable=true`
-  agree with the event columns and locked call row. Snapshot prior assignment
-  and reassignment notes, then clear both so stale audit text is not re-dated.
-- [CX] 2026-08-11 - Keep the production PostgreSQL concurrency and JSONB
-  lookup regression URL-gated and unexecuted locally. It must run against an
-  approved disposable DEV database before release; focused local suites must
-  not open a database or container.
-
-- [CX] 2026-08-11 - Rearm only when both stored and incoming requests are V8,
-  the latest row is exactly failed/retryable, tech IDs match, the locked
-  submission remains pending with Stage 1 and submission approval true, and
-  the exact terminal event is completed, applied, forwarded, and delivered.
-  Store the superseded provider/SO pair in one centralized immutable snapshot
-  shape so late callback lookup is exact. Lock all call events during rearm,
-  and lock/revalidate the current provider at webhook begin, so apply and
-  rearm cannot cross.
-- [CX] 2026-08-11 - Preserve the cheap active duplicate lookup before any
-  technician/encryption work, then commit the locked existing/rearm decision
-  before fresh ticket creation. Use the existing separate advisory-locked
-  bridge insert after ticket creation; never nest global DB work inside a
-  Drizzle transaction that already holds a pool connection.
+- [CX] 2026-08-11 - Preserve the `972409d` active-only bridge rule for both
+  V5 and V8. An active call uses the established duplicate response; every
+  terminal `approved`, `partial`, `denied`, or `failed` repeat follows normal
+  fresh ticket/bridge/public-call-ID intake. Retryable V8 failure has no
+  ticket-reset exception.
+- [CX] 2026-08-11 - Keep the cheap active lookup before technician/user/
+  encryption work. After normal ticket creation, rely on the existing
+  advisory-locked `createIntake` insert for the final active-race check; do not
+  inspect or mutate terminal bridge or callback rows during intake.
 
 - [CX] 2026-08-11 - Use distinct nonempty sentinels in the primary field-map
   fixture, including technician name and repair/replace rationale. Prove empty
@@ -167,10 +150,6 @@ Updated: 2026-08-11 21:11
 - [CX] 2026-08-10 - Preserve the VRS Express human Stage 1 boundary around the
   V8 wire contract. Store and forward the accepted V8 business payload
   unchanged except for the bridge-owned callback URL and secret.
-- [CX] 2026-08-10 - Implement V8 retryable terminal failure as a new public
-  call ID on the same Express ticket, preserving the previous attempt in the
-  existing event ledger and requiring another Stage 1 review; avoid a schema
-  change and acknowledge late callbacks for superseded terminal attempts.
 - [CX] 2026-08-10 - Use clean Replit `main` at `972409d` as the current
   production publish-source baseline because it contains six valid commits
   beyond GitHub. Rebase V8 work on that history; never overwrite the box with

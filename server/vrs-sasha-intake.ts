@@ -1,13 +1,7 @@
 import type { VrsExpressIntake } from "./vrs-sasha-api";
 import type { VrsAuthorizeRequest } from "./vrs-sasha-contract";
-import {
-  projectVrsBridgeIntake,
-  type VrsExpressApplianceDivision,
-} from "./vrs-sasha-queue";
-import type {
-  VrsBridgeIntakeDecisionStore,
-  VrsFreshSubmissionResult,
-} from "./vrs-sasha-store";
+import { projectVrsBridgeIntake } from "./vrs-sasha-queue";
+import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
 
 export interface VrsIntakeTechnician {
   ldapId: string;
@@ -31,18 +25,17 @@ export interface VrsIntakeTicketInput {
   user: VrsIntakeTechUser;
 }
 
-export interface VrsRearmNotification {
-  submissionId: number;
-  previousAssignee: number | null;
-  serviceOrder: string;
-  applianceType: VrsExpressApplianceDivision;
-  requestType: "authorization";
-  warrantyType: "american_home_shield";
-  warrantyProvider: "American Home Shield";
-}
+export type VrsFreshSubmissionResult =
+  | { kind: "created"; submissionId: number }
+  | {
+      kind: "rejected";
+      status: 409 | 422;
+      code: string;
+      message: string;
+    };
 
 export interface VrsSashaIntakeDependencies {
-  store: VrsBridgeIntakeDecisionStore;
+  store: VrsBridgeIntakeStore;
   resolveTechnician(techId: string): Promise<VrsIntakeTechnician | undefined>;
   resolveTechUser(
     ldapId: string,
@@ -57,9 +50,6 @@ export interface VrsSashaIntakeDependencies {
   };
   generateCallId(): string;
   createTicket(input: VrsIntakeTicketInput): Promise<VrsFreshSubmissionResult>;
-  bumpSubmissionsDataVersion(): void;
-  notifyRearmed(notification: VrsRearmNotification): Promise<void>;
-  logPostCommitError(error: unknown, notification: VrsRearmNotification): void;
 }
 
 function usablePhone(value: string | null | undefined): string {
@@ -154,7 +144,7 @@ export function createVrsSashaIntake(
             directoryPhone || usablePhone(techUser.phone),
         },
       );
-      const decisionInput = {
+      const bridgeInput: Omit<NewVrsBridgeIntake, "submissionId"> = {
         callId: deps.generateCallId(),
         serviceOrder: payload.service_order,
         techId: payload.tech_id,
@@ -166,56 +156,14 @@ export function createVrsSashaIntake(
         callbackSecretIv: encryptedSecret.iv,
         callbackSecretAuthTag: encryptedSecret.authTag,
         callbackSecretSalt: encryptedSecret.salt,
-        submissionProjection: {
-          applianceType: projection.submissionBody.applianceType,
-          issueDescription: projection.submissionBody.issueDescription,
-          estimateAmount: projection.submissionBody.estimateAmount,
-          partNumbers: projection.submissionBody.partNumbers,
-          phone: projection.submissionBody.phone,
-        },
       };
-      const decision = await deps.store.decideExistingOrRearm(decisionInput);
-
-      if (decision.kind === "duplicate") {
-        return {
-          kind: "duplicate",
-          existingCallId: decision.record.callId,
-          state: decision.record.state,
-        };
-      }
-      if (decision.kind === "rearmed") {
-        const notification: VrsRearmNotification = {
-          submissionId: decision.record.submissionId,
-          previousAssignee: decision.previousAssignee,
-          serviceOrder: projection.submissionBody.serviceOrder,
-          applianceType: projection.submissionBody.applianceType,
-          requestType: projection.submissionBody.requestType,
-          warrantyType: projection.submissionBody.warrantyType,
-          warrantyProvider: projection.submissionBody.warrantyProvider,
-        };
-        try {
-          deps.bumpSubmissionsDataVersion();
-          await deps.notifyRearmed(notification);
-        } catch (error) {
-          deps.logPostCommitError(error, notification);
-        }
-        return {
-          kind: "accepted",
-          callId: decision.record.callId,
-          serviceOrder: payload.service_order,
-          createdAt: decision.rearmedAt,
-        };
-      }
 
       const fresh = await deps.createTicket({
         body: projection.submissionBody,
         user: techUser,
       });
       if (fresh.kind === "rejected") return fresh;
-      const {
-        submissionProjection: _submissionProjection,
-        ...bridgeInput
-      } = decisionInput;
+
       const stored = await deps.store.createIntake({
         ...bridgeInput,
         submissionId: fresh.submissionId,

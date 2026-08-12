@@ -46,8 +46,8 @@ contract version after approval. It never up-converts V5.
 
 | Contract | Required authorize shape | Retryable failed attempt |
 |---|---|---|
-| V5 | Core fields; `appliance_grade`, `partner_id`, `appliance_photos`, and `comments` remain optional | V5 does not rearm; the failed attempt remains terminal |
-| V8 | Every V5 field plus the four V8-only fields; the four formerly optional V5 fields are required | A new incoming V8 request may receive a new public call ID on the same ticket and must return to human review |
+| V5 | Core fields; `appliance_grade`, `partner_id`, `appliance_photos`, and `comments` remain optional | A terminal repeat follows normal new-ticket intake with a new public call ID |
+| V8 | Every V5 field plus the four V8-only fields; the four formerly optional V5 fields are required | A terminal repeat, including retryable failure, follows normal new-ticket intake with a new public call ID |
 
 ## Callback ownership and identifiers
 
@@ -90,17 +90,16 @@ Sender-provided TINA/signed photo URLs pass through byte-for-byte and require
 no VRS Express login. Authenticated internal `/objects/` paths are never
 converted or exposed as sender photo URLs.
 
-## Failure and rearm behavior
+## Failure and terminal-repeat behavior
 
 `approved`, `partial`, `denied`, and `failed` are terminal callback states;
 `requires_info` is non-terminal. VRS AI owns call admission and rate limits.
 
-A V8 rearm requires a new incoming complete V8 request after a retryable
-`failed` result has been fully applied and forwarded. VRS Express reuses the
-same ticket, creates a new public call ID and callback material, preserves the
-prior attempt in the durable ledger, clears prior dispatch/result state, and
-requires another human approval. Late callbacks for the superseded provider
-call ID are acknowledged as duplicates without reapplying business effects.
+Only active bridge calls produce a duplicate conflict. After any terminal
+result, a valid new V5 or V8 request follows the normal intake path and creates
+a new ticket and bridge row with a new public call ID, subject to existing
+normal ticket/SO policy. A retryable V8 failure does not reuse the prior ticket
+or bridge row.
 
 ## Development safety boundary
 

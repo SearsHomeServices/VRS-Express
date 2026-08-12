@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 21:11 — Corrected status-dependent SUBMISSION_REJECTED parity in the V5/V8 handoff.
+> **Last Touched:** Codex — 2026-08-11 21:31 — Restored active-only V5/V8 terminal-repeat compatibility and removed the unapproved retry reset.
 
 ## Current State
 - Task 7 is implemented in the isolated worktree as an in-place handoff
@@ -8,7 +8,8 @@
   strict V5 and strict V8 on the same route, deterministic four-key selection,
   pending human review before VRS AI dispatch, same-version forwarding,
   exact callback/HMAC behavior, controlled V8 placeholder enrichment,
-  signed-photo pass-through, durable dedupe, and V8-only same-ticket rearm.
+  signed-photo pass-through, durable dedupe, and active-only duplicate
+  behavior.
 - Platform-facing sources contain only VRS Express/VRS AI identities and the
   four approved DEV URL placeholders, with no individual names, internal
   source history, live URLs, or credentials. Markdown request/callback
@@ -20,30 +21,28 @@
 - `SUBMISSION_REJECTED` appears under both generic response statuses: captured
   ticket conflict statuses return `409`; other submission rejections return
   `422`.
-- Task 7 verification is 15/15 documentation tests, 171/171 focused
-  non-database bridge tests with the explicit PostgreSQL test skipped, a
-  passing production build, and unchanged 56-raw/26-normalized TypeScript
-  diagnostics with zero Task 7 matches. No database, container, remote,
-  configuration, deployment, or publication action ran.
-- Task 6 is implemented and review-hardened in the isolated worktree.
-  Production intake now uses
-  an injected orchestrator with the existing active-duplicate gate first.
-  Eligible fully-forwarded retryable V8 failures reuse the same bridge row and
-  ticket with a new public call ID, complete bridge/submission resets, an
-  immutable internal ledger snapshot, and best-effort post-commit requeue.
-  Exact superseded provider/SO callbacks dedupe before all callback effects.
-  Every callback method that touches both tables now locks the call before the
-  event. Incomplete call delivery rejects rearm before event reads; terminal
-  JSON must agree with the event/call rows; assignment and reassignment notes
-  are captured in the immutable snapshot before both are cleared.
-- Fresh ticket creation remains outside the locked rearm transaction; the
-  existing advisory-locked bridge insert remains the final fresh duplicate
-  check. Non-database verification is 38/38 intake, 30/30 queue, 156/156
-  focused bridge, passing build, and unchanged 56-raw TypeScript baseline.
-  The URL-gated real-PostgreSQL concurrency/JSONB regression was added but not
-  executed; it is a DEV staging release gate. No database connection/write,
-  container, schema, seed, startup, migration, config, remote, deploy, or
-  publish action ran.
+- Task 7 documentation regressions remain green: 15/15 documentation tests
+  and 149/149 focused non-database bridge tests, a passing production build,
+  and the known 56-raw/26-normalized TypeScript baseline with zero new Task 6
+  module diagnostics. No database, container, remote, configuration,
+  deployment, or publication action ran.
+- Task 6 preserves the `972409d` active-only duplicate model in the isolated
+  worktree. The production route uses an injected intake orchestrator with the
+  existing cheap active lookup first. Active V5/V8 requests retain the current
+  duplicate response before technician, user, encryption, or ticket work.
+- A valid V5 or V8 request after terminal `approved`, `partial`, `denied`, or
+  `failed` follows normal intake and creates a normal new ticket, bridge row,
+  and public call ID, subject to normal ticket/service-order policy. This also
+  applies to retryable V8 `failed`; it is a new request, not reuse of the prior
+  ticket or bridge row.
+- The unapproved retry reset, immutable prior-attempt snapshot, historical
+  provider lookup, special callback locking, and URL-gated PostgreSQL test are
+  removed. Callback durability and Stage 1 `dispatch_failed` resend remain
+  baseline behavior. Final verification is 16/16 intake, 52/52 queue/API,
+  149/149 full bridge tests, a passing production build, and the known 56 raw
+  TypeScript diagnostics with zero new Task 6 module diagnostics. No database
+  connection/write, container, schema, seed, startup, migration, config,
+  remote, deploy, or publish action ran.
 - Tasks 1-6 of the V5/V8 integration are implemented in the isolated
   worktree. The dashboard directly consumes a server-render-tested production
   panel whose runtime null guard owns status/errors/failure copy and the
@@ -119,7 +118,7 @@
   `docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md`.
   It uses strict dual-schema parsing, same-version dispatch, controlled
   placeholder-only V8 enrichment, TINA/signed-photo pass-through, and
-  same-ticket V8 retryable-failure rearming without a schema change.
+  active-only terminal-repeat behavior without a schema change.
 - Tasks 1 and 2 now provide strict V5/V8 schemas, version-aware authenticated
   intake, and same-version outbound source validation in the isolated
   worktree. `POST /vrs/authorize` keeps its existing 503 configuration and
@@ -181,27 +180,15 @@
   machine-readable and runtime-validated, then require the Markdown copies to
   match exactly. Encode only documented limits; do not invent maxima for the
   parts array, rationale, contract number, symptom, or numeric purchase year.
-- [CX] 2026-08-11 - Use call-before-event as the universal lock order for any
-  operation touching both bridge and event rows. Keep event-row `FOR UPDATE`
-  during rearm because event-only failure updates still need serialization,
-  but reject immediately from the locked call row while delivery is null so
-  forwarding cannot be needlessly joined. Require terminal JSON identity,
-  state, and retryability to agree exactly with event and call rows.
-- [CX] 2026-08-11 - Keep the real PostgreSQL forward/rearm interleaving and
-  historical JSONB lookup test behind `VRS_TASK6_TEST_DATABASE_URL`. Do not
-  connect locally; require the env-gated proof in approved DEV staging before
-  release.
-- [CX] 2026-08-11 - Keep active duplicate lookup ahead of technician/user/
-  encryption work for compatibility, but make the advisory-locked
-  `decideExistingOrRearm` transaction the final terminal duplicate/rearm
-  authority. Rearm requires V8 on both sides, matching tech, failed/retryable,
-  pending Stage-1-approved plus `submissionApproved=true`, and a completed,
-  applied, forwarded callback delivery with no other in-progress/unforwarded
-  event. Webhook begin locks the same call row and rechecks provider identity.
-- [CX] 2026-08-11 - Do not call the global normal-ticket handler while a
-  Drizzle transaction holds a pool connection. Commit `kind:none` first,
-  create the normal ticket outside the transaction, then use the existing
-  advisory-locked `createIntake` for the final fresh bridge insert/race check.
+- [CX] 2026-08-11 - Supersede the unapproved retry-reset design. Preserve the
+  `972409d` active-only duplicate rule for V5 and V8: active calls return the
+  established duplicate response; terminal `approved`, `partial`, `denied`,
+  and `failed` repeats use normal fresh ticket/bridge/public-call-ID intake.
+  Retryable V8 failure has no ticket/bridge reuse exception.
+- [CX] 2026-08-11 - Keep active duplicate lookup before technician/user/
+  encryption work. Normal ticket creation remains outside the advisory-locked
+  fresh bridge insert; the existing `createIntake` lock is the final active
+  race check and does not inspect terminal rows.
 - [CX] 2026-08-11 - Keep field-routing proof and empty-value proof in separate
   rendered V8 fixtures. The routing fixture uses unique nonempty sentinels for
   every swappable field; the preservation fixture uses exact empty technician
@@ -277,10 +264,10 @@
 - [CX] 2026-08-10 - V8 supersedes V5 as the single contract source. Retrofit
   the existing `/vrs/authorize` bridge in place while preserving the VRS
   Express Stage 1 human gate and unrelated manual workflows.
-- [CX] 2026-08-10 - Use the existing bridge row and event ledger for a
-  retryable terminal-failure rearm: new Express call ID, new payload/secret,
-  same requeued ticket, prior-attempt audit snapshot, and late old-callback
-  acknowledgement. No schema change.
+- [CX] 2026-08-11 - Correct the terminal-repeat implementation to the source
+  and `972409d` baseline: a valid retryable V8 failure repeat is a normal new
+  request with a fresh ticket, bridge row, and public call ID; do not alter the
+  prior attempt or callback rows.
 - [CX] 2026-08-10 - The Replit workspace is the publish source. Base V8 on
   clean Replit commit `972409d`, not the six-commit-older GitHub mirror.
 - [CX] 2026-08-10 - Require zero regression from the captured baseline plus
@@ -324,8 +311,8 @@
   URL without exposing their values in Git or task output.
 - [CX] Complete an AHS-only staging transaction through the full Express
   approval bridge before any production approval.
-- [CX] Confirm with the VRS AI team whether retryable terminal failures are redialed by
-  VRS AI or require an explicit Express retry endpoint/button.
+- [CX] Terminal retries are normal new VRS Express requests; no Express
+  ticket-reset endpoint or button is part of this bridge contract.
 - [CX] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
   expiry behavior.
 - [CX] Validate an execution-capable First American portal path separately
@@ -341,9 +328,9 @@
   known permitted test callback only for runtime schema validation, while
   separately proving that platform-facing sources contain no live URLs.
 - [CX] 2026-08-11 - Never invoke global-DB ticket creation from inside a
-  Drizzle transaction callback. At pool saturation, outer transactions can
-  occupy every connection while each waits for nested global DB work. Commit
-  the locked existing/rearm decision before normal ticket creation.
+  Drizzle transaction callback. Normal ticket creation must complete before
+  the existing advisory-locked fresh bridge insert so pool connections cannot
+  deadlock on nested global DB work.
 - [CX] 2026-08-11 - A rendered page containing all expected values can still
   pass after two fields are swapped when fixture values overlap or assertions
   search the whole markup. Give swappable fields unique values and assert each

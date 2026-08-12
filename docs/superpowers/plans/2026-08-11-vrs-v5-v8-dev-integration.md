@@ -479,7 +479,7 @@ git diff --cached --check
 git commit -m "Show complete V8 review context"
 ```
 
-### Task 6: Rearm only retryable terminal V8 attempts without a second ticket
+### Task 6: Preserve active-only duplicate behavior for V5 and V8 intake
 
 **Files:**
 
@@ -497,37 +497,27 @@ Cover:
 
 - active V5/V8 attempt returns the current duplicate response before ticket creation;
 - a new request creates one normal ticket and one bridge row;
-- valid V8 after terminal `failed/retryable:true` reuses the submission, generates a new Express call ID, stores the new V8 payload/secret, clears provider/result/delivery state, and does not create a second ticket;
-- V5, active, non-retryable, approved, partial, and denied attempts cannot use rearm;
-- rearm records a prior-attempt ledger snapshot and returns the ticket to human review;
-- two simultaneous rearm attempts produce one `202` result and one duplicate/conflict;
-- a late callback for the superseded provider ID is acknowledged as duplicate without apply or forward; and
-- the existing pre-acceptance `dispatch_failed` retry remains a Stage 1 resend, not intake rearm.
+- every terminal V5/V8 repeat creates a normal new ticket and bridge row with
+  a new public call ID, subject to existing normal ticket/SO policy;
+- retryable V8 failure is a normal new request/new public call ID without
+  reusing the prior ticket or bridge row; and
+- the existing pre-acceptance `dispatch_failed` retry remains a Stage 1 resend.
 
 ```powershell
 npx vitest run tests/vrs-sasha-intake.test.ts --reporter=verbose
 ```
 
-Expected RED: intake orchestration/rearm APIs do not exist.
+Expected RED: the intake orchestration API does not exist.
 
 **Step 2: Extract intake orchestration from the route closure**
 
-Inject technician resolution, ticket creation, encryption, call-ID generation, bridge store, and queue notification. Preserve the existing successful path and status/error bodies.
+Inject technician resolution, ticket creation, encryption, call-ID generation, and bridge store. Preserve the existing successful path and status/error bodies.
 
-**Step 3: Implement the atomic Drizzle rearm**
+**Step 3: Preserve the active-only bridge admission lock**
 
-Under the existing service-order advisory lock:
-
-- load the latest bridge row;
-- require incoming V8 plus row `state === "failed"` and `retryable === true`;
-- insert an internal completed event-ledger snapshot containing prior public/provider IDs and terminal result;
-- update the existing bridge row with the new request/call/secret and clear all prior dispatch/result/delivery columns;
-- update that bridge submission to human-review state and clear the Stage 1 approval flag/assignment needed for another approval; and
-- return enough information to broadcast the normal queued-ticket event after commit.
-
-Do not add a table or column.
-
-Add a historical provider-ID lookup against the existing terminal event JSON. When no current bridge row matches a callback provider ID but the ledger proves it belongs to a superseded attempt, return the existing duplicate/200 outcome.
+Keep the existing advisory-locked `createIntake` final active-race check after
+normal ticket creation. Do not inspect or mutate terminal bridge rows, reset a
+ticket, add a ledger snapshot, or add historical callback lookup behavior.
 
 **Step 4: Run green and protect existing callbacks**
 
@@ -538,14 +528,14 @@ npm run test:vrs-ai-bridge
 npm run build
 ```
 
-Expected GREEN: retry, late-callback, existing queue/callback, full bridge, and build checks pass.
+Expected GREEN: terminal-repeat, existing queue/callback, full bridge, and build checks pass.
 
 **Step 5: Update required project records and commit**
 
 ```powershell
 git add -- server/vrs-sasha-intake.ts server/vrs-sasha-store.ts server/vrs-sasha-queue.ts server/routes.ts tests/vrs-sasha-intake.test.ts package.json CHANGELOG.md MEMORY.md .Codex/memory/context.md .Codex/memory/todos.md .Codex/memory/decisions.md
 git diff --cached --check
-git commit -m "Rearm retryable V8 bridge attempts"
+git commit -m "Preserve active-only V5 V8 bridge intake"
 ```
 
 ## External handoff
@@ -737,7 +727,8 @@ Use a unique dummy service order/technician approved for the development databas
 4. Confirm exactly one same-version request reaches VRS AI DEV, including usable signed photo URLs.
 5. VRS AI sends a correctly signed result to the Express DEV webhook.
 6. Confirm one ticket/SMS effect and one signed upstream callback; replay the event and confirm dedupe.
-7. Send a retryable failure and prove a new V8 request gets a new public call ID on the same ticket.
+7. Send a retryable failure and prove a new V8 request creates a normal new
+   ticket, bridge row, and public call ID.
 8. Smoke-test the listed manual/PWA, two-stage AHS, First American, NLA, admin, media, WebSocket, and SMS paths against the development database.
 
 Record sanitized timestamps, IDs, HTTP statuses, and screenshots/log evidence without secrets or customer data.

@@ -469,7 +469,7 @@ describe("VRS bridge platform handoff", () => {
     expect(handoff).not.toMatch(/202[^.\n]*(?:call|dial)(?:ing)? (?:has )?started/i);
   });
 
-  it("documents strict selection, URL pass-through, durable dedupe, and V8-only rearm", () => {
+  it("documents strict selection, URL pass-through, durable dedupe, and active-only repeats", () => {
     const combined = `${architecture}\n${handoff}`;
 
     for (const key of VRS_V8_ONLY_KEYS) expect(combined).toContain(`\`${key}\``);
@@ -480,8 +480,10 @@ describe("VRS bridge platform handoff", () => {
     expect(combined).toContain("`/objects/`");
     expect(combined).toMatch(/durable.*event ledger/is);
     expect(combined).not.toMatch(/(?:24\s*hours?|24h).*(?:dedup|expir)/i);
-    expect(combined).toMatch(/V8.*new incoming.*new public call ID.*same ticket/is);
-    expect(combined).toMatch(/V5.*does not rearm/is);
+    expect(combined).toMatch(/active.*(?:409|duplicate)/is);
+    expect(combined).toMatch(/terminal.*V5.*V8.*normal.*new.ticket/is);
+    expect(combined).toMatch(/retryable.*V8.*new request.*new call ID/is);
+    expect(combined).not.toMatch(/same.ticket.*(?:reset|reuse)/is);
     expect(combined).toMatch(/rate limits.*VRS AI/is);
   });
 });

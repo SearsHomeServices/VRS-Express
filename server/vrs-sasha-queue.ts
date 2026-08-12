@@ -251,10 +251,6 @@ export interface VrsBridgeStore {
   getByProviderCallId(
     providerCallId: string,
   ): Promise<VrsBridgeRecord | undefined>;
-  hasSupersededProviderCall(
-    providerCallId: string,
-    serviceOrder: string,
-  ): Promise<boolean>;
   markDispatching(id: number): Promise<boolean>;
   markAccepted(
     id: number,
@@ -465,7 +461,7 @@ export async function processVrsAiWebhookEvent(options: {
     | "markWebhookApplied"
     | "markWebhookForwarded"
     | "markWebhookFailed"
-  > & Partial<Pick<VrsBridgeStore, "hasSupersededProviderCall">>;
+  >;
   decryptCallbackSecret(encrypted: {
     cipher: string;
     iv: string;
@@ -486,14 +482,6 @@ export async function processVrsAiWebhookEvent(options: {
     options.event.callId,
   );
   if (!record) {
-    if (
-      await options.store.hasSupersededProviderCall?.(
-        options.event.callId,
-        options.event.soNo,
-      )
-    ) {
-      return "duplicate";
-    }
     throw new Error(`Unknown VRS AI call id: ${options.event.callId}`);
   }
   if (

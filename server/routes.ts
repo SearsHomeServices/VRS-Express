@@ -6,7 +6,6 @@ import { z } from "zod";
 import {
   storage,
   db,
-  bumpSubmissionsDataVersion,
   getSubmissionsDataVersion,
 } from "./storage";
 import { sql, eq, and } from "drizzle-orm";
@@ -1626,81 +1625,6 @@ export async function registerRoutes(
           : "SUBMISSION_REJECTED",
         message,
       };
-    },
-    bumpSubmissionsDataVersion,
-    async notifyRearmed(notification) {
-      if (notification.previousAssignee) {
-        try {
-          const prior = await storage.getUser(notification.previousAssignee);
-          if (
-            prior?.role === "vrs_agent" &&
-            prior.agentStatus === "working"
-          ) {
-            const [vrsPending, nlaPending] = await Promise.all([
-              storage.getPendingCount(prior.id),
-              storage.getNlaPendingCount(prior.id),
-            ]);
-            if (Number(vrsPending) + Number(nlaPending) === 0) {
-              await storage.updateUser(prior.id, {
-                agentStatus: "online",
-                updatedAt: new Date(),
-              } as any);
-              await safeLogActivity(
-                prior.id,
-                "status_change_ticket_flow",
-                {
-                  from: "working",
-                  to: "online",
-                  trigger: "v8_retry_rearm",
-                  submissionId: notification.submissionId,
-                },
-              );
-              updateClientStatus(prior.id, "online");
-              broadcastToAdmins({
-                type: "agent_status_changed",
-                payload: {
-                  userId: prior.id,
-                  name: prior.name,
-                  status: "online",
-                },
-              });
-              broadcastToAgent(prior.id, {
-                type: "own_status_changed",
-                payload: { status: "online" },
-              });
-            }
-          }
-        } catch (error) {
-          console.error(
-            `[vrs-sasha] Failed to release prior assignee after V8 rearm for submission ${notification.submissionId}:`,
-            error,
-          );
-        }
-      }
-      broadcastToDivisionAgents(notification.applianceType, {
-        type: "ticket_queued",
-        payload: {
-          submissionId: notification.submissionId,
-          serviceOrder: notification.serviceOrder,
-          applianceType: notification.applianceType,
-          applianceLabel: getDivisionLabel(notification.applianceType),
-          warrantyLabel: getWarrantyLabel(notification.warrantyType),
-        },
-      });
-      broadcastToAdmins({
-        type: "ticket_updated",
-        payload: {
-          submissionId: notification.submissionId,
-          ticketStatus: "queued",
-        },
-      });
-      await broadcastVrsAvailability();
-    },
-    logPostCommitError(error, notification) {
-      console.error(
-        `[vrs-sasha] V8 rearm committed but queue notification failed for submission ${notification.submissionId}:`,
-        error,
-      );
     },
   });
 

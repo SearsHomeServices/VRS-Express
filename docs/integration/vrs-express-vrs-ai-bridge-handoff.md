@@ -383,7 +383,7 @@ Raw body: {"version":1,"eventId":"evt_001","callId":"vrs_ai_call_456","soNo":"13
 Expected: sha256=5631d513c93853fa58efc382eed0c19db14ab42b94b1fa44938bb44ee352d4b6
 ```
 
-## 12. Idempotency, ordering, forwarding, and rearm
+## 12. Idempotency, ordering, forwarding, and terminal repeats
 
 VRS Express uses a durable event ledger with separate apply and forward
 checkpoints. A replay of the same event returns `200` with `deduped: true` and
@@ -395,11 +395,11 @@ dedupe expiry in this interface.
 event to `<UPSTREAM_DEV_CALLBACK_URL>` with its public call ID and the
 sender-provided secret.
 
-For V8 only, a fully delivered retryable `failed` result may be followed by a
-new incoming complete V8 request. VRS Express assigns a new public call ID on
-the same ticket, preserves the prior attempt, and requires human review again.
-V5 does not rearm. A late callback for the superseded provider call ID is
-acknowledged as a duplicate without business effects.
+Only active bridge calls return `409 DUPLICATE_CALL`. After any terminal
+result, a valid new V5 or V8 request follows the normal VRS Express intake
+path, creating a new ticket and bridge row with a new public call ID, subject
+to normal ticket/service-order policy. A retryable V8 failure therefore accepts
+a new request/new call ID without resetting the prior ticket or bridge row.
 
 ## 13. Exact development acceptance checklist
 
@@ -433,8 +433,9 @@ acknowledged as a duplicate without business effects.
 - [ ] Replay one event and confirm `200`, `deduped: true`, and no repeated
       ticket/SMS effect.
 - [ ] Send a retryable V8 failure, finish its upstream delivery, then send a
-      new V8 request and confirm a new public call ID on the same ticket with
-      another human review.
-- [ ] Confirm the equivalent V5 failed request does not rearm.
+      new V8 request and confirm a normal new ticket, new bridge row, and new
+      public call ID.
+- [ ] Confirm a new V5 request after a terminal result follows the same normal
+      new-ticket intake policy.
 
 Do not use production URLs, credentials, or customer data for this checklist.

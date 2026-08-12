@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 21:11
+Updated: 2026-08-11 21:31
 
 ## Current Session
 
@@ -8,7 +8,7 @@ Updated: 2026-08-11 21:11
   architecture, Markdown handoff, and OpenAPI now describe strict V5 and V8
   on the existing route, VRS Express human approval, same-version VRS AI
   dispatch, exact callbacks/HMAC, controlled V8 enrichment, durable dedupe,
-  and V8-only same-ticket rearm.
+  and active-only duplicate behavior.
 - All platform-facing sources use only VRS Express/VRS AI identities and the
   four approved DEV URL placeholders; they contain no individual names,
   internal source history, live URLs, or credentials. Copyable Markdown V5,
@@ -23,43 +23,27 @@ Updated: 2026-08-11 21:11
 - Task 7 RED was 9 expected failures against the stale V5-only handoff, plus
   one review RED for missing `422`/callback-retry details and a four-failure
   final-review RED for the remaining response/prerequisite/effect details.
-  GREEN is 15/15 docs tests, 171/171 focused non-database bridge tests with the
-  URL-gated PostgreSQL test skipped, a passing build, and unchanged
-  56-raw/26-normalized TypeScript diagnostics with zero Task 7 matches. No
-  database, container, remote, config, deploy, or publish action ran.
+   GREEN is 15/15 docs tests, 149/149 focused non-database bridge tests, a
+   passing build, and unchanged 56-raw/26-normalized TypeScript diagnostics
+   with zero new Task 6 module matches. No database, container, remote, config,
+   deploy, or publish action ran.
 
-- Hardened Task 6 review findings. `markWebhookForwarded` now follows the
-  universal call-before-event order used by rearm and webhook apply. Rearm
-  rejects incomplete call delivery before any event read, validates exact
-  terminal payload/event/call-row agreement, and snapshots `assignedTo` plus
-  `reassignmentNotes` before clearing both.
-- Added tight production-source guards for lock ordering and exact route
-  intake registration. Added a `VRS_TASK6_TEST_DATABASE_URL`-gated real
-  PostgreSQL lock-interleaving/JSONB regression, but did not execute it or
-  make any database/container connection; it remains a DEV release gate.
-- Fresh non-database evidence: intake 38/38, queue 30/30, focused bridge
-  156/156, production build passed, and TypeScript remains exactly 56 raw
-  diagnostics with zero Task 6 matches.
-
-- Completed Task 6 test-first. The production route now consumes an injected
-  intake orchestrator while preserving active duplicate ordering, partner and
-  technician validation, normal ticket creation, receipt SMS, and response
-  bodies. The locked store is the final terminal duplicate/rearm authority.
-- Eligible V8 rearm reuses the same bridge row/submission, rotates the public
-  call ID and encrypted callback material, stores sanitized strict V8 JSON,
-  clears every prior dispatch/provider/result/delivery field, resets the
-  ticket to human review, and appends one immutable completed prior-attempt
-  snapshot. V5, dispatch_failed, other terminal states, bad submission state,
-  tech mismatch, and incomplete upstream delivery do not rearm.
-- Fresh normal ticket creation runs only after the existing/rearm transaction
-  commits `none`; the existing advisory-locked bridge insert then handles the
-  final fresh race. This avoids nested pool acquisition under load.
-- Exact superseded provider/SO callbacks return duplicate before begin/apply/
-  decrypt/forward/broadcast. Call-row/provider revalidation closes callbacks
-  that resolved immediately before rearm, while in-flight event rows block
-  rearm. Verification is 30/30 intake, 30/30 queue, 148/148 focused bridge,
-  passing build, and unchanged 56 raw diagnostics with
-  zero Task 6 diagnostics. No prohibited environment or database action ran.
+- Corrected Task 6 to retain the `972409d` active-only duplicate model. The
+  production route still consumes the injected intake seam and retains its
+  cheap active lookup before partner, technician, encryption, normal ticket,
+  receipt-SMS, and response behavior.
+- An active V5 or V8 bridge returns the existing duplicate result. A valid V5
+  or V8 request after terminal `approved`, `partial`, `denied`, or `failed`
+  takes normal fresh intake: a new normal ticket, bridge row, and public call
+  ID. This includes retryable V8 `failed`; it is a new request, not a reset of
+  the prior ticket or bridge row.
+- Removed the unapproved ticket/bridge reset, attempt snapshot, historical
+  provider callback lookup, special callback locking, and PostgreSQL test.
+  Current callback durability and Stage 1 `dispatch_failed` resend remain
+  baseline behavior. Final non-database verification is 16/16 intake, 52/52
+  queue/API, 149/149 bridge tests, a passing build, and the known 56 raw
+  TypeScript diagnostics with zero new Task 6 module diagnostics. No database
+  or container action was run.
 
 - Closed the final narrow Task 5 proof gap: the main rendered V8 fixture now
   uses unique nonempty technician-name and rationale sentinels, while a

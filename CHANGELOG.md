@@ -11,8 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   strict V5 and strict V8 compatibility on the same authorize endpoint. The
   architecture, Markdown handoff, and OpenAPI now agree on deterministic
   four-key V8 selection, same-version dispatch, human approval, controlled V8
-  placeholder enrichment, signed-photo pass-through, callbacks, and V8-only
-  same-ticket rearm.
+  placeholder enrichment, signed-photo pass-through, callbacks, and
+  active-only duplicate behavior.
 - Replaced live endpoints with four development placeholders and removed
   individual names, upstream implementation labels, internal provenance, and
   credential material from all platform-facing source documents.
@@ -29,49 +29,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   effect of all five callback states. `SUBMISSION_REJECTED` is explicitly
   documented under both statuses because captured conflict statuses return
   `409` while other submission rejections return `422`.
-- Task 7 verification passes 15/15 documentation tests, 171/171 focused
-  non-database bridge tests with the dedicated PostgreSQL test skipped, and
-  the production build. TypeScript remains at the known 56-raw/26-normalized
-  baseline with zero Task 7 diagnostics. No database, container, remote,
-  configuration, deployment, or publication action ran.
+- Final V5/V8 verification passes 15/15 documentation tests and 149/149
+  focused non-database bridge tests, with a passing production build.
+  TypeScript remains at the known 56-raw/26-normalized baseline with zero new
+  Task 6 module diagnostics. No database, container, remote, configuration,
+  deployment, or publication action ran.
 
-### Changed — Retryable terminal V8 rearm (2026-08-11)
+### Changed — Active-only V5/V8 bridge intake compatibility (2026-08-11)
 - Extracted the production SASHA/Tech Hub intake orchestration from the route
   into an injected seam while retaining the existing active-duplicate,
   partner, technician, normal ticket, receipt-SMS, and API response behavior.
-- V8 requests can rearm the same bridge row and Express submission only after
-  a fully applied and forwarded retryable `failed` callback, with matching
-  technician identity and a still-pending, Stage-1-approved submission. V5,
-  active, dispatch-failed, nonretryable, terminal-success, and inconsistent
-  attempts remain duplicate conflicts.
-- The atomic rearm transaction locks the service order, latest bridge row,
-  linked submission, and terminal event; appends an immutable prior-attempt
-  snapshot; rotates the public call ID, payload, callback encryption material,
-  URL, and technician metadata; clears provider/result/delivery state; and
-  returns the same ticket to human review without a second receipt SMS.
-- Fresh normal ticket creation remains outside the rearm transaction to avoid
-  nested pool acquisition. The existing locked bridge insert remains the final
-  fresh-race duplicate authority.
-- Late callbacks for the exact superseded provider ID/service-order pair now
-  take the existing duplicate/200 path before event claim, ticket/SMS apply,
-  secret decryption, forwarding, or broadcasts. Current callbacks and Stage 1
-  `dispatch_failed` resend behavior are unchanged.
-- Follow-up hardening gives every callback path that touches both bridge and
-  event rows one call-before-event lock order. Rearm rejects from the locked
-  call row before reading event rows when delivery is incomplete, requires
-  exact terminal payload/event/call-row agreement, and snapshots then clears
-  prior assignment notes during the reset.
-- Production-source regressions protect the callback lock order and prove the
-  route registers the exact constructed intake seam. A dedicated
-  `VRS_TASK6_TEST_DATABASE_URL`-gated PostgreSQL test can exercise the real
-  forward-versus-rearm interleaving and historical JSONB lookup; it was not
-  executed locally and remains a DEV staging release gate.
-- Task 6 non-database verification passes 38/38 intake/rearm tests, 30/30
-  queue/callback tests, 156/156 focused bridge tests, and the production
-  build. TypeScript
-  remains at the known 56-raw-diagnostic baseline with zero Task 6
-  diagnostics. No schema, seed, startup, migration, database connection/write,
-  container, configuration, remote, deploy, or publication action ran.
+- Restored the `972409d` baseline model: only active bridge states return the
+  existing duplicate response. A valid V5 or V8 request after any terminal
+  `approved`, `partial`, `denied`, or `failed` bridge state takes the normal
+  intake path and creates a normal new ticket, bridge row, and public call ID.
+- A retryable V8 failure does not reset or reuse the prior ticket. Its next
+  valid request is the normal fresh intake, preserving the source-required new
+  request and new call ID without changing callback durability or Stage 1
+  `dispatch_failed` resend behavior.
+- Removed the unapproved retry/reset, prior-attempt snapshot,
+  historical provider lookup, callback lock-order override, and URL-gated
+  PostgreSQL test. The existing locked fresh bridge insert remains the final
+  active-race authority after normal ticket creation.
+- Task 6 final non-database verification passes 16/16 intake, 52/52 focused
+  queue/API, and 149/149 full bridge tests plus the production build.
+  `npm run check` remains at the known 56-raw-diagnostic baseline with zero
+  diagnostics in the new Task 6 modules. No schema, seed, startup, migration,
+  database connection/write, container, configuration, remote, deploy, or
+  publication action ran.
 
 ### Changed — Complete bridge review context (2026-08-11)
 - Bridge status now derives `contractVersion` as `v5` or `v8` from the stored

@@ -66,8 +66,8 @@ approved.
   authoritative value for that exact field.
 - Expose the complete V8 decision context, including TINA/signed photo URLs,
   to the human reviewer.
-- Support V8's new-request behavior after a retryable terminal failure without
-  creating a second Express ticket.
+- Support V8's source-required new-request behavior after a retryable terminal
+  failure through the normal fresh Express ticket and bridge intake path.
 - Prove the integration in the development runtime and database before any
   production publication.
 - Keep platform-facing handoff material limited to VRS Express and VRS AI.
@@ -245,26 +245,19 @@ continues its active-service-order duplicate guard. A VRS AI `429` received
 after Stage 1 is recorded as a dispatch failure and surfaced to the reviewer;
 Express's earlier `202` never represents VRS AI rate-limit admission.
 
-## V8 Retryable Failure
+## Terminal Repeat Behavior
 
-V8 permits a new authorize request after terminal `failed` with
-`retryable: true`. This applies only when the new request is valid V8:
+The baseline duplicate rule is active-only for both request versions. A valid
+new V5 or V8 request after `approved`, `partial`, `denied`, or `failed` follows
+the normal intake path: it creates a new ticket and bridge row with a new
+public call ID, subject to the existing normal ticket/SO policy. The source
+rule that a retryable V8 failure accepts a new request is therefore satisfied
+without a special state reset.
 
-1. Active calls and all V5 duplicates keep returning `409`.
-2. Under the existing service-order advisory lock, a valid V8 request may
-   rearm the same bridge-backed Express ticket only when its latest state is
-   terminal `failed` and retryable.
-3. The ledger records the prior Express call ID, provider call ID, terminal
-   result, and retry transition before reset.
-4. The bridge row receives a new Express call ID, new V8 payload, newly
-   encrypted upstream callback secret, cleared provider/result/delivery data,
-   and `pending_review` state.
-5. The same ticket returns to the human queue; a second ticket is not created.
-6. Late callbacks for the superseded provider call are acknowledged and
-   ignored from ledger evidence rather than applied to the rearmed ticket.
-
-This uses existing JSON and event-ledger storage. It adds no schema or startup
-migration.
+Only active bridge states return `409 DUPLICATE_CALL`. Terminal attempts do
+not reset their existing ticket/bridge/event rows, and late
+callbacks continue through the ordinary durable callback rules for their own
+provider call ID. This adds no schema or startup migration.
 
 ## Production Non-Regression Contract
 
@@ -342,12 +335,12 @@ Implementation follows red-green-refactor.
 
 ### Retry, callbacks, and UI
 
-- V8 alone may rearm a retryable terminal failure with a new Express call ID
-  and the same ticket.
-- Non-retryable/active/V5 duplicates remain conflicts.
-- Late old callbacks cannot apply to the new attempt.
+- Active V5/V8 attempts remain conflicts; terminal V5/V8 repeats use the
+  normal new-ticket/new-bridge intake path.
+- A retryable V8 failure does not reset an existing ticket; its next valid V8
+  request receives a new normal public call ID.
 - Existing callback signature, ID replacement, result idempotency, and ticket
-  effects remain green.
+  effects remain unchanged.
 - The V8 review fields and photos render only for bridge-backed tickets.
 
 ### Verification and development evidence

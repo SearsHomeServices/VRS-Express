@@ -1,45 +1,36 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 21:11
+Updated: 2026-08-11 21:31
 
 ## Done
 
 - [x] Revised the existing bridge architecture, Markdown handoff, and OpenAPI
   for strict V5+V8 compatibility, platform-only DEV placeholders, exact
-  request/callback constraints, HMAC, media handling, and V8 retry rearm.
+  request/callback constraints, HMAC, media handling, and active-only terminal
+  repeat behavior.
 - [x] Added documentation contract tests and final-review coverage for runtime
   intake errors, safe DEV identifiers, callback URL direction, and event
   effects, including status-dependent `SUBMISSION_REJECTED` under both `409`
-  and `422`; verified 15/15 docs tests, 171/171 focused non-database bridge
+  and `422`; verified 15/15 docs tests, 149/149 focused non-database bridge
   tests, the production build, and the
   unchanged 56-raw/26-normalized TypeScript baseline.
 
-- [x] Eliminated callback-forward/rearm lock inversion with universal
-  call-before-event order, early incomplete-delivery rejection, exact
-  terminal row/payload consistency, and assignment-note snapshot/reset.
-- [x] Added production lock-order and route-consumer regressions plus the
-  env-gated PostgreSQL concurrency/JSONB staging test without opening a
-  database or container locally.
-- [x] Verified the Task 6 hardening with 38/38 intake, 30/30 queue, 156/156
-  non-database focused tests, a passing build, and the unchanged 56-diagnostic
-  baseline with zero Task 6 matches.
+- [x] Corrected Task 6 to preserve the `972409d` active-only duplicate rule:
+  active V5/V8 requests keep the existing duplicate response, while every
+  valid terminal V5/V8 repeat uses normal fresh ticket/bridge/public-call-ID
+  intake. Retryable V8 `failed` uses that same normal new-request path.
+- [x] Removed the unapproved ticket/bridge reset, immutable retry snapshot,
+  historical-provider callback path, special callback locking, and URL-gated
+  PostgreSQL test; retained callback durability and Stage 1
+  `dispatch_failed` resend behavior.
+- [x] Verified the correction with 16/16 intake, 52/52 queue/API, and 149/149
+  focused bridge tests, a passing production build, and the known 56 raw
+  TypeScript baseline with zero new Task 6 module diagnostics.
 
 ## Open
 
 - [ ] Regenerate and visually verify the platform-only DOCX, PDF, and exact
   three-file ZIP from the updated Markdown and OpenAPI sources.
-
-- [ ] Run `tests/vrs-sasha-postgres.test.ts` against an approved disposable
-  DEV PostgreSQL URL via `VRS_TASK6_TEST_DATABASE_URL`; this remains a release
-  gate and was not executed locally.
-
-- [x] Implemented same-ticket retryable V8 rearm with locked final authority,
-  full bridge/ticket resets, immutable prior-attempt snapshot, no second
-  receipt SMS, post-commit requeue, and exact superseded callback dedupe.
-- [x] Preserved active duplicate ordering and Stage 1 `dispatch_failed`
-  resend, kept fresh ticket creation outside store transactions, and verified
-  30/30 intake, 30/30 queue, 148/148 focused bridge, build, and 56-baseline
-  TypeScript diagnostics.
 
 - [x] Separated unique field-routing proof from empty-value preservation for
   technician name and repair/replace rationale; retained exact `N/A`, `TBD`,
@@ -190,8 +181,6 @@ Updated: 2026-08-11 21:11
 
 ## Open
 
-- [x] Implement the same-ticket, new-call-ID retry path after a retryable
-  terminal failure, including late-callback deduplication.
 - [ ] Update the handoff/architecture/OpenAPI/examples for both V5 and V8 and
   regenerate the platform-only DOCX/PDF/ZIP package.
 - [ ] Run focused tests, build, TypeScript-baseline comparison, OpenAPI/example
