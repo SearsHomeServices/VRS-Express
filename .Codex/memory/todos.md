@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 22:10
+Updated: 2026-08-11 22:24
 
 ## Done
+
+- [x] Regenerated the platform-only V5/V8 integration package from approved
+  source: editable DOCX, matching 10-page PDF, and exact three-file ZIP with
+  OpenAPI at archive root. Verified all pages visually, metadata/text scans,
+  table geometry, source docs tests (16/16), and exact archive bytes/members.
 
 - [x] Revised the existing bridge architecture, Markdown handoff, and OpenAPI
   for strict V5+V8 compatibility, platform-only DEV placeholders, exact
@@ -32,9 +37,6 @@ Updated: 2026-08-11 22:10
   build, and the known 56-raw TypeScript baseline.
 
 ## Open
-
-- [ ] Regenerate and visually verify the platform-only DOCX, PDF, and exact
-  three-file ZIP from the updated Markdown and OpenAPI sources.
 
 - [x] Separated unique field-routing proof from empty-value preservation for
   technician name and repair/replace rationale; retained exact `N/A`, `TBD`,

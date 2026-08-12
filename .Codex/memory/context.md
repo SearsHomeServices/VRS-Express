@@ -1,8 +1,24 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 22:10
+Updated: 2026-08-11 22:24
 
 ## Current Session
+
+- Completed Task 8 from corrected source `bc3ff67`: regenerated the
+  platform-only direct-delivery package in `output/doc/` as an editable DOCX,
+  matching 10-page PDF, and ZIP with exactly those two files plus the
+  authoritative OpenAPI YAML at archive root. No standalone YAML exists in
+  `output/doc/`.
+- The document carries strict V5/V8 selection, two-direction DEV flow, full
+  payloads/constraints, responses, five callback payloads/effects, raw-byte
+  HMAC/retry details, signed-photo handling, the narrow immediate retryable V8
+  exception, and the acceptance checklist. It contains only VRS Express/VRS
+  AI and the four approved DEV placeholders.
+- Artifact verification passes: 16/16 source docs tests, complete DOCX table
+  geometry audit, scrubbed DOCX metadata, DOCX/PDF text scans, exact ZIP byte
+  membership, and visual inspection of all 10 PDF pages. Word was used only
+  hidden for local conversion and exited afterward; no database, container,
+  remote, configuration, deployment, publication, or production action ran.
 
 - Completed Task 7 test-first as an in-place documentation revision. The
   architecture, Markdown handoff, and OpenAPI now describe strict V5 and V8

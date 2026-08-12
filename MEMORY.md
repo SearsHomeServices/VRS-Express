@@ -1,8 +1,21 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 22:10 — Added the narrow immediate strict-V8 retry exception without reusing a prior attempt.
+> **Last Touched:** Codex — 2026-08-11 22:24 — Regenerated and visually verified the V5/V8 direct-delivery handoff package.
 
 ## Current State
+- Task 8 is complete in the isolated worktree. `output/doc/` now contains the
+  regenerated platform-only DOCX, matching 10-page PDF, and direct-delivery
+  ZIP. The ZIP has exactly the PDF, editable DOCX, and authoritative OpenAPI
+  YAML at its root; no standalone YAML was added under `output/doc/`.
+- The package faithfully covers strict V5/V8 selection, two-way DEV flow,
+  complete payloads and constraints, response/error behavior, callback HMAC,
+  retries/effects, signed photo handling, the narrow immediate retryable V8
+  exception, and the acceptance checklist. It uses only the four approved DEV
+  URL placeholders and only the two platform identities.
+- Local artifact checks pass: source docs 16/16, DOCX table geometry audit,
+  DOCX/PDF extracted-text and metadata scans, exact ZIP membership/bytes, and
+  visual inspection of all 10 rendered PDF pages. No database, container,
+  remote, configuration, deployment, publication, or production action ran.
 - Task 7 is implemented in the isolated worktree as an in-place handoff
   revision. The architecture, Markdown handoff, and OpenAPI now describe
   strict V5 and strict V8 on the same route, deterministic four-key selection,
@@ -176,6 +189,12 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Regenerate external handoff artifacts only after the
+  corrected source contract is approved. Ship one direct-delivery ZIP with
+  exactly the PDF, editable DOCX, and authoritative OpenAPI YAML at archive
+  root. Treat visual render review, text/metadata scrub, and exact archive
+  membership as package completion gates; do not imply any deployment or
+  activation.
 - [CX] 2026-08-11 - Keep `SUBMISSION_REJECTED` in both documented authorize
   status families because runtime status mapping depends on the captured ticket
   result: conflicts are `409`, while other submission rejections are `422`.
@@ -306,8 +325,6 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Regenerate the platform-only DOCX/PDF/ZIP from the updated V5/V8
-  Markdown/OpenAPI sources, then complete final local/DEV evidence.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
 - [CX] Run the staged non-bridge workflow matrix and record a rollback target

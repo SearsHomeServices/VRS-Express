@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Regenerated V5/V8 development handoff package (2026-08-11)
+- Rebuilt the direct-delivery handoff from the approved strict V5/V8 Markdown
+  and OpenAPI sources: editable DOCX, matching PDF, and a ZIP containing
+  exactly those two files plus the source OpenAPI YAML at the archive root.
+- The platform-only package includes both development directions, strict
+  version selection, complete V5/V8 payloads and constraints, response/error
+  behavior, all five signed callback shapes and effects, raw-byte HMAC and
+  retry rules, signed-photo handling, the narrow immediate retryable-failed
+  V8 exception, and the DEV acceptance checklist.
+- Scrubbed DOCX personal metadata, rendered and inspected all 10 PDF pages,
+  verified exact table geometry, extracted and scanned DOCX/PDF text, and
+  verified the exact three ZIP members and byte-for-byte bundled artifacts.
+- The source documentation regression passes 16/16. No database, container,
+  remote, configuration, deployment, publication, or production action ran.
+
 ### Changed — V5/V8 bridge handoff sources (2026-08-11)
 - Revised the existing VRS Express/VRS AI bridge documentation in place for
   strict V5 and strict V8 compatibility on the same authorize endpoint. The

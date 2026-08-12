@@ -1,8 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 22:10
+Updated: 2026-08-11 22:24
 
 ## Decisions
+
+- [CX] 2026-08-11 - Package the approved V5/V8 handoff as exactly three
+  root-level direct-delivery files: matching PDF, editable DOCX, and the
+  authoritative OpenAPI YAML. Keep artifact content platform-only and
+  development-placeholder-only. A package is complete only after a metadata
+  scrub, exact membership/byte check, source-contract test, and every-page
+  visual render review; packaging does not authorize any deployment.
 
 - [CX] 2026-08-11 - Revise the existing bridge handoff in place: document V5
   and V8 as strict alternatives on one endpoint, selected only by the four
