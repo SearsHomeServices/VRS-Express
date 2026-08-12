@@ -395,11 +395,18 @@ dedupe expiry in this interface.
 event to `<UPSTREAM_DEV_CALLBACK_URL>` with its public call ID and the
 sender-provided secret.
 
-Only active bridge calls return `409 DUPLICATE_CALL`. After any terminal
-result, a valid new V5 or V8 request follows the normal VRS Express intake
-path, creating a new ticket and bridge row with a new public call ID, subject
-to normal ticket/service-order policy. A retryable V8 failure therefore accepts
-a new request/new call ID without resetting the prior ticket or bridge row.
+Only active bridge calls return `409 DUPLICATE_CALL`. V5 and nonretryable V8
+terminal repeats remain subject to ordinary ticket/service-order policy.
+
+The narrow V8 exception is a strict V8 request whose latest same-service-order
+bridge is a retryable `failed` V8 call with its terminal failed callback
+locally applied. VRS Express creates a new normal ticket, new bridge row, and
+new public call ID immediately. It excludes only prior retryable-failed V8
+bridge tickets from the legacy same-day duplicate checks; every other ticket
+constraint remains in force. It never reuses or resets the old ticket, bridge,
+or event. Upstream forwarding remains independent: an old callback-forward
+retry may continue from its durable ledger without delaying or altering the
+new request.
 
 ## 13. Exact development acceptance checklist
 
@@ -432,10 +439,11 @@ a new request/new call ID without resetting the prior ticket or bridge row.
       upstream callback.
 - [ ] Replay one event and confirm `200`, `deduped: true`, and no repeated
       ticket/SMS effect.
-- [ ] Send a retryable V8 failure, finish its upstream delivery, then send a
-      new V8 request and confirm a normal new ticket, new bridge row, and new
-      public call ID.
-- [ ] Confirm a new V5 request after a terminal result follows the same normal
-      new-ticket intake policy.
+- [ ] Send a retryable V8 failure, confirm its failed callback is applied
+      locally, then immediately send a strict new V8 request and confirm a new
+      normal ticket, new bridge row, and new public call ID. The old upstream
+      forward retry may remain pending and must stay independent.
+- [ ] Confirm V5 and nonretryable V8 terminal repeats remain subject to
+      ordinary ticket/service-order policy.
 
 Do not use production URLs, credentials, or customer data for this checklist.

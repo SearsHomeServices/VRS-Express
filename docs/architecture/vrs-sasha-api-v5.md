@@ -46,8 +46,8 @@ contract version after approval. It never up-converts V5.
 
 | Contract | Required authorize shape | Retryable failed attempt |
 |---|---|---|
-| V5 | Core fields; `appliance_grade`, `partner_id`, `appliance_photos`, and `comments` remain optional | A terminal repeat follows normal new-ticket intake with a new public call ID |
-| V8 | Every V5 field plus the four V8-only fields; the four formerly optional V5 fields are required | A terminal repeat, including retryable failure, follows normal new-ticket intake with a new public call ID |
+| V5 | Core fields; `appliance_grade`, `partner_id`, `appliance_photos`, and `comments` remain optional | A terminal repeat remains subject to ordinary ticket/SO policy |
+| V8 | Every V5 field plus the four V8-only fields; the four formerly optional V5 fields are required | A strict V8 retry after a locally applied retryable `failed` V8 callback gets a new normal ticket, bridge, and public call ID; other terminal repeats use ordinary ticket/SO policy |
 
 ## Callback ownership and identifiers
 
@@ -95,11 +95,18 @@ converted or exposed as sender photo URLs.
 `approved`, `partial`, `denied`, and `failed` are terminal callback states;
 `requires_info` is non-terminal. VRS AI owns call admission and rate limits.
 
-Only active bridge calls produce a duplicate conflict. After any terminal
-result, a valid new V5 or V8 request follows the normal intake path and creates
-a new ticket and bridge row with a new public call ID, subject to existing
-normal ticket/SO policy. A retryable V8 failure does not reuse the prior ticket
-or bridge row.
+Only active bridge calls produce a duplicate conflict. V5 and nonretryable V8
+terminal repeats remain subject to ordinary ticket/SO policy.
+
+The narrow V8 exception is a strict V8 request whose latest same-service-order
+bridge is a retryable `failed` V8 call with its terminal failed callback
+locally applied. VRS Express creates a new normal ticket, new bridge row, and
+new public call ID immediately. It excludes only prior retryable-failed V8
+bridge tickets from the legacy same-day duplicate checks; every other ticket
+constraint remains in force. It never reuses or resets the old ticket, bridge,
+or event. Upstream forwarding remains independent: an old callback-forward
+retry may continue from its durable ledger without delaying or altering the
+new request.
 
 ## Development safety boundary
 

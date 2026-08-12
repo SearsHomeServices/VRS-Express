@@ -19,6 +19,10 @@ const handoffPath = resolve(
   repositoryRoot,
   "docs/integration/vrs-express-vrs-ai-bridge-handoff.md",
 );
+const retrofitDesignPath = resolve(
+  repositoryRoot,
+  "docs/superpowers/specs/2026-08-10-vrs-api-contract-v8-retrofit-design.md",
+);
 const openApiPath = resolve(
   repositoryRoot,
   "docs/integration/vrs-express-vrs-ai-bridge-openapi.yaml",
@@ -26,6 +30,7 @@ const openApiPath = resolve(
 
 const architecture = readFileSync(architecturePath, "utf8");
 const handoff = readFileSync(handoffPath, "utf8");
+const retrofitDesign = readFileSync(retrofitDesignPath, "utf8");
 const openApiSource = readFileSync(openApiPath, "utf8");
 const openApi = parse(openApiSource) as any;
 
@@ -481,9 +486,36 @@ describe("VRS bridge platform handoff", () => {
     expect(combined).toMatch(/durable.*event ledger/is);
     expect(combined).not.toMatch(/(?:24\s*hours?|24h).*(?:dedup|expir)/i);
     expect(combined).toMatch(/active.*(?:409|duplicate)/is);
-    expect(combined).toMatch(/terminal.*V5.*V8.*normal.*new.ticket/is);
-    expect(combined).toMatch(/retryable.*V8.*new request.*new call ID/is);
+    expect(combined).toMatch(
+      /V5.*nonretryable V8.*ordinary.*ticket\/SO policy/is,
+    );
+    expect(combined).toMatch(
+      /strict V8 request.*locally applied.*retryable.*failed/is,
+    );
+    expect(combined).toMatch(/new normal ticket.*new bridge.*new public call ID/is);
     expect(combined).not.toMatch(/same.ticket.*(?:reset|reuse)/is);
     expect(combined).toMatch(/rate limits.*VRS AI/is);
+  });
+
+  it("documents the narrow immediate V8 retry exception without a forwarding precondition", () => {
+    for (const source of [
+      architecture,
+      handoff,
+      retrofitDesign,
+      openApiSource,
+    ]) {
+      expect(source).toMatch(/strict V8/is);
+      expect(source).toMatch(/retryable.*failed/is);
+      expect(source).toMatch(/locally applied/is);
+      expect(source).toMatch(/prior retryable-failed V8\s+bridge tickets/is);
+      expect(source).toMatch(/same-day duplicate checks/is);
+      expect(source).toMatch(/upstream forwarding.*independent/is);
+      expect(source).toMatch(
+        /V5.*nonretryable V8.*ordinary.*ticket.*policy/is,
+      );
+      expect(source).toMatch(
+        /new.*ticket.*new.*bridge.*new.*public call ID/is,
+      );
+    }
   });
 });

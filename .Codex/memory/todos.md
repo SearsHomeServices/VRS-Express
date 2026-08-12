@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 21:31
+Updated: 2026-08-11 22:10
 
 ## Done
 
@@ -11,21 +11,25 @@ Updated: 2026-08-11 21:31
 - [x] Added documentation contract tests and final-review coverage for runtime
   intake errors, safe DEV identifiers, callback URL direction, and event
   effects, including status-dependent `SUBMISSION_REJECTED` under both `409`
-  and `422`; verified 15/15 docs tests, 149/149 focused non-database bridge
+  and `422`; verified 16/16 docs tests, 150/150 focused non-database bridge
   tests, the production build, and the
   unchanged 56-raw/26-normalized TypeScript baseline.
 
-- [x] Corrected Task 6 to preserve the `972409d` active-only duplicate rule:
-  active V5/V8 requests keep the existing duplicate response, while every
-  valid terminal V5/V8 repeat uses normal fresh ticket/bridge/public-call-ID
-  intake. Retryable V8 `failed` uses that same normal new-request path.
+- [x] Corrected Task 6 to preserve the `972409d` active-only duplicate rule
+  with the narrow V8 §2.4 exception: active V5/V8 requests keep the existing
+  duplicate response; V5 and nonretryable V8 terminal repeats retain ordinary
+  policy; a strict V8 request after a latest locally applied retryable failed
+  V8 callback creates a fresh ticket/bridge/public ID by excluding only prior
+  eligible V8 bridge ticket IDs from duplicate checks.
 - [x] Removed the unapproved ticket/bridge reset, immutable retry snapshot,
   historical-provider callback path, special callback locking, and URL-gated
   PostgreSQL test; retained callback durability and Stage 1
   `dispatch_failed` resend behavior.
-- [x] Verified the correction with 16/16 intake, 52/52 queue/API, and 149/149
-  focused bridge tests, a passing production build, and the known 56 raw
-  TypeScript baseline with zero new Task 6 module diagnostics.
+- [x] Proved selector eligibility, private duplicate-query exclusions, old
+  callback-forward isolation, active duplicate behavior, V5/nonretryable
+  isolation, and recurrence with focused intake/docs regressions. Final
+  verification is 16/16 intake, 16/16 docs, 150/150 full bridge, a passing
+  build, and the known 56-raw TypeScript baseline.
 
 ## Open
 

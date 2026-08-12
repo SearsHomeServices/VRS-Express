@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
 import { db } from "./storage";
 import {
@@ -63,10 +63,53 @@ export interface VrsBridgeIntakeStore {
   findActiveByServiceOrder(
     serviceOrder: string,
   ): Promise<VrsBridgeRecord | undefined>;
+  findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(
+    serviceOrder: string,
+  ): Promise<readonly { submissionId: number }[]>;
   createIntake(input: NewVrsBridgeIntake): Promise<
     | { kind: "accepted"; record: VrsBridgeRecord; createdAt: Date }
     | { kind: "duplicate"; record: VrsBridgeRecord }
   >;
+}
+
+export interface VrsRetryableFailedV8Candidate {
+  submissionId: number | null;
+  state: string;
+  retryable: boolean | null;
+  requestPayload: unknown;
+  webhookEventId: string | null;
+  eventId: string | null;
+  eventState: string | null;
+  eventAppliedAt: Date | null;
+}
+
+function isLocallyAppliedRetryableFailedV8Candidate(
+  row: VrsRetryableFailedV8Candidate | undefined,
+): row is VrsRetryableFailedV8Candidate & { submissionId: number } {
+  return (
+    row?.submissionId !== null &&
+    row?.submissionId !== undefined &&
+    row.state === "failed" &&
+    row.retryable === true &&
+    row.webhookEventId !== null &&
+    row.eventId === row.webhookEventId &&
+    row.eventState === "failed" &&
+    row.eventAppliedAt !== null &&
+    getVrsAuthorizeContractVersion(row.requestPayload) === "v8"
+  );
+}
+
+export function selectLocallyAppliedRetryableFailedV8SubmissionIds(
+  rows: readonly VrsRetryableFailedV8Candidate[],
+): readonly number[] {
+  // Locally applied is the terminal durability boundary. Do not require
+  // forwardedAt: the existing callback-forward ledger retries independently,
+  // and this fresh V8 request never mutates the prior attempt.
+  if (!isLocallyAppliedRetryableFailedV8Candidate(rows[0])) return [];
+
+  return rows
+    .filter(isLocallyAppliedRetryableFailedV8Candidate)
+    .map((row) => row.submissionId);
 }
 
 export type VrsAiBridgeStatusRow = Omit<
@@ -191,6 +234,40 @@ export class DrizzleVrsBridgeStore
       )
       .limit(1);
     return row ? toBridgeRecord(row) : undefined;
+  }
+
+  async findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(
+    serviceOrder: string,
+  ): Promise<readonly { submissionId: number }[]> {
+    const rows = await db
+      .select({
+        id: vrsAiCalls.id,
+        submissionId: vrsAiCalls.submissionId,
+        state: vrsAiCalls.state,
+        retryable: vrsAiCalls.retryable,
+        requestPayload: vrsAiCalls.requestPayload,
+        webhookEventId: vrsAiCalls.webhookEventId,
+        eventId: vrsAiCallEvents.eventId,
+        eventState: vrsAiCallEvents.state,
+        eventAppliedAt: vrsAiCallEvents.appliedAt,
+      })
+      .from(vrsAiCalls)
+      .leftJoin(
+        vrsAiCallEvents,
+        and(
+          eq(vrsAiCallEvents.vrsAiCallId, vrsAiCalls.id),
+          eq(vrsAiCallEvents.eventId, vrsAiCalls.webhookEventId),
+        ),
+      )
+      .where(eq(vrsAiCalls.serviceOrder, serviceOrder))
+      .orderBy(desc(vrsAiCalls.createdAt), desc(vrsAiCalls.id));
+
+    // The immediate V8 retry applies only after the newest bridge attempt is
+    // a durable retryable V8 failure. Earlier eligible failures are returned
+    // too, so their still-pending legacy tickets do not block a later retry.
+    return selectLocallyAppliedRetryableFailedV8SubmissionIds(rows).map(
+      (submissionId) => ({ submissionId }),
+    );
   }
 
   async createIntake(

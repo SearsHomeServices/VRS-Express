@@ -145,7 +145,13 @@ paths:
         '202':
           description: |
             VRS Express: pending human review and no VRS AI call. VRS AI:
-            asynchronous admission only; call start is not proven.
+            asynchronous admission only; call start is not proven. A strict V8
+            request after a locally applied retryable failed V8 callback creates
+            a new normal ticket, new bridge, and new public call ID immediately.
+            Only prior retryable-failed V8 bridge tickets are excluded from
+            legacy same-day duplicate checks; upstream forwarding remains
+            independent, and V5/nonretryable V8 terminal repeats use ordinary
+            ticket/service-order policy.
           content:
             application/json:
               schema:

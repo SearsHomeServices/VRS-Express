@@ -1085,7 +1085,13 @@ export async function registerRoutes(
   // (POST /api/external/v1/submissions) with an impersonated technician user.
   // Body must stay byte-identical to the original inline handler — every side
   // effect (Snowflake lookup, SMS, WS broadcast, micro-cache bump) is shared.
-  const createSubmissionHandler = async (req: Request, res: Response) => {
+  const createSubmissionHandler = async (
+    req: Request,
+    res: Response,
+    internalOptions?: {
+      ignoreLegacyDuplicateSubmissionIds?: readonly number[];
+    },
+  ) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const parsed = createSubmissionSchema.safeParse(req.body);
@@ -1103,6 +1109,11 @@ export async function registerRoutes(
       // requests are not available to providers — reject server-side even if
       // the (hidden-in-UI) option somehow slipped through.
       const isProvider1099 = user.role === "provider_1099";
+      // This option is private to the bridge intake closure below. It is never
+      // parsed from a public request body and excludes only durable prior V8
+      // retryable-failure ticket IDs from legacy same-day duplicate checks.
+      const excludedLegacyDuplicateSubmissionIds =
+        internalOptions?.ignoreLegacyDuplicateSubmissionIds ?? [];
       if (isProvider1099 && !is1099PortalEnabled()) {
         return res.status(403).json({ error: "The 1099 Provider Portal is not enabled in this environment." });
       }
@@ -1119,7 +1130,12 @@ export async function registerRoutes(
       // than 4xx: if this exact (tech, SO#) pair was just submitted within
       // 60s, return the existing row so the client sees "submitted" and
       // we don't fire a duplicate SMS or burn a resubmission slot.
-      const recentDup = await storage.findRecentDuplicateSubmission(parsed.data.serviceOrder, user.id, 60);
+      const recentDup = await storage.findRecentDuplicateSubmission(
+        parsed.data.serviceOrder,
+        user.id,
+        60,
+        { excludeSubmissionIds: excludedLegacyDuplicateSubmissionIds },
+      );
       if (recentDup) {
         // createdAt is `Date | null` in the schema (defaulted server-side),
         // so guard for the null case before doing time math.
@@ -1242,7 +1258,12 @@ export async function registerRoutes(
           // can distinguish "you already submitted this" from "another tech
           // already submitted this same SO today". Per VRS: one ticket per
           // service order per calendar day regardless of which tech submits.
-          const activeCheck = await storage.hasActiveSubmissionForServiceOrder(parsed.data.serviceOrder, user.id);
+          const activeCheck = await storage.hasActiveSubmissionForServiceOrder(
+            parsed.data.serviceOrder,
+            user.id,
+            undefined,
+            { excludeSubmissionIds: excludedLegacyDuplicateSubmissionIds },
+          );
           if (activeCheck.exists) {
             const statusLabels: Record<string, string> = {
               queued: "in the queue waiting for an agent",
@@ -1476,7 +1497,10 @@ export async function registerRoutes(
         resubmissionOf: parsed.data.resubmissionOf || null,
         procId: procIdResult.procId,
         clientNm: procIdResult.clientNm,
-      }, 60, { additionalRequest: isAdditionalRequest });
+      }, 60, {
+        additionalRequest: isAdditionalRequest,
+        excludeSubmissionIds: excludedLegacyDuplicateSubmissionIds,
+      });
       // Tyler 2026-05-27 — inside-tx cross-tech race-loser path. The
       // pre-check at line ~796 catches sequential dupes; this fires only
       // when a sibling request from another tech beat us through the
@@ -1580,7 +1604,12 @@ export async function registerRoutes(
     }
   };
 
-  app.post("/api/submissions", authenticateToken, requireRole("technician", "provider_1099"), createSubmissionHandler);
+  app.post(
+    "/api/submissions",
+    authenticateToken,
+    requireRole("technician", "provider_1099"),
+    (req, res) => createSubmissionHandler(req, res),
+  );
 
   // SASHA/Tech Hub intake for the VRS Express → VRS AI bridge. The V5
   // request is first converted into the normal VRS Express ticket so every
@@ -1593,7 +1622,7 @@ export async function registerRoutes(
       storage.getOrCreateTechUser(ldapId, name, phone),
     encryptCallbackSecret: encryptVrsCallbackSecret,
     generateCallId: () => `vrs_call_${randomUUID()}`,
-    async createTicket({ body, user }) {
+    async createTicket({ body, user }, internalOptions) {
       const internalRequest = { body } as Request;
       (internalRequest as AuthenticatedRequest).user = {
         id: user.id,
@@ -1604,7 +1633,7 @@ export async function registerRoutes(
         isTechnician: true,
       };
       const { res: capturedRes, captured } = makeCapturedResponse();
-      await createSubmissionHandler(internalRequest, capturedRes);
+      await createSubmissionHandler(internalRequest, capturedRes, internalOptions);
       const responseBody = captured.body as any;
       if (captured.statusCode === 201 && responseBody?.submission?.id) {
         return {

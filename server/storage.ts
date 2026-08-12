@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq, and, or, desc, asc, gte, lte, lt, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, desc, asc, gte, lte, lt, sql, isNull, inArray, notInArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   users,
@@ -264,7 +264,7 @@ export interface IStorage {
   getResubmissionChain(rootId: number): Promise<Submission[]>;
   getSubmissionHistory(serviceOrder: string): Promise<Submission[]>;
   hasRejectedClosedForServiceOrder(serviceOrder: string): Promise<boolean>;
-  hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
+  hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[], options?: { excludeSubmissionIds?: readonly number[] }): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }>;
   getNlaSubmissionsByServiceOrder(serviceOrder: string): Promise<NlaLookupRow[]>;
   getSubmissionsByServiceOrderForAgentLookup(serviceOrder: string): Promise<Array<{
     id: number;
@@ -300,12 +300,12 @@ export interface IStorage {
   // within `withinSeconds`, regardless of ticketStatus or resubmission flag.
   // The route handler treats a hit as "the original request already won —
   // return that row instead of creating a phantom duplicate."
-  findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number): Promise<Submission | undefined>;
+  findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number, options?: { excludeSubmissionIds?: readonly number[] }): Promise<Submission | undefined>;
   // Atomic insert-with-idempotency: serializes on advisory lock keyed by
   // (technicianId, hash(serviceOrder)), re-checks for a recent duplicate
   // inside the lock, and inserts only if no sibling request beat us to it.
   // See implementation comment for the rationale.
-  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number, options?: { additionalRequest?: boolean }): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
+  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number, options?: { additionalRequest?: boolean; excludeSubmissionIds?: readonly number[] }): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
 
   // SMS methods
   createSmsNotification(
@@ -630,7 +630,10 @@ export class DatabaseStorage implements IStorage {
   async createSubmissionWithIdempotency(
     submission: InsertSubmission,
     withinSeconds: number,
-    options?: { additionalRequest?: boolean }
+    options?: {
+      additionalRequest?: boolean;
+      excludeSubmissionIds?: readonly number[];
+    }
   ): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }> {
     return await db.transaction(async (tx) => {
       // Tyler 2026-05-27 — SO-scoped advisory lock (previously was
@@ -668,6 +671,7 @@ export class DatabaseStorage implements IStorage {
       // us to this SO# today — return blockedByOther so the route can convert
       // to a 409 (we deliberately don't surface another tech's row to this tech).
       const isResubOrAdditional = !!submission.resubmissionOf || !!options?.additionalRequest;
+      const excludeSubmissionIds = options?.excludeSubmissionIds ?? [];
       {
         // Tyler 2026-05-27 (premortem) — must compare "same calendar day"
         // in America/New_York, not the server's UTC. VRS techs operate on
@@ -686,6 +690,9 @@ export class DatabaseStorage implements IStorage {
             and(
               eq(submissions.serviceOrder, so),
               inArray(submissions.ticketStatus, activeStatuses),
+              excludeSubmissionIds.length > 0
+                ? notInArray(submissions.id, [...excludeSubmissionIds])
+                : undefined,
               gte(submissions.createdAt, wideCutoff),
               // Tyler 2026-05-27 (architect catch) — `submissions.created_at`
               // is `timestamp WITHOUT time zone`. Postgres semantics:
@@ -724,6 +731,9 @@ export class DatabaseStorage implements IStorage {
           and(
             eq(submissions.serviceOrder, so),
             eq(submissions.technicianId, submission.technicianId),
+            excludeSubmissionIds.length > 0
+              ? notInArray(submissions.id, [...excludeSubmissionIds])
+              : undefined,
             gte(submissions.createdAt, cutoff)
           )
         )
@@ -1437,7 +1447,7 @@ export class DatabaseStorage implements IStorage {
     return results.length > 0;
   }
 
-  async hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[]): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }> {
+  async hasActiveSubmissionForServiceOrder(serviceOrder: string, callerTechnicianId?: number, statuses?: string[], options?: { excludeSubmissionIds?: readonly number[] }): Promise<{ exists: boolean; status?: string; technicianId?: number; sameTech?: boolean }> {
     // Tyler 2026-05-06 (regression report): `"completed"` was previously in
     // this list, which blocked a tech from submitting a fresh ticket on the
     // same SO# any time after the prior one was approved — even days later.
@@ -1487,13 +1497,17 @@ export class DatabaseStorage implements IStorage {
     // them — only a still-in-flight ticket does. New submissions use the
     // default queued/pending/completed set.
     const activeStatuses = statuses ?? ["queued", "pending", "completed"];
+    const excludeSubmissionIds = options?.excludeSubmissionIds ?? [];
     const results = await db
       .select({ id: submissions.id, ticketStatus: submissions.ticketStatus, createdAt: submissions.createdAt, technicianId: submissions.technicianId })
       .from(submissions)
       .where(
         and(
           eq(submissions.serviceOrder, serviceOrder),
-          inArray(submissions.ticketStatus, activeStatuses)
+          inArray(submissions.ticketStatus, activeStatuses),
+          excludeSubmissionIds.length > 0
+            ? notInArray(submissions.id, [...excludeSubmissionIds])
+            : undefined,
         )
       )
       .orderBy(desc(submissions.createdAt))
@@ -1794,16 +1808,20 @@ export class DatabaseStorage implements IStorage {
   // or (b) a resubmission flow accidentally being submitted twice. A 60s
   // window safely brackets both — legitimate resubmissions happen minutes or
   // hours apart, never within a minute.
-  async findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number): Promise<Submission | undefined> {
+  async findRecentDuplicateSubmission(serviceOrder: string, technicianId: number, withinSeconds: number, options?: { excludeSubmissionIds?: readonly number[] }): Promise<Submission | undefined> {
     const cutoff = new Date(Date.now() - withinSeconds * 1000);
+    const excludeSubmissionIds = options?.excludeSubmissionIds ?? [];
     const results = await db
       .select()
       .from(submissions)
       .where(
         and(
-          eq(submissions.serviceOrder, serviceOrder),
-          eq(submissions.technicianId, technicianId),
-          gte(submissions.createdAt, cutoff)
+            eq(submissions.serviceOrder, serviceOrder),
+            eq(submissions.technicianId, technicianId),
+            excludeSubmissionIds.length > 0
+              ? notInArray(submissions.id, [...excludeSubmissionIds])
+              : undefined,
+            gte(submissions.createdAt, cutoff)
         )
       )
       .orderBy(desc(submissions.createdAt))

@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 21:31 — Restored active-only V5/V8 terminal-repeat compatibility and removed the unapproved retry reset.
+> **Last Touched:** Codex — 2026-08-11 22:10 — Added the narrow immediate strict-V8 retry exception without reusing a prior attempt.
 
 ## Current State
 - Task 7 is implemented in the isolated worktree as an in-place handoff
@@ -21,8 +21,8 @@
 - `SUBMISSION_REJECTED` appears under both generic response statuses: captured
   ticket conflict statuses return `409`; other submission rejections return
   `422`.
-- Task 7 documentation regressions remain green: 15/15 documentation tests
-  and 149/149 focused non-database bridge tests, a passing production build,
+- Task 7 documentation regressions remain green: 16/16 documentation tests
+  and 150/150 focused non-database bridge tests, a passing production build,
   and the known 56-raw/26-normalized TypeScript baseline with zero new Task 6
   module diagnostics. No database, container, remote, configuration,
   deployment, or publication action ran.
@@ -30,16 +30,23 @@
   worktree. The production route uses an injected intake orchestrator with the
   existing cheap active lookup first. Active V5/V8 requests retain the current
   duplicate response before technician, user, encryption, or ticket work.
-- A valid V5 or V8 request after terminal `approved`, `partial`, `denied`, or
-  `failed` follows normal intake and creates a normal new ticket, bridge row,
-  and public call ID, subject to normal ticket/service-order policy. This also
-  applies to retryable V8 `failed`; it is a new request, not reuse of the prior
-  ticket or bridge row.
+- V5 and nonretryable V8 terminal repeats remain subject to normal
+  ticket/service-order policy. The narrow V8 §2.4 exception applies only when
+  a strict V8 request follows a latest same-service-order retryable `failed`
+  V8 callback that was locally applied: it creates a new normal ticket, bridge
+  row, and public call ID immediately. Only prior retryable-failed V8 bridge
+  ticket IDs are excluded from all legacy duplicate queries; active, unrelated,
+  V5, and nonretryable rows remain blockers.
+- The old ticket, bridge, and event are never reset or reused. Upstream
+  callback forwarding is independent rather than a retry precondition: its
+  old-call durable ledger may resume without delaying or altering the new V8
+  request.
 - The unapproved retry reset, immutable prior-attempt snapshot, historical
   provider lookup, special callback locking, and URL-gated PostgreSQL test are
   removed. Callback durability and Stage 1 `dispatch_failed` resend remain
-  baseline behavior. Final verification is 16/16 intake, 52/52 queue/API,
-  149/149 full bridge tests, a passing production build, and the known 56 raw
+  baseline behavior. Final verification is 16/16 intake and 16/16
+  documentation tests, 150/150 full bridge tests, a passing production build,
+  and the known 56 raw
   TypeScript diagnostics with zero new Task 6 module diagnostics. No database
   connection/write, container, schema, seed, startup, migration, config,
   remote, deploy, or publish action ran.
@@ -180,11 +187,13 @@
   machine-readable and runtime-validated, then require the Markdown copies to
   match exactly. Encode only documented limits; do not invent maxima for the
   parts array, rationale, contract number, symptom, or numeric purchase year.
-- [CX] 2026-08-11 - Supersede the unapproved retry-reset design. Preserve the
-  `972409d` active-only duplicate rule for V5 and V8: active calls return the
-  established duplicate response; terminal `approved`, `partial`, `denied`,
-  and `failed` repeats use normal fresh ticket/bridge/public-call-ID intake.
-  Retryable V8 failure has no ticket/bridge reuse exception.
+- [CX] 2026-08-11 - Supersede the unapproved retry-reset design while retaining
+  the required narrow V8 §2.4 immediate retry: an active call remains the
+  established duplicate response; V5 and nonretryable V8 terminal repeats use
+  ordinary ticket/SO policy. A strict V8 request after the latest locally
+  applied retryable failed V8 callback creates a fresh ticket/bridge/public ID
+  by excluding only every prior eligible V8 bridge ticket ID from duplicate
+  queries. Do not reuse/reset old rows or require upstream forwarding.
 - [CX] 2026-08-11 - Keep active duplicate lookup before technician/user/
   encryption work. Normal ticket creation remains outside the advisory-locked
   fresh bridge insert; the existing `createIntake` lock is the final active
@@ -264,10 +273,11 @@
 - [CX] 2026-08-10 - V8 supersedes V5 as the single contract source. Retrofit
   the existing `/vrs/authorize` bridge in place while preserving the VRS
   Express Stage 1 human gate and unrelated manual workflows.
-- [CX] 2026-08-11 - Correct the terminal-repeat implementation to the source
-  and `972409d` baseline: a valid retryable V8 failure repeat is a normal new
-  request with a fresh ticket, bridge row, and public call ID; do not alter the
-  prior attempt or callback rows.
+- [CX] 2026-08-11 - Make retry eligibility locally durable rather than
+  upstream-forwarded: terminal callback application establishes the old V8
+  failure state, while its callback forward retry stays isolated by old call
+  ID. This permits the required immediate fresh request without mutating the
+  prior ticket, bridge, or event rows.
 - [CX] 2026-08-10 - The Replit workspace is the publish source. Base V8 on
   clean Replit commit `972409d`, not the six-commit-older GitHub mirror.
 - [CX] 2026-08-10 - Require zero regression from the captured baseline plus
@@ -311,8 +321,10 @@
   URL without exposing their values in Git or task output.
 - [CX] Complete an AHS-only staging transaction through the full Express
   approval bridge before any production approval.
-- [CX] Terminal retries are normal new VRS Express requests; no Express
-  ticket-reset endpoint or button is part of this bridge contract.
+- [CX] A qualifying strict V8 retry after a locally applied retryable failed
+  V8 callback creates a normal new VRS Express request; V5 and nonretryable
+  terminal repeats retain ordinary policy. No Express ticket-reset endpoint or
+  button is part of this bridge contract.
 - [CX] Confirm VRS AI recording URL retention, `X-API-Key` authorization, and
   expiry behavior.
 - [CX] Validate an execution-capable First American portal path separately

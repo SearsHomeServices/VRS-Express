@@ -29,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   effect of all five callback states. `SUBMISSION_REJECTED` is explicitly
   documented under both statuses because captured conflict statuses return
   `409` while other submission rejections return `422`.
-- Final V5/V8 verification passes 15/15 documentation tests and 149/149
+- Final V5/V8 verification passes 16/16 documentation tests and 150/150
   focused non-database bridge tests, with a passing production build.
   TypeScript remains at the known 56-raw/26-normalized baseline with zero new
   Task 6 module diagnostics. No database, container, remote, configuration,
@@ -39,20 +39,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Extracted the production SASHA/Tech Hub intake orchestration from the route
   into an injected seam while retaining the existing active-duplicate,
   partner, technician, normal ticket, receipt-SMS, and API response behavior.
-- Restored the `972409d` baseline model: only active bridge states return the
-  existing duplicate response. A valid V5 or V8 request after any terminal
-  `approved`, `partial`, `denied`, or `failed` bridge state takes the normal
-  intake path and creates a normal new ticket, bridge row, and public call ID.
-- A retryable V8 failure does not reset or reuse the prior ticket. Its next
-  valid request is the normal fresh intake, preserving the source-required new
-  request and new call ID without changing callback durability or Stage 1
-  `dispatch_failed` resend behavior.
+- Preserved the `972409d` active-only duplicate model: active bridge states
+  keep the existing duplicate response. V5 and nonretryable V8 terminal
+  repeats retain ordinary ticket/service-order policy.
+- Added the narrow V8 §2.4 exception: after the latest same-service-order
+  retryable `failed` V8 callback is locally applied, a strict new V8 request
+  creates a new normal ticket, bridge row, and public call ID immediately.
+  Only prior retryable-failed V8 bridge ticket IDs are excluded from all four
+  legacy duplicate queries; unrelated, active, V5, and nonretryable ticket
+  blockers remain in force. Old rows are never reset or reused.
+- Upstream forwarding is not a retry precondition. Its durable ledger retries
+  independently by the old call ID, without altering the new request;
+  `dispatch_failed` remains the existing Stage 1 resend behavior.
 - Removed the unapproved retry/reset, prior-attempt snapshot,
   historical provider lookup, callback lock-order override, and URL-gated
   PostgreSQL test. The existing locked fresh bridge insert remains the final
   active-race authority after normal ticket creation.
-- Task 6 final non-database verification passes 16/16 intake, 52/52 focused
-  queue/API, and 149/149 full bridge tests plus the production build.
+- Task 6 final non-database verification passes 16/16 intake and 16/16
+  documentation tests, 150/150 full bridge tests, and the production build.
   `npm run check` remains at the known 56-raw-diagnostic baseline with zero
   diagnostics in the new Task 6 modules. No schema, seed, startup, migration,
   database connection/write, container, configuration, remote, deploy, or

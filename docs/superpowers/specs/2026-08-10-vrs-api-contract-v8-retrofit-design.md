@@ -66,8 +66,9 @@ approved.
   authoritative value for that exact field.
 - Expose the complete V8 decision context, including TINA/signed photo URLs,
   to the human reviewer.
-- Support V8's source-required new-request behavior after a retryable terminal
-  failure through the normal fresh Express ticket and bridge intake path.
+- Support V8's source-required immediate new-request behavior after a locally
+  applied retryable terminal failure through a fresh Express ticket and bridge,
+  without relaxing ordinary V5 or nonretryable V8 ticket policy.
 - Prove the integration in the development runtime and database before any
   production publication.
 - Keep platform-facing handoff material limited to VRS Express and VRS AI.
@@ -247,17 +248,21 @@ Express's earlier `202` never represents VRS AI rate-limit admission.
 
 ## Terminal Repeat Behavior
 
-The baseline duplicate rule is active-only for both request versions. A valid
-new V5 or V8 request after `approved`, `partial`, `denied`, or `failed` follows
-the normal intake path: it creates a new ticket and bridge row with a new
-public call ID, subject to the existing normal ticket/SO policy. The source
-rule that a retryable V8 failure accepts a new request is therefore satisfied
-without a special state reset.
+The baseline duplicate rule is active-only for both request versions. V5 and
+nonretryable V8 terminal repeats remain subject to ordinary ticket/SO policy.
 
-Only active bridge states return `409 DUPLICATE_CALL`. Terminal attempts do
-not reset their existing ticket/bridge/event rows, and late
-callbacks continue through the ordinary durable callback rules for their own
-provider call ID. This adds no schema or startup migration.
+The narrow V8 exception is a strict V8 request whose latest same-service-order
+bridge is a retryable `failed` V8 call with its terminal failed callback
+locally applied. VRS Express creates a new normal ticket, new bridge row, and
+new public call ID immediately. It excludes only prior retryable-failed V8
+bridge tickets from legacy same-day duplicate checks; every other ticket
+constraint remains in force. The prior ticket, bridge, and event rows are not
+reset or reused. Upstream forwarding remains independent: a callback-forward
+retry can continue through its own durable ledger without delaying or altering
+the new request.
+
+Only active bridge states return `409 DUPLICATE_CALL`. This adds no schema or
+startup migration.
 
 ## Production Non-Regression Contract
 
@@ -335,10 +340,12 @@ Implementation follows red-green-refactor.
 
 ### Retry, callbacks, and UI
 
-- Active V5/V8 attempts remain conflicts; terminal V5/V8 repeats use the
-  normal new-ticket/new-bridge intake path.
-- A retryable V8 failure does not reset an existing ticket; its next valid V8
-  request receives a new normal public call ID.
+- Active V5/V8 attempts remain conflicts. V5 and nonretryable V8 terminal
+  repeats retain ordinary ticket/SO policy.
+- A strict V8 request after a locally applied retryable failed V8 callback
+  receives a new normal ticket, new bridge, and new public call ID by excluding
+  only prior retryable-failed V8 bridge tickets from same-day duplicate checks.
+  Its old callback-forward retry remains independent and no old row is reset.
 - Existing callback signature, ID replacement, result idempotency, and ticket
   effects remain unchanged.
 - The V8 review fields and photos render only for bridge-backed tickets.

@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 21:31
+Updated: 2026-08-11 22:10
 
 ## Decisions
 
@@ -24,11 +24,17 @@ Updated: 2026-08-11 21:31
   `422` for other submission rejections. Both use the generic error/message
   response shape.
 
-- [CX] 2026-08-11 - Preserve the `972409d` active-only bridge rule for both
-  V5 and V8. An active call uses the established duplicate response; every
-  terminal `approved`, `partial`, `denied`, or `failed` repeat follows normal
-  fresh ticket/bridge/public-call-ID intake. Retryable V8 failure has no
-  ticket-reset exception.
+- [CX] 2026-08-11 - Preserve the `972409d` active-only bridge rule while adding
+  the narrow V8 §2.4 immediate retry. V5 and nonretryable V8 terminal repeats
+  retain ordinary policy. A strict V8 request may bypass only prior
+  retryable-failed V8 bridge tickets after the latest same-SO failure callback
+  is locally applied; it creates a new ticket/bridge/public ID and never resets
+  or reuses the prior attempt.
+- [CX] 2026-08-11 - Apply the qualifying prior-ID set query-side in all four
+  legacy duplicate reads, including the pre-limit 60-second read and both
+  atomic transaction reads. Upstream callback forwarding is independent of
+  retry eligibility, so old-call forwarding can retry without blocking or
+  mutating the new V8 request.
 - [CX] 2026-08-11 - Keep the cheap active lookup before technician/user/
   encryption work. After normal ticket creation, rely on the existing
   advisory-locked `createIntake` insert for the final active-race check; do not

@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 21:31
+Updated: 2026-08-11 22:10
 
 ## Current Session
 
@@ -23,7 +23,7 @@ Updated: 2026-08-11 21:31
 - Task 7 RED was 9 expected failures against the stale V5-only handoff, plus
   one review RED for missing `422`/callback-retry details and a four-failure
   final-review RED for the remaining response/prerequisite/effect details.
-   GREEN is 15/15 docs tests, 149/149 focused non-database bridge tests, a
+   GREEN is 16/16 docs tests, 150/150 focused non-database bridge tests, a
    passing build, and unchanged 56-raw/26-normalized TypeScript diagnostics
    with zero new Task 6 module matches. No database, container, remote, config,
    deploy, or publish action ran.
@@ -32,16 +32,22 @@ Updated: 2026-08-11 21:31
   production route still consumes the injected intake seam and retains its
   cheap active lookup before partner, technician, encryption, normal ticket,
   receipt-SMS, and response behavior.
-- An active V5 or V8 bridge returns the existing duplicate result. A valid V5
-  or V8 request after terminal `approved`, `partial`, `denied`, or `failed`
-  takes normal fresh intake: a new normal ticket, bridge row, and public call
-  ID. This includes retryable V8 `failed`; it is a new request, not a reset of
-  the prior ticket or bridge row.
+- An active V5 or V8 bridge returns the existing duplicate result. V5 and
+  nonretryable V8 terminal repeats retain ordinary ticket/service-order policy.
+  The narrow V8 §2.4 exception applies only when a strict V8 request follows a
+  latest same-service-order retryable `failed` V8 callback that was locally
+  applied: it creates a new normal ticket, bridge row, and public call ID.
+  It excludes only every prior eligible retryable-failed V8 bridge ticket ID
+  from all legacy duplicate queries; unrelated, active, V5, and nonretryable
+  rows remain blockers.
+- This does not reset or reuse the old ticket, bridge, or event. Upstream
+  callback forwarding stays independent by old call ID, so an old forward
+  retry may resume without delaying or altering the new V8 request.
 - Removed the unapproved ticket/bridge reset, attempt snapshot, historical
   provider callback lookup, special callback locking, and PostgreSQL test.
   Current callback durability and Stage 1 `dispatch_failed` resend remain
-  baseline behavior. Final non-database verification is 16/16 intake, 52/52
-  queue/API, 149/149 bridge tests, a passing build, and the known 56 raw
+  baseline behavior. Final non-database verification is 16/16 intake and
+  documentation tests, 150/150 bridge tests, a passing build, and the known 56 raw
   TypeScript diagnostics with zero new Task 6 module diagnostics. No database
   or container action was run.
 

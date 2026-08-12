@@ -497,10 +497,11 @@ Cover:
 
 - active V5/V8 attempt returns the current duplicate response before ticket creation;
 - a new request creates one normal ticket and one bridge row;
-- every terminal V5/V8 repeat creates a normal new ticket and bridge row with
-  a new public call ID, subject to existing normal ticket/SO policy;
-- retryable V8 failure is a normal new request/new public call ID without
-  reusing the prior ticket or bridge row; and
+- V5 and nonretryable V8 terminal repeats retain ordinary ticket/SO policy;
+- a strict V8 request after a locally applied retryable `failed` V8 callback
+  creates a new normal ticket, bridge row, and public call ID by excluding only
+  prior retryable-failed V8 bridge tickets from legacy same-day duplicate
+  checks, without reusing/resetting an old row; and
 - the existing pre-acceptance `dispatch_failed` retry remains a Stage 1 resend.
 
 ```powershell
@@ -516,8 +517,12 @@ Inject technician resolution, ticket creation, encryption, call-ID generation, a
 **Step 3: Preserve the active-only bridge admission lock**
 
 Keep the existing advisory-locked `createIntake` final active-race check after
-normal ticket creation. Do not inspect or mutate terminal bridge rows, reset a
-ticket, add a ledger snapshot, or add historical callback lookup behavior.
+normal ticket creation. After the active gate, the strict V8-only immediate
+retry path may read the latest locally applied retryable failed V8 bridge and
+pass only that same-SO set of prior bridge ticket IDs through all four legacy
+duplicate queries. Do not reset or mutate terminal bridge/event rows, add a
+ledger snapshot, or add historical callback lookup behavior. Callback-forward
+retries remain independent.
 
 **Step 4: Run green and protect existing callbacks**
 
@@ -528,14 +533,15 @@ npm run test:vrs-ai-bridge
 npm run build
 ```
 
-Expected GREEN: terminal-repeat, existing queue/callback, full bridge, and build checks pass.
+Expected GREEN: active duplicate, narrow immediate V8 retry, existing
+queue/callback, full bridge, and build checks pass.
 
 **Step 5: Update required project records and commit**
 
 ```powershell
 git add -- server/vrs-sasha-intake.ts server/vrs-sasha-store.ts server/vrs-sasha-queue.ts server/routes.ts tests/vrs-sasha-intake.test.ts package.json CHANGELOG.md MEMORY.md .Codex/memory/context.md .Codex/memory/todos.md .Codex/memory/decisions.md
 git diff --cached --check
-git commit -m "Preserve active-only V5 V8 bridge intake"
+git commit -m "Allow immediate retryable V8 bridge requests"
 ```
 
 ## External handoff
@@ -727,8 +733,9 @@ Use a unique dummy service order/technician approved for the development databas
 4. Confirm exactly one same-version request reaches VRS AI DEV, including usable signed photo URLs.
 5. VRS AI sends a correctly signed result to the Express DEV webhook.
 6. Confirm one ticket/SMS effect and one signed upstream callback; replay the event and confirm dedupe.
-7. Send a retryable failure and prove a new V8 request creates a normal new
-   ticket, bridge row, and public call ID.
+7. Send a retryable V8 failure, confirm it is applied locally, and immediately
+   prove a strict new V8 request creates a normal new ticket, bridge row, and
+   public call ID while any old callback-forward retry remains independent.
 8. Smoke-test the listed manual/PWA, two-stage AHS, First American, NLA, admin, media, WebSocket, and SMS paths against the development database.
 
 Record sanitized timestamps, IDs, HTTP statuses, and screenshots/log evidence without secrets or customer data.

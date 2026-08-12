@@ -1,5 +1,8 @@
 import type { VrsExpressIntake } from "./vrs-sasha-api";
-import type { VrsAuthorizeRequest } from "./vrs-sasha-contract";
+import {
+  getVrsAuthorizeContractVersion,
+  type VrsAuthorizeRequest,
+} from "./vrs-sasha-contract";
 import { projectVrsBridgeIntake } from "./vrs-sasha-queue";
 import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
 
@@ -23,6 +26,12 @@ export interface VrsIntakeTechUser {
 export interface VrsIntakeTicketInput {
   body: ReturnType<typeof projectVrsBridgeIntake>["submissionBody"];
   user: VrsIntakeTechUser;
+}
+
+interface VrsSashaInternalTicketOptions {
+  // Private route-to-handler escape hatch for the V8 §2.4 retry exception.
+  // It never comes from the request body or public API.
+  ignoreLegacyDuplicateSubmissionIds?: readonly number[];
 }
 
 export type VrsFreshSubmissionResult =
@@ -49,7 +58,10 @@ export interface VrsSashaIntakeDependencies {
     salt: string;
   };
   generateCallId(): string;
-  createTicket(input: VrsIntakeTicketInput): Promise<VrsFreshSubmissionResult>;
+  createTicket(
+    input: VrsIntakeTicketInput,
+    internalOptions?: VrsSashaInternalTicketOptions,
+  ): Promise<VrsFreshSubmissionResult>;
 }
 
 function usablePhone(value: string | null | undefined): string {
@@ -87,6 +99,13 @@ export function createVrsSashaIntake(
           state: active.state,
         };
       }
+
+      const retryableFailedV8SubmissionIds =
+        getVrsAuthorizeContractVersion(payload) === "v8"
+          ? await deps.store.findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(
+            payload.service_order,
+          )
+          : [];
 
       const technician = await deps.resolveTechnician(payload.tech_id);
       if (!technician) {
@@ -161,7 +180,12 @@ export function createVrsSashaIntake(
       const fresh = await deps.createTicket({
         body: projection.submissionBody,
         user: techUser,
-      });
+      }, retryableFailedV8SubmissionIds.length > 0
+        ? {
+          ignoreLegacyDuplicateSubmissionIds: retryableFailedV8SubmissionIds
+            .map((entry) => entry.submissionId),
+        }
+        : undefined);
       if (fresh.kind === "rejected") return fresh;
 
       const stored = await deps.store.createIntake({
