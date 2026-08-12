@@ -33,6 +33,14 @@ Other partner values are rejected before ticket creation.
 | `<VRS_EXPRESS_DEV_CALLBACK_URL>` | Exact VRS Express development callback ending `/api/integrations/vrs-ai/v1/webhook` |
 | `<UPSTREAM_DEV_CALLBACK_URL>` | Exact clean HTTPS upstream development webhook already permitted by VRS Express intake |
 
+### Development data prerequisites
+
+Before Direction A, replace each sample `tech_id` with a provisioned active VRS Express DEV technician
+mapped to a valid four-digit district. Use that same ID in `comments[].tech_id`.
+Replace each sample `service_order` with a unique eight-digit DEV value. The
+literal identifiers in the examples are format-safe samples only and must not
+be sent unchanged.
+
 ## 2. Exact two-direction development flow
 
 ### Direction A: VRS AI simulator to VRS Express
@@ -85,7 +93,7 @@ includes them.
 ```json
 {
   "service_order": "13538277",
-  "tech_id": "0123456",
+  "tech_id": "replace-with-dev-tech-id",
   "tech_phone": "+12145550199",
   "tech_name": "Example Technician",
   "reason_for_call": "authorization",
@@ -119,7 +127,7 @@ includes them.
   "appliance_photos": [],
   "comments": [
     {
-      "tech_id": "0123456",
+      "tech_id": "replace-with-dev-tech-id",
       "work_item": "failure_diagnosis",
       "text": "Diagnostic code F7E1 was confirmed.",
       "timestamp": "2026-08-11T18:00:00Z"
@@ -136,7 +144,7 @@ four V8-only keys.
 ```json
 {
   "service_order": "13538278",
-  "tech_id": "0123456",
+  "tech_id": "replace-with-dev-tech-id",
   "tech_phone": "+12145550199",
   "tech_name": "Example Technician",
   "reason_for_call": "authorization",
@@ -170,7 +178,7 @@ four V8-only keys.
   "appliance_photos": [],
   "comments": [
     {
-      "tech_id": "0123456",
+      "tech_id": "replace-with-dev-tech-id",
       "work_item": "failure_diagnosis",
       "text": "Diagnostic code F7E1 was confirmed.",
       "timestamp": "2026-08-11T18:00:00Z"
@@ -280,8 +288,8 @@ the provider ID in its upstream admission response.
 |---|---|
 | `400` | Strict validation failed |
 | `401` | Missing or invalid `X-API-Key` |
-| `422` | VRS Express rejected an unsupported partner before ticket creation |
-| `409` | Active call exists; body includes `existing_call_id` |
+| `409` | `DUPLICATE_CALL` includes `existing_call_id`; `NOT_A_TECHNICIAN` and `SUBMISSION_ALREADY_EXISTS` return `{ "error", "message" }` |
+| `422` | Unsupported partner code `UNSUPPORTED_PARTNER` includes `partner_id`; `UNKNOWN_TECHNICIAN`, `INACTIVE_TECHNICIAN`, `INVALID_TECHNICIAN_DISTRICT`, and `SUBMISSION_REJECTED` return `{ "error", "message" }` |
 | `429` | Admission limit reached; body includes `retry_after_seconds` |
 | `500`, `502`, `503`, timeout | Admission was not proven |
 
@@ -326,6 +334,19 @@ All events require `version: 1`, `eventId` max 100, `callId` max 100, exact
 100. `denyReason` and `question` have maximum length 2000; `field` has maximum
 length 100. The `failed.reason` enum is
 `busy`, `no_answer`, `ivr_error`, `agent_error`, `timeout`, or `aborted`.
+
+### Event effects
+
+| Event | VRS Express ticket effect | Technician SMS |
+|---|---|---|
+| `approved` | Approve and complete using `authNumber` | Yes, the normal approval SMS is attempted |
+| `partial` | Approve and complete using `authNumber` and the partial detail | Yes, the normal approval SMS is attempted |
+| `denied` | Reject using `denyReason` | Yes, the normal rejection SMS is attempted |
+| `failed` | Status-only; no ticket decision | No |
+| `requires_info` | Status-only; no ticket decision | No |
+
+Every accepted event is recorded and forwarded. SMS delivery is best effort,
+and replaying an event cannot repeat its ticket or SMS effect.
 
 ## 10. Callback acknowledgement and retry
 
@@ -384,6 +405,9 @@ acknowledged as a duplicate without business effects.
 
 ### Direction A acceptance: VRS AI simulator to VRS Express
 
+- [ ] Provision an active VRS Express DEV technician mapped to a valid
+      four-digit district, then replace both sample `tech_id` occurrences.
+- [ ] Replace each sample `service_order` with a unique eight-digit DEV value.
 - [ ] Substitute `<VRS_EXPRESS_DEV_BASE_URL>` and
       `<UPSTREAM_DEV_CALLBACK_URL>` only in the development test runner.
 - [ ] Send one unique complete V5 payload and receive `202` with a public call

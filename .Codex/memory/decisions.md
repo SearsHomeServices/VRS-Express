@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 20:49
+Updated: 2026-08-11 21:08
 
 ## Decisions
 
@@ -14,6 +14,11 @@ Updated: 2026-08-11 20:49
   them exactly after runtime validation. Model exact stated bounds and avoid
   invented maxima for parts, rationale, contract number, symptom, and numeric
   purchase year.
+- [CX] 2026-08-11 - Make development examples intentionally non-runnable until
+  the tester supplies an active VRS Express DEV technician in a valid
+  four-digit district and a unique eight-digit DEV service order. Publish the
+  runtime `409`/`422` body alternatives and callback ticket/SMS effects instead
+  of collapsing distinct intake and result outcomes.
 
 - [CX] 2026-08-11 - Impose call-before-event locking on every callback path
   that touches both tables. Retain event-row locks in rearm to serialize

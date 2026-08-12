@@ -65,7 +65,7 @@ paths:
                 summary: Complete V5 request including optional fields
                 value:
                   service_order: '13538277'
-                  tech_id: '0123456'
+                  tech_id: replace-with-dev-tech-id
                   tech_phone: '+12145550199'
                   tech_name: Example Technician
                   reason_for_call: authorization
@@ -95,7 +95,7 @@ paths:
                   partner_id: ahs
                   appliance_photos: []
                   comments:
-                    - tech_id: '0123456'
+                    - tech_id: replace-with-dev-tech-id
                       work_item: failure_diagnosis
                       text: Diagnostic code F7E1 was confirmed.
                       timestamp: '2026-08-11T18:00:00Z'
@@ -103,7 +103,7 @@ paths:
                 summary: Complete V8 request
                 value:
                   service_order: '13538278'
-                  tech_id: '0123456'
+                  tech_id: replace-with-dev-tech-id
                   tech_phone: '+12145550199'
                   tech_name: Example Technician
                   reason_for_call: authorization
@@ -133,7 +133,7 @@ paths:
                   partner_id: American Home Shield
                   appliance_photos: []
                   comments:
-                    - tech_id: '0123456'
+                    - tech_id: replace-with-dev-tech-id
                       work_item: failure_diagnosis
                       text: Diagnostic code F7E1 was confirmed.
                       timestamp: '2026-08-11T18:00:00Z'
@@ -163,17 +163,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '422':
-          description: VRS Express rejected an unsupported partner before ticket creation
+          description: |
+            UNSUPPORTED_PARTNER returns its partner-specific body. Intake
+            rejections UNKNOWN_TECHNICIAN, INACTIVE_TECHNICIAN,
+            INVALID_TECHNICIAN_DISTRICT, and SUBMISSION_REJECTED return the
+            generic error and message body.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UnsupportedPartner'
+                oneOf:
+                  - $ref: '#/components/schemas/UnsupportedPartner'
+                  - $ref: '#/components/schemas/IntakeRejection'
         '409':
-          description: An active call already exists for the service order
+          description: |
+            DUPLICATE_CALL returns the active-call body. Intake rejections
+            NOT_A_TECHNICIAN and SUBMISSION_ALREADY_EXISTS return the generic
+            error and message body.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DuplicateCall'
+                oneOf:
+                  - $ref: '#/components/schemas/DuplicateCall'
+                  - $ref: '#/components/schemas/IntakeRejection'
         '429':
           description: VRS AI admission limit reached
           content:
@@ -221,6 +232,22 @@ paths:
                   - 4
                   - 8
                 stableEventIdAndBody: true
+              x-vrs-event-effects:
+                approved:
+                  ticketAction: approve
+                  technicianSms: true
+                partial:
+                  ticketAction: approve
+                  technicianSms: true
+                denied:
+                  ticketAction: reject
+                  technicianSms: true
+                failed:
+                  ticketAction: status_only
+                  technicianSms: false
+                requires_info:
+                  ticketAction: status_only
+                  technicianSms: false
               parameters:
                 - name: X-VRS-Signature
                   in: header
@@ -487,7 +514,11 @@ components:
         callback_url:
           type: string
           format: uri
-          description: Direction-specific development callback URL
+          description: |
+            Inbound to VRS Express this must be the exact allowlisted clean HTTPS
+            upstream development webhook. VRS Express replaces this
+            value on dispatch with its exact clean HTTPS callback ending
+            /api/integrations/vrs-ai/v1/webhook.
         callback_secret:
           type: string
           minLength: 16
@@ -649,7 +680,11 @@ components:
         callback_url:
           type: string
           format: uri
-          description: Direction-specific development callback URL
+          description: |
+            Inbound to VRS Express this must be the exact allowlisted clean HTTPS
+            upstream development webhook. VRS Express replaces this
+            value on dispatch with its exact clean HTTPS callback ending
+            /api/integrations/vrs-ai/v1/webhook.
         callback_secret:
           type: string
           minLength: 16
@@ -829,6 +864,17 @@ components:
         partner_id:
           type: string
           maxLength: 50
+    IntakeRejection:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
     RateLimited:
       type: object
       additionalProperties: false

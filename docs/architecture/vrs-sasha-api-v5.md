@@ -105,7 +105,9 @@ call ID are acknowledged as duplicates without reapplying business effects.
 ## Development safety boundary
 
 Development testing uses development URLs, credentials, configuration, and
-data only. Source readiness, environment activation, and production release
-are separate decisions. The bridge must not be activated until both directions
-of the development acceptance checklist in the handoff pass with sanitized
-evidence.
+data only. Inbound testing requires a provisioned active VRS Express DEV
+technician mapped to a valid four-digit district and a unique eight-digit DEV
+service order. Source readiness, environment activation, and production
+release are separate decisions. The bridge must not be activated until both
+directions of the development acceptance checklist in the handoff pass with
+sanitized evidence.

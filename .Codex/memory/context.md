@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 20:49
+Updated: 2026-08-11 21:08
 
 ## Current Session
 
@@ -14,9 +14,14 @@ Updated: 2026-08-11 20:49
   internal source history, live URLs, or credentials. Copyable Markdown V5,
   V8, and five callback examples are byte-equivalent to the runtime-validated
   OpenAPI examples.
+- Final review added every runtime `409`/`422` intake rejection shape, explicit
+  replace-before-test DEV technician and service-order prerequisites, exact
+  clean-HTTPS callback direction rules, and the ticket/SMS matrix for all five
+  result events.
 - Task 7 RED was 9 expected failures against the stale V5-only handoff, plus
-  one review RED for missing `422`/callback-retry details. GREEN is 12/12 docs
-  tests, 168/168 focused non-database bridge tests with the
+  one review RED for missing `422`/callback-retry details and a four-failure
+  final-review RED for the remaining response/prerequisite/effect details.
+  GREEN is 15/15 docs tests, 171/171 focused non-database bridge tests with the
   URL-gated PostgreSQL test skipped, a passing build, and unchanged
   56-raw/26-normalized TypeScript diagnostics with zero Task 7 matches. No
   database, container, remote, config, deploy, or publish action ran.

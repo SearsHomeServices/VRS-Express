@@ -23,7 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Review hardening added the real `422 UNSUPPORTED_PARTNER` intake response
   plus callback retry coverage for network failures and HTTP `500`, `502`, or
   `503`, with five total attempts and 1/2/4/8-second backoff.
-- Task 7 verification passes 12/12 documentation tests, 168/168 focused
+- Final review hardening documents the complete `409`/`422` intake rejection
+  families, replace-before-test DEV technician/service-order prerequisites,
+  directional clean-HTTPS callback allowlisting, and the exact ticket/SMS
+  effect of all five callback states.
+- Task 7 verification passes 15/15 documentation tests, 171/171 focused
   non-database bridge tests with the dedicated PostgreSQL test skipped, and
   the production build. TypeScript remains at the known 56-raw/26-normalized
   baseline with zero Task 7 diagnostics. No database, container, remote,

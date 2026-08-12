@@ -297,9 +297,43 @@ describe("VRS bridge OpenAPI contract", () => {
     const authorizeResponses = openApi.paths["/vrs/authorize"].post.responses;
     const callbackResponses = callbackPost.responses;
 
-    expect(authorizeResponses["422"].content["application/json"].schema).toEqual({
-      $ref: "#/components/schemas/UnsupportedPartner",
+    expect(authorizeResponses["409"].content["application/json"].schema).toEqual({
+      oneOf: [
+        { $ref: "#/components/schemas/DuplicateCall" },
+        { $ref: "#/components/schemas/IntakeRejection" },
+      ],
     });
+    expect(authorizeResponses["422"].content["application/json"].schema).toEqual({
+      oneOf: [
+        { $ref: "#/components/schemas/UnsupportedPartner" },
+        { $ref: "#/components/schemas/IntakeRejection" },
+      ],
+    });
+    expect(openApi.components.schemas.IntakeRejection).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["error", "message"],
+      properties: {
+        error: { type: "string" },
+        message: { type: "string" },
+      },
+    });
+    for (const code of [
+      "NOT_A_TECHNICIAN",
+      "SUBMISSION_ALREADY_EXISTS",
+    ]) {
+      expect(authorizeResponses["409"].description).toContain(code);
+      expect(handoff).toContain(`\`${code}\``);
+    }
+    for (const code of [
+      "UNKNOWN_TECHNICIAN",
+      "INACTIVE_TECHNICIAN",
+      "INVALID_TECHNICIAN_DISTRICT",
+      "SUBMISSION_REJECTED",
+    ]) {
+      expect(authorizeResponses["422"].description).toContain(code);
+      expect(handoff).toContain(`\`${code}\``);
+    }
     expect(callbackPost["x-vrs-retry-policy"]).toEqual({
       retryableStatusCodes: [500, 502, 503],
       retryNetworkFailures: true,
@@ -316,6 +350,49 @@ describe("VRS bridge OpenAPI contract", () => {
     expect(handoff).toMatch(/network\s+failures.*`500`.*`502`.*`503`/is);
     expect(handoff).toMatch(/maximum of five attempts/is);
     expect(handoff).toMatch(/1, 2, 4, and 8\s+seconds/is);
+  });
+
+  it("marks sample identifiers as replace-before-test DEV prerequisites", () => {
+    for (const version of ["v5", "v8"] as const) {
+      const example = authorizeExample(version);
+      expect(example.tech_id).toBe("replace-with-dev-tech-id");
+      expect(example.service_order).toMatch(/^\d{8}$/);
+      expect((example.comments as any[])[0].tech_id).toBe(example.tech_id);
+    }
+
+    expect(handoff).toMatch(/provisioned active VRS Express DEV technician/is);
+    expect(handoff).toMatch(/valid four-digit district/is);
+    expect(handoff).toMatch(/replace.*service_order.*unique.*eight-digit/is);
+    expect(handoff).toMatch(/prerequisite.*before.*Direction A/is);
+  });
+
+  it("publishes the exact callback ticket and technician-SMS effects", () => {
+    expect(callbackPost["x-vrs-event-effects"]).toEqual({
+      approved: { ticketAction: "approve", technicianSms: true },
+      partial: { ticketAction: "approve", technicianSms: true },
+      denied: { ticketAction: "reject", technicianSms: true },
+      failed: { ticketAction: "status_only", technicianSms: false },
+      requires_info: { ticketAction: "status_only", technicianSms: false },
+    });
+
+    expect(handoff).toMatch(/\| `approved` \| Approve.*\| Yes/is);
+    expect(handoff).toMatch(/\| `partial` \| Approve.*\| Yes/is);
+    expect(handoff).toMatch(/\| `denied` \| Reject.*\| Yes/is);
+    expect(handoff).toMatch(/\| `failed` \| Status-only.*\| No/is);
+    expect(handoff).toMatch(/\| `requires_info` \| Status-only.*\| No/is);
+  });
+
+  it("annotates callback_url with the exact directional URL restrictions", () => {
+    for (const version of ["V5", "V8"] as const) {
+      const callbackUrl = openApi.components.schemas[`${version}AuthorizeRequest`]
+        .properties.callback_url;
+      expect(callbackUrl).toMatchObject({ type: "string", format: "uri" });
+      expect(callbackUrl.description).toMatch(/inbound.*allowlisted clean HTTPS/is);
+      expect(callbackUrl.description).toContain(
+        "/api/integrations/vrs-ai/v1/webhook",
+      );
+      expect(callbackUrl.description).toMatch(/replaces.*dispatch/is);
+    }
   });
 });
 

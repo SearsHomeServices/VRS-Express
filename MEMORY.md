@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 20:49 — Completed the platform-only V5/V8 Markdown and OpenAPI handoff revision with executable parity checks.
+> **Last Touched:** Codex — 2026-08-11 21:08 — Completed final-review hardening of the platform-only V5/V8 handoff and executable parity checks.
 
 ## Current State
 - Task 7 is implemented in the isolated worktree as an in-place handoff
@@ -13,7 +13,11 @@
   four approved DEV URL placeholders, with no individual names, internal
   source history, live URLs, or credentials. Markdown request/callback
   examples exactly match the runtime-validated OpenAPI examples.
-- Task 7 verification is 12/12 documentation tests, 168/168 focused
+- The handoff now exposes all runtime `409`/`422` intake response alternatives,
+  replace-before-test DEV technician/service-order prerequisites, exact
+  clean-HTTPS callback direction rules, and the ticket/SMS effects of all five
+  callback states.
+- Task 7 verification is 15/15 documentation tests, 171/171 focused
   non-database bridge tests with the explicit PostgreSQL test skipped, a
   passing production build, and unchanged 56-raw/26-normalized TypeScript
   diagnostics with zero Task 7 matches. No database, container, remote,

@@ -1,14 +1,16 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 20:49
+Updated: 2026-08-11 21:08
 
 ## Done
 
 - [x] Revised the existing bridge architecture, Markdown handoff, and OpenAPI
   for strict V5+V8 compatibility, platform-only DEV placeholders, exact
   request/callback constraints, HMAC, media handling, and V8 retry rearm.
-- [x] Added documentation contract tests and verified 12/12 docs tests,
-  168/168 focused non-database bridge tests, the production build, and the
+- [x] Added documentation contract tests and final-review coverage for runtime
+  intake errors, safe DEV identifiers, callback URL direction, and event
+  effects; verified 15/15 docs tests, 171/171 focused non-database bridge
+  tests, the production build, and the
   unchanged 56-raw/26-normalized TypeScript baseline.
 
 - [x] Eliminated callback-forward/rearm lock inversion with universal
