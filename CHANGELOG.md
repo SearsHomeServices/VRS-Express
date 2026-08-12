@@ -15,9 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   production publish, schema/data write, deployment configuration change, or
   production database action occurred.
 - Read-only runtime checks confirmed the existing bridge tables are present.
-  DEV bridge secrets/endpoints are still absent, so the live authorize route
-  intentionally returns `503 NOT_CONFIGURED` until secure configuration is
-  supplied outside Git.
+  DEV bridge secrets/endpoints, including the callback-secret encryption key,
+  are still absent, so the live authorize route intentionally returns `503
+  NOT_CONFIGURED` until secure configuration is supplied outside Git.
 
 ### Added — Regenerated V5/V8 development handoff package (2026-08-11)
 - Rebuilt the direct-delivery handoff from the approved strict V5/V8 Markdown

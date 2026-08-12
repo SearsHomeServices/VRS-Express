@@ -10,7 +10,8 @@
 - The DEV database already contains `vrs_ai_calls` and `vrs_ai_call_events`,
   so no schema action is required. The running DEV process is missing
   `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
-  `VRS_AI_WEBHOOK_SECRET`, and both callback/public-URL alternatives. Until
+  `VRS_AI_WEBHOOK_SECRET`, `VRS_BRIDGE_ENCRYPTION_KEY`, and both
+  callback/public-URL alternatives. Until
   those secure DEV values are configured, `/vrs/authorize` correctly returns
   `503 NOT_CONFIGURED` and an end-to-end partner test cannot start.
 - Next activation step: configure the secure DEV bridge values outside Git,

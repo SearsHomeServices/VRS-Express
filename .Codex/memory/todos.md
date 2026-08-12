@@ -194,7 +194,7 @@ Updated: 2026-08-11 22:40
 
 - [ ] Configure the secure VRS Express DEV bridge values outside Git:
   `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
-  `VRS_AI_WEBHOOK_SECRET`, and either `VRS_AI_CALLBACK_URL` or
+  `VRS_AI_WEBHOOK_SECRET`, `VRS_BRIDGE_ENCRYPTION_KEY`, and either `VRS_AI_CALLBACK_URL` or
   `VRS_EXPRESS_PUBLIC_URL`. The running DEV process currently has none of
   these values and correctly returns `503 NOT_CONFIGURED`.
 - [ ] Run the joint DEV V5/V8 acceptance exchange using a provisioned DEV
