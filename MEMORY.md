@@ -9,9 +9,10 @@
 - Replit Secrets now contains generated DEV-only `VRS_SASHA_API_KEY`,
   `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values. The running
   DEV process also has the confirmed `VRS_AI_BASE_URL` and
-  `VRS_EXPRESS_PUBLIC_URL`. No value was written to Git, docs, logs, or task
-  output. `VRS_AI_API_KEY` is the only missing bridge value and must come from
-  the VRS AI platform through a secure channel.
+  `VRS_EXPRESS_PUBLIC_URL`; both URLs are scoped to `.replit`'s development
+  section so production cannot inherit them. No value was written to Git,
+  docs, logs, or task output. `VRS_AI_API_KEY` is the only missing bridge value
+  and must come from the VRS AI platform through a secure channel.
 - The public DEV health endpoint returns `200`; `/vrs/authorize` returns `401`
   without a key, and the configured key reaches strict contract validation
   (`400` for an empty payload). A complete strict V8 smoke request for active

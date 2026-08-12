@@ -7,9 +7,10 @@ Updated: 2026-08-12 08:41
 - Configured the Express-owned bridge values in Replit DEV without exposing
   values: generated `VRS_SASHA_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and
   `VRS_BRIDGE_ENCRYPTION_KEY`, plus the confirmed VRS AI staging origin and
-  VRS Express public DEV origin. The restarted DEV process contains all five.
-  `VRS_AI_API_KEY` remains the only missing value and must be supplied by VRS
-  AI through a secure channel.
+  VRS Express public DEV origin. Both URLs live under `.replit`'s development
+  section and cannot leak into a later production publish. The restarted DEV
+  process contains all five. `VRS_AI_API_KEY` remains the only missing value
+  and must be supplied by VRS AI through a secure channel.
 - Live DEV proof: public no-key authorize returns `401`; authenticated empty
   input reaches strict validation and returns `400`; a complete strict V8
   request using active DEV technician `test_tech_1` / district `8175` and

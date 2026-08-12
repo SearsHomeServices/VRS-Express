@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added generated DEV-only `VRS_SASHA_API_KEY`,
   `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values through
   Replit Secrets. Added the confirmed VRS AI staging origin and VRS Express
-  public DEV origin to the Replit development configuration. No secret value
+  public DEV origin under `.replit`'s development-only configuration. A
+  future production publish does not inherit either DEV URL. No secret value
   was written to Git, logs, documentation, or task output.
 - Restarted only the Replit development process and confirmed its environment
   contains every Express-owned bridge value. `VRS_AI_API_KEY` remains the one

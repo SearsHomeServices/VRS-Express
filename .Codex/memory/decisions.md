@@ -194,9 +194,10 @@ Updated: 2026-08-12 08:41
   without separate evidence and approval.
 - [CX] 2026-08-12 - Generate and store the three Express-owned bridge secrets
   only in Replit DEV. Use the V8-confirmed VRS AI staging origin and the live
-  VRS Express `.replit.dev` origin; never copy secret values into Git or the
-  external handoff. The VRS AI platform remains the authority for its outbound
-  `X-API-Key`.
+  VRS Express `.replit.dev` origin under `.replit`'s development-only section;
+  never allow those URLs into the production configuration and never copy
+  secret values into Git or the external handoff. The VRS AI platform remains
+  the authority for its outbound `X-API-Key`.
 - [CX] 2026-08-12 - Treat a DEV-only integration monitor as a read-only
   observability surface over existing bridge/ticket/event rows. It must be
   unavailable in production, require admin authentication in DEV, redact
