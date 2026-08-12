@@ -1,8 +1,15 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 20:35
+Updated: 2026-08-11 20:49
 
 ## Done
+
+- [x] Revised the existing bridge architecture, Markdown handoff, and OpenAPI
+  for strict V5+V8 compatibility, platform-only DEV placeholders, exact
+  request/callback constraints, HMAC, media handling, and V8 retry rearm.
+- [x] Added documentation contract tests and verified 12/12 docs tests,
+  168/168 focused non-database bridge tests, the production build, and the
+  unchanged 56-raw/26-normalized TypeScript baseline.
 
 - [x] Eliminated callback-forward/rearm lock inversion with universal
   call-before-event order, early incomplete-delivery rejection, exact
@@ -15,6 +22,9 @@ Updated: 2026-08-11 20:35
   baseline with zero Task 6 matches.
 
 ## Open
+
+- [ ] Regenerate and visually verify the platform-only DOCX, PDF, and exact
+  three-file ZIP from the updated Markdown and OpenAPI sources.
 
 - [ ] Run `tests/vrs-sasha-postgres.test.ts` against an approved disposable
   DEV PostgreSQL URL via `VRS_TASK6_TEST_DATABASE_URL`; this remains a release

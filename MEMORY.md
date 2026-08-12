@@ -1,8 +1,23 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 20:35 — Hardened Task 6 callback/rearm lock ordering and audit consistency without database access.
+> **Last Touched:** Codex — 2026-08-11 20:49 — Completed the platform-only V5/V8 Markdown and OpenAPI handoff revision with executable parity checks.
 
 ## Current State
+- Task 7 is implemented in the isolated worktree as an in-place handoff
+  revision. The architecture, Markdown handoff, and OpenAPI now describe
+  strict V5 and strict V8 on the same route, deterministic four-key selection,
+  pending human review before VRS AI dispatch, same-version forwarding,
+  exact callback/HMAC behavior, controlled V8 placeholder enrichment,
+  signed-photo pass-through, durable dedupe, and V8-only same-ticket rearm.
+- Platform-facing sources contain only VRS Express/VRS AI identities and the
+  four approved DEV URL placeholders, with no individual names, internal
+  source history, live URLs, or credentials. Markdown request/callback
+  examples exactly match the runtime-validated OpenAPI examples.
+- Task 7 verification is 12/12 documentation tests, 168/168 focused
+  non-database bridge tests with the explicit PostgreSQL test skipped, a
+  passing production build, and unchanged 56-raw/26-normalized TypeScript
+  diagnostics with zero Task 7 matches. No database, container, remote,
+  configuration, deployment, or publication action ran.
 - Task 6 is implemented and review-hardened in the isolated worktree.
   Production intake now uses
   an injected orchestrator with the existing active-duplicate gate first.
@@ -148,6 +163,14 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Revise the existing bridge handoff in place, keeping V5
+  and V8 as strict alternatives on one endpoint with no wire version or V5
+  up-conversion. Use only the four approved DEV URL placeholders in the
+  platform-facing sources.
+- [CX] 2026-08-11 - Keep the OpenAPI V5, V8, and five callback examples
+  machine-readable and runtime-validated, then require the Markdown copies to
+  match exactly. Encode only documented limits; do not invent maxima for the
+  parts array, rationale, contract number, symptom, or numeric purchase year.
 - [CX] 2026-08-11 - Use call-before-event as the universal lock order for any
   operation touching both bridge and event rows. Keep event-row `FOR UPDATE`
   during rearm because event-only failure updates still need serialization,
@@ -276,8 +299,8 @@
 - [CX] 2026-07-29 - The handoff package is ready to send even though activation is not complete. The document explicitly carries the remaining secure configuration, development-schema, VRS AI decision, and joint staging gates instead of implying the live bridge works.
 
 ## Open Threads
-- [CX] Continue the corrected V5/V8 bridge with platform-only handoff updates
-  and final local/DEV evidence.
+- [CX] Regenerate the platform-only DOCX/PDF/ZIP from the updated V5/V8
+  Markdown/OpenAPI sources, then complete final local/DEV evidence.
 - [CX] Obtain explicit approval before push, Replit sync, configuration change,
   or publication.
 - [CX] Run the staged non-bridge workflow matrix and record a rollback target
@@ -303,6 +326,10 @@
   password. Do not rotate or restart without Tyler's approval and coordination.
 
 ## Gotchas & Lessons
+- [CX] 2026-08-11 - URL placeholders make external handoffs safe to share but
+  are not valid runtime callback URLs. Documentation tests should substitute a
+  known permitted test callback only for runtime schema validation, while
+  separately proving that platform-facing sources contain no live URLs.
 - [CX] 2026-08-11 - Never invoke global-DB ticket creation from inside a
   Drizzle transaction callback. At pool saturation, outer transactions can
   occupy every connection while each waits for nested global DB work. Commit

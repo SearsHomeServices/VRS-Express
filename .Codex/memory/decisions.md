@@ -1,8 +1,19 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 20:35
+Updated: 2026-08-11 20:49
 
 ## Decisions
+
+- [CX] 2026-08-11 - Revise the existing bridge handoff in place: document V5
+  and V8 as strict alternatives on one endpoint, selected only by the four
+  V8-only keys, with no wire version or V5 up-conversion. Keep every external
+  artifact limited to VRS Express/VRS AI identities and four DEV URL
+  placeholders.
+- [CX] 2026-08-11 - Treat OpenAPI examples as the machine-readable source for
+  V5, V8, and all five callbacks, and require the Markdown copies to match
+  them exactly after runtime validation. Model exact stated bounds and avoid
+  invented maxima for parts, rationale, contract number, symptom, and numeric
+  purchase year.
 
 - [CX] 2026-08-11 - Impose call-before-event locking on every callback path
   that touches both tables. Retain event-row locks in rearm to serialize

@@ -1,30 +1,55 @@
 openapi: 3.1.0
 info:
-  title: VRS Express to VRS AI Bridge
-  version: 1.0.0-v5
-  summary: Machine contract between VRS Express and VRS AI for AHS authorization calls
+  title: VRS Express and VRS AI Authorization Bridge
+  version: 8.0.0
   description: |
-    Contract implemented by the VRS Express bridge under the approved platform
-    ownership model. VRS AI hosts POST /vrs/authorize and posts signed result
-    events to the callback_url supplied by Express. Phase 1 supports AHS only.
+    Strict V5 and V8 authorize payloads on the same endpoint. VRS Express
+    holds every accepted request for human review and sends the same contract
+    version to VRS AI only after approval. The current automated partner flow
+    is American Home Shield authorization.
 servers:
-  - url: https://vrs-dev.stage.nextgen.shs.com
-    description: Staging / development VRS AI
-  - url: https://vrs.prod.nextgen.shs.com
-    description: Production VRS AI
+  - url: '<VRS_EXPRESS_DEV_BASE_URL>'
+    description: VRS Express development intake for simulator tests
+  - url: '<VRS_AI_DEV_BASE_URL>'
+    description: VRS AI development intake after VRS Express approval
 tags:
   - name: Authorization
+x-vrs-contract-selection:
+  rule: v8-if-any-v8-only-key-is-present-otherwise-v5
+  v8OnlyKeys:
+    - appliance_color
+    - contract_number
+    - purchase_year
+    - symptom
+  forbiddenVersionFields:
+    - contractVersion
+    - contract_version
+x-vrs-dev-flow:
+  inbound:
+    endpoint: '<VRS_EXPRESS_DEV_BASE_URL>/vrs/authorize'
+    callbackUrl: '<UPSTREAM_DEV_CALLBACK_URL>'
+    acceptedMeaning: Pending human review; no VRS AI call has been made.
+  outbound:
+    endpoint: '<VRS_AI_DEV_BASE_URL>/vrs/authorize'
+    callbackUrl: '<VRS_EXPRESS_DEV_CALLBACK_URL>'
+    acceptedMeaning: Asynchronous admission; call execution is not proven.
+x-vrs-hmac-test-vector:
+  secret: vrs-ai-test-secret-do-not-use-in-prod
+  rawBody: '{"version":1,"eventId":"evt_001","callId":"vrs_ai_call_456","soNo":"13538277","occurredAt":"2026-07-24T17:24:00Z","state":"approved","authNumber":"AHS-001","authorizedAmount":365.6}'
+  expectedSignature: sha256=5631d513c93853fa58efc382eed0c19db14ab42b94b1fa44938bb44ee352d4b6
 paths:
   /vrs/authorize:
     post:
       tags:
         - Authorization
-      operationId: authorizeAhsCall
-      summary: Admit an approved AHS authorization call
+      operationId: authorizeVrsBridgeRequest
+      summary: Accept a strict V5 or V8 authorization request
       description: |
-        VRS Express calls this endpoint only after a human agent approves the
-        ticket for AI dispatch. VRS AI owns admission, Twilio/AHS execution,
-        prompt construction, recordings, and callback production.
+        On VRS Express, 202 creates a pending human-review ticket and does not
+        call VRS AI. After approval, VRS Express calls the VRS AI development
+        endpoint with the same version, a separate API key, and callback
+        ownership replaced. On VRS AI, 202 means asynchronous admission only.
+        VRS AI owns call admission and rate limits.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -32,25 +57,28 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AuthorizeRequest'
+              oneOf:
+                - $ref: '#/components/schemas/V5AuthorizeRequest'
+                - $ref: '#/components/schemas/V8AuthorizeRequest'
             examples:
-              ahsRepair:
+              v5:
+                summary: Complete V5 request including optional fields
                 value:
                   service_order: '13538277'
                   tech_id: '0123456'
                   tech_phone: '+12145550199'
                   tech_name: Example Technician
                   reason_for_call: authorization
-                  callback_url: https://vrs-express-stage.example/api/integrations/vrs-ai/v1/webhook
-                  callback_secret: express-supplied-secret-at-least-16-characters
+                  callback_url: '<UPSTREAM_DEV_CALLBACK_URL>'
+                  callback_secret: example-callback-secret-not-for-live-use
                   parts:
                     - part_id: WPW10503278
                       part_description: Electronic Control Board
                       sell_price: 245
                       part_function: Controls wash cycle timing and motor speed.
                   customer_name: Example Customer
-                  customer_address: 742 Evergreen Terrace, Hagerstown, MD 21740
-                  service_address: 742 Evergreen Terrace, Hagerstown, MD 21740
+                  customer_address: 100 Example Street, Example City, NC 27000
+                  service_address: 100 Example Street, Example City, NC 27000
                   brand: Whirlpool
                   model_number: WTW5000DW1
                   serial_number: C31290822
@@ -62,25 +90,68 @@ paths:
                   appliance_location: laundry room
                   failure_cause: normal-wear
                   tech_recommendation: repair
-                  repair_replace_rationale: Board failure is isolated and repair is within the coverage threshold.
+                  repair_replace_rationale: The isolated board failure is repairable.
                   appliance_grade: mid
                   partner_id: ahs
-                  appliance_photos:
-                    - https://srdm.example.com/photo_1.jpg
+                  appliance_photos: []
                   comments:
                     - tech_id: '0123456'
                       work_item: failure_diagnosis
-                      text: Diagnostic code F7E1.
-                      timestamp: '2026-05-12T13:55:00Z'
+                      text: Diagnostic code F7E1 was confirmed.
+                      timestamp: '2026-08-11T18:00:00Z'
+              v8:
+                summary: Complete V8 request
+                value:
+                  service_order: '13538278'
+                  tech_id: '0123456'
+                  tech_phone: '+12145550199'
+                  tech_name: Example Technician
+                  reason_for_call: authorization
+                  callback_url: '<UPSTREAM_DEV_CALLBACK_URL>'
+                  callback_secret: example-callback-secret-not-for-live-use
+                  parts:
+                    - part_id: WPW10503278
+                      part_description: Electronic Control Board
+                      sell_price: 245
+                      part_function: Controls wash cycle timing and motor speed.
+                  customer_name: Example Customer
+                  customer_address: 100 Example Street, Example City, NC 27000
+                  service_address: 100 Example Street, Example City, NC 27000
+                  brand: Whirlpool
+                  model_number: WTW5000DW1
+                  serial_number: C31290822
+                  appliance_type: Washer
+                  appliance_age: 4
+                  labor_amount: 120
+                  tax_amount: 15.6
+                  part_price: 245
+                  appliance_location: laundry room
+                  failure_cause: normal-wear
+                  tech_recommendation: repair
+                  repair_replace_rationale: The isolated board failure is repairable.
+                  appliance_grade: mid
+                  partner_id: American Home Shield
+                  appliance_photos: []
+                  comments:
+                    - tech_id: '0123456'
+                      work_item: failure_diagnosis
+                      text: Diagnostic code F7E1 was confirmed.
+                      timestamp: '2026-08-11T18:00:00Z'
+                  appliance_color: stainless steel
+                  contract_number: '1234567890'
+                  purchase_year: 2022
+                  symptom: Washer does not drain
       responses:
         '202':
-          description: Call admitted asynchronously
+          description: |
+            VRS Express: pending human review and no VRS AI call. VRS AI:
+            asynchronous admission only; call start is not proven.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthorizeAccepted'
         '400':
-          description: Request validation failed
+          description: Strict request validation failed
           content:
             application/json:
               schema:
@@ -91,6 +162,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '422':
+          description: VRS Express rejected an unsupported partner before ticket creation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsupportedPartner'
         '409':
           description: An active call already exists for the service order
           content:
@@ -104,19 +181,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/RateLimited'
         '500':
-          description: VRS AI internal failure before admission
+          description: Internal failure before admission
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '502':
-          description: VRS AI dependency failure before admission
+          description: Dependency failure before admission
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: VRS AI temporarily unavailable
+          description: Temporarily unavailable or not configured
           content:
             application/json:
               schema:
@@ -126,17 +203,29 @@ paths:
           '{$request.body#/callback_url}':
             post:
               operationId: receiveVrsAiResult
-              summary: Deliver a signed VRS AI result to Express
+              summary: Deliver one signed VRS AI result event
               description: |
-                Sign the exact raw request body with HMAC-SHA256 using the
-                callback_secret from the authorize request. Prefix the
-                lowercase hexadecimal digest with sha256=. Use the same
-                eventId and exact body on retries.
+                Sign the exact raw UTF-8 request-body bytes with HMAC-SHA256
+                using callback_secret. Reuse the event ID and exact body on a
+                retry, and refresh only the timestamp header.
+              x-vrs-retry-policy:
+                retryableStatusCodes:
+                  - 500
+                  - 502
+                  - 503
+                retryNetworkFailures: true
+                maxAttempts: 5
+                backoffSeconds:
+                  - 1
+                  - 2
+                  - 4
+                  - 8
+                stableEventIdAndBody: true
               parameters:
                 - name: X-VRS-Signature
                   in: header
                   required: true
-                  description: HMAC-SHA256 over exact raw UTF-8 request bytes
+                  description: HMAC-SHA256 over exact raw request-body bytes
                   schema:
                     type: string
                     pattern: '^sha256=[0-9a-f]{64}$'
@@ -151,7 +240,7 @@ paths:
                 - name: X-VRS-Timestamp
                   in: header
                   required: true
-                  description: Current Unix epoch milliseconds, within five minutes
+                  description: Unix epoch milliseconds within five minutes
                   schema:
                     type: string
                     pattern: '^[0-9]+$'
@@ -161,33 +250,95 @@ paths:
                   application/json:
                     schema:
                       $ref: '#/components/schemas/WebhookEvent'
+                    examples:
+                      approved:
+                        value:
+                          version: 1
+                          eventId: evt_approved_001
+                          callId: vrs_ai_call_456
+                          soNo: '13538278'
+                          occurredAt: '2026-08-11T18:04:00Z'
+                          state: approved
+                          authNumber: AHS-001
+                          authorizedAmount: 365.6
+                          durationSec: 187
+                      partial:
+                        value:
+                          version: 1
+                          eventId: evt_partial_001
+                          callId: vrs_ai_call_456
+                          soNo: '13538278'
+                          occurredAt: '2026-08-11T18:04:00Z'
+                          state: partial
+                          authNumber: AHS-002
+                          authorizedAmount: 250
+                          requestedAmount: 380.6
+                          denyReason: Labor exceeded the coverage limit
+                          durationSec: 214
+                      denied:
+                        value:
+                          version: 1
+                          eventId: evt_denied_001
+                          callId: vrs_ai_call_456
+                          soNo: '13538278'
+                          occurredAt: '2026-08-11T18:04:00Z'
+                          state: denied
+                          denyReason: Repair cost exceeds the authorization limit
+                          durationSec: 142
+                      failed:
+                        value:
+                          version: 1
+                          eventId: evt_failed_001
+                          callId: vrs_ai_call_456
+                          soNo: '13538278'
+                          occurredAt: '2026-08-11T18:04:00Z'
+                          state: failed
+                          reason: busy
+                          retryable: true
+                      requiresInfo:
+                        value:
+                          version: 1
+                          eventId: evt_info_001
+                          callId: vrs_ai_call_456
+                          soNo: '13538278'
+                          occurredAt: '2026-08-11T18:04:00Z'
+                          state: requires_info
+                          question: What is the unit age?
+                          field: appliance_age
+                          urgency: hard
               responses:
                 '200':
-                  description: Processed or previously processed
+                  description: Processed or already processed
                   content:
                     application/json:
                       schema:
                         $ref: '#/components/schemas/WebhookAccepted'
                 '400':
-                  description: Invalid event body or event-ID mismatch; do not retry unchanged
+                  description: Invalid body or event-ID mismatch
                   content:
                     application/json:
                       schema:
                         $ref: '#/components/schemas/Error'
                 '401':
-                  description: Invalid signature or stale timestamp; correct signing/clock
+                  description: Invalid signature or stale timestamp
                   content:
                     application/json:
                       schema:
                         $ref: '#/components/schemas/Error'
                 '500':
-                  description: Express internal processing failure; retry
+                  description: Transient VRS Express processing failure; retry
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '502':
+                  description: Transient callback dependency failure; retry
                   content:
                     application/json:
                       schema:
                         $ref: '#/components/schemas/Error'
                 '503':
-                  description: Express callback is not configured; retry after coordination
+                  description: VRS Express callback temporarily unavailable; retry
                   content:
                     application/json:
                       schema:
@@ -198,14 +349,14 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: Static VRS AI API key exchanged through a secure channel
+      description: Direction-specific development key exchanged securely
   schemas:
     Money:
       type: number
       minimum: 0
       maximum: 1000000
       multipleOf: 0.01
-    Part:
+    V5Part:
       type: object
       additionalProperties: false
       required:
@@ -218,15 +369,42 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         part_description:
           type: string
           minLength: 1
           maxLength: 500
+          pattern: '.*\S.*'
         sell_price:
           $ref: '#/components/schemas/Money'
         part_function:
           type: string
           minLength: 1
+          maxLength: 200
+          pattern: '.*\S.*'
+    V8Part:
+      type: object
+      additionalProperties: false
+      required:
+        - part_id
+        - part_description
+        - sell_price
+        - part_function
+      properties:
+        part_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        part_description:
+          type: string
+          minLength: 1
+          maxLength: 500
+          pattern: '.*\S.*'
+        sell_price:
+          $ref: '#/components/schemas/Money'
+        part_function:
+          type: string
           maxLength: 200
     Comment:
       type: object
@@ -241,6 +419,7 @@ components:
           type: string
           minLength: 1
           maxLength: 50
+          pattern: '.*\S.*'
         work_item:
           type: string
           enum:
@@ -254,10 +433,11 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
+          pattern: '.*\S.*'
         timestamp:
           type: string
           format: date-time
-    AuthorizeRequest:
+    V5AuthorizeRequest:
       type: object
       additionalProperties: false
       required:
@@ -292,6 +472,7 @@ components:
           type: string
           minLength: 1
           maxLength: 50
+          pattern: '.*\S.*'
         tech_phone:
           type: string
           pattern: '^\+[1-9][0-9]{7,14}$'
@@ -299,13 +480,14 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          pattern: '.*\S.*'
         reason_for_call:
           type: string
           const: authorization
         callback_url:
           type: string
           format: uri
-          pattern: '^https://[^/?#]+/api/integrations/vrs-ai/v1/webhook$'
+          description: Direction-specific development callback URL
         callback_secret:
           type: string
           minLength: 16
@@ -315,35 +497,42 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: '#/components/schemas/Part'
+            $ref: '#/components/schemas/V5Part'
         customer_name:
           type: string
           minLength: 1
           maxLength: 255
+          pattern: '.*\S.*'
         customer_address:
           type: string
           minLength: 1
           maxLength: 1000
+          pattern: '.*\S.*'
         service_address:
           type: string
           minLength: 1
           maxLength: 1000
+          pattern: '.*\S.*'
         brand:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         model_number:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         serial_number:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         appliance_type:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         appliance_age:
           type: number
           minimum: 0
@@ -358,6 +547,7 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         failure_cause:
           type: string
           enum:
@@ -376,6 +566,7 @@ components:
         repair_replace_rationale:
           type: string
           minLength: 1
+          pattern: '.*\S.*'
         appliance_grade:
           type: string
           enum:
@@ -384,9 +575,10 @@ components:
             - top
         partner_id:
           type: string
-          enum:
-            - ahs
-            - american_home_shield
+          minLength: 1
+          maxLength: 50
+          pattern: '.*\S.*'
+          description: Optional in V5; missing defaults to AHS at VRS Express intake
         appliance_photos:
           type: array
           maxItems: 10
@@ -398,6 +590,186 @@ components:
           maxItems: 20
           items:
             $ref: '#/components/schemas/Comment'
+    V8AuthorizeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - service_order
+        - tech_id
+        - tech_phone
+        - tech_name
+        - reason_for_call
+        - callback_url
+        - callback_secret
+        - parts
+        - customer_name
+        - customer_address
+        - service_address
+        - brand
+        - model_number
+        - serial_number
+        - appliance_type
+        - appliance_age
+        - labor_amount
+        - tax_amount
+        - part_price
+        - appliance_location
+        - failure_cause
+        - tech_recommendation
+        - repair_replace_rationale
+        - appliance_grade
+        - partner_id
+        - appliance_photos
+        - comments
+        - appliance_color
+        - contract_number
+        - purchase_year
+        - symptom
+      properties:
+        service_order:
+          type: string
+          pattern: '^[0-9]{8}$'
+        tech_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '.*\S.*'
+        tech_phone:
+          oneOf:
+            - type: string
+              pattern: '^\+[1-9][0-9]{7,14}$'
+            - type: string
+              const: N/A
+        tech_name:
+          type: string
+          maxLength: 255
+        reason_for_call:
+          type: string
+          const: authorization
+        callback_url:
+          type: string
+          format: uri
+          description: Direction-specific development callback URL
+        callback_secret:
+          type: string
+          minLength: 16
+          maxLength: 512
+          writeOnly: true
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/V8Part'
+        customer_name:
+          type: string
+          maxLength: 255
+        customer_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          pattern: '.*\S.*'
+        service_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          pattern: '.*\S.*'
+        brand:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        model_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        serial_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        appliance_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        appliance_age:
+          type: number
+          minimum: 0
+          maximum: 100
+        labor_amount:
+          $ref: '#/components/schemas/Money'
+        tax_amount:
+          $ref: '#/components/schemas/Money'
+        part_price:
+          $ref: '#/components/schemas/Money'
+        appliance_location:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        failure_cause:
+          type: string
+          enum:
+            - normal-wear
+            - power-surge
+            - impact
+            - installation-error
+            - abuse
+            - age
+            - other
+        tech_recommendation:
+          type: string
+          enum:
+            - repair
+            - replace
+        repair_replace_rationale:
+          type: string
+        appliance_grade:
+          type: string
+          enum:
+            - entry
+            - mid
+            - top
+            - N/A
+        partner_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '.*\S.*'
+          description: Required in V8; AHS-normalized values and N/A are accepted
+        appliance_photos:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+        comments:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Comment'
+        appliance_color:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '.*\S.*'
+        contract_number:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+        purchase_year:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: string
+              const: TBD
+            - type: string
+              const: N/A
+        symptom:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
     AuthorizeAccepted:
       type: object
       additionalProperties: false
@@ -441,6 +813,22 @@ components:
         state:
           type: string
           const: in_progress
+    UnsupportedPartner:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+        - message
+        - partner_id
+      properties:
+        error:
+          type: string
+          const: UNSUPPORTED_PARTNER
+        message:
+          type: string
+        partner_id:
+          type: string
+          maxLength: 50
     RateLimited:
       type: object
       additionalProperties: false
@@ -476,6 +864,7 @@ components:
             type: string
     Error:
       type: object
+      additionalProperties: false
       required:
         - error
         - message
@@ -501,12 +890,10 @@ components:
           type: string
           minLength: 1
           maxLength: 100
-          description: Stable UUID v4 in production; reuse on retry
         callId:
           type: string
           minLength: 1
           maxLength: 100
-          description: Exact provider call_id returned by VRS AI
         soNo:
           type: string
           pattern: '^[0-9]{8}$'
@@ -515,15 +902,6 @@ components:
           format: date-time
         state:
           type: string
-    RecordingFields:
-      type: object
-      properties:
-        durationSec:
-          type: integer
-          minimum: 0
-        recordingUrl:
-          type: string
-          format: uri
     ApprovedEvent:
       unevaluatedProperties: false
       allOf:

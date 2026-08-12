@@ -1,8 +1,25 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 20:35
+Updated: 2026-08-11 20:49
 
 ## Current Session
+
+- Completed Task 7 test-first as an in-place documentation revision. The
+  architecture, Markdown handoff, and OpenAPI now describe strict V5 and V8
+  on the existing route, VRS Express human approval, same-version VRS AI
+  dispatch, exact callbacks/HMAC, controlled V8 enrichment, durable dedupe,
+  and V8-only same-ticket rearm.
+- All platform-facing sources use only VRS Express/VRS AI identities and the
+  four approved DEV URL placeholders; they contain no individual names,
+  internal source history, live URLs, or credentials. Copyable Markdown V5,
+  V8, and five callback examples are byte-equivalent to the runtime-validated
+  OpenAPI examples.
+- Task 7 RED was 9 expected failures against the stale V5-only handoff, plus
+  one review RED for missing `422`/callback-retry details. GREEN is 12/12 docs
+  tests, 168/168 focused non-database bridge tests with the
+  URL-gated PostgreSQL test skipped, a passing build, and unchanged
+  56-raw/26-normalized TypeScript diagnostics with zero Task 7 matches. No
+  database, container, remote, config, deploy, or publish action ran.
 
 - Hardened Task 6 review findings. `markWebhookForwarded` now follows the
   universal call-before-event order used by rearm and webhook apply. Rearm

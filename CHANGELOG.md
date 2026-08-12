@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — V5/V8 bridge handoff sources (2026-08-11)
+- Revised the existing VRS Express/VRS AI bridge documentation in place for
+  strict V5 and strict V8 compatibility on the same authorize endpoint. The
+  architecture, Markdown handoff, and OpenAPI now agree on deterministic
+  four-key V8 selection, same-version dispatch, human approval, controlled V8
+  placeholder enrichment, signed-photo pass-through, callbacks, and V8-only
+  same-ticket rearm.
+- Replaced live endpoints with four development placeholders and removed
+  individual names, upstream implementation labels, internal provenance, and
+  credential material from all platform-facing source documents.
+- Added executable documentation checks for OpenAPI references, strict
+  V5/V8 `oneOf`, runtime-valid request/callback examples, exact constraints,
+  deterministic raw-byte HMAC, Markdown/OpenAPI parity, approved placeholders,
+  and the two-direction development acceptance boundary.
+- Review hardening added the real `422 UNSUPPORTED_PARTNER` intake response
+  plus callback retry coverage for network failures and HTTP `500`, `502`, or
+  `503`, with five total attempts and 1/2/4/8-second backoff.
+- Task 7 verification passes 12/12 documentation tests, 168/168 focused
+  non-database bridge tests with the dedicated PostgreSQL test skipped, and
+  the production build. TypeScript remains at the known 56-raw/26-normalized
+  baseline with zero Task 7 diagnostics. No database, container, remote,
+  configuration, deployment, or publication action ran.
+
 ### Changed — Retryable terminal V8 rearm (2026-08-11)
 - Extracted the production SASHA/Tech Hub intake orchestration from the route
   into an injected seam while retaining the existing active-duplicate,
