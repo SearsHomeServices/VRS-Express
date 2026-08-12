@@ -288,8 +288,8 @@ the provider ID in its upstream admission response.
 |---|---|
 | `400` | Strict validation failed |
 | `401` | Missing or invalid `X-API-Key` |
-| `409` | `DUPLICATE_CALL` includes `existing_call_id`; `NOT_A_TECHNICIAN` and `SUBMISSION_ALREADY_EXISTS` return `{ "error", "message" }` |
-| `422` | Unsupported partner code `UNSUPPORTED_PARTNER` includes `partner_id`; `UNKNOWN_TECHNICIAN`, `INACTIVE_TECHNICIAN`, `INVALID_TECHNICIAN_DISTRICT`, and `SUBMISSION_REJECTED` return `{ "error", "message" }` |
+| `409` | `DUPLICATE_CALL` includes `existing_call_id`; `NOT_A_TECHNICIAN`, `SUBMISSION_ALREADY_EXISTS`, and `SUBMISSION_REJECTED` when the captured ticket status maps to a conflict return `{ "error", "message" }` |
+| `422` | Unsupported partner code `UNSUPPORTED_PARTNER` includes `partner_id`; `UNKNOWN_TECHNICIAN`, `INACTIVE_TECHNICIAN`, `INVALID_TECHNICIAN_DISTRICT`, and non-conflict `SUBMISSION_REJECTED` return `{ "error", "message" }` |
 | `429` | Admission limit reached; body includes `retry_after_seconds` |
 | `500`, `502`, `503`, timeout | Admission was not proven |
 

@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 21:08
+Updated: 2026-08-11 21:11
 
 ## Done
 
@@ -9,7 +9,8 @@ Updated: 2026-08-11 21:08
   request/callback constraints, HMAC, media handling, and V8 retry rearm.
 - [x] Added documentation contract tests and final-review coverage for runtime
   intake errors, safe DEV identifiers, callback URL direction, and event
-  effects; verified 15/15 docs tests, 171/171 focused non-database bridge
+  effects, including status-dependent `SUBMISSION_REJECTED` under both `409`
+  and `422`; verified 15/15 docs tests, 171/171 focused non-database bridge
   tests, the production build, and the
   unchanged 56-raw/26-normalized TypeScript baseline.
 

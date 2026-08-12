@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 21:08
+Updated: 2026-08-11 21:11
 
 ## Current Session
 
@@ -17,7 +17,9 @@ Updated: 2026-08-11 21:08
 - Final review added every runtime `409`/`422` intake rejection shape, explicit
   replace-before-test DEV technician and service-order prerequisites, exact
   clean-HTTPS callback direction rules, and the ticket/SMS matrix for all five
-  result events.
+  result events. The final parity correction places `SUBMISSION_REJECTED` in
+  both status families: captured ticket conflicts are `409`; other submission
+  rejections are `422`.
 - Task 7 RED was 9 expected failures against the stale V5-only handoff, plus
   one review RED for missing `422`/callback-retry details and a four-failure
   final-review RED for the remaining response/prerequisite/effect details.

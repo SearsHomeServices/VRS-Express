@@ -166,8 +166,9 @@ paths:
           description: |
             UNSUPPORTED_PARTNER returns its partner-specific body. Intake
             rejections UNKNOWN_TECHNICIAN, INACTIVE_TECHNICIAN,
-            INVALID_TECHNICIAN_DISTRICT, and SUBMISSION_REJECTED return the
-            generic error and message body.
+            INVALID_TECHNICIAN_DISTRICT, and SUBMISSION_REJECTED when the
+            rejection is not a conflict return the generic error and message
+            body.
           content:
             application/json:
               schema:
@@ -177,8 +178,9 @@ paths:
         '409':
           description: |
             DUPLICATE_CALL returns the active-call body. Intake rejections
-            NOT_A_TECHNICIAN and SUBMISSION_ALREADY_EXISTS return the generic
-            error and message body.
+            NOT_A_TECHNICIAN, SUBMISSION_ALREADY_EXISTS, and
+            SUBMISSION_REJECTED when the captured ticket status maps to a
+            conflict return the generic error and message body.
           content:
             application/json:
               schema:

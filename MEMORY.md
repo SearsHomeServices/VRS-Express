@@ -1,6 +1,6 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 21:08 — Completed final-review hardening of the platform-only V5/V8 handoff and executable parity checks.
+> **Last Touched:** Codex — 2026-08-11 21:11 — Corrected status-dependent SUBMISSION_REJECTED parity in the V5/V8 handoff.
 
 ## Current State
 - Task 7 is implemented in the isolated worktree as an in-place handoff
@@ -17,6 +17,9 @@
   replace-before-test DEV technician/service-order prerequisites, exact
   clean-HTTPS callback direction rules, and the ticket/SMS effects of all five
   callback states.
+- `SUBMISSION_REJECTED` appears under both generic response statuses: captured
+  ticket conflict statuses return `409`; other submission rejections return
+  `422`.
 - Task 7 verification is 15/15 documentation tests, 171/171 focused
   non-database bridge tests with the explicit PostgreSQL test skipped, a
   passing production build, and unchanged 56-raw/26-normalized TypeScript
@@ -167,6 +170,9 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Keep `SUBMISSION_REJECTED` in both documented authorize
+  status families because runtime status mapping depends on the captured ticket
+  result: conflicts are `409`, while other submission rejections are `422`.
 - [CX] 2026-08-11 - Revise the existing bridge handoff in place, keeping V5
   and V8 as strict alternatives on one endpoint with no wire version or V5
   up-conversion. Use only the four approved DEV URL placeholders in the

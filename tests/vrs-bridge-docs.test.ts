@@ -321,6 +321,7 @@ describe("VRS bridge OpenAPI contract", () => {
     for (const code of [
       "NOT_A_TECHNICIAN",
       "SUBMISSION_ALREADY_EXISTS",
+      "SUBMISSION_REJECTED",
     ]) {
       expect(authorizeResponses["409"].description).toContain(code);
       expect(handoff).toContain(`\`${code}\``);

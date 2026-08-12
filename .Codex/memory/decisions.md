@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 21:08
+Updated: 2026-08-11 21:11
 
 ## Decisions
 
@@ -19,6 +19,10 @@ Updated: 2026-08-11 21:08
   four-digit district and a unique eight-digit DEV service order. Publish the
   runtime `409`/`422` body alternatives and callback ticket/SMS effects instead
   of collapsing distinct intake and result outcomes.
+- [CX] 2026-08-11 - Document `SUBMISSION_REJECTED` in both authorize status
+  families: it is `409` when the captured ticket status maps to a conflict and
+  `422` for other submission rejections. Both use the generic error/message
+  response shape.
 
 - [CX] 2026-08-11 - Impose call-before-event locking on every callback path
   that touches both tables. Retain event-row locks in rearm to serialize

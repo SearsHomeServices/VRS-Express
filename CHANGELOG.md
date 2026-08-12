@@ -26,7 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Final review hardening documents the complete `409`/`422` intake rejection
   families, replace-before-test DEV technician/service-order prerequisites,
   directional clean-HTTPS callback allowlisting, and the exact ticket/SMS
-  effect of all five callback states.
+  effect of all five callback states. `SUBMISSION_REJECTED` is explicitly
+  documented under both statuses because captured conflict statuses return
+  `409` while other submission rejections return `422`.
 - Task 7 verification passes 15/15 documentation tests, 171/171 focused
   non-database bridge tests with the dedicated PostgreSQL test skipped, and
   the production build. TypeScript remains at the known 56-raw/26-normalized
