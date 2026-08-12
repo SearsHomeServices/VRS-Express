@@ -110,6 +110,7 @@ export interface VrsLockedSubmission {
   stage1Status: string;
   submissionApproved: boolean;
   assignedTo: number | null;
+  reassignmentNotes: string | null;
   stage1ReviewedBy: number | null;
   stage1ReviewedAt: Date | null;
   stage1RejectionReason: string | null;
@@ -163,6 +164,10 @@ export interface VrsRetryRearmSnapshot {
     reviewed_by: number | null;
     reviewed_at: string | null;
     rejection_reason: string | null;
+  };
+  prior_assignment: {
+    assigned_to: number | null;
+    reassignment_notes: string | null;
   };
   replacement_public_call_id: string;
   rearmed_at: string;
@@ -271,6 +276,10 @@ export function buildVrsRetryRearmSnapshot(options: {
       reviewed_at: toIso(submission.stage1ReviewedAt),
       rejection_reason: submission.stage1RejectionReason,
     },
+    prior_assignment: {
+      assigned_to: submission.assignedTo,
+      reassignment_notes: submission.reassignmentNotes,
+    },
     replacement_public_call_id: replacementCallId,
     rearmed_at: rearmedAt.toISOString(),
   };
@@ -291,8 +300,13 @@ function isFullyForwardedTerminalFailure(
   ) {
     return false;
   }
-  return terminalEvent.payload.callId === attempt.providerCallId &&
-    terminalEvent.payload.soNo === attempt.serviceOrder;
+  return terminalEvent.eventId === attempt.webhookEventId &&
+    terminalEvent.payload.eventId === terminalEvent.eventId &&
+    terminalEvent.payload.callId === attempt.providerCallId &&
+    terminalEvent.payload.soNo === attempt.serviceOrder &&
+    terminalEvent.payload.state === terminalEvent.state &&
+    terminalEvent.payload.state === "failed" &&
+    terminalEvent.payload.retryable === true;
 }
 
 function toDecisionRecord(attempt: VrsLockedBridgeAttempt): VrsBridgeRecord {
@@ -327,7 +341,9 @@ export async function decideLockedVrsBridgeIntake(
     existing.state !== "failed" ||
     existing.retryable !== true ||
     existing.techId !== options.input.techId ||
-    existing.submissionId === null
+    existing.submissionId === null ||
+    !existing.providerCallId ||
+    !existing.webhookDeliveredAt
   ) {
     return duplicate();
   }
@@ -395,6 +411,7 @@ export async function decideLockedVrsBridgeIntake(
   await options.updateSubmission(submission.id, {
     ticketStatus: "queued",
     assignedTo: null,
+    reassignmentNotes: null,
     claimedAt: null,
     submissionApproved: false,
     submissionApprovedAt: null,
@@ -595,6 +612,7 @@ export class DrizzleVrsBridgeStore
               stage1Status: submissions.stage1Status,
               submissionApproved: submissions.submissionApproved,
               assignedTo: submissions.assignedTo,
+              reassignmentNotes: submissions.reassignmentNotes,
               stage1ReviewedBy: submissions.stage1ReviewedBy,
               stage1ReviewedAt: submissions.stage1ReviewedAt,
               stage1RejectionReason: submissions.stage1RejectionReason,
@@ -922,6 +940,18 @@ export class DrizzleVrsBridgeStore
   ): Promise<void> {
     const now = new Date();
     await db.transaction(async (transaction) => {
+      // Every path that touches both rows locks the call first. Rearm uses the
+      // same call -> event order, preventing callback-forward/rearm deadlocks.
+      await transaction
+        .update(vrsAiCalls)
+        .set({
+          webhookAttemptCount: result.attempts,
+          webhookLastStatus: result.status ?? null,
+          webhookLastAttemptAt: now,
+          webhookDeliveredAt: result.delivered ? now : null,
+          updatedAt: now,
+        })
+        .where(eq(vrsAiCalls.id, id));
       await transaction
         .update(vrsAiCallEvents)
         .set({
@@ -937,16 +967,6 @@ export class DrizzleVrsBridgeStore
             eq(vrsAiCallEvents.eventId, eventId),
           ),
         );
-      await transaction
-        .update(vrsAiCalls)
-        .set({
-          webhookAttemptCount: result.attempts,
-          webhookLastStatus: result.status ?? null,
-          webhookLastAttemptAt: now,
-          webhookDeliveredAt: result.delivered ? now : null,
-          updatedAt: now,
-        })
-        .where(eq(vrsAiCalls.id, id));
     });
   }
 

@@ -1,8 +1,24 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 20:18
+Updated: 2026-08-11 20:35
 
 ## Done
+
+- [x] Eliminated callback-forward/rearm lock inversion with universal
+  call-before-event order, early incomplete-delivery rejection, exact
+  terminal row/payload consistency, and assignment-note snapshot/reset.
+- [x] Added production lock-order and route-consumer regressions plus the
+  env-gated PostgreSQL concurrency/JSONB staging test without opening a
+  database or container locally.
+- [x] Verified the Task 6 hardening with 38/38 intake, 30/30 queue, 156/156
+  non-database focused tests, a passing build, and the unchanged 56-diagnostic
+  baseline with zero Task 6 matches.
+
+## Open
+
+- [ ] Run `tests/vrs-sasha-postgres.test.ts` against an approved disposable
+  DEV PostgreSQL URL via `VRS_TASK6_TEST_DATABASE_URL`; this remains a release
+  gate and was not executed locally.
 
 - [x] Implemented same-ticket retryable V8 rearm with locked final authority,
   full bridge/ticket resets, immutable prior-attempt snapshot, no second

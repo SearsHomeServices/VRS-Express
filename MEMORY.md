@@ -1,20 +1,27 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 20:18 — Implemented atomic same-ticket retryable V8 rearm and late-callback dedupe.
+> **Last Touched:** Codex — 2026-08-11 20:35 — Hardened Task 6 callback/rearm lock ordering and audit consistency without database access.
 
 ## Current State
-- Task 6 is implemented in the isolated worktree. Production intake now uses
+- Task 6 is implemented and review-hardened in the isolated worktree.
+  Production intake now uses
   an injected orchestrator with the existing active-duplicate gate first.
   Eligible fully-forwarded retryable V8 failures reuse the same bridge row and
   ticket with a new public call ID, complete bridge/submission resets, an
   immutable internal ledger snapshot, and best-effort post-commit requeue.
   Exact superseded provider/SO callbacks dedupe before all callback effects.
+  Every callback method that touches both tables now locks the call before the
+  event. Incomplete call delivery rejects rearm before event reads; terminal
+  JSON must agree with the event/call rows; assignment and reassignment notes
+  are captured in the immutable snapshot before both are cleared.
 - Fresh ticket creation remains outside the locked rearm transaction; the
   existing advisory-locked bridge insert remains the final fresh duplicate
-  check. Verification is 30/30 intake, 30/30 queue, 148/148 focused bridge,
-  passing build, and unchanged 56-raw TypeScript baseline. No database,
-  schema, seed, startup, migration, config, remote, deploy, or publish action
-  ran.
+  check. Non-database verification is 38/38 intake, 30/30 queue, 156/156
+  focused bridge, passing build, and unchanged 56-raw TypeScript baseline.
+  The URL-gated real-PostgreSQL concurrency/JSONB regression was added but not
+  executed; it is a DEV staging release gate. No database connection/write,
+  container, schema, seed, startup, migration, config, remote, deploy, or
+  publish action ran.
 - Tasks 1-6 of the V5/V8 integration are implemented in the isolated
   worktree. The dashboard directly consumes a server-render-tested production
   panel whose runtime null guard owns status/errors/failure copy and the
@@ -141,6 +148,16 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-11 - Use call-before-event as the universal lock order for any
+  operation touching both bridge and event rows. Keep event-row `FOR UPDATE`
+  during rearm because event-only failure updates still need serialization,
+  but reject immediately from the locked call row while delivery is null so
+  forwarding cannot be needlessly joined. Require terminal JSON identity,
+  state, and retryability to agree exactly with event and call rows.
+- [CX] 2026-08-11 - Keep the real PostgreSQL forward/rearm interleaving and
+  historical JSONB lookup test behind `VRS_TASK6_TEST_DATABASE_URL`. Do not
+  connect locally; require the env-gated proof in approved DEV staging before
+  release.
 - [CX] 2026-08-11 - Keep active duplicate lookup ahead of technician/user/
   encryption work for compatibility, but make the advisory-locked
   `decideExistingOrRearm` transaction the final terminal duplicate/rearm

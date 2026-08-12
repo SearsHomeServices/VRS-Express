@@ -27,11 +27,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   take the existing duplicate/200 path before event claim, ticket/SMS apply,
   secret decryption, forwarding, or broadcasts. Current callbacks and Stage 1
   `dispatch_failed` resend behavior are unchanged.
-- Task 6 verification passes 30/30 intake/rearm tests, 30/30 queue/callback
-  tests, 148/148 focused bridge tests, and the production build. TypeScript
+- Follow-up hardening gives every callback path that touches both bridge and
+  event rows one call-before-event lock order. Rearm rejects from the locked
+  call row before reading event rows when delivery is incomplete, requires
+  exact terminal payload/event/call-row agreement, and snapshots then clears
+  prior assignment notes during the reset.
+- Production-source regressions protect the callback lock order and prove the
+  route registers the exact constructed intake seam. A dedicated
+  `VRS_TASK6_TEST_DATABASE_URL`-gated PostgreSQL test can exercise the real
+  forward-versus-rearm interleaving and historical JSONB lookup; it was not
+  executed locally and remains a DEV staging release gate.
+- Task 6 non-database verification passes 38/38 intake/rearm tests, 30/30
+  queue/callback tests, 156/156 focused bridge tests, and the production
+  build. TypeScript
   remains at the known 56-raw-diagnostic baseline with zero Task 6
-  diagnostics. No schema, seed, startup, migration, database, configuration,
-  remote, deploy, or publication action ran.
+  diagnostics. No schema, seed, startup, migration, database connection/write,
+  container, configuration, remote, deploy, or publication action ran.
 
 ### Changed — Complete bridge review context (2026-08-11)
 - Bridge status now derives `contractVersion` as `v5` or `v8` from the stored

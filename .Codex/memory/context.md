@@ -1,8 +1,21 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 20:18
+Updated: 2026-08-11 20:35
 
 ## Current Session
+
+- Hardened Task 6 review findings. `markWebhookForwarded` now follows the
+  universal call-before-event order used by rearm and webhook apply. Rearm
+  rejects incomplete call delivery before any event read, validates exact
+  terminal payload/event/call-row agreement, and snapshots `assignedTo` plus
+  `reassignmentNotes` before clearing both.
+- Added tight production-source guards for lock ordering and exact route
+  intake registration. Added a `VRS_TASK6_TEST_DATABASE_URL`-gated real
+  PostgreSQL lock-interleaving/JSONB regression, but did not execute it or
+  make any database/container connection; it remains a DEV release gate.
+- Fresh non-database evidence: intake 38/38, queue 30/30, focused bridge
+  156/156, production build passed, and TypeScript remains exactly 56 raw
+  diagnostics with zero Task 6 matches.
 
 - Completed Task 6 test-first. The production route now consumes an injected
   intake orchestrator while preserving active duplicate ordering, partner and

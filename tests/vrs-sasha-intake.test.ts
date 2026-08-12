@@ -1,4 +1,5 @@
 import express from "express";
+import { readFileSync } from "node:fs";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -77,6 +78,7 @@ function makeSubmission(
     stage1Status: "approved",
     submissionApproved: true,
     assignedTo: 77,
+    reassignmentNotes: "Temporarily assigned for specialist review",
     stage1ReviewedBy: 77,
     stage1ReviewedAt: new Date("2026-08-10T12:01:30.000Z"),
     stage1RejectionReason: null,
@@ -150,6 +152,8 @@ function makeLockedStore(options: {
   const callUpdates: Array<Record<string, unknown>> = [];
   const submissionUpdates: Array<Record<string, unknown>> = [];
   const freshRows: Array<Record<string, unknown>> = [];
+  let terminalEventLoads = 0;
+  let blockingEventChecks = 0;
   let lock = Promise.resolve();
 
   const runExclusive = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -195,9 +199,14 @@ function makeLockedStore(options: {
           now: () => rearmedAt,
           loadLatestAttempt: async () => attempt,
           loadLinkedSubmission: async () => submission,
-          loadTerminalEvent: async () => terminalEvent,
-          hasBlockingWebhookEvents: async () =>
-            options.blockingWebhookEvents ?? false,
+          loadTerminalEvent: async () => {
+            terminalEventLoads++;
+            return terminalEvent;
+          },
+          hasBlockingWebhookEvents: async () => {
+            blockingEventChecks++;
+            return options.blockingWebhookEvents ?? false;
+          },
           insertRearmSnapshot: async (_attemptId, snapshot) => {
             snapshots.push(snapshot);
           },
@@ -278,6 +287,8 @@ function makeLockedStore(options: {
     freshRows,
     getAttempt: () => attempt,
     getSubmission: () => submission,
+    getTerminalEventLoads: () => terminalEventLoads,
+    getBlockingEventChecks: () => blockingEventChecks,
   };
 }
 
@@ -343,6 +354,45 @@ function makeIntakeHarness(options: {
 }
 
 describe("VRS SASHA intake and V8 retry rearm", () => {
+  it("keeps production webhook forwarding on universal call-before-event lock order", () => {
+    const source = readFileSync(
+      new URL("../server/vrs-sasha-store.ts", import.meta.url),
+      "utf8",
+    );
+    const method = source.slice(
+      source.indexOf("  async markWebhookForwarded("),
+      source.indexOf("  async markWebhookFailed("),
+    );
+
+    expect(method.indexOf(".update(vrsAiCalls)")).toBeGreaterThan(-1);
+    expect(method.indexOf(".update(vrsAiCallEvents)")).toBeGreaterThan(-1);
+    expect(method.indexOf(".update(vrsAiCalls)"))
+      .toBeLessThan(method.indexOf(".update(vrsAiCallEvents)"));
+  });
+
+  it("constructs the production intake seam and registers that exact result", () => {
+    const source = readFileSync(
+      new URL("../server/routes.ts", import.meta.url),
+      "utf8",
+    );
+    const factoryStart = source.indexOf(
+      "const vrsExpressIntake = createVrsSashaIntake({",
+    );
+    const registrationStart = source.indexOf(
+      "registerVrsSashaApi(app, {",
+      factoryStart,
+    );
+    const registration = source.slice(
+      registrationStart,
+      source.indexOf("});", registrationStart) + 3,
+    );
+
+    expect(factoryStart).toBeGreaterThan(-1);
+    expect(registrationStart).toBeGreaterThan(factoryStart);
+    expect(registration).toContain("intake: vrsExpressIntake");
+    expect(registration).not.toMatch(/intake:\s*createVrsSashaIntake/);
+  });
+
   it.each([
     ["V5", validV5AuthorizePayload],
     ["V8", validV8AuthorizePayload],
@@ -524,6 +574,10 @@ describe("VRS SASHA intake and V8 retry rearm", () => {
         reviewed_by: 77,
         reviewed_at: "2026-08-10T12:01:30.000Z",
       },
+      prior_assignment: {
+        assigned_to: 77,
+        reassignment_notes: "Temporarily assigned for specialist review",
+      },
       replacement_public_call_id: "vrs_call_new",
       rearmed_at: rearmedAt.toISOString(),
     });
@@ -567,6 +621,7 @@ describe("VRS SASHA intake and V8 retry rearm", () => {
     expect(harness.submissionUpdates).toEqual([expect.objectContaining({
       ticketStatus: "queued",
       assignedTo: null,
+      reassignmentNotes: null,
       claimedAt: null,
       submissionApproved: false,
       submissionApprovedAt: null,
@@ -649,6 +704,44 @@ describe("VRS SASHA intake and V8 retry rearm", () => {
     expect(harness.callUpdates).toHaveLength(0);
   });
 
+  it.each([
+    ["event id", { eventId: "evt_wrong" }],
+    ["provider call id", { callId: "vrs_ai_wrong" }],
+    ["service order", { soNo: "99999999" }],
+    ["terminal state", { state: "approved" }],
+    ["retryable flag", { retryable: false }],
+  ])("rejects rearm when terminal payload %s diverges", async (_label, patch) => {
+    const terminal = makeTerminalEvent();
+    const harness = makeIntakeHarness({
+      attempt: makeAttempt(),
+      submission: makeSubmission(),
+      terminalEvent: makeTerminalEvent({
+        payload: { ...terminal.payload, ...patch },
+      }),
+    });
+
+    await expect(harness.intake.receive(validV8AuthorizePayload)).resolves
+      .toMatchObject({ kind: "duplicate" });
+    expect(harness.snapshots).toHaveLength(0);
+    expect(harness.callUpdates).toHaveLength(0);
+  });
+
+  it("rejects rearm when the terminal event column diverges from the call row", async () => {
+    const terminal = makeTerminalEvent();
+    const harness = makeIntakeHarness({
+      attempt: makeAttempt({ webhookEventId: "evt_call_row" }),
+      submission: makeSubmission(),
+      terminalEvent: makeTerminalEvent({
+        eventId: "evt_event_row",
+        payload: { ...terminal.payload, eventId: "evt_event_row" },
+      }),
+    });
+
+    await expect(harness.intake.receive(validV8AuthorizePayload)).resolves
+      .toMatchObject({ kind: "duplicate" });
+    expect(harness.snapshots).toHaveLength(0);
+  });
+
   it("rejects rearm when the technician differs from the original attempt", async () => {
     const harness = makeIntakeHarness({
       attempt: makeAttempt({ techId: "0765432" }),
@@ -678,6 +771,10 @@ describe("VRS SASHA intake and V8 retry rearm", () => {
     await expect(harness.intake.receive(validV8AuthorizePayload)).resolves
       .toMatchObject({ kind: "duplicate" });
     expect(harness.callUpdates).toHaveLength(0);
+    if (label === "call delivery missing") {
+      expect(harness.getTerminalEventLoads()).toBe(0);
+      expect(harness.getBlockingEventChecks()).toBe(0);
+    }
   });
 
   it("serializes two rearm attempts into one winner, one duplicate, one snapshot, and one notification", async () => {

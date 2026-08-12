@@ -1,8 +1,21 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 20:18
+Updated: 2026-08-11 20:35
 
 ## Decisions
+
+- [CX] 2026-08-11 - Impose call-before-event locking on every callback path
+  that touches both tables. Retain event-row locks in rearm to serialize
+  event-only failure updates, while using the locked call's missing delivery
+  timestamp as an early duplicate result that avoids event rows entirely.
+- [CX] 2026-08-11 - A retryable terminal callback is rearm evidence only when
+  payload `eventId`, `callId`, `soNo`, `state=failed`, and `retryable=true`
+  agree with the event columns and locked call row. Snapshot prior assignment
+  and reassignment notes, then clear both so stale audit text is not re-dated.
+- [CX] 2026-08-11 - Keep the production PostgreSQL concurrency and JSONB
+  lookup regression URL-gated and unexecuted locally. It must run against an
+  approved disposable DEV database before release; focused local suites must
+  not open a database or container.
 
 - [CX] 2026-08-11 - Rearm only when both stored and incoming requests are V8,
   the latest row is exactly failed/retryable, tech IDs match, the locked
