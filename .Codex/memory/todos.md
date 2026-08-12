@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 22:40
+Updated: 2026-08-12 08:41
 
 ## Done
 
@@ -42,6 +42,18 @@ Updated: 2026-08-11 22:40
   build, and the known 56-raw TypeScript baseline.
 
 ## Open
+
+- [x] Configure the Express-owned Replit DEV bridge values and prove a strict
+  V8 Direction A intake with active DEV technician `test_tech_1` and unique
+  service order `99081201`.
+- [ ] Obtain the VRS AI development `X-API-Key` through a secure channel and
+  save it as `VRS_AI_API_KEY`; restart only the DEV process afterward.
+- [ ] After Tyler approves the design, add a DEV-only, admin-authenticated,
+  read-only integration monitor showing intake, Stage 1, outbound dispatch,
+  callback, forwarding, and failure checkpoints without secret values.
+- [x] Produced the platform-only DEV connection sheet with exact environment
+  URLs, key direction, safe test technician, unique-SO guidance, and the joint
+  test sequence; keep live credentials out of the file.
 
 - [x] Separated unique field-routing proof from empty-value preservation for
   technician name and repair/replace rationale; retained exact `N/A`, `TBD`,
@@ -192,11 +204,11 @@ Updated: 2026-08-11 22:40
 
 ## Open
 
-- [ ] Configure the secure VRS Express DEV bridge values outside Git:
+- [ ] Complete the secure VRS Express DEV bridge configuration outside Git:
   `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
   `VRS_AI_WEBHOOK_SECRET`, `VRS_BRIDGE_ENCRYPTION_KEY`, and either `VRS_AI_CALLBACK_URL` or
-  `VRS_EXPRESS_PUBLIC_URL`. The running DEV process currently has none of
-  these values and correctly returns `503 NOT_CONFIGURED`.
+  `VRS_EXPRESS_PUBLIC_URL`. Every Express-owned value is now configured and
+  verified in the running DEV process; only `VRS_AI_API_KEY` remains missing.
 - [ ] Run the joint DEV V5/V8 acceptance exchange using a provisioned DEV
   technician and unique DEV service orders: VRS AI intake, human approval,
   same-version outbound request, all five signed callback shapes, replay, and

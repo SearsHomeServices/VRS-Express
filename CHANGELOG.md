@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Live VRS bridge DEV configuration and intake proof (2026-08-12)
+- Added generated DEV-only `VRS_SASHA_API_KEY`,
+  `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values through
+  Replit Secrets. Added the confirmed VRS AI staging origin and VRS Express
+  public DEV origin to the Replit development configuration. No secret value
+  was written to Git, logs, documentation, or task output.
+- Restarted only the Replit development process and confirmed its environment
+  contains every Express-owned bridge value. `VRS_AI_API_KEY` remains the one
+  missing value and must be supplied by the VRS AI platform through a secure
+  channel before Direction B can dispatch.
+- Verified the public DEV authorize route returns `401` without a key and the
+  configured key reaches strict contract validation (`400` for an empty
+  payload). A complete strict V8 smoke request for active DEV technician
+  `test_tech_1` and unique service order `99081201` returned `202`, created one
+  pending-review bridge/ticket, and retained a null provider call ID before
+  human approval.
+- Added a separate platform-only Markdown DEV connection sheet alongside the
+  contract package with the exact four test endpoints, credential direction,
+  provisioned DEV technician, one-time service-order guidance, expected
+  checkpoints, and joint run sequence. Credential values remain outside it.
+- No production publication, production configuration, schema operation, or
+  production database action occurred.
+
 ### Changed — Replit development workspace synchronization (2026-08-11)
 - Fast-forwarded the clean VRS Express Replit workspace `main` from
   `972409d` to the verified V5/V8 handoff commit `6c69bab`, restarted its

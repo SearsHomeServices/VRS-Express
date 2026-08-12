@@ -1,8 +1,26 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 22:40
+Updated: 2026-08-12 08:41
 
 ## Current Session
+
+- Configured the Express-owned bridge values in Replit DEV without exposing
+  values: generated `VRS_SASHA_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and
+  `VRS_BRIDGE_ENCRYPTION_KEY`, plus the confirmed VRS AI staging origin and
+  VRS Express public DEV origin. The restarted DEV process contains all five.
+  `VRS_AI_API_KEY` remains the only missing value and must be supplied by VRS
+  AI through a secure channel.
+- Live DEV proof: public no-key authorize returns `401`; authenticated empty
+  input reaches strict validation and returns `400`; a complete strict V8
+  request using active DEV technician `test_tech_1` / district `8175` and
+  unique service order `99081201` returned `202`. The stored ticket remains
+  queued with Stage 1 pending, bridge state `pending_review`, and no provider
+  call ID, proving no pre-approval outbound dispatch.
+- The existing handoff package intentionally contains no live endpoint or key.
+  Added the separate platform-only Markdown DEV connection sheet with the
+  exact environment URLs and secure credential-exchange/run sequence. A proposed
+  DEV-only, admin-authenticated, read-only bridge monitor awaits Tyler's design
+  approval before implementation.
 
 - Synchronized verified commit `6c69bab` to the clean VRS Express Replit
   workspace `main`, then pushed that same `main` history to GitHub. Restarted

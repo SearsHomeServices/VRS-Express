@@ -1,23 +1,31 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 22:40 — Synced the verified V5/V8 branch to the Replit DEV workspace and GitHub; DEV configuration remains the only test blocker.
+> **Last Touched:** Codex — 2026-08-12 08:41 — Configured the Express-owned DEV bridge values and proved strict V8 intake; the VRS AI outbound key remains pending.
 
 ## Current State
-- The verified V5/V8 branch is now live in the VRS Express Replit development
-  workspace `main` and GitHub `main` at `6c69bab`. The Replit DEV process was
-  restarted and its public health endpoint returned `200`; production was not
+- The verified V5/V8 branch is live in the VRS Express Replit development
+  workspace `main` and GitHub `main` at `63398c4`. Production was not
   published or changed.
-- The DEV database already contains `vrs_ai_calls` and `vrs_ai_call_events`,
-  so no schema action is required. The running DEV process is missing
-  `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
-  `VRS_AI_WEBHOOK_SECRET`, `VRS_BRIDGE_ENCRYPTION_KEY`, and both
-  callback/public-URL alternatives. Until
-  those secure DEV values are configured, `/vrs/authorize` correctly returns
-  `503 NOT_CONFIGURED` and an end-to-end partner test cannot start.
-- Next activation step: configure the secure DEV bridge values outside Git,
-  use a provisioned DEV technician plus a unique DEV service order, and run
-  the documented VRS AI -> VRS Express -> human approval -> VRS AI callback
-  acceptance flow. Production publication remains separate.
+- Replit Secrets now contains generated DEV-only `VRS_SASHA_API_KEY`,
+  `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values. The running
+  DEV process also has the confirmed `VRS_AI_BASE_URL` and
+  `VRS_EXPRESS_PUBLIC_URL`. No value was written to Git, docs, logs, or task
+  output. `VRS_AI_API_KEY` is the only missing bridge value and must come from
+  the VRS AI platform through a secure channel.
+- The public DEV health endpoint returns `200`; `/vrs/authorize` returns `401`
+  without a key, and the configured key reaches strict contract validation
+  (`400` for an empty payload). A complete strict V8 smoke request for active
+  DEV technician `test_tech_1` (district `8175`) and service order `99081201`
+  returned `202` with public call ID
+  `vrs_call_4fe3c302-c90b-4722-babf-01e3f5d56297`.
+- Read-only verification shows exactly one associated ticket/bridge in
+  `queued` / `pending_review`, Stage 1 still pending, and no provider call ID.
+  This proves Direction A without dispatching to VRS AI before human approval.
+  Direction B remains blocked only by `VRS_AI_API_KEY` and joint testing.
+- `output/doc/VRS-Express-VRS-AI-DEV-Test-Connection-Sheet.md` is the separate
+  environment-specific test handoff. It supplies the exact DEV endpoints,
+  credential direction, `test_tech_1` / district `8175`, one-time service-order
+  guidance, checkpoints, and run sequence without embedding any secret value.
 - Task 8 is complete in the isolated worktree. `output/doc/` now contains the
   regenerated platform-only DOCX, matching 10-page PDF, and direct-delivery
   ZIP. The ZIP has exactly the PDF, editable DOCX, and authoritative OpenAPI

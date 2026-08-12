@@ -1,6 +1,6 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 22:40
+Updated: 2026-08-12 08:41
 
 ## Decisions
 
@@ -192,6 +192,16 @@ Updated: 2026-08-11 22:40
   Express ticket, and Express sends the same-version request to VRS AI DEV.
   Shared source does not permit use of the production database or publication
   without separate evidence and approval.
+- [CX] 2026-08-12 - Generate and store the three Express-owned bridge secrets
+  only in Replit DEV. Use the V8-confirmed VRS AI staging origin and the live
+  VRS Express `.replit.dev` origin; never copy secret values into Git or the
+  external handoff. The VRS AI platform remains the authority for its outbound
+  `X-API-Key`.
+- [CX] 2026-08-12 - Treat a DEV-only integration monitor as a read-only
+  observability surface over existing bridge/ticket/event rows. It must be
+  unavailable in production, require admin authentication in DEV, redact
+  secrets, and make the Stage 1 hold plus both API directions visually
+  auditable without changing bridge behavior.
 - [CX] 2026-08-11 - Implement runtime changes on an isolated
   `codex/vrs-v5-v8-dev-integration` worktree. Require focused/full regression,
   build, normalized type-diagnostic, final review, and read-only Replit
