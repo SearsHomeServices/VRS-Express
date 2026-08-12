@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-11 22:24
+Updated: 2026-08-11 22:40
 
 ## Done
+
+- [x] Fast-forwarded the clean VRS Express Replit DEV workspace and GitHub
+  `main` to verified commit `6c69bab`; restarted the configured DEV process
+  and confirmed its public health endpoint returns `200`. Confirmed the
+  existing bridge tables are present without a schema write.
 
 - [x] Regenerated the platform-only V5/V8 integration package from approved
   source: editable DOCX, matching 10-page PDF, and exact three-file ZIP with
@@ -187,20 +192,18 @@ Updated: 2026-08-11 22:24
 
 ## Open
 
-- [ ] Update the handoff/architecture/OpenAPI/examples for both V5 and V8 and
-  regenerate the platform-only DOCX/PDF/ZIP package.
-- [ ] Run focused tests, build, TypeScript-baseline comparison, OpenAPI/example
-  validation, metadata/text scans, and visual document review.
-- [ ] Prove every change in shared route/UI files is bridge-guarded and run the
-  existing technician, agent, manual AHS, NLA, admin, media, WebSocket, and SMS
-  workflows in a non-production environment before calling V8 publish-ready.
-- [ ] Record the rollback commit and post-change production smoke checklist.
-- [ ] Obtain explicit approval before source sync, development configuration,
-  or production publication; never use production credentials/database for
-  the VRS AI simulator test.
-- [ ] Package the secure out-of-band exchange for the staging API key, callback
-  secret, and actual Express staging callback origin; do not place secrets in
-  Git or the handoff documents.
+- [ ] Configure the secure VRS Express DEV bridge values outside Git:
+  `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
+  `VRS_AI_WEBHOOK_SECRET`, and either `VRS_AI_CALLBACK_URL` or
+  `VRS_EXPRESS_PUBLIC_URL`. The running DEV process currently has none of
+  these values and correctly returns `503 NOT_CONFIGURED`.
+- [ ] Run the joint DEV V5/V8 acceptance exchange using a provisioned DEV
+  technician and unique DEV service orders: VRS AI intake, human approval,
+  same-version outbound request, all five signed callback shapes, replay, and
+  retryable-failed V8 retry.
+- [ ] Run the listed manual/PWA, two-stage AHS, First American, NLA, admin,
+  media, WebSocket, and SMS smoke checks against the DEV database, then obtain
+  separate approval before any production publication.
 - [ ] With Tyler's explicit approval and coordination, rotate every credential
   exposed by the 2026-07-28 Replit SSH output: OpenAI, Snowflake key/password/
   passphrase, Twilio auth, Replit identity/DB tokens, `SESSION_SECRET`, VRS API

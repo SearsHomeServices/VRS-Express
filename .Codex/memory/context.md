@@ -1,8 +1,20 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-11 22:24
+Updated: 2026-08-11 22:40
 
 ## Current Session
+
+- Synchronized verified commit `6c69bab` to the clean VRS Express Replit
+  workspace `main`, then pushed that same `main` history to GitHub. Restarted
+  the configured Replit DEV process and confirmed its public health endpoint
+  returns `200`. No production publication, deployment, schema/data write, or
+  production configuration change occurred.
+- Read-only runtime checks confirmed `vrs_ai_calls` and `vrs_ai_call_events`
+  already exist in the DEV database. The running DEV process is missing the
+  bridge configuration names `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`,
+  `VRS_AI_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, `VRS_AI_CALLBACK_URL`, and
+  `VRS_EXPRESS_PUBLIC_URL`; endpoint testing correctly stops at `503
+  NOT_CONFIGURED` until secure DEV values are supplied.
 
 - Completed Task 8 from corrected source `bc3ff67`: regenerated the
   platform-only direct-delivery package in `output/doc/` as an editable DOCX,

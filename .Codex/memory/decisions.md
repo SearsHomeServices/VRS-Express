@@ -1,8 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-11 22:24
+Updated: 2026-08-11 22:40
 
 ## Decisions
+
+- [CX] 2026-08-11 - Treat the verified Replit workspace sync as DEV source
+  activation, not production publication. The box `main` and GitHub `main`
+  now share `6c69bab`; the restarted DEV process is healthy, existing bridge
+  tables are present, and no schema/data/configuration write was needed.
+  Secure bridge variables remain an external DEV activation prerequisite and
+  must not be stored in Git or handoff documents.
 
 - [CX] 2026-08-11 - Package the approved V5/V8 handoff as exactly three
   root-level direct-delivery files: matching PDF, editable DOCX, and the

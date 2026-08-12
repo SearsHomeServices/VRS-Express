@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Replit development workspace synchronization (2026-08-11)
+- Fast-forwarded the clean VRS Express Replit workspace `main` from
+  `972409d` to the verified V5/V8 handoff commit `6c69bab`, restarted its
+  configured development server, and confirmed the public DEV health endpoint
+  returns `200`.
+- Pushed the same clean `main` history from the Replit box to GitHub. No
+  production publish, schema/data write, deployment configuration change, or
+  production database action occurred.
+- Read-only runtime checks confirmed the existing bridge tables are present.
+  DEV bridge secrets/endpoints are still absent, so the live authorize route
+  intentionally returns `503 NOT_CONFIGURED` until secure configuration is
+  supplied outside Git.
+
 ### Added — Regenerated V5/V8 development handoff package (2026-08-11)
 - Rebuilt the direct-delivery handoff from the approved strict V5/V8 Markdown
   and OpenAPI sources: editable DOCX, matching PDF, and a ZIP containing

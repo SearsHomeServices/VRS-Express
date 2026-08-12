@@ -1,8 +1,22 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-11 22:24 — Regenerated and visually verified the V5/V8 direct-delivery handoff package.
+> **Last Touched:** Codex — 2026-08-11 22:40 — Synced the verified V5/V8 branch to the Replit DEV workspace and GitHub; DEV configuration remains the only test blocker.
 
 ## Current State
+- The verified V5/V8 branch is now live in the VRS Express Replit development
+  workspace `main` and GitHub `main` at `6c69bab`. The Replit DEV process was
+  restarted and its public health endpoint returned `200`; production was not
+  published or changed.
+- The DEV database already contains `vrs_ai_calls` and `vrs_ai_call_events`,
+  so no schema action is required. The running DEV process is missing
+  `VRS_SASHA_API_KEY`, `VRS_AI_BASE_URL`, `VRS_AI_API_KEY`,
+  `VRS_AI_WEBHOOK_SECRET`, and both callback/public-URL alternatives. Until
+  those secure DEV values are configured, `/vrs/authorize` correctly returns
+  `503 NOT_CONFIGURED` and an end-to-end partner test cannot start.
+- Next activation step: configure the secure DEV bridge values outside Git,
+  use a provisioned DEV technician plus a unique DEV service order, and run
+  the documented VRS AI -> VRS Express -> human approval -> VRS AI callback
+  acceptance flow. Production publication remains separate.
 - Task 8 is complete in the isolated worktree. `output/doc/` now contains the
   regenerated platform-only DOCX, matching 10-page PDF, and direct-delivery
   ZIP. The ZIP has exactly the PDF, editable DOCX, and authoritative OpenAPI
