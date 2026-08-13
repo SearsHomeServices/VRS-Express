@@ -20,6 +20,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification: 160/160 bridge tests pass, the production build passes, and
   the known repository TypeScript baseline has no diagnostic in the new
   service-order lookup modules.
+- Fast-forwarded GitHub and the clean Replit DEV workspace, restarted only the
+  DEV process, and confirmed public health `200`. The public lookup rejects a
+  missing key with `401`; an authenticated lookup for existing V8 service
+  order `99081204` returned `200`, one photo location, no callback fields, and
+  no internal `/objects/` path. No publish, schema operation, or database write
+  ran.
 
 ### Added — Direct V8 object-storage photo delivery (2026-08-13)
 - VRS Express now converts ticket-owned `/objects/` photo paths into direct

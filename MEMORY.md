@@ -10,7 +10,11 @@
   signs internal `/objects/` values for 24 hours, de-duplicates and caps at
   10, and performs no database mutation. The exact public DEV URL and examples
   are in the environment-specific connection sheet. Local verification is
-  160/160 bridge tests and a passing production build.
+  160/160 bridge tests and a passing production build. GitHub and Replit DEV
+  now contain the endpoint; DEV was restarted, health is `200`, no-key lookup
+  is `401`, and authenticated existing V8 service order `99081204` returns
+  `200` with one photo location and no callback/internal-path leakage. No
+  publish or database write ran.
 - Approved V8 Stage 1 dispatch now converts VRS Express ticket `/objects/`
   paths into direct signed HTTPS Object Storage `GET` URLs valid for 24 hours
   when the accepted `appliance_photos` placeholder is empty. VRS AI retrieves

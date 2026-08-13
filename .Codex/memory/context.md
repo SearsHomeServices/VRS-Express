@@ -11,7 +11,10 @@ Updated: 2026-08-13 17:08
   fields, merges sender and linked-ticket photos, and converts internal
   `/objects/` paths into direct 24-hour signed URLs. No new secret, schema, or
   database write is involved. Local verification is 160/160 bridge tests and
-  a passing production build; the live DEV sync/restart/proof is pending.
+  a passing production build. GitHub/Replit DEV are synchronized, only DEV was
+  restarted, health is `200`, no-key lookup is `401`, and authenticated
+  service order `99081204` returns `200` with sanitized V8 data and one photo
+  location. No publish or database write ran.
 
 - Diagnosed real-technician `INVALID_TECHNICIAN_DISTRICT` without data writes:
   `dhanse9` is active and its DEV roster district is `0008175`; 1,635 active
