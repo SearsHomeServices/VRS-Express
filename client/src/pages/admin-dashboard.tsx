@@ -1452,6 +1452,7 @@ function TicketOverviewSection() {
   // request-type toggle, search). Server limits rows to negative outcomes.
   const [coachingExporting, setCoachingExporting] = useState(false);
   const [pdcPushing, setPdcPushing] = useState(false);
+  const [techReportDownloading, setTechReportDownloading] = useState(false);
   const coachingFilterParams = () => {
     const params = new URLSearchParams();
     if (createdAfterIso) params.set("createdAfter", createdAfterIso);
@@ -1483,6 +1484,43 @@ function TicketOverviewSection() {
       toast({ title: "Export Failed", description: "Could not export the coaching report.", variant: "destructive" });
     } finally {
       setCoachingExporting(false);
+    }
+  };
+  // 2026-08-12 — download the latest weekly IH tech no-login report
+  // (generated Wednesdays 5 PM ET; generates one on demand if none exists).
+  const handleTechReportDownload = async () => {
+    try {
+      setTechReportDownloading(true);
+      const listRes = await fetch("/api/admin/reports/tech-no-login", {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!listRes.ok) throw new Error("List failed");
+      let reports = (await listRes.json()).reports as Array<{ id: number; generatedAt: string; summary: any }>;
+      if (!reports.length) {
+        const runRes = await apiRequest("POST", "/api/admin/reports/tech-no-login/run", {});
+        const json = await runRes.json();
+        reports = [json.report];
+      }
+      const latest = reports[0];
+      const res = await fetch(`/api/admin/reports/tech-no-login/${latest.id}/csv`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.headers.get("Content-Disposition")?.match(/filename="(.+)"/)?.[1] || "ih-techs-not-signed-in.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      const when = new Date(latest.generatedAt).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" });
+      toast({ title: "Report Downloaded", description: `${latest.summary?.notSignedIn ?? "?"} techs never signed in (generated ${when} ET).` });
+    } catch {
+      toast({ title: "Download Failed", description: "Could not fetch the tech sign-in report.", variant: "destructive" });
+    } finally {
+      setTechReportDownloading(false);
     }
   };
   const handlePushToTechPdc = async () => {
@@ -1589,6 +1627,18 @@ function TicketOverviewSection() {
           >
             {pdcPushing ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Send className="w-3 h-3 mr-1.5" />}
             Push to Tech PDC
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={techReportDownloading}
+            onClick={handleTechReportDownload}
+            title="Weekly list of active IH technicians who have never signed into VRS Express (auto-generated Wednesdays 5 PM ET)"
+            data-testid="button-tech-no-login-report"
+          >
+            {techReportDownloading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+            Tech Sign-In Report
           </Button>
         </div>
         {!businessHoursActive && (
@@ -3029,6 +3079,16 @@ export default function AdminDashboard() {
       scheduleWsInvalidate(["/api/submissions", "/api/admin/analytics"]);
     });
 
+    // 2026-08-12 — weekly IH tech no-login report ready (Wednesdays 5 PM ET).
+    const unsubWeeklyReport = subscribe("weekly_report_ready", (payload: any) => {
+      playNotificationDing();
+      const title = `Weekly tech sign-in report ready`;
+      const desc = `${payload.notSignedIn} of ${payload.activeRoster} active IH techs have never signed in. Download it from Ticket Overview.`;
+      toast({ title, description: desc, duration: 12000 });
+      showBrowserNotification(title, desc);
+      scheduleWsInvalidate(["/api/admin/reports/tech-no-login"]);
+    });
+
     // 2026-08-07 — admins are notified when a VRS agent (not an admin)
     // sends a coaching record to Tech PDC.
     const unsubTechPdc = subscribe("tech_pdc_pushed", (payload: any) => {
@@ -3098,7 +3158,7 @@ export default function AdminDashboard() {
       ]);
     });
 
-    return () => { unsub(); unsub2(); unsub3(); unsubTechPdc(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
+    return () => { unsub(); unsub2(); unsub3(); unsubWeeklyReport(); unsubTechPdc(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); };
   }, [subscribe]);
 
   const [userTab, setUserTab] = useState<"staff" | "technicians">("staff");

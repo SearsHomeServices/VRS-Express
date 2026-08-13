@@ -6641,6 +6641,49 @@ export async function registerRoutes(
     }
   });
 
+  // ---- Weekly IH tech no-login report (Wednesdays 5 PM ET scheduler; see
+  // server/services/weekly-tech-report.ts). Admin-only list / download /
+  // manual generate.
+  app.get("/api/admin/reports/tech-no-login", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
+    try {
+      const { getLatestTechNoLoginReports } = await import("./services/weekly-tech-report");
+      return res.json({ reports: await getLatestTechNoLoginReports() });
+    } catch (error) {
+      console.error("Weekly report list error:", error);
+      return res.status(500).json({ error: "Failed to list weekly reports" });
+    }
+  });
+
+  app.get("/api/admin/reports/tech-no-login/:id/csv", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid report id" });
+      const { getWeeklyReportById, TECH_NO_LOGIN_REPORT_TYPE } = await import("./services/weekly-tech-report");
+      const report = await getWeeklyReportById(id);
+      if (!report || report.reportType !== TECH_NO_LOGIN_REPORT_TYPE) {
+        return res.status(404).json({ error: "Report not found" });
+      }
+      const etDate = new Date(report.generatedAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="ih-techs-not-signed-in-${etDate}.csv"`);
+      return res.send(report.csv);
+    } catch (error) {
+      console.error("Weekly report download error:", error);
+      return res.status(500).json({ error: "Failed to download report" });
+    }
+  });
+
+  app.post("/api/admin/reports/tech-no-login/run", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
+    try {
+      const { generateTechNoLoginReport } = await import("./services/weekly-tech-report");
+      const report = await generateTechNoLoginReport();
+      return res.json({ report: { id: report.id, generatedAt: report.generatedAt, summary: report.summary } });
+    } catch (error) {
+      console.error("Weekly report generation error:", error);
+      return res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
   // Bulk push: transmit all currently-filtered rejection/coaching records to
   // Tech PDC. Sequential sends (volume is small) so status columns stay
   // accurate; returns a summary the UI toasts.

@@ -95,6 +95,7 @@ export async function seedDatabase() {
   // 2026-08-06 — coaching/Tech PDC columns: referenced by the Drizzle schema,
   // so they must exist BEFORE the first submissions query (same reasoning).
   await ensureCoachingColumns();
+  await ensureWeeklyReportsTable();
   for (const seedUser of SEED_USERS) {
     let user = seedUser.racId ? await storage.getUserByRacId(seedUser.racId) : null;
 
@@ -401,6 +402,30 @@ async function ensureCoachingColumns() {
     console.log("[coaching] submissions coaching/tech-pdc columns ensured");
   } catch (err: any) {
     console.warn(`[coaching] Failed to ensure columns: ${err?.message || err}`);
+  }
+}
+
+// 2026-08-12 — weekly_reports table (Wednesday IH tech no-login report).
+// Idempotent boot-time migration mirroring shared/schema.ts:weeklyReports,
+// so prod gets it on next deploy. Safe to re-run.
+async function ensureWeeklyReportsTable() {
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS weekly_reports (
+        id SERIAL PRIMARY KEY,
+        report_type VARCHAR(64) NOT NULL,
+        generated_at TIMESTAMP NOT NULL DEFAULT now(),
+        summary JSONB NOT NULL,
+        csv TEXT NOT NULL
+      )
+    `));
+    await db.execute(sql.raw(`
+      CREATE INDEX IF NOT EXISTS weekly_reports_type_generated_idx
+        ON weekly_reports (report_type, generated_at DESC)
+    `));
+    console.log("[weekly-reports] weekly_reports table ensured");
+  } catch (err: any) {
+    console.warn(`[weekly-reports] Failed to ensure table: ${err?.message || err}`);
   }
 }
 
