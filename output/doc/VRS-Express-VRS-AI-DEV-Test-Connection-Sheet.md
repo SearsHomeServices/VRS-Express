@@ -29,6 +29,31 @@ published VRS Express production URL; this test is development-only.
 Never place credential values in Git, this sheet, the contract ZIP, tickets,
 screenshots, or ordinary test logs.
 
+## Photo retrieval
+
+For an approved V8 ticket, `appliance_photos` in the VRS Express -> VRS AI
+payload contains the usable photo locations. Sender-provided external HTTPS
+URLs remain unchanged. If VRS Express owns the photo, it replaces the internal
+`/objects/` path with a direct signed HTTPS Object Storage `GET` URL valid for
+24 hours.
+
+VRS AI downloads each URL with a plain HTTP `GET`. Do not attach the VRS
+Express `X-API-Key`, a login cookie, or a media token to that photo request.
+The URL is generated per dispatch and should be downloaded during the test;
+it is not a permanent bucket path. A photo-signing failure prevents the
+authorize request from being sent, so VRS AI will never receive a known-broken
+internal path.
+
+Example outbound field (the real signature is generated at dispatch):
+
+```json
+{
+  "appliance_photos": [
+    "https://storage.googleapis.com/example-object?X-Goog-Signature=temporary"
+  ]
+}
+```
+
 ## Test data
 
 - Active VRS Express DEV technician: `test_tech_1`
@@ -60,15 +85,17 @@ screenshots, or ordinary test logs.
 7. Confirm VRS AI receives exactly one authorize request per approved ticket,
    with the same contract version received by VRS Express and the VRS Express
    DEV callback URL.
-8. VRS AI returns `202` with its provider `call_id`.
-9. VRS AI sends a correctly signed result event to the VRS Express DEV callback
+8. For the V8 ticket, confirm each `appliance_photos` URL downloads with a
+   plain `GET` and no VRS Express credentials.
+9. VRS AI returns `202` with its provider `call_id`.
+10. VRS AI sends a correctly signed result event to the VRS Express DEV callback
    URL, using the exact raw body and the `callback_secret` received in step 7.
-10. Confirm VRS Express records the event, applies the expected ticket result,
+11. Confirm VRS Express records the event, applies the expected ticket result,
     performs the applicable technician notification once, and forwards one
     signed result to the simulator's upstream DEV callback.
-11. Replay the same event and confirm `200`, `deduped: true`, and no repeated
+12. Replay the same event and confirm `200`, `deduped: true`, and no repeated
     ticket or notification effect.
-12. Run the remaining callback shapes and retryable-failed V8 case from the
+13. Run the remaining callback shapes and retryable-failed V8 case from the
     acceptance checklist in the handoff ZIP.
 
 ## Expected checkpoints
@@ -80,6 +107,7 @@ screenshots, or ordinary test logs.
 | Valid unique V5 or V8 intake | `202`, public VRS Express call ID, `pending_review` |
 | Before human approval | No VRS AI outbound request and no provider call ID |
 | After human approval | One same-version VRS AI authorize request |
+| V8 ticket with VRS Express photos | Up to 10 direct signed HTTPS URLs; plain `GET` succeeds without VRS Express credentials |
 | Valid signed result callback | `200`, durable event record, expected ticket effect |
 | Exact event replay | `200`, `deduped: true`, no duplicate side effect |
 

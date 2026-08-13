@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Direct V8 object-storage photo delivery (2026-08-13)
+- VRS Express now converts ticket-owned `/objects/` photo paths into direct
+  signed HTTPS Object Storage `GET` URLs during approved V8 dispatch when the
+  accepted `appliance_photos` array is empty. URLs expire after 24 hours and
+  require no VRS Express API key, login cookie, or media token.
+- Sender-provided external HTTPS photo URLs remain unchanged, V5 remains
+  unchanged, populated V8 photo arrays remain unchanged, and at most 10 URLs
+  are sent. If an internal photo cannot be signed, dispatch fails before any
+  VRS AI authorize call instead of sending a broken internal path.
+- Updated the architecture, handoff, OpenAPI, DEV connection sheet, DOCX,
+  matching PDF, and exact three-file ZIP package. The 10-page handoff was
+  rendered through Microsoft Word and visually inspected page-by-page after
+  the prescribed LibreOffice renderer proved unavailable.
+- Verification: 155/155 bridge tests pass, the production build passes,
+  `git diff --check` is clean, and TypeScript remains exactly at the 60-error
+  HEAD baseline with zero diagnostics in the new photo-signing scope.
+
 ### Fixed — Real technician district normalization (2026-08-13)
 - Fixed VRS bridge intake for real DEV technicians whose roster district uses
   the standard seven-character `000DDDD` form. VRS Express now derives and

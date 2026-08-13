@@ -9,7 +9,7 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test:vrs-sasha": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-ai-bridge-ui.test.ts",
-    "test:vrs-ai-bridge": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-contract-v5-v8.test.ts tests/vrs-sasha-intake.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-sasha-stage-one.test.ts tests/vrs-ai-bridge-ui.test.ts tests/vrs-bridge-docs.test.ts",
+    "test:vrs-ai-bridge": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-contract-v5-v8.test.ts tests/vrs-sasha-intake.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-sasha-stage-one.test.ts tests/vrs-object-storage-photo-url.test.ts tests/vrs-ai-bridge-ui.test.ts tests/vrs-bridge-docs.test.ts",
     "test:vrs-bridge-docs": "vitest run tests/vrs-bridge-docs.test.ts",
     "db:push": "drizzle-kit push"
   },

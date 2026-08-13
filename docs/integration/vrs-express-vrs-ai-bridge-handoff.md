@@ -265,8 +265,13 @@ implemented candidates are `tech_phone`, `tech_name`, and an empty
 missing key, adds `cta_no`, or changes contract version.
 
 Sender-provided TINA/signed photo URLs pass through byte-for-byte and require
-no VRS Express login. VRS Express does not convert authenticated internal
-`/objects/` paths into outbound sender photo URLs.
+no VRS Express login. When an accepted V8 request has an empty
+`appliance_photos` array and its VRS Express ticket contains authenticated
+internal `/objects/` photo paths, VRS Express converts those paths at dispatch
+into direct signed HTTPS Object Storage `GET` URLs valid for 24 hours. VRS AI
+downloads each URL with a plain `GET`; it does not send a VRS Express API key,
+session cookie, or media token. A signing failure stops dispatch before VRS AI
+is called. The internal path itself is never sent as the outbound photo URL.
 
 ## 8. Authorize responses and identifiers
 

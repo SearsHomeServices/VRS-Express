@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-13 12:45
+Updated: 2026-08-13 13:13
 
 ## Current Session
 
@@ -13,11 +13,17 @@ Updated: 2026-08-13 12:45
   repository diagnostics with zero in this change's intake/test scope. The
   fix was merged over the Replit Agent's two newer weekly-report commits and
   synchronized to DEV. Live request `dhanse9` / `99081204` returned `202`.
-- VRS AI also needs retrievable VRS Express object-storage photos on outbound
-  dispatch. Existing enrichment deliberately drops authenticated `/objects/`
-  paths. The bounded design under review is to replace only those paths with
-  time-limited direct object-storage GET URLs at Stage 1 dispatch, while
-  preserving sender-provided URLs and all non-bridge workflows.
+- VRS AI photo retrieval is implemented for approved V8 dispatch. When the
+  accepted `appliance_photos` array is empty, VRS Express converts its ticket
+  `/objects/` paths into direct signed Object Storage `GET` URLs valid for 24
+  hours. Plain `GET` needs no Express key/login/media token. External HTTPS
+  URLs pass through; V5 and populated V8 arrays do not change; signing failure
+  stops before the VRS AI call. Tests are 155/155, build passes, and the exact
+  60-diagnostic HEAD TypeScript baseline has zero new scoped diagnostics.
+- Updated and verified the external Markdown/OpenAPI sources, DEV connection
+  sheet, DOCX, matching 10-page PDF, and three-file ZIP. Word produced the PDF
+  because the prescribed LibreOffice renderer is unavailable; all pages were
+  rendered to PNG and visually inspected without layout defects.
 
 - Configured the Express-owned bridge values in Replit DEV without exposing
   values: generated `VRS_SASHA_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and

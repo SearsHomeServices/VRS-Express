@@ -134,6 +134,23 @@ describe("VRS Stage 1 bridge boundary", () => {
     ]);
   });
 
+  it("forwards the private object photo signer only through the bridge dispatch boundary", async () => {
+    const boundary = makeBoundary({
+      bridge: bridgeRecord,
+      config: configuredBridge,
+    });
+    const signObjectPhotoUrl = vi.fn(async () =>
+      "https://storage.googleapis.com/example/signed-photo",
+    );
+    boundary.options.signObjectPhotoUrl = signObjectPhotoUrl;
+
+    await decideVrsStageOneBridge(boundary.options);
+
+    expect(boundary.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ signObjectPhotoUrl }),
+    );
+  });
+
   it("returns accepted for an already-dispatched bridge", async () => {
     const boundary = makeBoundary({
       bridge: bridgeRecord,

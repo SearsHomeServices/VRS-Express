@@ -1,8 +1,20 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-13 12:45 — Corrected real-technician roster district normalization for VRS bridge DEV intake.
+> **Last Touched:** Codex — 2026-08-13 13:13 — Added direct 24-hour V8 object-storage photo URLs and refreshed the handoff package.
 
 ## Current State
+- Approved V8 Stage 1 dispatch now converts VRS Express ticket `/objects/`
+  paths into direct signed HTTPS Object Storage `GET` URLs valid for 24 hours
+  when the accepted `appliance_photos` placeholder is empty. VRS AI retrieves
+  the URLs with plain `GET` and no Express credential. Sender-provided HTTPS
+  URLs pass through; V5 and populated V8 photos are unchanged. Signing failure
+  stops before the VRS AI call. Local verification is 155/155 bridge tests,
+  passing build, clean diff check, and the exact 60-diagnostic HEAD TypeScript
+  baseline with zero diagnostics in the photo-signing scope.
+- The DOCX, matching 10-page PDF, exact three-file ZIP, OpenAPI, Markdown
+  handoff, and DEV test connection sheet now document the same photo behavior.
+  All 10 PDF pages were visually inspected after Word conversion; ZIP members
+  byte-match the committed DOCX/PDF/OpenAPI sources.
 - Root cause for `INVALID_TECHNICIAN_DISTRICT` on real technicians was the
   roster's standard seven-character representation (`dhanse9` is `0008175`),
   while bridge intake required an already-four-digit value. Intake now

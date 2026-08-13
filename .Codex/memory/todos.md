@@ -1,8 +1,15 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-13 12:45
+Updated: 2026-08-13 13:13
 
 ## Done
+
+- [x] Added approved V8 photo delivery: convert VRS Express `/objects/` ticket
+  paths at Stage 1 dispatch to direct 24-hour signed Object Storage `GET` URLs,
+  preserve sender HTTPS URLs, leave V5/populated V8 unchanged, and fail closed
+  before the VRS AI call. Refreshed the DOCX/PDF/ZIP/OpenAPI/connection sheet;
+  verified 155/155 tests, build, exact HEAD TypeScript baseline, package bytes,
+  and all 10 rendered PDF pages.
 
 - [x] Diagnose real technician district rejection and normalize the roster's
   exact `000DDDD` representation to the four-digit service-order prefix inside
@@ -62,7 +69,7 @@ Updated: 2026-08-13 12:45
 - [ ] After Tyler approves the design, add a DEV-only, admin-authenticated,
   read-only integration monitor showing intake, Stage 1, outbound dispatch,
   callback, forwarding, and failure checkpoints without secret values.
-- [ ] After Tyler approves the bounded photo design and link lifetime, convert
+- [x] After Tyler approves the bounded photo design and link lifetime, convert
   VRS Express `/objects/` photo paths to direct time-limited object-storage GET
   URLs only for V8 placeholder enrichment during bridge dispatch.
 - [x] Produced the platform-only DEV connection sheet with exact environment

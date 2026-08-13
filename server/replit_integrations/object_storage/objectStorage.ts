@@ -398,6 +398,26 @@ export class ObjectStorageService {
     return objectFile;
   }
 
+  // Creates a temporary, direct-download URL for a private object entity.
+  // This is used when VRS Express sends its stored photos to VRS AI, which
+  // cannot use the session-protected /objects/* application route.
+  async getObjectEntityReadURL(
+    objectPath: string,
+    ttlSec: number = 24 * 60 * 60,
+  ): Promise<string> {
+    if (!Number.isInteger(ttlSec) || ttlSec <= 0) {
+      throw new Error("Object read URL TTL must be a positive integer");
+    }
+
+    const objectFile = await this.getObjectEntityFile(objectPath);
+    return signObjectURL({
+      bucketName: objectFile.bucket.name,
+      objectName: objectFile.name,
+      method: "GET",
+      ttlSec,
+    });
+  }
+
   normalizeObjectEntityPath(
     rawPath: string,
   ): string {

@@ -37,6 +37,7 @@ type VrsStageOneDispatcher = (options: {
   callbackUrl: string;
   callbackSecret: string;
   enrichment?: VrsAuthorizeEnrichment;
+  signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
 }) => Promise<DispatchVrsAiResult>;
 
 export interface VrsStageOneBridgeOptions {
@@ -49,6 +50,7 @@ export interface VrsStageOneBridgeOptions {
     | VrsAuthorizeEnrichment
     | undefined
     | Promise<VrsAuthorizeEnrichment | undefined>;
+  signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
 }
 
 export async function decideVrsStageOneBridge(
@@ -82,6 +84,7 @@ export async function decideVrsStageOneBridge(
     callbackUrl: config.callbackUrl,
     callbackSecret: config.callbackSecret,
     enrichment,
+    signObjectPhotoUrl: options.signObjectPhotoUrl,
   });
 
   if (dispatch.kind === "busy") {

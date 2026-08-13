@@ -322,6 +322,7 @@ export async function dispatchVrsAiForSubmission(options: {
   callbackUrl: string;
   callbackSecret: string;
   enrichment?: VrsAuthorizeEnrichment;
+  signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
 }): Promise<DispatchVrsAiResult> {
   const record = await options.store.getBySubmissionId(options.submissionId);
   if (!record) return { kind: "not_applicable" };
@@ -345,9 +346,41 @@ export async function dispatchVrsAiForSubmission(options: {
       callback_secret: "stored-callback-secret-redacted",
     } as VrsAuthorizeRequest;
     const sourceVersion = getVrsAuthorizeContractVersion(sourcePayload);
+    let enrichment = options.enrichment ?? {};
+    if (
+      sourceVersion === "v8" &&
+      (sourcePayload as VrsAuthorizeV8Request).appliance_photos.length === 0 &&
+      Array.isArray(enrichment.appliancePhotos)
+    ) {
+      const appliancePhotos: string[] = [];
+      for (const candidate of enrichment.appliancePhotos) {
+        let resolvedCandidate = candidate;
+        if (
+          candidate === candidate.trim() &&
+          candidate.startsWith("/objects/")
+        ) {
+          if (!options.signObjectPhotoUrl) {
+            throw new Error(
+              "VRS Express object photo signing is not configured",
+            );
+          }
+          resolvedCandidate = await options.signObjectPhotoUrl(candidate);
+          if (!isDispatchablePhotoUrl(resolvedCandidate)) {
+            throw new Error(
+              "VRS Express object photo signing returned an invalid URL",
+            );
+          }
+        }
+        if (isDispatchablePhotoUrl(resolvedCandidate)) {
+          appliancePhotos.push(resolvedCandidate);
+        }
+        if (appliancePhotos.length === 10) break;
+      }
+      enrichment = { ...enrichment, appliancePhotos };
+    }
     const enrichedPayload = enrichVrsAuthorizeForDispatch(
       sourcePayload,
-      options.enrichment ?? {},
+      enrichment,
     );
     const revalidated = safeParseVrsAuthorizeRequest(enrichedPayload);
     if (!revalidated.success || revalidated.version !== sourceVersion) {

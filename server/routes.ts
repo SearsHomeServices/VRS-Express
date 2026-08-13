@@ -494,6 +494,7 @@ export async function registerRoutes(
   await seedDatabase();
 
   registerObjectStorageRoutes(app);
+  const vrsObjectStorageService = new ObjectStorageService();
 
   // Tyler 2026-05-12 — lightweight liveness + readiness probe. Returns 200 only
   // if the DB ping completes inside 2s. Used by external uptime monitoring
@@ -2824,6 +2825,11 @@ export async function registerRoutes(
               submissionPhotos: submission.photos,
             });
           },
+          signObjectPhotoUrl: (objectPath) =>
+            vrsObjectStorageService.getObjectEntityReadURL(
+              objectPath,
+              24 * 60 * 60,
+            ),
           dispatch: dispatchVrsAiForSubmission,
         }, (bridgeError) => {
           res.status(bridgeError.status).json({

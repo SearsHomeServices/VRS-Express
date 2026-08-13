@@ -631,6 +631,101 @@ describe("VRS Express bridge orchestration", () => {
     expect(sent).not.toHaveProperty("cta_no");
   });
 
+  it("signs VRS Express object paths into direct V8 photo download URLs at dispatch", async () => {
+    const { callback_secret: _callbackSecret, ...storedPayload } = {
+      ...validV8AuthorizePayload,
+      appliance_photos: [],
+    };
+    const signedObjectUrl =
+      "https://storage.googleapis.com/vrs-dev/uploads/photo-1?X-Goog-Signature=signed";
+    const signObjectPhotoUrl = vi.fn(async () => signedObjectUrl);
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted" as const,
+        callId: "vrs_ai_call_photos",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 13,
+        submissionId: 53,
+        callId: "vrs_call_photos",
+        state: "pending_review",
+        requestPayload: storedPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 53,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: {
+        appliancePhotos: [
+          "/objects/uploads/photo-1",
+          "https://cdn.example.test/external-photo.jpg",
+        ],
+      },
+      signObjectPhotoUrl,
+    });
+
+    expect(signObjectPhotoUrl).toHaveBeenCalledOnce();
+    expect(signObjectPhotoUrl).toHaveBeenCalledWith("/objects/uploads/photo-1");
+    expect(client.authorize.mock.calls[0]?.[0].payload.appliance_photos)
+      .toEqual([
+        signedObjectUrl,
+        "https://cdn.example.test/external-photo.jpg",
+      ]);
+  });
+
+  it("fails bridge dispatch before the VRS AI call when an object photo cannot be signed", async () => {
+    const { callback_secret: _callbackSecret, ...storedPayload } = {
+      ...validV8AuthorizePayload,
+      appliance_photos: [],
+    };
+    const client = { authorize: vi.fn() };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 14,
+        submissionId: 54,
+        callId: "vrs_call_photo_failure",
+        state: "pending_review",
+        requestPayload: storedPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn(),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 54,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: { appliancePhotos: ["/objects/uploads/missing-photo"] },
+      signObjectPhotoUrl: vi.fn().mockRejectedValue(
+        new Error("Object storage signing unavailable"),
+      ),
+    })).resolves.toEqual({
+      kind: "failed",
+      message: "Object storage signing unavailable",
+    });
+    expect(client.authorize).not.toHaveBeenCalled();
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      14,
+      "Object storage signing unavailable",
+    );
+  });
+
   it("rejects a stored payload that no longer validates as its original version before client dispatch", async () => {
     const { callback_secret: _callbackSecret, contract_number: _contract, ...invalidStoredPayload } =
       validV8AuthorizePayload;

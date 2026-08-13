@@ -1,8 +1,16 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-12 08:41
+Updated: 2026-08-13 13:13
 
 ## Decisions
+
+- [CX] 2026-08-13 - Supersede the earlier no-conversion photo boundary after
+  Tyler approved VRS AI access to VRS Express photos. Only approved V8
+  dispatch with an empty `appliance_photos` placeholder may convert exact
+  ticket `/objects/` paths into direct signed Object Storage `GET` URLs. Use a
+  24-hour lifetime, preserve sender HTTPS URLs and V5/populated V8 bodies, cap
+  at 10, require no Express credential on download, and fail dispatch before
+  the VRS AI call when signing fails.
 
 - [CX] 2026-08-11 - Treat the verified Replit workspace sync as DEV source
   activation, not production publication. The box `main` and GitHub `main`

@@ -484,6 +484,14 @@ describe("VRS bridge platform handoff", () => {
     expect(combined).toMatch(/never.*contractVersion.*contract_version/is);
     expect(combined).toMatch(/TINA.*byte-for-byte/is);
     expect(combined).toContain("`/objects/`");
+    expect(combined).toMatch(
+      /internal.*`\/objects\/`.*direct signed HTTPS Object Storage.*`GET` URLs.*24 hours/is,
+    );
+    expect(combined).toMatch(/plain `GET`.*no VRS Express API\s+key/is);
+    expect(
+      openApi.components.schemas.V8AuthorizeRequest.properties
+        .appliance_photos.description,
+    ).toMatch(/direct signed Object Storage GET URLs.*24 hours/is);
     expect(combined).toMatch(/durable.*event ledger/is);
     expect(combined).not.toMatch(/(?:24\s*hours?|24h).*(?:dedup|expir)/i);
     expect(combined).toMatch(/active.*(?:409|duplicate)/is);
