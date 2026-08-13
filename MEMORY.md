@@ -11,6 +11,12 @@
   stops before the VRS AI call. Local verification is 155/155 bridge tests,
   passing build, clean diff check, and the exact 60-diagnostic HEAD TypeScript
   baseline with zero diagnostics in the photo-signing scope.
+- Implementation commit `4c61ecc` is live on the synchronized GitHub/Replit
+  DEV history; only the DEV process was restarted and public health is `200`.
+  A read-only live proof
+  found an existing DEV ticket photo, generated an HTTPS signed URL with an
+  approximately 24-hour expiry, and downloaded byte range `0-0` directly with
+  HTTP `206`. The signed URL was not printed. No publish or DB write occurred.
 - The DOCX, matching 10-page PDF, exact three-file ZIP, OpenAPI, Markdown
   handoff, and DEV test connection sheet now document the same photo behavior.
   All 10 PDF pages were visually inspected after Word conversion; ZIP members

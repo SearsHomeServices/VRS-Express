@@ -9,7 +9,9 @@ Updated: 2026-08-13 13:13
   preserve sender HTTPS URLs, leave V5/populated V8 unchanged, and fail closed
   before the VRS AI call. Refreshed the DOCX/PDF/ZIP/OpenAPI/connection sheet;
   verified 155/155 tests, build, exact HEAD TypeScript baseline, package bytes,
-  and all 10 rendered PDF pages.
+  and all 10 rendered PDF pages. Synchronized GitHub/Replit DEV, restarted only
+  DEV, confirmed health `200`, and proved a live signed existing-photo byte
+  fetch returns `206` without printing the temporary URL.
 
 - [x] Diagnose real technician district rejection and normalize the roster's
   exact `000DDDD` representation to the four-digit service-order prefix inside

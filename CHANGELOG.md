@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification: 155/155 bridge tests pass, the production build passes,
   `git diff --check` is clean, and TypeScript remains exactly at the 60-error
   HEAD baseline with zero diagnostics in the new photo-signing scope.
+- Fast-forwarded GitHub and the clean Replit DEV workspace to the same source,
+  restarted only DEV, and confirmed public health `200`. A read-only live test
+  signed an existing DEV ticket photo for approximately 24 hours and fetched
+  byte range `0-0` directly with HTTP `206`; the signed URL was not printed.
+  No production publish, production configuration, or database write ran.
 
 ### Fixed — Real technician district normalization (2026-08-13)
 - Fixed VRS bridge intake for real DEV technicians whose roster district uses

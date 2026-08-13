@@ -115,6 +115,10 @@ Example outbound field (the real signature is generated at dispatch):
 
 - VRS Express DEV intake and strict V8 admission have been proven with a real
   `202` response and a stored pending-review bridge record.
+- VRS Express DEV photo signing has been proven against an existing stored
+  photo: the generated HTTPS URL carried an approximately 24-hour expiry and a
+  credential-free byte-range `GET` returned `206`. The temporary URL was not
+  recorded in this sheet or test output.
 - VRS Express owns and has configured its intake, callback, encryption, and
   environment values.
 - Direction B is waiting only for the VRS AI DEV `X-API-Key` and the joint

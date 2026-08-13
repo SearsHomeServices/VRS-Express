@@ -20,6 +20,11 @@ Updated: 2026-08-13 13:13
   URLs pass through; V5 and populated V8 arrays do not change; signing failure
   stops before the VRS AI call. Tests are 155/155, build passes, and the exact
   60-diagnostic HEAD TypeScript baseline has zero new scoped diagnostics.
+- Implementation commit `4c61ecc` is live on the synchronized GitHub/Replit
+  DEV history; DEV was restarted and health is `200`. A read-only live test
+  generated an approximately 24-hour HTTPS URL for
+  an existing DEV object photo and a credential-free byte-range GET returned
+  `206`. The signed URL was not emitted. No publish or database write ran.
 - Updated and verified the external Markdown/OpenAPI sources, DEV connection
   sheet, DOCX, matching 10-page PDF, and three-file ZIP. Word produced the PDF
   because the prescribed LibreOffice renderer is unavailable; all pages were
