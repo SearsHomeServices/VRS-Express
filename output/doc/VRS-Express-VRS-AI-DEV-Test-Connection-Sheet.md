@@ -34,6 +34,9 @@ screenshots, or ordinary test logs.
 - Active VRS Express DEV technician: `test_tech_1`
 - Technician district: `8175`
 - Use `test_tech_1` in both root `tech_id` and `comments[].tech_id`.
+- A sender never supplies district. VRS Express resolves it from `tech_id` and
+  normalizes a real roster value such as `0008175` to the `8175` service-order
+  prefix.
 - Reserved/used smoke-test service order: `99081201` - do not reuse.
 - Suggested one-time V5 service order: `99081202`.
 - Suggested one-time V8 service order: `99081203`.

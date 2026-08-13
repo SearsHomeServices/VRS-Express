@@ -485,6 +485,30 @@ describe("VRS SASHA intake active-only duplicate behavior", () => {
     );
   });
 
+  it("normalizes the zero-padded roster district for a real technician intake", async () => {
+    const harness = makeHarness();
+    harness.deps.resolveTechnician = vi.fn().mockResolvedValue({
+      ldapId: "dhanse9",
+      name: "Directory Technician",
+      phone: "+17045550111",
+      district: "0008175",
+      isActive: true,
+    });
+    harness.intake = createVrsSashaIntake(harness.deps);
+
+    await expect(harness.intake.receive({
+      ...validV8AuthorizePayload,
+      tech_id: "dhanse9",
+    })).resolves.toMatchObject({
+      kind: "accepted",
+      serviceOrder: "13538277",
+    });
+    expect(harness.ticketBodies).toHaveLength(1);
+    expect(harness.ticketBodies[0]).toMatchObject({
+      serviceOrder: "8175-13538277",
+    });
+  });
+
   it("retains the legacy final active-race duplicate after normal ticket creation", async () => {
     const harness = makeHarness({ nextCreateIsDuplicate: true });
 

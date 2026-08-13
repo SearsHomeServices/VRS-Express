@@ -1,10 +1,18 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-12 09:04 — Confirmed current production has no new bridge variables; hold any republish pending explicit production secret review.
+> **Last Touched:** Codex — 2026-08-13 12:45 — Corrected real-technician roster district normalization for VRS bridge DEV intake.
 
 ## Current State
+- Root cause for `INVALID_TECHNICIAN_DISTRICT` on real technicians was the
+  roster's standard seven-character representation (`dhanse9` is `0008175`),
+  while bridge intake required an already-four-digit value. Intake now
+  normalizes only exact `000DDDD` or accepts exact `DDDD`; the sender still
+  supplies no district field. A regression requires `0008175` to generate
+  service order prefix `8175`. All 151 focused bridge tests and the production
+  build pass; TypeScript remains at its known 56-diagnostic baseline with none
+  in the changed intake/test scope.
 - The verified V5/V8 branch is live in the VRS Express Replit development
-  workspace `main` and GitHub `main` at `e72b351`. Production was not
+  workspace `main` and GitHub `main` at `4b3ff7d`. Production was not
   published or changed.
 - Connected Replit inspection confirms the live August 10 production
   deployment contains none of the six new bridge variables. App Secrets may

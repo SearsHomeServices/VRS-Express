@@ -23,6 +23,11 @@ export interface VrsIntakeTechUser {
   phone?: string | null;
 }
 
+function normalizeTechnicianDistrict(value: string | null | undefined) {
+  if (value && /^\d{4}$/.test(value)) return value;
+  return value?.match(/^000(\d{4})$/)?.[1];
+}
+
 export interface VrsIntakeTicketInput {
   body: ReturnType<typeof projectVrsBridgeIntake>["submissionBody"];
   user: VrsIntakeTechUser;
@@ -124,7 +129,8 @@ export function createVrsSashaIntake(
           message: `Technician ${payload.tech_id} is inactive`,
         };
       }
-      if (!technician.district || !/^\d{4}$/.test(technician.district)) {
+      const district = normalizeTechnicianDistrict(technician.district);
+      if (!district) {
         return {
           kind: "rejected",
           status: 422,
@@ -157,7 +163,7 @@ export function createVrsSashaIntake(
       );
       const projection = projectVrsBridgeIntake(
         payload,
-        technician.district,
+        district,
         {
           technicianPhone:
             directoryPhone || usablePhone(techUser.phone),

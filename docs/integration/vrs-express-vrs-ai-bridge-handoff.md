@@ -35,8 +35,11 @@ Other partner values are rejected before ticket creation.
 
 ### Development data prerequisites
 
-Before Direction A, replace each sample `tech_id` with a provisioned active VRS Express DEV technician
-mapped to a valid four-digit district. Use that same ID in `comments[].tech_id`.
+Before Direction A, replace each sample `tech_id` with a provisioned active
+VRS Express DEV technician. The sender does not provide a district field; VRS
+Express resolves it from `tech_id` and normalizes the roster's `000DDDD`
+representation to the four-digit `DDDD` service-order prefix. Use that same ID
+in `comments[].tech_id`.
 Replace each sample `service_order` with a unique eight-digit DEV value. The
 literal identifiers in the examples are format-safe samples only and must not
 be sent unchanged.
@@ -412,8 +415,9 @@ new request.
 
 ### Direction A acceptance: VRS AI simulator to VRS Express
 
-- [ ] Provision an active VRS Express DEV technician mapped to a valid
-      four-digit district, then replace both sample `tech_id` occurrences.
+- [ ] Provision an active VRS Express DEV technician, then replace both sample
+      `tech_id` occurrences. Do not send district; VRS Express derives and
+      normalizes it from the technician roster.
 - [ ] Replace each sample `service_order` with a unique eight-digit DEV value.
 - [ ] Substitute `<VRS_EXPRESS_DEV_BASE_URL>` and
       `<UPSTREAM_DEV_CALLBACK_URL>` only in the development test runner.

@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-12 09:04
+Updated: 2026-08-13 12:45
 
 ## Done
+
+- [x] Diagnose real technician district rejection and normalize the roster's
+  exact `000DDDD` representation to the four-digit service-order prefix inside
+  VRS Express; callers continue sending only `tech_id`. Verified 151/151
+  focused bridge tests, passing build, and no new scoped TypeScript diagnostic.
 
 - [x] Fast-forwarded the clean VRS Express Replit DEV workspace and GitHub
   `main` to verified commit `6c69bab`; restarted the configured DEV process

@@ -208,6 +208,10 @@ Updated: 2026-08-12 08:41
   any later republish as a separate approval gate because Replit may capture
   synchronized App Secrets; review production secret selection and endpoint
   values before publishing.
+- [CX] 2026-08-13 - Treat technician district as VRS Express-owned directory
+  data, never an inbound contract field. Accept exact `DDDD` and normalize only
+  the observed roster form `000DDDD` to `DDDD`; continue rejecting every other
+  district shape instead of guessing.
 - [CX] 2026-08-11 - Implement runtime changes on an isolated
   `codex/vrs-v5-v8-dev-integration` worktree. Require focused/full regression,
   build, normalized type-diagnostic, final review, and read-only Replit

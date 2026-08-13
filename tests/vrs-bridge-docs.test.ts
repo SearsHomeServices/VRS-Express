@@ -366,8 +366,9 @@ describe("VRS bridge OpenAPI contract", () => {
       expect((example.comments as any[])[0].tech_id).toBe(example.tech_id);
     }
 
-    expect(handoff).toMatch(/provisioned active VRS Express DEV technician/is);
-    expect(handoff).toMatch(/valid four-digit district/is);
+    expect(handoff).toMatch(/provisioned active.*VRS Express DEV technician/is);
+    expect(handoff).toMatch(/does not provide a district field/is);
+    expect(handoff).toMatch(/normalizes.*000DDDD.*four-digit.*DDDD/is);
     expect(handoff).toMatch(/replace.*service_order.*unique.*eight-digit/is);
     expect(handoff).toMatch(/prerequisite.*before.*Direction A/is);
   });

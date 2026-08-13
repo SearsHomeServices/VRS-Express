@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Real technician district normalization (2026-08-13)
+- Fixed VRS bridge intake for real DEV technicians whose roster district uses
+  the standard seven-character `000DDDD` form. VRS Express now derives and
+  normalizes that value to the four-digit `DDDD` service-order prefix; callers
+  continue sending only `tech_id` and do not add a district field.
+- Added a regression using `dhanse9` / `0008175` that requires an accepted
+  intake to create service order `8175-13538277`. Unsupported district shapes
+  retain the existing `INVALID_TECHNICIAN_DISTRICT` rejection.
+- Verification: all 151 focused bridge tests pass, the production build
+  passes, and TypeScript remains at the known 56 repository diagnostics with
+  zero diagnostics in the changed intake/test scope.
+
 ### Changed — Live VRS bridge DEV configuration and intake proof (2026-08-12)
 - Added generated DEV-only `VRS_SASHA_API_KEY`,
   `VRS_AI_WEBHOOK_SECRET`, and `VRS_BRIDGE_ENCRYPTION_KEY` values through
