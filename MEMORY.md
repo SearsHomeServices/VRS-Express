@@ -10,7 +10,10 @@
   supplies no district field. A regression requires `0008175` to generate
   service order prefix `8175`. All 151 focused bridge tests and the production
   build pass; TypeScript remains at its known 56-diagnostic baseline with none
-  in the changed intake/test scope.
+  in the changed intake/test scope. The fix was merged without overwriting the
+  Replit Agent's two newer weekly-report commits and is live in DEV. An
+  unchanged `dhanse9` V8 request using service order `99081204` returned `202`;
+  no production publish occurred.
 - The verified V5/V8 branch is live in the VRS Express Replit development
   workspace `main` and GitHub `main` at `4b3ff7d`. Production was not
   published or changed.

@@ -7,7 +7,9 @@ Updated: 2026-08-13 12:45
 - [x] Diagnose real technician district rejection and normalize the roster's
   exact `000DDDD` representation to the four-digit service-order prefix inside
   VRS Express; callers continue sending only `tech_id`. Verified 151/151
-  focused bridge tests, passing build, and no new scoped TypeScript diagnostic.
+  focused bridge tests, passing build, no new scoped TypeScript diagnostic,
+  and live DEV `202` for `dhanse9` / `99081204` after preserving and merging
+  the two newer Replit Agent weekly-report commits.
 
 - [x] Fast-forwarded the clean VRS Express Replit DEV workspace and GitHub
   `main` to verified commit `6c69bab`; restarted the configured DEV process
@@ -60,6 +62,9 @@ Updated: 2026-08-13 12:45
 - [ ] After Tyler approves the design, add a DEV-only, admin-authenticated,
   read-only integration monitor showing intake, Stage 1, outbound dispatch,
   callback, forwarding, and failure checkpoints without secret values.
+- [ ] After Tyler approves the bounded photo design and link lifetime, convert
+  VRS Express `/objects/` photo paths to direct time-limited object-storage GET
+  URLs only for V8 placeholder enrichment during bridge dispatch.
 - [x] Produced the platform-only DEV connection sheet with exact environment
   URLs, key direction, safe test technician, unique-SO guidance, and the joint
   test sequence; keep live credentials out of the file.

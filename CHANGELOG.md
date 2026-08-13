@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification: all 151 focused bridge tests pass, the production build
   passes, and TypeScript remains at the known 56 repository diagnostics with
   zero diagnostics in the changed intake/test scope.
+- Synchronized the fix on top of the Replit Agent's two newer weekly-report
+  commits without overwriting them, restarted only DEV, and proved the live
+  path with unchanged `dhanse9` V8 request `99081204`: `202` with a new public
+  call ID and the derived `8175` district prefix. No production publish ran.
 
 ### Changed — Live VRS bridge DEV configuration and intake proof (2026-08-12)
 - Added generated DEV-only `VRS_SASHA_API_KEY`,

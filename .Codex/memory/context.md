@@ -10,7 +10,14 @@ Updated: 2026-08-13 12:45
   normalizes exact `000DDDD` to `DDDD` internally. The external payload remains
   unchanged and contains no district field. Focused bridge verification is
   151/151 and the production build passes; TypeScript retains the known 56
-  repository diagnostics with zero in this change's intake/test scope.
+  repository diagnostics with zero in this change's intake/test scope. The
+  fix was merged over the Replit Agent's two newer weekly-report commits and
+  synchronized to DEV. Live request `dhanse9` / `99081204` returned `202`.
+- VRS AI also needs retrievable VRS Express object-storage photos on outbound
+  dispatch. Existing enrichment deliberately drops authenticated `/objects/`
+  paths. The bounded design under review is to replace only those paths with
+  time-limited direct object-storage GET URLs at Stage 1 dispatch, while
+  preserving sender-provided URLs and all non-bridge workflows.
 
 - Configured the Express-owned bridge values in Replit DEV without exposing
   values: generated `VRS_SASHA_API_KEY`, `VRS_AI_WEBHOOK_SECRET`, and

@@ -212,6 +212,10 @@ Updated: 2026-08-12 08:41
   data, never an inbound contract field. Accept exact `DDDD` and normalize only
   the observed roster form `000DDDD` to `DDDD`; continue rejecting every other
   district shape instead of guessing.
+- [CX] 2026-08-13 - Preserve the Replit Agent's newer weekly-report commits
+  when delivering the district fix: merge histories and fast-forward both
+  GitHub and Replit rather than resetting either source. Keep the proposed
+  object-storage photo delivery separate and approval-gated.
 - [CX] 2026-08-11 - Implement runtime changes on an isolated
   `codex/vrs-v5-v8-dev-integration` worktree. Require focused/full regression,
   build, normalized type-diagnostic, final review, and read-only Replit
