@@ -163,6 +163,14 @@ app.use((req, res, next) => {
     scheduleDailyTechnicianSync(log);
   }
 
+  // Weekly IH tech no-login report, Wednesdays 5:00 PM ET, production only —
+  // dev restarts constantly and would double-generate; the admin "Generate
+  // Now" endpoint remains available everywhere for manual runs.
+  if (process.env.NODE_ENV === "production") {
+    const { scheduleWeeklyTechNoLoginReport } = await import("./services/weekly-tech-report");
+    scheduleWeeklyTechNoLoginReport(log);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
