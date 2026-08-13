@@ -94,6 +94,14 @@ for 24 hours. VRS AI retrieves them with a plain `GET` and no VRS Express API
 key, session cookie, or media token. A signing failure fails dispatch before
 the VRS AI call; the authenticated internal path is never sent outbound.
 
+For direct development lookup, VRS AI may call
+`GET <VRS_EXPRESS_DEV_BASE_URL>/api/integrations/vrs-ai/v1/service-orders/{service_order}`
+with the same VRS Express `X-API-Key` used by inbound authorize. The route
+returns only the latest bridge-received request for that eight-digit service
+order, removes callback fields, and merges sender photo URLs with the linked
+VRS Express ticket photos. Internal `/objects/` values are converted to
+24-hour signed HTTPS URLs; no database or schema mutation occurs.
+
 ## Failure and terminal-repeat behavior
 
 `approved`, `partial`, `denied`, and `failed` are terminal callback states;

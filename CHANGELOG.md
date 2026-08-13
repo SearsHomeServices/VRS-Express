@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Authenticated service-order and photo lookup (2026-08-13)
+- Added `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` for
+  VRS AI to retrieve the latest bridge-received service-order information and
+  up to 10 directly downloadable photo URLs using the existing VRS Express
+  DEV `X-API-Key`.
+- The response removes callback fields, preserves valid sender HTTPS photo
+  URLs, converts linked VRS Express `/objects/` paths into 24-hour signed
+  Object Storage URLs, de-duplicates results, and fails closed if signing does
+  not succeed. The lookup is read-only and adds no schema or secret.
+- Updated the environment-specific DEV connection sheet with the exact live
+  URL, request, response, authentication, expiry, and error behavior.
+- Verification: 160/160 bridge tests pass, the production build passes, and
+  the known repository TypeScript baseline has no diagnostic in the new
+  service-order lookup modules.
+
 ### Added — Direct V8 object-storage photo delivery (2026-08-13)
 - VRS Express now converts ticket-owned `/objects/` photo paths into direct
   signed HTTPS Object Storage `GET` URLs during approved V8 dispatch when the

@@ -195,6 +195,44 @@ function isDispatchablePhotoUrl(value: string): boolean {
   }
 }
 
+export async function resolveVrsPhotoUrls(
+  candidates: readonly string[],
+  signObjectPhotoUrl?: (objectPath: string) => Promise<string>,
+): Promise<{ urls: string[]; signedObjectPhoto: boolean }> {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  let signedObjectPhoto = false;
+
+  for (const candidate of candidates) {
+    let resolvedCandidate = candidate;
+    if (
+      candidate === candidate.trim() &&
+      candidate.startsWith("/objects/")
+    ) {
+      if (!signObjectPhotoUrl) {
+        throw new Error("VRS Express object photo signing is not configured");
+      }
+      resolvedCandidate = await signObjectPhotoUrl(candidate);
+      if (!isDispatchablePhotoUrl(resolvedCandidate)) {
+        throw new Error(
+          "VRS Express object photo signing returned an invalid URL",
+        );
+      }
+      signedObjectPhoto = true;
+    }
+    if (
+      isDispatchablePhotoUrl(resolvedCandidate) &&
+      !seen.has(resolvedCandidate)
+    ) {
+      seen.add(resolvedCandidate);
+      urls.push(resolvedCandidate);
+    }
+    if (urls.length === 10) break;
+  }
+
+  return { urls, signedObjectPhoto };
+}
+
 export function enrichVrsAuthorizeForDispatch(
   payload: VrsAuthorizeRequest,
   enrichment: VrsAuthorizeEnrichment,
@@ -352,31 +390,11 @@ export async function dispatchVrsAiForSubmission(options: {
       (sourcePayload as VrsAuthorizeV8Request).appliance_photos.length === 0 &&
       Array.isArray(enrichment.appliancePhotos)
     ) {
-      const appliancePhotos: string[] = [];
-      for (const candidate of enrichment.appliancePhotos) {
-        let resolvedCandidate = candidate;
-        if (
-          candidate === candidate.trim() &&
-          candidate.startsWith("/objects/")
-        ) {
-          if (!options.signObjectPhotoUrl) {
-            throw new Error(
-              "VRS Express object photo signing is not configured",
-            );
-          }
-          resolvedCandidate = await options.signObjectPhotoUrl(candidate);
-          if (!isDispatchablePhotoUrl(resolvedCandidate)) {
-            throw new Error(
-              "VRS Express object photo signing returned an invalid URL",
-            );
-          }
-        }
-        if (isDispatchablePhotoUrl(resolvedCandidate)) {
-          appliancePhotos.push(resolvedCandidate);
-        }
-        if (appliancePhotos.length === 10) break;
-      }
-      enrichment = { ...enrichment, appliancePhotos };
+      const resolvedPhotos = await resolveVrsPhotoUrls(
+        enrichment.appliancePhotos,
+        options.signObjectPhotoUrl,
+      );
+      enrichment = { ...enrichment, appliancePhotos: resolvedPhotos.urls };
     }
     const enrichedPayload = enrichVrsAuthorizeForDispatch(
       sourcePayload,

@@ -1661,6 +1661,12 @@ export async function registerRoutes(
   registerVrsSashaApi(app, {
     apiKey: process.env.VRS_SASHA_API_KEY,
     intake: vrsExpressIntake,
+    serviceOrders: vrsBridgeStore,
+    signObjectPhotoUrl: (objectPath) =>
+      vrsObjectStorageService.getObjectEntityReadURL(
+        objectPath,
+        24 * 60 * 60,
+      ),
   });
 
   // Tyler 2026-07-08 (perf) — 2s micro-cache for the STAFF branch of

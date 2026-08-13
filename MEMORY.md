@@ -1,8 +1,16 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-13 13:13 — Added direct 24-hour V8 object-storage photo URLs and refreshed the handoff package.
+> **Last Touched:** Codex — 2026-08-13 17:08 — Added authenticated direct service-order and photo lookup for VRS AI.
 
 ## Current State
+- VRS AI can use the existing VRS Express DEV `X-API-Key` with
+  `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` to retrieve
+  the latest bridge-received service-order data and current photo URLs. The
+  response strips callback fields, combines sender and linked-ticket photos,
+  signs internal `/objects/` values for 24 hours, de-duplicates and caps at
+  10, and performs no database mutation. The exact public DEV URL and examples
+  are in the environment-specific connection sheet. Local verification is
+  160/160 bridge tests and a passing production build.
 - Approved V8 Stage 1 dispatch now converts VRS Express ticket `/objects/`
   paths into direct signed HTTPS Object Storage `GET` URLs valid for 24 hours
   when the accepted `appliance_photos` placeholder is empty. VRS AI retrieves
@@ -247,6 +255,10 @@
   require Tyler-approved coordinated rotation before they are relied on.
 
 ## Recent Decisions
+- [CX] 2026-08-13 - Reuse the inbound VRS Express DEV `X-API-Key` for a
+  read-only latest-service-order lookup instead of adding a credential. Return
+  sanitized bridge request data plus fresh direct photo URLs, never callback
+  fields or raw `/objects/` paths, and make no schema/data mutation.
 - [CX] 2026-08-11 - Regenerate external handoff artifacts only after the
   corrected source contract is approved. Ship one direct-delivery ZIP with
   exactly the PDF, editable DOCX, and authoritative OpenAPI YAML at archive

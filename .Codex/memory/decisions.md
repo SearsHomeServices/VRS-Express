@@ -1,8 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-13 13:13
+Updated: 2026-08-13 17:08
 
 ## Decisions
+
+- [CX] 2026-08-13 - Give VRS AI a read-only service-order retrieval surface
+  under the existing VRS Express inbound trust boundary. Reuse the configured
+  `X-API-Key`; do not add or depend on `VRS_AI_API_KEY`. Return only the latest
+  bridge-received request, strip callback ownership fields, combine its sender
+  URLs with linked-ticket photos, sign exact `/objects/` paths for 24 hours,
+  cap/de-duplicate at 10, and make no schema or data mutation.
 
 - [CX] 2026-08-13 - Supersede the earlier no-conversion photo boundary after
   Tyler approved VRS AI access to VRS Express photos. Only approved V8

@@ -1,8 +1,17 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-13 13:13
+Updated: 2026-08-13 17:08
 
 ## Current Session
+
+- Added an authenticated, read-only VRS AI service-order lookup at
+  `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}`. It uses
+  the already-configured inbound VRS Express `X-API-Key`, loads only the latest
+  bridge request for the exact eight-digit service order, strips callback
+  fields, merges sender and linked-ticket photos, and converts internal
+  `/objects/` paths into direct 24-hour signed URLs. No new secret, schema, or
+  database write is involved. Local verification is 160/160 bridge tests and
+  a passing production build; the live DEV sync/restart/proof is pending.
 
 - Diagnosed real-technician `INVALID_TECHNICIAN_DISTRICT` without data writes:
   `dhanse9` is active and its DEV roster district is `0008175`; 1,635 active

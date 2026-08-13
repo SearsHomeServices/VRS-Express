@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-13 13:13
+Updated: 2026-08-13 17:08
 
 ## Done
+
+- [x] Added the authenticated read-only service-order/photo lookup using the
+  existing VRS Express DEV key, sanitized bridge request projection, and
+  direct 24-hour signed Object Storage URLs. Updated the exact DEV connection
+  sheet and verified 160/160 bridge tests plus the production build.
 
 - [x] Added approved V8 photo delivery: convert VRS Express `/objects/` ticket
   paths at Stage 1 dispatch to direct 24-hour signed Object Storage `GET` URLs,

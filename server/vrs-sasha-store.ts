@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
-import { vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
+import { submissions, vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
 import { db } from "./storage";
 import {
   projectVrsBridgeReviewContext,
@@ -70,6 +70,19 @@ export interface VrsBridgeIntakeStore {
     | { kind: "accepted"; record: VrsBridgeRecord; createdAt: Date }
     | { kind: "duplicate"; record: VrsBridgeRecord }
   >;
+}
+
+export interface VrsServiceOrderSource {
+  callId: string;
+  state: string;
+  requestPayload: VrsStoredAuthorizeRequest;
+  submissionPhotos: string | null;
+}
+
+export interface VrsServiceOrderReader {
+  getLatestByServiceOrder(
+    serviceOrder: string,
+  ): Promise<VrsServiceOrderSource | undefined>;
 }
 
 export interface VrsRetryableFailedV8Candidate {
@@ -213,7 +226,7 @@ function eventResultUpdate(event: VrsWebhookEvent) {
 }
 
 export class DrizzleVrsBridgeStore
-  implements VrsBridgeStore, VrsBridgeIntakeStore {
+  implements VrsBridgeStore, VrsBridgeIntakeStore, VrsServiceOrderReader {
   private readonly statusRowLoader: VrsAiBridgeStatusRowLoader;
 
   constructor(statusRowLoader?: VrsAiBridgeStatusRowLoader) {
@@ -234,6 +247,30 @@ export class DrizzleVrsBridgeStore
       )
       .limit(1);
     return row ? toBridgeRecord(row) : undefined;
+  }
+
+  async getLatestByServiceOrder(
+    serviceOrder: string,
+  ): Promise<VrsServiceOrderSource | undefined> {
+    const [row] = await db
+      .select({
+        callId: vrsAiCalls.callId,
+        state: vrsAiCalls.state,
+        requestPayload: vrsAiCalls.requestPayload,
+        submissionPhotos: submissions.photos,
+      })
+      .from(vrsAiCalls)
+      .leftJoin(submissions, eq(submissions.id, vrsAiCalls.submissionId))
+      .where(eq(vrsAiCalls.serviceOrder, serviceOrder))
+      .orderBy(desc(vrsAiCalls.createdAt), desc(vrsAiCalls.id))
+      .limit(1);
+
+    return row
+      ? {
+          ...row,
+          requestPayload: row.requestPayload as VrsStoredAuthorizeRequest,
+        }
+      : undefined;
   }
 
   async findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(

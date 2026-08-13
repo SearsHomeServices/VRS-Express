@@ -8,6 +8,7 @@ import {
   encryptVrsCallbackSecret,
 } from "../server/vrs-sasha-secret";
 import {
+  signedTinaPhotoUrl,
   validV5AuthorizePayload,
   validV8AuthorizePayload,
 } from "./fixtures/vrs-authorize-payloads";
@@ -48,14 +49,37 @@ class FakeIntake {
   }
 }
 
+class FakeServiceOrders {
+  constructor(
+    private readonly source?: {
+      callId: string;
+      state: string;
+      requestPayload: Record<string, unknown>;
+      submissionPhotos: string | null;
+    },
+  ) {}
+
+  async getLatestByServiceOrder(serviceOrder: string) {
+    return serviceOrder === "13538277" ? this.source : undefined;
+  }
+}
+
 function makeIntakeApp(
   intake: FakeIntake,
+  serviceOrderOptions?: {
+    source?: ConstructorParameters<typeof FakeServiceOrders>[0];
+    signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
+    now?: () => Date;
+  },
 ) {
   const app = express();
   app.use(express.json());
   (apiModule.registerVrsSashaApi as any)(app, {
     apiKey: "test-vrs-api-key",
     intake,
+    serviceOrders: new FakeServiceOrders(serviceOrderOptions?.source),
+    signObjectPhotoUrl: serviceOrderOptions?.signObjectPhotoUrl,
+    now: serviceOrderOptions?.now,
   });
   return app;
 }
@@ -241,6 +265,126 @@ describe("VRS Express bridge — V5 contract boundary", () => {
       expect.arrayContaining(["contract_number", "purchase_year", "symptom"]),
     );
     expect(intake.received).toBeUndefined();
+  });
+
+  it("returns sanitized service-order data with directly retrievable photo URLs", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+    const signedObjectPhoto =
+      "https://storage.googleapis.com/vrs-dev/photo.jpg?X-Goog-Expires=86400&X-Goog-Signature=test";
+    const source = {
+      callId: "vrs_call_bridge_v8",
+      state: "pending_review",
+      requestPayload: {
+        ...validV8AuthorizePayload,
+        callback_secret: "must-never-be-returned",
+      },
+      submissionPhotos: JSON.stringify([
+        "/objects/uploads/diagnostic-photo.jpg",
+        signedTinaPhotoUrl,
+        "/objects/uploads/diagnostic-photo.jpg",
+      ]),
+    };
+    const {
+      callback_url: _callbackUrl,
+      callback_secret: _callbackSecret,
+      appliance_photos: _appliancePhotos,
+      ...serviceOrderInfo
+    } = validV8AuthorizePayload;
+
+    const response = await request(makeIntakeApp(intake, {
+      source,
+      signObjectPhotoUrl: async (objectPath) => {
+        expect(objectPath).toBe("/objects/uploads/diagnostic-photo.jpg");
+        return signedObjectPhoto;
+      },
+      now: () => new Date("2026-08-13T17:30:00.000Z"),
+    }))
+      .get("/api/integrations/vrs-ai/v1/service-orders/13538277")
+      .set("X-API-Key", "test-vrs-api-key");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      service_order: "13538277",
+      call_id: "vrs_call_bridge_v8",
+      state: "pending_review",
+      contract_version: "v8",
+      service_order_info: serviceOrderInfo,
+      appliance_photos: [signedTinaPhotoUrl, signedObjectPhoto],
+      photo_urls_expire_at: "2026-08-14T17:30:00.000Z",
+    });
+    expect(JSON.stringify(response.body)).not.toContain("callback_");
+  });
+
+  it("authenticates service-order photo lookup with the existing Express API key", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+    const response = await request(makeIntakeApp(intake))
+      .get("/api/integrations/vrs-ai/v1/service-orders/13538277")
+      .set("X-API-Key", "wrong-key");
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: "UNAUTHORIZED",
+      message: "Invalid or missing API key",
+    });
+  });
+
+  it.each([
+    ["1353-8277", 400, "VALIDATION_ERROR"],
+    ["99999999", 404, "SERVICE_ORDER_NOT_FOUND"],
+  ])(
+    "rejects unavailable service-order lookup %s with %i",
+    async (serviceOrder, status, error) => {
+      const intake = new FakeIntake({
+        kind: "accepted",
+        callId: "must-not-run",
+        serviceOrder: "13538277",
+        createdAt: new Date(),
+      });
+      const response = await request(makeIntakeApp(intake))
+        .get(`/api/integrations/vrs-ai/v1/service-orders/${serviceOrder}`)
+        .set("X-API-Key", "test-vrs-api-key");
+
+      expect(response.status).toBe(status);
+      expect(response.body.error).toBe(error);
+    },
+  );
+
+  it("fails closed when an Express object photo cannot be signed", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "must-not-run",
+      serviceOrder: "13538277",
+      createdAt: new Date(),
+    });
+    const response = await request(makeIntakeApp(intake, {
+      source: {
+        callId: "vrs_call_bridge_v8",
+        state: "pending_review",
+        requestPayload: validV8AuthorizePayload,
+        submissionPhotos: JSON.stringify(["/objects/uploads/photo.jpg"]),
+      },
+      signObjectPhotoUrl: async () => {
+        throw new Error("object storage unavailable");
+      },
+    }))
+      .get("/api/integrations/vrs-ai/v1/service-orders/13538277")
+      .set("X-API-Key", "test-vrs-api-key");
+
+    expect(response.status).toBe(502);
+    expect(response.body).toEqual({
+      error: "PHOTO_URL_GENERATION_FAILED",
+      message: "Unable to generate photo download URLs",
+    });
   });
 
   it("returns the existing bridge call for a duplicate service order", async () => {

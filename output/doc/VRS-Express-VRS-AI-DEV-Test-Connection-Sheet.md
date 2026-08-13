@@ -9,6 +9,7 @@ exact joint-test sequence. It contains no credential values.
 | Direction | Endpoint |
 |---|---|
 | VRS AI simulator -> VRS Express | `POST https://a11bb216-7de2-40f6-ada7-2f3b2631048f-00-8qow8i4553hq.riker.replit.dev/vrs/authorize` |
+| VRS AI -> VRS Express service order and photos | `GET https://a11bb216-7de2-40f6-ada7-2f3b2631048f-00-8qow8i4553hq.riker.replit.dev/api/integrations/vrs-ai/v1/service-orders/{service_order}` |
 | VRS Express -> VRS AI | `POST https://vrs-dev.stage.nextgen.shs.com/vrs/authorize` |
 | VRS AI result -> VRS Express | `POST https://a11bb216-7de2-40f6-ada7-2f3b2631048f-00-8qow8i4553hq.riker.replit.dev/api/integrations/vrs-ai/v1/webhook` |
 | VRS Express result -> upstream DEV | `POST https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook` |
@@ -21,7 +22,7 @@ published VRS Express production URL; this test is development-only.
 
 | Credential | Supplied by | Used by | Current action |
 |---|---|---|---|
-| VRS Express DEV intake `X-API-Key` | VRS Express | VRS AI simulator when calling VRS Express | VRS Express has generated and configured it. Transfer its value through the approved secure channel. |
+| VRS Express DEV `X-API-Key` | VRS Express | VRS AI simulator when creating an intake or retrieving a service order and its photos | VRS Express has generated and configured it. Use the same key for both VRS Express endpoints and transfer its value through the approved secure channel. |
 | VRS AI DEV `X-API-Key` | VRS AI | VRS Express when calling VRS AI | VRS AI must transfer its value through the approved secure channel. VRS Express will store it as `VRS_AI_API_KEY`. |
 | Outbound `callback_secret` | VRS Express | VRS AI when signing result callbacks | VRS Express sends this value inside each authorized DEV request. VRS AI must sign with the exact received value; no separate preconfiguration is needed. |
 | Simulator `callback_secret` | VRS AI simulator | VRS Express when forwarding the result upstream | Include a DEV-only value in each simulator request and use the same value to verify the forwarded callback. |
@@ -31,8 +32,53 @@ screenshots, or ordinary test logs.
 
 ## Photo retrieval
 
-For an approved V8 ticket, `appliance_photos` in the VRS Express -> VRS AI
-payload contains the usable photo locations. Sender-provided external HTTPS
+VRS AI can retrieve the latest VRS Express bridge request and its current
+photo download URLs by replacing `{service_order}` with the eight-digit
+service order and sending the same VRS Express DEV `X-API-Key` used for
+`POST /vrs/authorize`:
+
+```http
+GET /api/integrations/vrs-ai/v1/service-orders/99081203 HTTP/1.1
+Host: a11bb216-7de2-40f6-ada7-2f3b2631048f-00-8qow8i4553hq.riker.replit.dev
+X-API-Key: <VRS_EXPRESS_DEV_API_KEY>
+```
+
+The `200` response contains `service_order_info` and `appliance_photos`.
+VRS Express removes callback credentials and converts its internal
+`/objects/` paths into direct signed HTTPS Object Storage URLs. Generated
+photo URLs are valid until `photo_urls_expire_at`; call the lookup again to
+obtain fresh URLs after expiry.
+
+```json
+{
+  "service_order": "99081203",
+  "call_id": "vrs_call_example",
+  "state": "pending_review",
+  "contract_version": "v8",
+  "service_order_info": {
+    "service_order": "99081203",
+    "tech_id": "test_tech_1",
+    "brand": "Whirlpool",
+    "model_number": "WTW5000DW1",
+    "serial_number": "C31290822",
+    "symptom": "Washer does not drain"
+  },
+  "appliance_photos": [
+    "https://storage.googleapis.com/example-object?X-Goog-Signature=temporary"
+  ],
+  "photo_urls_expire_at": "2026-08-14T17:30:00.000Z"
+}
+```
+
+`404 SERVICE_ORDER_NOT_FOUND` means VRS Express has not received that service
+order through the bridge. `502 PHOTO_URL_GENERATION_FAILED` means the photo
+URLs could not be generated and should be retried later.
+
+The approved-ticket outbound payload remains a second supported delivery
+path. For an approved V8 ticket, `appliance_photos` in the VRS Express -> VRS
+AI payload contains the same usable photo locations.
+
+Sender-provided external HTTPS
 URLs remain unchanged. If VRS Express owns the photo, it replaces the internal
 `/objects/` path with a direct signed HTTPS Object Storage `GET` URL valid for
 24 hours.
@@ -108,6 +154,7 @@ Example outbound field (the real signature is generated at dispatch):
 | Before human approval | No VRS AI outbound request and no provider call ID |
 | After human approval | One same-version VRS AI authorize request |
 | V8 ticket with VRS Express photos | Up to 10 direct signed HTTPS URLs; plain `GET` succeeds without VRS Express credentials |
+| Service-order and photo lookup | `200` with sanitized `service_order_info`, up to 10 direct photo URLs, and photo expiry; same VRS Express DEV `X-API-Key` as intake |
 | Valid signed result callback | `200`, durable event record, expected ticket effect |
 | Exact event replay | `200`, `deduped: true`, no duplicate side effect |
 

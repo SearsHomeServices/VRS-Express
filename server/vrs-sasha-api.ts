@@ -1,11 +1,18 @@
 import { timingSafeEqual } from "crypto";
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import {
+  getVrsAuthorizeContractVersion,
   safeParseVrsAuthorizeRequest,
   verifyVrsWebhookSignature,
   vrsWebhookEventSchema,
 } from "./vrs-sasha-contract";
 import type { VrsAuthorizeRequest } from "./vrs-sasha-contract";
+import {
+  buildVrsAuthorizeEnrichmentCandidates,
+  projectVrsBridgeReviewContext,
+  resolveVrsPhotoUrls,
+} from "./vrs-sasha-queue";
+import type { VrsServiceOrderReader } from "./vrs-sasha-store";
 
 export type ReceiveVrsIntakeResult =
   | {
@@ -34,30 +41,52 @@ export interface VrsExpressIntake {
   receive(input: VrsAuthorizeRequest): Promise<ReceiveVrsIntakeResult>;
 }
 
+interface RegisterVrsSashaApiDependencies {
+  apiKey?: string;
+  intake: VrsExpressIntake;
+  serviceOrders?: VrsServiceOrderReader;
+  signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
+  now?: () => Date;
+}
+
+function authenticateVrsSashaApiKey(
+  req: Request,
+  res: Response,
+  apiKey?: string,
+): boolean {
+  if (!apiKey) {
+    res.status(503).json({
+      error: "NOT_CONFIGURED",
+      message: "VRS SASHA API key is not configured",
+    });
+    return false;
+  }
+
+  const presented = req.header("x-api-key") ?? "";
+  const expectedBuffer = Buffer.from(apiKey);
+  const presentedBuffer = Buffer.from(presented);
+  const authenticated =
+    expectedBuffer.length === presentedBuffer.length &&
+    timingSafeEqual(expectedBuffer, presentedBuffer);
+
+  if (!authenticated) {
+    res.status(401).json({
+      error: "UNAUTHORIZED",
+      message: "Invalid or missing API key",
+    });
+    return false;
+  }
+
+  return true;
+}
+
 export function registerVrsSashaApi(
   app: Express,
-  deps: { apiKey?: string; intake: VrsExpressIntake },
+  deps: RegisterVrsSashaApiDependencies,
 ): void {
   app.post("/vrs/authorize", async (req, res) => {
-    if (!deps.apiKey) {
-      return res.status(503).json({
-        error: "NOT_CONFIGURED",
-        message: "VRS SASHA API key is not configured",
-      });
-    }
-
-    const presented = req.header("x-api-key") ?? "";
-    const expectedBuffer = Buffer.from(deps.apiKey);
-    const presentedBuffer = Buffer.from(presented);
-    const authenticated =
-      expectedBuffer.length === presentedBuffer.length &&
-      timingSafeEqual(expectedBuffer, presentedBuffer);
-
-    if (!authenticated) {
-      return res.status(401).json({
-        error: "UNAUTHORIZED",
-        message: "Invalid or missing API key",
-      });
+    if (!authenticateVrsSashaApiKey(req, res, deps.apiKey)) {
+      return;
     }
 
     const parsed = safeParseVrsAuthorizeRequest(req.body);
@@ -120,6 +149,103 @@ export function registerVrsSashaApi(
       });
     }
   });
+
+  app.get(
+    "/api/integrations/vrs-ai/v1/service-orders/:serviceOrder",
+    async (req, res) => {
+      if (!authenticateVrsSashaApiKey(req, res, deps.apiKey)) {
+        return;
+      }
+      if (!deps.serviceOrders) {
+        return res.status(503).json({
+          error: "NOT_CONFIGURED",
+          message: "VRS service-order lookup is not configured",
+        });
+      }
+
+      const serviceOrder = req.params.serviceOrder;
+      if (!/^\d{8}$/.test(serviceOrder)) {
+        return res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "service_order must be 8 digits",
+          fields: ["service_order"],
+        });
+      }
+
+      let source;
+      try {
+        source = await deps.serviceOrders.getLatestByServiceOrder(
+          serviceOrder,
+        );
+      } catch (error) {
+        console.error(
+          "[vrs-sasha] Failed to load service-order data:",
+          error instanceof Error ? error.message : String(error),
+        );
+        return res.status(500).json({
+          error: "INTERNAL",
+          message: "Unable to load service-order data",
+        });
+      }
+      if (!source) {
+        return res.status(404).json({
+          error: "SERVICE_ORDER_NOT_FOUND",
+          message: `No VRS Express bridge request was found for service order ${serviceOrder}`,
+        });
+      }
+
+      const requestPhotos = Array.isArray(
+          source.requestPayload.appliance_photos,
+        )
+        ? source.requestPayload.appliance_photos.filter(
+          (value): value is string => typeof value === "string",
+        )
+        : [];
+      const submissionPhotos = buildVrsAuthorizeEnrichmentCandidates({
+        submissionPhotos: source.submissionPhotos,
+      }).appliancePhotos ?? [];
+
+      let resolvedPhotos;
+      try {
+        resolvedPhotos = await resolveVrsPhotoUrls(
+          [...requestPhotos, ...submissionPhotos],
+          deps.signObjectPhotoUrl,
+        );
+      } catch (error) {
+        console.error(
+          "[vrs-sasha] Failed to generate service-order photo URLs:",
+          error instanceof Error ? error.message : String(error),
+        );
+        return res.status(502).json({
+          error: "PHOTO_URL_GENERATION_FAILED",
+          message: "Unable to generate photo download URLs",
+        });
+      }
+
+      const reviewContext = projectVrsBridgeReviewContext(
+        source.requestPayload,
+      );
+      const {
+        appliance_photos: _appliancePhotos,
+        ...serviceOrderInfo
+      } = reviewContext;
+      const now = (deps.now ?? (() => new Date()))();
+
+      return res.status(200).json({
+        service_order: serviceOrder,
+        call_id: source.callId,
+        state: source.state,
+        contract_version: getVrsAuthorizeContractVersion(
+          source.requestPayload,
+        ),
+        service_order_info: serviceOrderInfo,
+        appliance_photos: resolvedPhotos.urls,
+        photo_urls_expire_at: resolvedPhotos.signedObjectPhoto
+          ? new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString()
+          : null,
+      });
+    },
+  );
 }
 
 export interface VrsAiWebhookSink {
