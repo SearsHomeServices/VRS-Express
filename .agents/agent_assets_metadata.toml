@@ -18,3 +18,10 @@ id = "G66Nk7P89RFZM35YrTOeL"
 uri = "file://exports/VRS_QA_Testing_Guide.pdf"
 type = "pdf"
 title = "VRS QA Testing Guide (1099 Portal & New Admin Features)"
+
+[[outputs]]
+id = "wGqaQSzZK_TSQa-qp_XkA"
+uri = "file://.agents/outputs/ih-techs-not-signed-in-2026-08-12.csv"
+type = "table"
+title = "IH Technicians Not Yet Signed Into VRS Express"
+description = "335 active in-home technicians with no VRS Express login, sorted by district and manager (LDAP ID, name, district, manager, phone)."
