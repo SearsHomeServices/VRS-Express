@@ -1,6 +1,6 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-14 16:15
+Updated: 2026-08-14 16:28
 
 ## Done
 
@@ -9,6 +9,12 @@ Updated: 2026-08-14 16:15
   CTA/contract equality, V8+ retry/photo behavior, review-panel visibility,
   and updated OpenAPI/Markdown/DEV test documentation. Verified 179/179 bridge
   tests, a passing build, and zero new scoped TypeScript diagnostics.
+
+- [x] Merge the verified V9 implementation with the two newer Replit commits,
+  synchronize GitHub/Replit DEV, restart DEV only, confirm health `200`, and
+  prove a complete authenticated V9 request returns `202`. Confirmed the
+  authenticated lookup reports V9 plus the exact CTA/order district without
+  exposing either callback credential field. No publish or production action.
 
 - [x] Removed the DEV-only duplicate API-key requirement by accepting the
   existing contract key under `VRS_SASHA_API_KEY` for Stage 1 dispatch only in
@@ -79,10 +85,6 @@ Updated: 2026-08-14 16:15
   build, and the known 56-raw TypeScript baseline.
 
 ## Open
-
-- [ ] Synchronize the verified V9 commit to GitHub/Replit DEV, restart DEV
-  only, and prove one authenticated complete V9 intake returns `202` without
-  publishing or approving the ticket.
 
 - [x] Configure the Express-owned Replit DEV bridge values and prove a strict
   V8 Direction A intake with active DEV technician `test_tech_1` and unique

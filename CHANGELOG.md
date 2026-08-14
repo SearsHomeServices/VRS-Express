@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification: 179/179 focused bridge tests pass, the production build
   passes, and TypeScript remains at the known 60-diagnostic repository
   baseline with zero diagnostics in the V9 change scope.
+- Merged the two newer Replit commits without replacing them, synchronized
+  GitHub and the Replit DEV workspace, restarted only DEV, and confirmed
+  public health `200`. A complete authenticated V9 request for DEV service
+  order `99081205` returned `202`; the authenticated lookup then returned
+  `200`, `contract_version: v9`, the exact CTA and order district, and no
+  callback credential fields. No publish, production, schema, Secret, or
+  manual database action ran.
 
 ### Fixed — DEV bridge contract-key compatibility (2026-08-14)
 - VRS Express DEV approval dispatch now recognizes the already-configured

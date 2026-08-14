@@ -8,6 +8,10 @@ exact joint-test sequence. It contains no credential values.
 
 - VRS Express DEV intake, service-order lookup, photo retrieval, and health
   endpoints below are live.
+- Strict V9 intake is live on the same authorize endpoint. A complete
+  authenticated V9 request returned `202`; the read-only lookup returned
+  `contract_version: v9` with the exact `cta_no` and `district_number` and no
+  callback credential fields.
 - The contract-specified VRS AI DEV destination
   `https://vrs-dev.stage.nextgen.shs.com` currently has no public DNS record.
   VRS Express cannot complete the approval dispatch until VRS AI provisions
@@ -128,8 +132,9 @@ Example outbound field (the real signature is generated at dispatch):
 - Reserved/used smoke-test service order: `99081201` - do not reuse.
 - Suggested one-time V5 service order: `99081202`.
 - Suggested one-time V8 service order: `99081203`.
-- Suggested one-time V9 service order: `99081204`.
-- If either suggested order has already been used, choose a new unique
+- Used V9 activation-proof service order: `99081205` - do not reuse.
+- Suggested next one-time V9 service order: `99081206`.
+- If any suggested order has already been used, choose a new unique
   eight-digit DEV value before sending.
 - Use only synthetic DEV customer, appliance, part, phone, and photo data.
 
@@ -181,8 +186,10 @@ Example outbound field (the real signature is generated at dispatch):
 
 ## Current readiness
 
-- VRS Express DEV intake and strict V8 admission have been proven with a real
-  `202` response and a stored pending-review bridge record.
+- VRS Express DEV intake and strict V8/V9 admission have been proven with real
+  `202` responses and stored pending-review bridge records. The authenticated
+  V9 lookup also proves that CTA and order district are preserved and callback
+  credentials are removed from the retrieval response.
 - VRS Express DEV photo signing has been proven against an existing stored
   photo: the generated HTTPS URL carried an approximately 24-hour expiry and a
   credential-free byte-range `GET` returned `206`. The temporary URL was not

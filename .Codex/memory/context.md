@@ -1,6 +1,6 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-14 16:15
+Updated: 2026-08-14 16:28
 
 ## Current Session
 
@@ -13,8 +13,13 @@ Updated: 2026-08-14 16:15
   OpenAPI, Markdown handoff, architecture, and DEV connection sheet. Local
   evidence is 179/179 focused bridge tests, a passing production build, and
   the unchanged 60-diagnostic TypeScript baseline with zero scoped errors.
-  GitHub/Replit DEV synchronization and a live V9 intake proof remain next;
-  no production, schema, data, or Secret action has run.
+  The implementation was merged with the two newer Replit commits and is now
+  on GitHub `main` and the Replit DEV workspace. Only DEV was restarted;
+  health is `200`. A complete authenticated V9 request for service order
+  `99081205` returned `202`, and the authenticated service-order lookup
+  returned `200`, `contract_version: v9`, `cta_no: 1234567890`, and
+  `district_number: 8175` without callback credential exposure. No publish,
+  production, schema, Secret, or manual database action ran.
 
 - Corrected the DEV bridge key-name mismatch without adding or exposing a
   Secret. Stage 1 configuration now falls back to the existing

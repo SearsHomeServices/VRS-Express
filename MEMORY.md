@@ -1,22 +1,27 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-14 16:15 — Implemented and locally verified strict V9 bridge compatibility; DEV sync and live proof are next.
+> **Last Touched:** Codex — 2026-08-14 16:28 — Strict V9 is synchronized and proven live in Replit DEV; no publish or production action ran.
 
 ## Current State
-- V9 is implemented locally on the same `POST /vrs/authorize` endpoint. The
+- V9 is implemented and live in Replit DEV on the same `POST /vrs/authorize`
+  endpoint. The
   selector chooses strict V9 when `cta_no` or `district_number` is present and
   requires the full V8 shape plus both fields. `cta_no` must exactly equal
   `contract_number`; `district_number` is the order-scoped four-digit value or
   `N/A`. Both fields are preserved through pending human review, Stage 1
   dispatch, service-order lookup, retryable-failure handling, and signed-photo
   enrichment, and appear in the agent review panel. V5/V8 remain unchanged.
+  GitHub and Replit DEV contain the merged V9 history; only DEV was restarted
+  and public health is `200`. Complete authenticated V9 service order
+  `99081205` returned `202`; its read-only lookup returned `200`,
+  `contract_version: v9`, exact CTA/order-district values, and no callback
+  credential fields. No publish, production, schema, Secret, or manual
+  database action ran.
 - The OpenAPI is now version 9.0 with a complete runtime-valid V9 example; the
   architecture, Markdown handoff, and DEV connection sheet carry the same
   rules. Local verification is 179/179 bridge tests, a passing production
   build, and the unchanged 60-diagnostic TypeScript baseline with zero V9
-  scoped diagnostics. No schema, database, Secret, production, publish, or
-  remote action has run for V9 yet; GitHub/Replit DEV sync and one live V9
-  intake proof remain next.
+  scoped diagnostics.
 - DEV Stage 1 dispatch now uses the existing `VRS_SASHA_API_KEY` as a fallback
   only when `NODE_ENV=development` and `VRS_AI_API_KEY` is absent. Production
   cannot use the fallback. The key-name error is therefore removed without

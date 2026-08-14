@@ -1,8 +1,16 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-14 16:15
+Updated: 2026-08-14 16:28
 
 ## Decisions
+
+- [CX] 2026-08-14 - Activate V9 by fast-forwarding the existing Replit DEV
+  `main` history after merging its two newer dashboard/publish commits; do not
+  overwrite the box, run the configured post-merge database script, or
+  publish production. Treat an authenticated real-box `202` plus sanitized
+  V9 lookup as the activation proof, while leaving human approval and outbound
+  dispatch for the joint test because the contracted VRS AI DEV hostname still
+  does not resolve.
 
 - [CX] 2026-08-14 - Implement V9 as a third strict wire shape on the existing
   versionless endpoint. Select V9 before V8 whenever `cta_no` or
