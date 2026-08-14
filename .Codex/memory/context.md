@@ -12,6 +12,11 @@ Updated: 2026-08-14 14:14
   scoped diagnostic. The contract VRS AI DEV hostname still has no public DNS
   record, so the external platform must provision it or provide a corrected
   reachable URL before approval can complete.
+- GitHub `main` and Replit DEV contain commit `278447c`; only DEV was
+  restarted and health is `200`. The running process resolves Stage 1 as
+  configured without `VRS_AI_API_KEY`. The real outbound client then fails at
+  DNS with `ENOTFOUND` for `vrs-dev.stage.nextgen.shs.com`, isolating the
+  remaining fault outside VRS Express.
 
 - Added an authenticated, read-only VRS AI service-order lookup at
   `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}`. It uses

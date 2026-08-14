@@ -9,13 +9,18 @@
   duplicating or exposing a Secret. Verification is 161/161 bridge tests, a
   passing production build, and the unchanged 60-diagnostic TypeScript
   baseline with no new scoped diagnostic.
+- Commit `278447c` is on GitHub `main` and the Replit DEV workspace. Only the
+  DEV process was restarted; public health is `200`. Live configuration
+  resolution returns `STAGE_ONE_CONFIGURED` with no `VRS_AI_API_KEY`, proving
+  the existing key-name mapping is active on the box.
 - The remaining end-to-end blocker is external: the V8 contract's confirmed
   `https://vrs-dev.stage.nextgen.shs.com` base URL currently returns public
   DNS `NXDOMAIN` and has no certificate record. VRS Express cannot dispatch
   approval traffic until VRS AI provisions that hostname or supplies a
   corrected reachable DEV URL. The environment-specific connection sheet now
-  says this directly. No publish, production change, schema operation, or
-  database write ran.
+  says this directly. A live outbound-client probe reaches the network step
+  and fails `DNS_ENOTFOUND`, proving the old configuration error is gone. No
+  publish, production change, schema operation, or database write ran.
 - VRS AI can use the existing VRS Express DEV `X-API-Key` with
   `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` to retrieve
   the latest bridge-received service-order data and current photo URLs. The

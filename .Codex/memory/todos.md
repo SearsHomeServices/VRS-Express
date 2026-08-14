@@ -7,7 +7,10 @@ Updated: 2026-08-14 14:14
 - [x] Removed the DEV-only duplicate API-key requirement by accepting the
   existing contract key under `VRS_SASHA_API_KEY` for Stage 1 dispatch only in
   development. Preserved the explicit production credential boundary and
-  verified 161/161 bridge tests plus the production build.
+  verified 161/161 bridge tests plus the production build. Synchronized
+  GitHub/Replit DEV, restarted only DEV, confirmed health `200`, and proved
+  live Stage 1 configuration succeeds before the contract hostname returns
+  `DNS_ENOTFOUND`.
 
 - [x] Added the authenticated read-only service-order/photo lookup using the
   existing VRS Express DEV key, sanitized bridge request projection, and

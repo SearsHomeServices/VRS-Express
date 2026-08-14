@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   state the remaining external activation blocker accurately: the contract's
   `vrs-dev.stage.nextgen.shs.com` hostname has no public DNS record. No publish,
   production configuration, schema, or database action ran.
+- Fast-forwarded GitHub and the clean Replit DEV workspace to `278447c`,
+  restarted only the development process, and confirmed public health `200`.
+  Live resolution reports `STAGE_ONE_CONFIGURED` while `VRS_AI_API_KEY` remains
+  absent; a real outbound-client probe advances past configuration and fails
+  with `DNS_ENOTFOUND` for the contract hostname. No database write ran.
 
 ### Added — Authenticated service-order and photo lookup (2026-08-13)
 - Added `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` for
