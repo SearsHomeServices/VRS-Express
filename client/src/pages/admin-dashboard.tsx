@@ -1594,6 +1594,25 @@ function TicketOverviewSection() {
             </SelectContent>
           </Select>
         </div>
+        {/* Status filter — same state as the count-card tabs, but also
+            covers rejected_closed and invalid, which have no card. */}
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">Status</Label>
+          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as TicketStatusFilter)}>
+            <SelectTrigger className="h-8 w-[190px] text-xs" data-testid="select-status-filter">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="option-status-all">All Statuses ({statusCounts.all})</SelectItem>
+              <SelectItem value="queued" data-testid="option-status-queued">In Queue ({statusCounts.queued})</SelectItem>
+              <SelectItem value="pending" data-testid="option-status-pending">Pending (In Progress) ({statusCounts.pending})</SelectItem>
+              <SelectItem value="completed" data-testid="option-status-completed">Approved ({statusCounts.completed})</SelectItem>
+              <SelectItem value="rejected" data-testid="option-status-rejected">Rejected ({statusCounts.rejected})</SelectItem>
+              <SelectItem value="rejected_closed" data-testid="option-status-rejected_closed">Rejected &amp; Closed ({statusCounts.rejected_closed})</SelectItem>
+              <SelectItem value="invalid" data-testid="option-status-invalid">Invalid ({statusCounts.invalid})</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="flex items-center gap-2 ml-auto">
           <Button
             variant="outline"
