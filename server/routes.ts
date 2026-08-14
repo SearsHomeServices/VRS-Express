@@ -6499,6 +6499,9 @@ export async function registerRoutes(
   // tab, request-type toggle, search text) so the export matches the table.
   const getCoachingRecords = async (query: any) => {
     const createdAfter = query.createdAfter ? new Date(query.createdAfter as string) : null;
+    // Optional inclusive upper bound — mirrors the Ticket Overview's custom
+    // date range so exports match the visible table.
+    const createdBefore = query.createdBefore ? new Date(query.createdBefore as string) : null;
     const status = (query.status as string) || "all";
     const requestType = (query.requestType as string) || "all";
     const search = ((query.search as string) || "").toLowerCase().trim();
@@ -6515,6 +6518,11 @@ export async function registerRoutes(
     let rows = all.filter(s =>
       (NEGATIVE_STATUSES as readonly string[]).includes(s.ticketStatus)
     );
+    if (createdBefore && !isNaN(createdBefore.getTime())) {
+      rows = rows.filter(s =>
+        s.createdAt && new Date(s.createdAt).getTime() <= createdBefore.getTime()
+      );
+    }
     if ((NEGATIVE_STATUSES as readonly string[]).includes(status)) {
       rows = rows.filter(s => s.ticketStatus === status);
     }

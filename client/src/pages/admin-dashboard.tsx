@@ -1243,7 +1243,12 @@ function TicketOverviewSection() {
   // already cuts payload ~5-10x; this window cuts row count too. Widen via
   // the selector beside the request-type filter. The CSV/XLSX export
   // endpoints are unaffected (different endpoints with their own scopes).
-  const [createdAfterWindow, setCreatedAfterWindow] = useState<"30d" | "60d" | "90d" | "all">("30d");
+  const [createdAfterWindow, setCreatedAfterWindow] = useState<"30d" | "60d" | "90d" | "all" | "custom">("30d");
+  // Custom created-date range (yyyy-mm-dd, from the native date inputs).
+  // "From" is pushed to the server as createdAfter; "To" is applied
+  // client-side since the list endpoint has no createdBefore param.
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   // Tyler 2026-05-15 — every column in the Ticket Overview table is sortable.
   // Default (null) preserves the existing FIFO behavior on the queue tab.
   type TicketSortField = "serviceOrder" | "status" | "assigned" | "technician" | "division" | "warranty" | "intakeForm" | "lastUpdated" | "queueWait" | "handleTime" | "totalTime";
@@ -1260,12 +1265,25 @@ function TicketOverviewSection() {
   };
   const createdAfterIso = useMemo(() => {
     if (createdAfterWindow === "all") return null;
+    if (createdAfterWindow === "custom") {
+      if (!customFrom) return null;
+      const d = new Date(`${customFrom}T00:00:00`);
+      return isNaN(d.getTime()) ? null : d.toISOString();
+    }
     const days = createdAfterWindow === "60d" ? 60 : createdAfterWindow === "90d" ? 90 : 30;
     const d = new Date();
     d.setDate(d.getDate() - days);
     d.setHours(0, 0, 0, 0);
     return d.toISOString();
-  }, [createdAfterWindow]);
+  }, [createdAfterWindow, customFrom]);
+  // End of the custom "To" day (inclusive), applied client-side. Only
+  // active once "From" is set: without a lower bound the server applies
+  // its own floor/row cap, so a To-only range could silently miss rows.
+  const createdBeforeMs = useMemo(() => {
+    if (createdAfterWindow !== "custom" || !customTo || !customFrom) return null;
+    const d = new Date(`${customTo}T23:59:59.999`);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }, [createdAfterWindow, customTo, customFrom]);
   const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
   const [reassignTicket, setReassignTicket] = useState<any | null>(null);
   const [reassignTarget, setReassignTarget] = useState<string>("");
@@ -1361,7 +1379,16 @@ function TicketOverviewSection() {
   // otherwise the windowed (default 30d) list is. The client-side filter
   // below still runs over whichever source is active — it matches the same
   // fields the server search does, so it only ever narrows, never hides.
-  const rawTickets = (searchActive ? searchData?.submissions : allData?.submissions) || [];
+  const rawTicketsUnbounded = (searchActive ? searchData?.submissions : allData?.submissions) || [];
+  // Custom "To" cutoff (inclusive end of day) — client-side, before the
+  // status counts so the cards reflect the selected range too. Skipped
+  // while searching (search is explicitly all-time).
+  const rawTickets = (!searchActive && createdBeforeMs != null)
+    ? rawTicketsUnbounded.filter((t: any) => {
+        const created = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
+        return !isNaN(created) && created <= createdBeforeMs;
+      })
+    : rawTicketsUnbounded;
   const allTickets = requestTypeFilter === "all"
     ? rawTickets
     : requestTypeFilter === "nla"
@@ -1456,6 +1483,7 @@ function TicketOverviewSection() {
   const coachingFilterParams = () => {
     const params = new URLSearchParams();
     if (createdAfterIso) params.set("createdAfter", createdAfterIso);
+    if (createdBeforeMs != null) params.set("createdBefore", new Date(createdBeforeMs).toISOString());
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (requestTypeFilter !== "all") params.set("requestType", requestTypeFilter);
     if (debouncedSearch) params.set("search", debouncedSearch);
@@ -1591,9 +1619,36 @@ function TicketOverviewSection() {
               <SelectItem value="60d" data-testid="option-created-window-60d">Last 60 days</SelectItem>
               <SelectItem value="90d" data-testid="option-created-window-90d">Last 90 days</SelectItem>
               <SelectItem value="all" data-testid="option-created-window-all">All time</SelectItem>
+              <SelectItem value="custom" data-testid="option-created-window-custom">Custom range</SelectItem>
             </SelectContent>
           </Select>
         </div>
+        {createdAfterWindow === "custom" && (
+          <div className="flex items-center gap-2" data-testid="custom-date-range">
+            <Input
+              type="date"
+              value={customFrom}
+              max={customTo || undefined}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              className="h-8 w-[150px] text-xs"
+              data-testid="input-custom-date-from"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <Input
+              type="date"
+              value={customTo}
+              min={customFrom || undefined}
+              onChange={(e) => setCustomTo(e.target.value)}
+              className="h-8 w-[150px] text-xs"
+              data-testid="input-custom-date-to"
+            />
+            {!customFrom && (
+              <span className="text-xs text-muted-foreground" data-testid="text-custom-range-hint">
+                Pick a "From" date to apply the range
+              </span>
+            )}
+          </div>
+        )}
         {/* Status filter — same state as the count-card tabs, but also
             covers rejected_closed and invalid, which have no card. */}
         <div className="flex items-center gap-2">
