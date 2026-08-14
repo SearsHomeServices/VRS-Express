@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   decideVrsStageOneBridge,
+  resolveVrsStageOneBridgeConfig,
   runVrsStageOneRouteGate,
   type VrsStageOneBridgeOptions,
 } from "../server/vrs-stage-one-bridge";
@@ -78,6 +79,30 @@ function makeBoundary(overrides: {
 }
 
 describe("VRS Stage 1 bridge boundary", () => {
+  it("uses the existing contract API key for outbound dispatch only in development", () => {
+    expect(resolveVrsStageOneBridgeConfig({
+      NODE_ENV: "development",
+      VRS_AI_BASE_URL: "https://vrs-ai.example.test",
+      VRS_SASHA_API_KEY: "existing-contract-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+    })).toEqual({
+      baseUrl: "https://vrs-ai.example.test",
+      apiKey: "existing-contract-key",
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "callback-secret",
+    });
+
+    expect(resolveVrsStageOneBridgeConfig({
+      NODE_ENV: "production",
+      VRS_AI_BASE_URL: "https://vrs-ai.example.test",
+      VRS_SASHA_API_KEY: "development-only-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+    })).toBeUndefined();
+  });
+
   it("returns not_applicable before reading config or constructing a client for a manual ticket", async () => {
     const boundary = makeBoundary({});
 

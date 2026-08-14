@@ -4,6 +4,19 @@ Use this sheet with `VRS-Express-VRS-AI-Handoff-Package.zip`. The ZIP is the
 wire contract; this sheet supplies the current development environment and the
 exact joint-test sequence. It contains no credential values.
 
+## Current activation status — August 14, 2026
+
+- VRS Express DEV intake, service-order lookup, photo retrieval, and health
+  endpoints below are live.
+- The contract-specified VRS AI DEV destination
+  `https://vrs-dev.stage.nextgen.shs.com` currently has no public DNS record.
+  VRS Express cannot complete the approval dispatch until VRS AI provisions
+  that hostname or supplies a corrected reachable DEV base URL.
+- No additional DEV API key needs to be delivered to VRS Express. For this
+  joint DEV test only, VRS Express recognizes the already-exchanged contract
+  `X-API-Key` under its existing Secret name. Production still requires a
+  separately reviewed outbound credential and does not use this DEV fallback.
+
 ## Live development endpoints
 
 | Direction | Endpoint |
@@ -23,7 +36,7 @@ published VRS Express production URL; this test is development-only.
 | Credential | Supplied by | Used by | Current action |
 |---|---|---|---|
 | VRS Express DEV `X-API-Key` | VRS Express | VRS AI simulator when creating an intake or retrieving a service order and its photos | VRS Express has generated and configured it. Use the same key for both VRS Express endpoints and transfer its value through the approved secure channel. |
-| VRS AI DEV `X-API-Key` | VRS AI | VRS Express when calling VRS AI | VRS AI must transfer its value through the approved secure channel. VRS Express will store it as `VRS_AI_API_KEY`. |
+| Joint DEV contract `X-API-Key` | Already exchanged | Both DEV directions | VRS Express recognizes the existing key under its current Secret name for DEV approval dispatch. Do not create or send a duplicate key. Production does not use this fallback. |
 | Outbound `callback_secret` | VRS Express | VRS AI when signing result callbacks | VRS Express sends this value inside each authorized DEV request. VRS AI must sign with the exact received value; no separate preconfiguration is needed. |
 | Simulator `callback_secret` | VRS AI simulator | VRS Express when forwarding the result upstream | Include a DEV-only value in each simulator request and use the same value to verify the forwarded callback. |
 

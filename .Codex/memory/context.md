@@ -1,8 +1,17 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-13 17:08
+Updated: 2026-08-14 14:14
 
 ## Current Session
+
+- Corrected the DEV bridge key-name mismatch without adding or exposing a
+  Secret. Stage 1 configuration now falls back to the existing
+  `VRS_SASHA_API_KEY` only in development; production still requires
+  `VRS_AI_API_KEY`. A regression proves both boundaries. Full bridge tests are
+  161/161, build passes, and the known TypeScript baseline remains 60 with no
+  scoped diagnostic. The contract VRS AI DEV hostname still has no public DNS
+  record, so the external platform must provision it or provide a corrected
+  reachable URL before approval can complete.
 
 - Added an authenticated, read-only VRS AI service-order lookup at
   `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}`. It uses
@@ -47,8 +56,10 @@ Updated: 2026-08-13 17:08
   `VRS_BRIDGE_ENCRYPTION_KEY`, plus the confirmed VRS AI staging origin and
   VRS Express public DEV origin. Both URLs live under `.replit`'s development
   section and cannot leak into a later production publish. The restarted DEV
-  process contains all five. `VRS_AI_API_KEY` remains the only missing value
-  and must be supplied by VRS AI through a secure channel.
+  process contains all five Express-owned values. DEV now recognizes the
+  existing contract key under `VRS_SASHA_API_KEY`; no duplicate
+  `VRS_AI_API_KEY` is required for the joint DEV test. Production keeps the
+  explicit outbound-key requirement.
 - Live DEV proof: public no-key authorize returns `401`; authenticated empty
   input reaches strict validation and returns `400`; a complete strict V8
   request using active DEV technician `test_tech_1` / district `8175` and

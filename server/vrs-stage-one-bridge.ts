@@ -22,6 +22,32 @@ export interface VrsStageOneBridgeConfig {
   callbackSecret: string;
 }
 
+type VrsStageOneEnvironment = Readonly<Record<string, string | undefined>>;
+
+export function resolveVrsStageOneBridgeConfig(
+  env: VrsStageOneEnvironment,
+): VrsStageOneBridgeConfig | undefined {
+  const baseUrl = env.VRS_AI_BASE_URL;
+  const apiKey = env.VRS_AI_API_KEY
+    || (env.NODE_ENV === "development" ? env.VRS_SASHA_API_KEY : undefined);
+  const callbackSecret = env.VRS_AI_WEBHOOK_SECRET;
+  let callbackUrl = env.VRS_AI_CALLBACK_URL;
+  if (!callbackUrl && env.VRS_EXPRESS_PUBLIC_URL) {
+    try {
+      callbackUrl = new URL(
+        "/api/integrations/vrs-ai/v1/webhook",
+        env.VRS_EXPRESS_PUBLIC_URL,
+      ).toString();
+    } catch {
+      callbackUrl = undefined;
+    }
+  }
+  if (!baseUrl || !apiKey || !callbackSecret || !callbackUrl) {
+    return undefined;
+  }
+  return { baseUrl, apiKey, callbackUrl, callbackSecret };
+}
+
 type VrsStageOneBridgeStore = Pick<
   VrsBridgeStore,
   | "getBySubmissionId"

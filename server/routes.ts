@@ -46,7 +46,10 @@ import {
   decryptVrsCallbackSecret,
   encryptVrsCallbackSecret,
 } from "./vrs-sasha-secret";
-import { runVrsStageOneRouteGate } from "./vrs-stage-one-bridge";
+import {
+  resolveVrsStageOneBridgeConfig,
+  runVrsStageOneRouteGate,
+} from "./vrs-stage-one-bridge";
 import { verifyUploadOwnership } from "./lib/uploadTokens";
 import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from "./lib/mediaTokens";
 import { timingSafeEqual } from "crypto";
@@ -2791,26 +2794,7 @@ export async function registerRoutes(
         const stageOneGate = await runVrsStageOneRouteGate({
           submissionId: id,
           store: vrsBridgeStore,
-          resolveConfig: () => {
-            const baseUrl = process.env.VRS_AI_BASE_URL;
-            const apiKey = process.env.VRS_AI_API_KEY;
-            const callbackSecret = process.env.VRS_AI_WEBHOOK_SECRET;
-            let callbackUrl = process.env.VRS_AI_CALLBACK_URL;
-            if (!callbackUrl && process.env.VRS_EXPRESS_PUBLIC_URL) {
-              try {
-                callbackUrl = new URL(
-                  "/api/integrations/vrs-ai/v1/webhook",
-                  process.env.VRS_EXPRESS_PUBLIC_URL,
-                ).toString();
-              } catch {
-                callbackUrl = undefined;
-              }
-            }
-            if (!baseUrl || !apiKey || !callbackSecret || !callbackUrl) {
-              return undefined;
-            }
-            return { baseUrl, apiKey, callbackUrl, callbackSecret };
-          },
+          resolveConfig: () => resolveVrsStageOneBridgeConfig(process.env),
           createClient: ({ baseUrl, apiKey, callbackUrl, callbackSecret }) => ({
             authorize: ({ payload }) =>
               sendVrsAuthorizeRequest({

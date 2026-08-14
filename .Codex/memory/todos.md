@@ -1,8 +1,13 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-13 17:08
+Updated: 2026-08-14 14:14
 
 ## Done
+
+- [x] Removed the DEV-only duplicate API-key requirement by accepting the
+  existing contract key under `VRS_SASHA_API_KEY` for Stage 1 dispatch only in
+  development. Preserved the explicit production credential boundary and
+  verified 161/161 bridge tests plus the production build.
 
 - [x] Added the authenticated read-only service-order/photo lookup using the
   existing VRS Express DEV key, sanitized bridge request projection, and
@@ -69,8 +74,9 @@ Updated: 2026-08-13 17:08
 - [x] Configure the Express-owned Replit DEV bridge values and prove a strict
   V8 Direction A intake with active DEV technician `test_tech_1` and unique
   service order `99081201`.
-- [ ] Obtain the VRS AI development `X-API-Key` through a secure channel and
-  save it as `VRS_AI_API_KEY`; restart only the DEV process afterward.
+- [ ] Obtain a resolvable VRS AI development base URL, or have VRS AI provision
+  the contract hostname `vrs-dev.stage.nextgen.shs.com`; the existing DEV
+  contract key is already accepted and no duplicate Secret is required.
 - [ ] Before any future production republish, review which synchronized App
   Secrets the deployment will capture and set deliberate production values;
   never publish the DEV bridge URLs or assume workspace configuration is a

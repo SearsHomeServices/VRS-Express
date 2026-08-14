@@ -1,8 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-13 17:08
+Updated: 2026-08-14 14:14
 
 ## Decisions
+
+- [CX] 2026-08-14 - Treat the platform team's statement that the DEV contract
+  key is already configured under another name as authority for a narrow
+  compatibility mapping. Only development may use `VRS_SASHA_API_KEY` when
+  `VRS_AI_API_KEY` is absent; production must retain an explicit outbound key.
+  Do not hide the independent external blocker: the contract VRS AI DEV host
+  must resolve publicly from Replit before approval dispatch can succeed.
 
 - [CX] 2026-08-13 - Give VRS AI a read-only service-order retrieval surface
   under the existing VRS Express inbound trust boundary. Reuse the configured

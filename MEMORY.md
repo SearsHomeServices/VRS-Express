@@ -1,8 +1,21 @@
 # Memory - VRS-Agent-Core
 
-> **Last Touched:** Codex — 2026-08-13 17:08 — Added authenticated direct service-order and photo lookup for VRS AI.
+> **Last Touched:** Codex — 2026-08-14 14:14 — Fixed the DEV contract-key name mismatch and confirmed the remaining VRS AI hostname blocker.
 
 ## Current State
+- DEV Stage 1 dispatch now uses the existing `VRS_SASHA_API_KEY` as a fallback
+  only when `NODE_ENV=development` and `VRS_AI_API_KEY` is absent. Production
+  cannot use the fallback. The key-name error is therefore removed without
+  duplicating or exposing a Secret. Verification is 161/161 bridge tests, a
+  passing production build, and the unchanged 60-diagnostic TypeScript
+  baseline with no new scoped diagnostic.
+- The remaining end-to-end blocker is external: the V8 contract's confirmed
+  `https://vrs-dev.stage.nextgen.shs.com` base URL currently returns public
+  DNS `NXDOMAIN` and has no certificate record. VRS Express cannot dispatch
+  approval traffic until VRS AI provisions that hostname or supplies a
+  corrected reachable DEV URL. The environment-specific connection sheet now
+  says this directly. No publish, production change, schema operation, or
+  database write ran.
 - VRS AI can use the existing VRS Express DEV `X-API-Key` with
   `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` to retrieve
   the latest bridge-received service-order data and current photo URLs. The
@@ -57,8 +70,9 @@
   DEV process also has the confirmed `VRS_AI_BASE_URL` and
   `VRS_EXPRESS_PUBLIC_URL`; both URLs are scoped to `.replit`'s development
   section so production cannot inherit them. No value was written to Git,
-  docs, logs, or task output. `VRS_AI_API_KEY` is the only missing bridge value
-  and must come from the VRS AI platform through a secure channel.
+  docs, logs, or task output. DEV now recognizes the existing contract key
+  under `VRS_SASHA_API_KEY`; no duplicate `VRS_AI_API_KEY` is required for the
+  joint DEV test. Production retains the explicit outbound-key requirement.
 - The public DEV health endpoint returns `200`; `/vrs/authorize` returns `401`
   without a key, and the configured key reaches strict contract validation
   (`400` for an empty payload). A complete strict V8 smoke request for active
@@ -68,7 +82,8 @@
 - Read-only verification shows exactly one associated ticket/bridge in
   `queued` / `pending_review`, Stage 1 still pending, and no provider call ID.
   This proves Direction A without dispatching to VRS AI before human approval.
-  Direction B remains blocked only by `VRS_AI_API_KEY` and joint testing.
+  Direction B remains blocked by the unresolvable VRS AI DEV contract hostname
+  and joint testing, not by an additional Express Secret.
 - `output/doc/VRS-Express-VRS-AI-DEV-Test-Connection-Sheet.md` is the separate
   environment-specific test handoff. It supplies the exact DEV endpoints,
   credential direction, `test_tech_1` / district `8175`, one-time service-order

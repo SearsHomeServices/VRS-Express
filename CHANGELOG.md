@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — DEV bridge contract-key compatibility (2026-08-14)
+- VRS Express DEV approval dispatch now recognizes the already-configured
+  contract `X-API-Key` under its existing `VRS_SASHA_API_KEY` Secret name when
+  `VRS_AI_API_KEY` is absent. The fallback is strictly development-only;
+  production still requires an explicit outbound credential.
+- Centralized Stage 1 environment resolution and added a regression proving
+  the existing key is accepted in development and refused as a fallback in
+  production. The full bridge suite passes 161/161 and the production build
+  passes; TypeScript remains at the known 60-diagnostic repository baseline
+  with no diagnostic in the changed bridge scope.
+- Updated the DEV connection sheet to remove the duplicate-key handoff and to
+  state the remaining external activation blocker accurately: the contract's
+  `vrs-dev.stage.nextgen.shs.com` hostname has no public DNS record. No publish,
+  production configuration, schema, or database action ran.
+
 ### Added — Authenticated service-order and photo lookup (2026-08-13)
 - Added `GET /api/integrations/vrs-ai/v1/service-orders/{service_order}` for
   VRS AI to retrieve the latest bridge-received service-order information and
