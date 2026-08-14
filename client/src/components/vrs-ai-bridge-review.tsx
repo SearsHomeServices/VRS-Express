@@ -56,7 +56,7 @@ export function VrsAiBridgeReview({
               {context.partner_id}
             </ReviewField>
           )}
-          {bridge.contractVersion === "v8" && (
+          {bridge.contractVersion !== "v5" && (
             <>
               <ReviewField label="Contract number" dataField="contract-number" mono>
                 {context.contract_number}
@@ -70,6 +70,20 @@ export function VrsAiBridgeReview({
               <ReviewField label="Color" dataField="appliance-color">
                 {context.appliance_color}
               </ReviewField>
+              {bridge.contractVersion === "v9" && (
+                <>
+                  <ReviewField label="CTA number" dataField="cta-number" mono>
+                    {context.cta_no}
+                  </ReviewField>
+                  <ReviewField
+                    label="Order district"
+                    dataField="district-number"
+                    mono
+                  >
+                    {context.district_number}
+                  </ReviewField>
+                </>
+              )}
             </>
           )}
           <ReviewField label="Technician ID" dataField="tech-id" mono>

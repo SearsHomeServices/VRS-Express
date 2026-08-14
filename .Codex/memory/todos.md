@@ -1,8 +1,14 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-14 14:14
+Updated: 2026-08-14 16:15
 
 ## Done
+
+- [x] Implement strict V9 intake and same-version forwarding on the existing
+  bridge endpoint with required `cta_no` and `district_number`, exact
+  CTA/contract equality, V8+ retry/photo behavior, review-panel visibility,
+  and updated OpenAPI/Markdown/DEV test documentation. Verified 179/179 bridge
+  tests, a passing build, and zero new scoped TypeScript diagnostics.
 
 - [x] Removed the DEV-only duplicate API-key requirement by accepting the
   existing contract key under `VRS_SASHA_API_KEY` for Stage 1 dispatch only in
@@ -73,6 +79,10 @@ Updated: 2026-08-14 14:14
   build, and the known 56-raw TypeScript baseline.
 
 ## Open
+
+- [ ] Synchronize the verified V9 commit to GitHub/Replit DEV, restart DEV
+  only, and prove one authenticated complete V9 intake returns `202` without
+  publishing or approving the ticket.
 
 - [x] Configure the Express-owned Replit DEV bridge values and prove a strict
   V8 Direction A intake with active DEV technician `test_tech_1` and unique

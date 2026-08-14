@@ -1,8 +1,20 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-14 14:14
+Updated: 2026-08-14 16:15
 
 ## Current Session
+
+- Implemented V9 as a strict extension on the existing authorize route. The
+  two V9 intent/required fields are `cta_no` and `district_number`; `cta_no`
+  must exactly equal `contract_number`, while `district_number` is four digits
+  or `N/A`. Accepted V9 payloads remain immutable through human review and
+  outbound dispatch, including existing V8+ retry and signed-photo behavior.
+  V5/V8 selection and wire shapes remain unchanged. Updated the review UI,
+  OpenAPI, Markdown handoff, architecture, and DEV connection sheet. Local
+  evidence is 179/179 focused bridge tests, a passing production build, and
+  the unchanged 60-diagnostic TypeScript baseline with zero scoped errors.
+  GitHub/Replit DEV synchronization and a live V9 intake proof remain next;
+  no production, schema, data, or Secret action has run.
 
 - Corrected the DEV bridge key-name mismatch without adding or exposing a
   Secret. Stage 1 configuration now falls back to the existing

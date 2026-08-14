@@ -82,6 +82,17 @@ const v5Bridge: VrsAiBridgeStatus = {
   },
 };
 
+const v9Bridge: VrsAiBridgeStatus = {
+  ...v8Bridge,
+  callId: "vrs_call_v9_review",
+  contractVersion: "v9",
+  reviewContext: {
+    ...v8Bridge.reviewContext!,
+    cta_no: "contract-number-CN-0008",
+    district_number: "8206",
+  },
+};
+
 function renderReview(bridge: VrsAiBridgeStatus): string {
   return renderToStaticMarkup(
     createElement(reviewComponents.VrsAiBridgeReview, { bridge }),
@@ -114,6 +125,16 @@ describe("VRS AI bridge agent approval copy", () => {
 });
 
 describe("VRS AI bridge review rendering", () => {
+  it("renders the two V9 fields alongside the unchanged V8 fields", () => {
+    const html = renderReview(v9Bridge);
+
+    expectField(html, "contract-version", "v9");
+    expectField(html, "cta-number", "contract-number-CN-0008");
+    expectField(html, "district-number", "8206");
+    expectField(html, "contract-number", "contract-number-CN-0008");
+    expectField(html, "symptom", "symptom-not-draining");
+  });
+
   it("renders every V8 field into its exact row with placeholders, totals, and comment metadata", () => {
     const html = renderReview(v8Bridge);
 

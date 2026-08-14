@@ -16,6 +16,7 @@ import { registerVrsSashaApi } from "../server/vrs-sasha-api";
 import {
   validV5AuthorizePayload,
   validV8AuthorizePayload,
+  validV9AuthorizePayload,
 } from "./fixtures/vrs-authorize-payloads";
 
 const createdAt = new Date("2026-08-11T21:15:00.000Z");
@@ -44,6 +45,11 @@ function storedV5() {
 
 function storedV8() {
   const { callback_secret: _secret, ...payload } = validV8AuthorizePayload;
+  return payload;
+}
+
+function storedV9() {
+  const { callback_secret: _secret, ...payload } = validV9AuthorizePayload;
   return payload;
 }
 
@@ -232,6 +238,9 @@ describe("VRS SASHA intake active-only duplicate behavior", () => {
       locallyAppliedForwardPending,
       { ...locallyAppliedForwardPending, submissionId: 41 },
     ])).toEqual([42, 41]);
+    expect(select([
+      { ...locallyAppliedForwardPending, requestPayload: storedV9() },
+    ])).toEqual([42]);
 
     for (const ineligibleLatest of [
       { ...locallyAppliedForwardPending, state: "dispatch_failed" },
@@ -274,6 +283,7 @@ describe("VRS SASHA intake active-only duplicate behavior", () => {
   it.each([
     ["V5", validV5AuthorizePayload],
     ["V8", validV8AuthorizePayload],
+    ["V9", validV9AuthorizePayload],
   ])("returns 409-compatible duplicate for an active %s bridge before work", async (_version, payload) => {
     const harness = makeHarness({ initialState: "pending_review" });
 
@@ -323,6 +333,29 @@ describe("VRS SASHA intake active-only duplicate behavior", () => {
       { ignoreLegacyDuplicateSubmissionIds: [42] },
     ]);
     expect(harness.oldTicketStates).toEqual(new Map([[42, "pending"]]));
+  });
+
+  it("keeps the immediate retryable-failure behavior for V9", async () => {
+    const harness = makeHarness({
+      initialState: "failed",
+      initialRetryable: true,
+      retryableFailedV8SubmissionIds: [42],
+      legacyBlockingSubmissionIds: [42],
+    });
+
+    await expect(harness.intake.receive(validV9AuthorizePayload)).resolves
+      .toMatchObject({
+        kind: "accepted",
+        callId: "vrs_call_new",
+        serviceOrder: "13538277",
+      });
+    expect(harness.ticketOptions).toEqual([
+      { ignoreLegacyDuplicateSubmissionIds: [42] },
+    ]);
+    expect(harness.createdBridges[0].requestPayload).toMatchObject({
+      cta_no: "1234567890",
+      district_number: "8206",
+    });
   });
 
   it("keeps a prior failed callback forward retry isolated from the immediate V8 retry", async () => {

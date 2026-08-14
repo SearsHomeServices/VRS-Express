@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: VRS Express and VRS AI Authorization Bridge
-  version: 8.0.0
+  version: 9.0.0
   description: |
-    Strict V5 and V8 authorize payloads on the same endpoint. VRS Express
+    Strict V5, V8, and V9 authorize payloads on the same endpoint. VRS Express
     holds every accepted request for human review and sends the same contract
     version to VRS AI only after approval. The current automated partner flow
     is American Home Shield authorization.
@@ -15,7 +15,10 @@ servers:
 tags:
   - name: Authorization
 x-vrs-contract-selection:
-  rule: v8-if-any-v8-only-key-is-present-otherwise-v5
+  rule: v9-if-any-v9-only-key-is-present-otherwise-v8-or-v5
+  v9OnlyKeys:
+    - cta_no
+    - district_number
   v8OnlyKeys:
     - appliance_color
     - contract_number
@@ -43,7 +46,7 @@ paths:
       tags:
         - Authorization
       operationId: authorizeVrsBridgeRequest
-      summary: Accept a strict V5 or V8 authorization request
+      summary: Accept a strict V5, V8, or V9 authorization request
       description: |
         On VRS Express, 202 creates a pending human-review ticket and does not
         call VRS AI. After approval, VRS Express calls the VRS AI development
@@ -60,6 +63,7 @@ paths:
               oneOf:
                 - $ref: '#/components/schemas/V5AuthorizeRequest'
                 - $ref: '#/components/schemas/V8AuthorizeRequest'
+                - $ref: '#/components/schemas/V9AuthorizeRequest'
             examples:
               v5:
                 summary: Complete V5 request including optional fields
@@ -141,16 +145,60 @@ paths:
                   contract_number: '1234567890'
                   purchase_year: 2022
                   symptom: Washer does not drain
+              v9:
+                summary: Complete V9 request
+                value:
+                  service_order: '13538279'
+                  tech_id: replace-with-dev-tech-id
+                  tech_phone: '+12145550199'
+                  tech_name: Example Technician
+                  reason_for_call: authorization
+                  callback_url: '<UPSTREAM_DEV_CALLBACK_URL>'
+                  callback_secret: example-callback-secret-not-for-live-use
+                  parts:
+                    - part_id: WPW10503278
+                      part_description: Electronic Control Board
+                      sell_price: 245
+                      part_function: Controls wash cycle timing and motor speed.
+                  customer_name: Example Customer
+                  customer_address: 100 Example Street, Example City, NC 27000
+                  service_address: 100 Example Street, Example City, NC 27000
+                  brand: Whirlpool
+                  model_number: WTW5000DW1
+                  serial_number: C31290822
+                  appliance_type: Washer
+                  appliance_age: 4
+                  labor_amount: 120
+                  tax_amount: 15.6
+                  part_price: 245
+                  appliance_location: laundry room
+                  failure_cause: normal-wear
+                  tech_recommendation: repair
+                  repair_replace_rationale: The isolated board failure is repairable.
+                  appliance_grade: mid
+                  partner_id: American Home Shield
+                  appliance_photos: []
+                  comments:
+                    - tech_id: replace-with-dev-tech-id
+                      work_item: failure_diagnosis
+                      text: Diagnostic code F7E1 was confirmed.
+                      timestamp: '2026-08-14T18:00:00Z'
+                  appliance_color: stainless steel
+                  contract_number: '1234567890'
+                  purchase_year: 2022
+                  symptom: Washer does not drain
+                  cta_no: '1234567890'
+                  district_number: '8206'
       responses:
         '202':
           description: |
             VRS Express: pending human review and no VRS AI call. VRS AI:
-            asynchronous admission only; call start is not proven. A strict V8
-            request after a locally applied retryable failed V8 callback creates
+            asynchronous admission only; call start is not proven. A strict V8+
+            request after a locally applied retryable failed V8+ callback creates
             a new normal ticket, new bridge, and new public call ID immediately.
-            Only prior retryable-failed V8 bridge tickets are excluded from
+            Only prior retryable-failed V8+ bridge tickets are excluded from
             legacy same-day duplicate checks; upstream forwarding remains
-            independent, and V5/nonretryable V8 terminal repeats use ordinary
+            independent, and V5/nonretryable V8+ terminal repeats use ordinary
             ticket/service-order policy.
           content:
             application/json:
@@ -819,6 +867,211 @@ components:
           type: string
           minLength: 1
           pattern: '.*\S.*'
+    V9AuthorizeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - service_order
+        - tech_id
+        - tech_phone
+        - tech_name
+        - reason_for_call
+        - callback_url
+        - callback_secret
+        - parts
+        - customer_name
+        - customer_address
+        - service_address
+        - brand
+        - model_number
+        - serial_number
+        - appliance_type
+        - appliance_age
+        - labor_amount
+        - tax_amount
+        - part_price
+        - appliance_location
+        - failure_cause
+        - tech_recommendation
+        - repair_replace_rationale
+        - appliance_grade
+        - partner_id
+        - appliance_photos
+        - comments
+        - appliance_color
+        - contract_number
+        - purchase_year
+        - symptom
+        - cta_no
+        - district_number
+      properties:
+        service_order:
+          type: string
+          pattern: '^[0-9]{8}$'
+        tech_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '.*\S.*'
+        tech_phone:
+          oneOf:
+            - type: string
+              pattern: '^\+[1-9][0-9]{7,14}$'
+            - type: string
+              const: N/A
+        tech_name:
+          type: string
+          maxLength: 255
+        reason_for_call:
+          type: string
+          const: authorization
+        callback_url:
+          type: string
+          format: uri
+          description: |
+            Inbound to VRS Express this must be the exact allowlisted clean HTTPS
+            upstream development webhook. VRS Express replaces this value on
+            dispatch with its exact clean HTTPS callback ending
+            /api/integrations/vrs-ai/v1/webhook.
+        callback_secret:
+          type: string
+          minLength: 16
+          maxLength: 512
+          writeOnly: true
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/V8Part'
+        customer_name:
+          type: string
+          maxLength: 255
+        customer_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          pattern: '.*\S.*'
+        service_address:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          pattern: '.*\S.*'
+        brand:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        model_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        serial_number:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        appliance_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        appliance_age:
+          type: number
+          minimum: 0
+          maximum: 100
+        labor_amount:
+          $ref: '#/components/schemas/Money'
+        tax_amount:
+          $ref: '#/components/schemas/Money'
+        part_price:
+          $ref: '#/components/schemas/Money'
+        appliance_location:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '.*\S.*'
+        failure_cause:
+          type: string
+          enum:
+            - normal-wear
+            - power-surge
+            - impact
+            - installation-error
+            - abuse
+            - age
+            - other
+        tech_recommendation:
+          type: string
+          enum:
+            - repair
+            - replace
+        repair_replace_rationale:
+          type: string
+        appliance_grade:
+          type: string
+          enum:
+            - entry
+            - mid
+            - top
+            - N/A
+        partner_id:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '.*\S.*'
+          description: Required in V9; AHS-normalized values and N/A are accepted
+        appliance_photos:
+          type: array
+          maxItems: 10
+          description: >-
+            Direct HTTPS photo URLs. Sender-provided URLs pass through. When
+            V9 receives an empty array and the VRS Express ticket has internal
+            photos, VRS Express supplies direct signed Object Storage GET URLs
+            valid for 24 hours at dispatch; VRS AI uses plain GET with no VRS
+            Express API key or session.
+          items:
+            type: string
+            format: uri
+        comments:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Comment'
+        appliance_color:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '.*\S.*'
+        contract_number:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+        purchase_year:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: string
+              const: TBD
+            - type: string
+              const: N/A
+        symptom:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+        cta_no:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+          x-vrs-equals-field: contract_number
+          description: >-
+            V9 client/dispatch number. It must contain the same value as
+            contract_number, including the N/A placeholder.
+        district_number:
+          oneOf:
+            - type: string
+              pattern: '^[0-9]{4}$'
+            - const: N/A
     AuthorizeAccepted:
       type: object
       additionalProperties: false

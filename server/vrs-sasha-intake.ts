@@ -34,7 +34,7 @@ export interface VrsIntakeTicketInput {
 }
 
 interface VrsSashaInternalTicketOptions {
-  // Private route-to-handler escape hatch for the V8 §2.4 retry exception.
+  // Private route-to-handler escape hatch for the V8+ retry exception.
   // It never comes from the request body or public API.
   ignoreLegacyDuplicateSubmissionIds?: readonly number[];
 }
@@ -106,7 +106,7 @@ export function createVrsSashaIntake(
       }
 
       const retryableFailedV8SubmissionIds =
-        getVrsAuthorizeContractVersion(payload) === "v8"
+        getVrsAuthorizeContractVersion(payload) !== "v5"
           ? await deps.store.findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(
             payload.service_order,
           )

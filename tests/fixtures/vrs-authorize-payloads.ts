@@ -54,3 +54,9 @@ export const validV8AuthorizePayload = {
   appliance_photos: [signedTinaPhotoUrl],
   comments: [],
 };
+
+export const validV9AuthorizePayload = {
+  ...validV8AuthorizePayload,
+  cta_no: "1234567890",
+  district_number: "8206",
+};

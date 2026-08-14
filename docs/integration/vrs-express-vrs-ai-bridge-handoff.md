@@ -3,7 +3,7 @@
 | Item | Value |
 |---|---|
 | Platforms | VRS Express and VRS AI |
-| Interface | Strict V5 and strict V8 on `POST /vrs/authorize` |
+| Interface | Strict V5, strict V8, and strict V9 on `POST /vrs/authorize` |
 | Environment | Development only until both acceptance directions pass |
 | Machine-readable contract | [vrs-express-vrs-ai-bridge-openapi.yaml](./vrs-express-vrs-ai-bridge-openapi.yaml) |
 
@@ -36,10 +36,11 @@ Other partner values are rejected before ticket creation.
 ### Development data prerequisites
 
 Before Direction A, replace each sample `tech_id` with a provisioned active
-VRS Express DEV technician. The sender does not provide a district field; VRS
-Express resolves it from `tech_id` and normalizes the roster's `000DDDD`
-representation to the four-digit `DDDD` service-order prefix. Use that same ID
-in `comments[].tech_id`.
+VRS Express DEV technician. VRS Express resolves its internal ticket prefix
+from `tech_id` and normalizes the roster's `000DDDD` representation to four
+digits. V9 separately requires the order-scoped `district_number`; that field
+does not replace the technician roster check. Use the same technician ID in
+`comments[].tech_id`.
 Replace each sample `service_order` with a unique eight-digit DEV value. The
 literal identifiers in the examples are format-safe samples only and must not
 be sent unchanged.
@@ -51,7 +52,7 @@ be sent unchanged.
 1. VRS AI's simulator sends `POST
    <VRS_EXPRESS_DEV_BASE_URL>/vrs/authorize`.
 2. It authenticates with the development VRS Express intake `X-API-Key`.
-3. It sends one complete strict V5 or V8 body with
+3. It sends one complete strict V5, V8, or V9 body with
    `callback_url: "<UPSTREAM_DEV_CALLBACK_URL>"`.
 4. VRS Express returns `202` with its public call ID after creating one pending
    human-review ticket. This `202` means pending human review and does not call VRS AI.
@@ -76,15 +77,17 @@ this handoff.
 
 ## 3. Strict contract selection
 
-Both versions use the same route and have `additionalProperties: false`.
+All three versions use the same route and have `additionalProperties: false`.
 
+- If either `cta_no` or `district_number` exists, the entire request is strict
+  V9.
 - If any one of `appliance_color`, `contract_number`, `purchase_year`, or
   `symptom` exists, the entire request is strict V8.
 - Otherwise the entire request is strict V5.
-- A partial V8 request fails V8 validation; it never falls through to V5.
+- A partial V8/V9 request fails its selected validation; it never falls through.
 - VRS Express dispatches the same contract version received and never
   up-converts V5.
-- Never emit `contractVersion`, `contract_version`, `cta_no`, `end_level`, or
+- Never emit `contractVersion`, `contract_version`, `end_level`, or
   `diagnostic_photos`.
 
 ## 4. Copyable V5 development payload
@@ -206,6 +209,25 @@ V8 placeholder values are part of the contract:
   `repair_replace_rationale` may be the empty string.
 - `appliance_photos` and `comments` may be empty arrays but must be present.
 
+## 5A. V9 development delta
+
+V9 is the complete V8 payload plus these two required fields. The complete
+copyable V9 example is also under `examples.v9` in the OpenAPI file.
+
+```json
+{
+  "cta_no": "1234567890",
+  "district_number": "8206"
+}
+```
+
+- `cta_no` is nonblank with no contract maximum and must exactly equal
+  `contract_number`, including when both are `"N/A"`.
+- `district_number` is the order-scoped four-digit district (`"8206"`) or
+  `"N/A"`. It is not the technician's routing-area district.
+- VRS Express preserves both fields through review and dispatch. It does not
+  derive or overwrite them.
+
 ## 6. Exact field constraints
 
 Unknown root, part, and comment keys are rejected.
@@ -238,6 +260,13 @@ Unknown root, part, and comment keys are rejected.
 | `purchase_year` | Not allowed | Positive integer with no upper limit, `TBD`, or `N/A` |
 | `symptom` | Not allowed | Required nonblank string; no contract maximum |
 
+V9 keeps every V8 constraint and adds:
+
+| Field | V9 constraint |
+|---|---|
+| `cta_no` | Required nonblank string; no contract maximum; exactly equals `contract_number` |
+| `district_number` | Required four digits or `N/A` |
+
 Each `parts[]` item is strict:
 
 | Field | Constraint |
@@ -256,16 +285,17 @@ Each `comments[]` item is strict:
 | `text` | Nonblank, max 2000 |
 | `timestamp` | ISO-8601 date-time with offset |
 
-## 7. Controlled V8 enrichment and photos
+## 7. Controlled V8/V9 enrichment and photos
 
 After approval, VRS Express may fill only a documented placeholder in an
-already-existing V8 key from authoritative data for that exact field. The
+already-existing V8/V9 key from authoritative data for that exact field. The
 implemented candidates are `tech_phone`, `tech_name`, and an empty
 `appliance_photos` array. It never overwrites a populated value, appends a
-missing key, adds `cta_no`, or changes contract version.
+missing key or changes contract version. V9 `cta_no` and `district_number`
+pass through unchanged.
 
 Sender-provided TINA/signed photo URLs pass through byte-for-byte and require
-no VRS Express login. When an accepted V8 request has an empty
+no VRS Express login. When an accepted V8/V9 request has an empty
 `appliance_photos` array and its VRS Express ticket contains authenticated
 internal `/objects/` photo paths, VRS Express converts those paths at dispatch
 into direct signed HTTPS Object Storage `GET` URLs valid for 24 hours. VRS AI
@@ -403,13 +433,13 @@ dedupe expiry in this interface.
 event to `<UPSTREAM_DEV_CALLBACK_URL>` with its public call ID and the
 sender-provided secret.
 
-Only active bridge calls return `409 DUPLICATE_CALL`. V5 and nonretryable V8
+Only active bridge calls return `409 DUPLICATE_CALL`. V5 and nonretryable V8+
 terminal repeats remain subject to ordinary ticket/service-order policy.
 
-The narrow V8 exception is a strict V8 request whose latest same-service-order
-bridge is a retryable `failed` V8 call with its terminal failed callback
+The narrow V8+ exception is a strict V8 or V9 request whose latest
+same-service-order bridge is a retryable `failed` V8+ call with its terminal failed callback
 locally applied. VRS Express creates a new normal ticket, new bridge row, and
-new public call ID immediately. It excludes only prior retryable-failed V8
+new public call ID immediately. It excludes only prior retryable-failed V8+
 bridge tickets from the legacy same-day duplicate checks; every other ticket
 constraint remains in force. It never reuses or resets the old ticket, bridge,
 or event. Upstream forwarding remains independent: an old callback-forward
@@ -421,8 +451,9 @@ new request.
 ### Direction A acceptance: VRS AI simulator to VRS Express
 
 - [ ] Provision an active VRS Express DEV technician, then replace both sample
-      `tech_id` occurrences. Do not send district; VRS Express derives and
-      normalizes it from the technician roster.
+      `tech_id` occurrences. VRS Express derives its internal ticket prefix
+      from the technician roster; V9 still sends the separate order-scoped
+      `district_number`.
 - [ ] Replace each sample `service_order` with a unique eight-digit DEV value.
 - [ ] Substitute `<VRS_EXPRESS_DEV_BASE_URL>` and
       `<UPSTREAM_DEV_CALLBACK_URL>` only in the development test runner.
@@ -430,9 +461,13 @@ new request.
       ID.
 - [ ] Send one unique complete V8 payload and receive `202` with a public call
       ID.
+- [ ] Send one unique complete V9 payload and receive `202` with a public call
+      ID. Confirm `cta_no` equals `contract_number` and `district_number` is
+      the order's four-digit district.
 - [ ] Confirm each request creates exactly one pending development ticket.
 - [ ] Confirm VRS AI receives zero outbound requests before human approval.
 - [ ] Confirm a partial V8 body returns `400` and does not fall through to V5.
+- [ ] Confirm a partial V9 body returns `400` and does not fall through to V8.
 - [ ] Confirm a duplicate active service order returns `409`.
 
 ### Direction B acceptance: VRS Express to VRS AI
@@ -443,16 +478,18 @@ new request.
       with only callback ownership replaced.
 - [ ] Approve the V8 ticket and confirm exactly one strict V8 request arrives,
       with the same contract version and usable sender-signed photos.
+- [ ] Approve the V9 ticket and confirm exactly one strict V9 request arrives
+      with both V9 fields unchanged and usable sender-signed photos.
 - [ ] Return each of the five signed event shapes and confirm the expected
       ticket state, one technician SMS effect where applicable, and one signed
       upstream callback.
 - [ ] Replay one event and confirm `200`, `deduped: true`, and no repeated
       ticket/SMS effect.
-- [ ] Send a retryable V8 failure, confirm its failed callback is applied
-      locally, then immediately send a strict new V8 request and confirm a new
+- [ ] Send a retryable V8/V9 failure, confirm its failed callback is applied
+      locally, then immediately send a strict new same-version request and confirm a new
       normal ticket, new bridge row, and new public call ID. The old upstream
       forward retry may remain pending and must stay independent.
-- [ ] Confirm V5 and nonretryable V8 terminal repeats remain subject to
+- [ ] Confirm V5 and nonretryable V8/V9 terminal repeats remain subject to
       ordinary ticket/service-order policy.
 
 Do not use production URLs, credentials, or customer data for this checklist.

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — V9 bridge contract compatibility (2026-08-14)
+- Added strict V9 selection on the existing `POST /vrs/authorize` route when
+  either `cta_no` or `district_number` is present. V9 requires the complete V8
+  shape plus both fields, requires `cta_no` to equal `contract_number`, and
+  accepts only a four-digit order district or `N/A`.
+- VRS Express preserves the V9 business payload through intake, human review,
+  Stage 1 dispatch, retryable-failure handling, service-order lookup, and
+  signed-photo enrichment. V5 and V8 parsing and dispatch remain available on
+  the same endpoint with no database, schema, Secret, or production change.
+- Added the two fields to the DEV review panel, OpenAPI 9.0 contract, Markdown
+  handoff, architecture, and environment-specific DEV test sheet.
+- Verification: 179/179 focused bridge tests pass, the production build
+  passes, and TypeScript remains at the known 60-diagnostic repository
+  baseline with zero diagnostics in the V9 change scope.
+
 ### Fixed — DEV bridge contract-key compatibility (2026-08-14)
 - VRS Express DEV approval dispatch now recognizes the already-configured
   contract `X-API-Key` under its existing `VRS_SASHA_API_KEY` Secret name when

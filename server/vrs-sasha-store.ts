@@ -10,6 +10,7 @@ import {
 } from "./vrs-sasha-queue";
 import {
   getVrsAuthorizeContractVersion,
+  type VrsAuthorizeContractVersion,
   type VrsWebhookEvent,
 } from "./vrs-sasha-contract";
 
@@ -49,7 +50,7 @@ export interface NewVrsBridgeIntake {
 
 export interface VrsAiBridgeStatus {
   callId: string;
-  contractVersion: "v5" | "v8";
+  contractVersion: VrsAuthorizeContractVersion;
   state: string;
   providerCallId: string | null;
   dispatchError: string | null;
@@ -108,7 +109,7 @@ function isLocallyAppliedRetryableFailedV8Candidate(
     row.eventId === row.webhookEventId &&
     row.eventState === "failed" &&
     row.eventAppliedAt !== null &&
-    getVrsAuthorizeContractVersion(row.requestPayload) === "v8"
+    getVrsAuthorizeContractVersion(row.requestPayload) !== "v5"
   );
 }
 

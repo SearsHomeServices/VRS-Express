@@ -1,8 +1,17 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-14 14:14
+Updated: 2026-08-14 16:15
 
 ## Decisions
+
+- [CX] 2026-08-14 - Implement V9 as a third strict wire shape on the existing
+  versionless endpoint. Select V9 before V8 whenever `cta_no` or
+  `district_number` is present; require the complete V8 baseline plus both V9
+  fields; enforce `cta_no === contract_number`; accept order district only as
+  `DDDD` or `N/A`; and preserve both fields unchanged through review and
+  dispatch. Treat V9 as V8+ for the already-approved immediate retryable-fail
+  and signed-photo paths. Do not change schema, Secrets, routes, callbacks,
+  production, or the existing V5/V8 behavior.
 
 - [CX] 2026-08-14 - Treat the platform team's statement that the DEV contract
   key is already configured under another name as authority for a narrow

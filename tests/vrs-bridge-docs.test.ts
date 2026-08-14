@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   VRS_V8_ONLY_KEYS,
+  VRS_V9_ONLY_KEYS,
   safeParseVrsAuthorizeRequest,
   vrsWebhookEventSchema,
 } from "../server/vrs-sasha-contract";
@@ -110,11 +111,11 @@ function collectLocalRefs(value: unknown, references: string[] = []): string[] {
   return references;
 }
 
-function authorizeExample(name: "v5" | "v8"): Record<string, unknown> {
+function authorizeExample(name: "v5" | "v8" | "v9"): Record<string, unknown> {
   return structuredClone(requestMedia.examples[name].value);
 }
 
-function runtimeAuthorizeExample(name: "v5" | "v8"): Record<string, unknown> {
+function runtimeAuthorizeExample(name: "v5" | "v8" | "v9"): Record<string, unknown> {
   return {
     ...authorizeExample(name),
     callback_url:
@@ -133,34 +134,39 @@ describe("VRS bridge OpenAPI contract", () => {
     }
   });
 
-  it("selects one strict V5 or V8 request without a wire version field", () => {
+  it("selects one strict V5, V8, or V9 request without a wire version field", () => {
     expect(requestMedia.schema).toEqual({
       oneOf: [
         { $ref: "#/components/schemas/V5AuthorizeRequest" },
         { $ref: "#/components/schemas/V8AuthorizeRequest" },
+        { $ref: "#/components/schemas/V9AuthorizeRequest" },
       ],
     });
 
     const selection = openApi["x-vrs-contract-selection"];
     expect(selection).toEqual({
-      rule: "v8-if-any-v8-only-key-is-present-otherwise-v5",
+      rule: "v9-if-any-v9-only-key-is-present-otherwise-v8-or-v5",
+      v9OnlyKeys: [...VRS_V9_ONLY_KEYS],
       v8OnlyKeys: [...VRS_V8_ONLY_KEYS],
       forbiddenVersionFields: ["contractVersion", "contract_version"],
     });
 
-    for (const version of ["V5", "V8"] as const) {
+    for (const version of ["V5", "V8", "V9"] as const) {
       const schema = openApi.components.schemas[`${version}AuthorizeRequest`];
       expect(schema.additionalProperties).toBe(false);
       expect(schema.properties).not.toHaveProperty("contractVersion");
       expect(schema.properties).not.toHaveProperty("contract_version");
-      expect(schema.properties).not.toHaveProperty("cta_no");
+      if (version !== "V9") {
+        expect(schema.properties).not.toHaveProperty("cta_no");
+        expect(schema.properties).not.toHaveProperty("district_number");
+      }
       expect(schema.properties).not.toHaveProperty("end_level");
       expect(schema.properties).not.toHaveProperty("diagnostic_photos");
     }
   });
 
-  it("keeps the complete V5 and V8 examples aligned with runtime parsing", () => {
-    expect(Object.keys(requestMedia.examples).sort()).toEqual(["v5", "v8"]);
+  it("keeps the complete V5, V8, and V9 examples aligned with runtime parsing", () => {
+    expect(Object.keys(requestMedia.examples).sort()).toEqual(["v5", "v8", "v9"]);
 
     const v5 = authorizeExample("v5");
     const parsedV5 = safeParseVrsAuthorizeRequest(runtimeAuthorizeExample("v5"));
@@ -173,6 +179,13 @@ describe("VRS bridge OpenAPI contract", () => {
     expect(parsedV8.success).toBe(true);
     expect(parsedV8.version).toBe("v8");
     expect(v8AlwaysPresent.every((key) => key in v8)).toBe(true);
+
+    const v9 = authorizeExample("v9");
+    const parsedV9 = safeParseVrsAuthorizeRequest(runtimeAuthorizeExample("v9"));
+    expect(parsedV9.success).toBe(true);
+    expect(parsedV9.version).toBe("v9");
+    expect([...v8AlwaysPresent, ...VRS_V9_ONLY_KEYS].every((key) => key in v9))
+      .toBe(true);
 
     const partialV8 = { ...runtimeAuthorizeExample("v5"), symptom: "N/A" };
     const parsedPartial = safeParseVrsAuthorizeRequest(partialV8);
@@ -367,8 +380,9 @@ describe("VRS bridge OpenAPI contract", () => {
     }
 
     expect(handoff).toMatch(/provisioned active.*VRS Express DEV technician/is);
-    expect(handoff).toMatch(/does not provide a district field/is);
-    expect(handoff).toMatch(/normalizes.*000DDDD.*four-digit.*DDDD/is);
+    expect(handoff).toMatch(/internal ticket prefix.*tech_id/is);
+    expect(handoff).toMatch(/normalizes.*000DDDD.*four\s+digits/is);
+    expect(handoff).toMatch(/V9.*order-scoped.*district_number/is);
     expect(handoff).toMatch(/replace.*service_order.*unique.*eight-digit/is);
     expect(handoff).toMatch(/prerequisite.*before.*Direction A/is);
   });
@@ -499,7 +513,7 @@ describe("VRS bridge platform handoff", () => {
       /V5.*nonretryable V8.*ordinary.*ticket\/SO policy/is,
     );
     expect(combined).toMatch(
-      /strict V8 request.*locally applied.*retryable.*failed/is,
+      /strict V8(?:\+| or V9) request.*locally applied.*retryable.*failed/is,
     );
     expect(combined).toMatch(/new normal ticket.*new bridge.*new public call ID/is);
     expect(combined).not.toMatch(/same.ticket.*(?:reset|reuse)/is);
@@ -516,7 +530,7 @@ describe("VRS bridge platform handoff", () => {
       expect(source).toMatch(/strict V8/is);
       expect(source).toMatch(/retryable.*failed/is);
       expect(source).toMatch(/locally applied/is);
-      expect(source).toMatch(/prior retryable-failed V8\s+bridge tickets/is);
+      expect(source).toMatch(/prior retryable-failed V8\+?\s+bridge tickets/is);
       expect(source).toMatch(/same-day duplicate checks/is);
       expect(source).toMatch(/upstream forwarding.*independent/is);
       expect(source).toMatch(

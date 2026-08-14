@@ -9,6 +9,7 @@ import {
   signedTinaPhotoUrl,
   validV5AuthorizePayload,
   validV8AuthorizePayload,
+  validV9AuthorizePayload,
 } from "./fixtures/vrs-authorize-payloads";
 
 type EnrichForDispatch = (
@@ -683,6 +684,53 @@ describe("VRS Express bridge orchestration", () => {
         signedObjectUrl,
         "https://cdn.example.test/external-photo.jpg",
       ]);
+  });
+
+  it("preserves V9 keys while signing VRS Express photo URLs at dispatch", async () => {
+    const { callback_secret: _callbackSecret, ...storedPayload } = {
+      ...validV9AuthorizePayload,
+      appliance_photos: [],
+    };
+    const signedObjectUrl =
+      "https://storage.googleapis.com/vrs-dev/uploads/v9-photo?X-Goog-Signature=signed";
+    const client = {
+      authorize: vi.fn().mockResolvedValue({
+        kind: "accepted" as const,
+        callId: "vrs_ai_call_v9_photos",
+        state: "queued",
+        duplicate: false,
+      }),
+    };
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 19,
+        submissionId: 59,
+        callId: "vrs_call_v9_photos",
+        state: "pending_review",
+        requestPayload: storedPayload,
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 59,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+      enrichment: { appliancePhotos: ["/objects/uploads/v9-photo"] },
+      signObjectPhotoUrl: vi.fn(async () => signedObjectUrl),
+    });
+
+    expect(client.authorize.mock.calls[0]?.[0].payload).toMatchObject({
+      cta_no: "1234567890",
+      contract_number: "1234567890",
+      district_number: "8206",
+      appliance_photos: [signedObjectUrl],
+    });
   });
 
   it("fails bridge dispatch before the VRS AI call when an object photo cannot be signed", async () => {

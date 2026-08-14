@@ -223,6 +223,28 @@ export const vrsAuthorizeV8RequestSchema = z
   .object(vrsAuthorizeV8RequestShape)
   .strict();
 
+const vrsAuthorizeV9RequestShape = {
+  ...vrsAuthorizeV8RequestShape,
+  cta_no: nonblankString("cta_no"),
+  district_number: z.union([
+    z.string().regex(/^\d{4}$/, "district_number must be 4 digits"),
+    z.literal("N/A"),
+  ]),
+};
+
+export const vrsAuthorizeV9RequestSchema = z
+  .object(vrsAuthorizeV9RequestShape)
+  .strict()
+  .superRefine((value, context) => {
+    if (value.cta_no !== value.contract_number) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cta_no"],
+        message: "cta_no must match contract_number",
+      });
+    }
+  });
+
 export const VRS_V8_ONLY_KEYS = [
   "appliance_color",
   "contract_number",
@@ -230,12 +252,16 @@ export const VRS_V8_ONLY_KEYS = [
   "symptom",
 ] as const;
 
-export type VrsAuthorizeContractVersion = "v5" | "v8";
+export const VRS_V9_ONLY_KEYS = ["cta_no", "district_number"] as const;
+
+export type VrsAuthorizeContractVersion = "v5" | "v8" | "v9";
 export type VrsAuthorizeV5Request = z.infer<typeof vrsAuthorizeV5ShapeSchema>;
 export type VrsAuthorizeV8Request = z.infer<typeof vrsAuthorizeV8RequestSchema>;
+export type VrsAuthorizeV9Request = z.infer<typeof vrsAuthorizeV9RequestSchema>;
 export type VrsAuthorizeRequest =
   | VrsAuthorizeV5Request
-  | VrsAuthorizeV8Request;
+  | VrsAuthorizeV8Request
+  | VrsAuthorizeV9Request;
 
 export function getVrsAuthorizeContractVersion(
   input: unknown,
@@ -244,11 +270,17 @@ export function getVrsAuthorizeContractVersion(
     return "v5";
   }
 
+  if (
+    VRS_V9_ONLY_KEYS.some((key) =>
+      Object.prototype.hasOwnProperty.call(input, key)
+    )
+  ) {
+    return "v9";
+  }
+
   return VRS_V8_ONLY_KEYS.some((key) =>
     Object.prototype.hasOwnProperty.call(input, key)
-  )
-    ? "v8"
-    : "v5";
+  ) ? "v8" : "v5";
 }
 
 export function safeParseVrsAuthorizeRequest(input: unknown):
@@ -263,9 +295,11 @@ export function safeParseVrsAuthorizeRequest(input: unknown):
       error: z.ZodError;
     } {
   const version = getVrsAuthorizeContractVersion(input);
-  const parsed = version === "v8"
-    ? vrsAuthorizeV8RequestSchema.safeParse(input)
-    : vrsAuthorizeV5RequestSchema.safeParse(input);
+  const parsed = version === "v9"
+    ? vrsAuthorizeV9RequestSchema.safeParse(input)
+    : version === "v8"
+      ? vrsAuthorizeV8RequestSchema.safeParse(input)
+      : vrsAuthorizeV5RequestSchema.safeParse(input);
 
   return parsed.success
     ? { success: true, version, data: parsed.data }
@@ -317,6 +351,22 @@ const vrsAuthorizeV8OutboundSourceSchema = z
     callback_url: cleanHttpsUrl,
   })
   .strict();
+
+const vrsAuthorizeV9OutboundSourceSchema = z
+  .object({
+    ...vrsAuthorizeV9RequestShape,
+    callback_url: cleanHttpsUrl,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.cta_no !== value.contract_number) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cta_no"],
+        message: "cta_no must match contract_number",
+      });
+    }
+  });
 
 export function isValidVrsExpressCallbackUrl(value: string): boolean {
   try {
@@ -457,9 +507,11 @@ export async function sendVrsAuthorizeRequest(options: {
   fetchImpl?: typeof fetch;
 }): Promise<VrsAiAuthorizeResult> {
   const sourceVersion = getVrsAuthorizeContractVersion(options.payload);
-  const sourcePayload = sourceVersion === "v8"
-    ? vrsAuthorizeV8OutboundSourceSchema.parse(options.payload)
-    : vrsAuthorizeV5OutboundSourceSchema.parse(options.payload);
+  const sourcePayload = sourceVersion === "v9"
+    ? vrsAuthorizeV9OutboundSourceSchema.parse(options.payload)
+    : sourceVersion === "v8"
+      ? vrsAuthorizeV8OutboundSourceSchema.parse(options.payload)
+      : vrsAuthorizeV5OutboundSourceSchema.parse(options.payload);
   const baseUrl = new URL(options.baseUrl);
   if (
     baseUrl.protocol !== "https:" ||

@@ -67,14 +67,17 @@ obtain fresh URLs after expiry.
   "service_order": "99081203",
   "call_id": "vrs_call_example",
   "state": "pending_review",
-  "contract_version": "v8",
+  "contract_version": "v9",
   "service_order_info": {
     "service_order": "99081203",
     "tech_id": "test_tech_1",
     "brand": "Whirlpool",
     "model_number": "WTW5000DW1",
     "serial_number": "C31290822",
-    "symptom": "Washer does not drain"
+    "symptom": "Washer does not drain",
+    "contract_number": "1234567890",
+    "cta_no": "1234567890",
+    "district_number": "8206"
   },
   "appliance_photos": [
     "https://storage.googleapis.com/example-object?X-Goog-Signature=temporary"
@@ -88,7 +91,7 @@ order through the bridge. `502 PHOTO_URL_GENERATION_FAILED` means the photo
 URLs could not be generated and should be retried later.
 
 The approved-ticket outbound payload remains a second supported delivery
-path. For an approved V8 ticket, `appliance_photos` in the VRS Express -> VRS
+path. For an approved V8/V9 ticket, `appliance_photos` in the VRS Express -> VRS
 AI payload contains the same usable photo locations.
 
 Sender-provided external HTTPS
@@ -118,12 +121,14 @@ Example outbound field (the real signature is generated at dispatch):
 - Active VRS Express DEV technician: `test_tech_1`
 - Technician district: `8175`
 - Use `test_tech_1` in both root `tech_id` and `comments[].tech_id`.
-- A sender never supplies district. VRS Express resolves it from `tech_id` and
-  normalizes a real roster value such as `0008175` to the `8175` service-order
-  prefix.
+- VRS Express always resolves the internal ticket prefix from `tech_id` and
+  normalizes a roster value such as `0008175` to `8175`. V9 also requires a
+  separate order-scoped `district_number` field (`DDDD` or `N/A`) that passes
+  through to the VRS AI agent; it does not replace the roster check.
 - Reserved/used smoke-test service order: `99081201` - do not reuse.
 - Suggested one-time V5 service order: `99081202`.
 - Suggested one-time V8 service order: `99081203`.
+- Suggested one-time V9 service order: `99081204`.
 - If either suggested order has already been used, choose a new unique
   eight-digit DEV value before sending.
 - Use only synthetic DEV customer, appliance, part, phone, and photo data.
@@ -140,21 +145,24 @@ Example outbound field (the real signature is generated at dispatch):
    ticket before human approval.
 5. Repeat steps 2-4 with the complete strict V8 example and a different unique
    service order.
-6. A VRS Express human reviewer claims and approves each DEV ticket.
-7. Confirm VRS AI receives exactly one authorize request per approved ticket,
+6. Repeat steps 2-4 with the complete strict V9 example and another unique
+   service order. Set `cta_no` equal to `contract_number` and use the order's
+   four-digit `district_number`.
+7. A VRS Express human reviewer claims and approves each DEV ticket.
+8. Confirm VRS AI receives exactly one authorize request per approved ticket,
    with the same contract version received by VRS Express and the VRS Express
    DEV callback URL.
-8. For the V8 ticket, confirm each `appliance_photos` URL downloads with a
+9. For the V8/V9 tickets, confirm each `appliance_photos` URL downloads with a
    plain `GET` and no VRS Express credentials.
-9. VRS AI returns `202` with its provider `call_id`.
-10. VRS AI sends a correctly signed result event to the VRS Express DEV callback
+10. VRS AI returns `202` with its provider `call_id`.
+11. VRS AI sends a correctly signed result event to the VRS Express DEV callback
    URL, using the exact raw body and the `callback_secret` received in step 7.
-11. Confirm VRS Express records the event, applies the expected ticket result,
+12. Confirm VRS Express records the event, applies the expected ticket result,
     performs the applicable technician notification once, and forwards one
     signed result to the simulator's upstream DEV callback.
-12. Replay the same event and confirm `200`, `deduped: true`, and no repeated
+13. Replay the same event and confirm `200`, `deduped: true`, and no repeated
     ticket or notification effect.
-13. Run the remaining callback shapes and retryable-failed V8 case from the
+14. Run the remaining callback shapes and retryable-failed V8/V9 case from the
     acceptance checklist in the handoff ZIP.
 
 ## Expected checkpoints
@@ -163,10 +171,10 @@ Example outbound field (the real signature is generated at dispatch):
 |---|---|
 | Missing or invalid VRS Express intake key | `401 UNAUTHORIZED` |
 | Invalid or incomplete strict payload | `400 VALIDATION_ERROR` |
-| Valid unique V5 or V8 intake | `202`, public VRS Express call ID, `pending_review` |
+| Valid unique V5, V8, or V9 intake | `202`, public VRS Express call ID, `pending_review` |
 | Before human approval | No VRS AI outbound request and no provider call ID |
 | After human approval | One same-version VRS AI authorize request |
-| V8 ticket with VRS Express photos | Up to 10 direct signed HTTPS URLs; plain `GET` succeeds without VRS Express credentials |
+| V8/V9 ticket with VRS Express photos | Up to 10 direct signed HTTPS URLs; plain `GET` succeeds without VRS Express credentials |
 | Service-order and photo lookup | `200` with sanitized `service_order_info`, up to 10 direct photo URLs, and photo expiry; same VRS Express DEV `X-API-Key` as intake |
 | Valid signed result callback | `200`, durable event record, expected ticket effect |
 | Exact event replay | `200`, `deduped: true`, no duplicate side effect |
@@ -181,6 +189,7 @@ Example outbound field (the real signature is generated at dispatch):
   recorded in this sheet or test output.
 - VRS Express owns and has configured its intake, callback, encryption, and
   environment values.
-- Direction B is waiting only for the VRS AI DEV `X-API-Key` and the joint
-  test window.
+- Direction B is waiting for a resolvable VRS AI DEV base URL and the joint
+  test window. The already-exchanged DEV contract key is configured under its
+  existing Secret name.
 - No production publish or production database action is part of this test.

@@ -386,7 +386,7 @@ export async function dispatchVrsAiForSubmission(options: {
     const sourceVersion = getVrsAuthorizeContractVersion(sourcePayload);
     let enrichment = options.enrichment ?? {};
     if (
-      sourceVersion === "v8" &&
+      sourceVersion !== "v5" &&
       (sourcePayload as VrsAuthorizeV8Request).appliance_photos.length === 0 &&
       Array.isArray(enrichment.appliancePhotos)
     ) {
