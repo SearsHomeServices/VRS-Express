@@ -66,3 +66,14 @@ tiny theoretical leak (entry per user never returning) — negligible.
 ## Index hygiene done this session
 Added FK indexes on intake_forms.submission_id, submission_notes.submission_id,
 sms_notifications.submission_id (all were PK-only). See perf-index-pattern.md.
+
+## #5 Admin Ticket Overview client-side render — MITIGATED 2026-08-16
+At ~11.5k prod submissions the admin list response was ~9 MB JSON (slim rows incl.
+photos/thumbnail JSON) and the table rendered ALL filtered rows with the whole
+derived pipeline (filters/counts/sort/search) re-running un-memoized on every
+render. Fixed: pipeline staged in useMemo (decorate-sort-undecorate for sorts),
+table body paginated (100 rows + "Show more"; counts/exports still full-set),
+audit detail endpoint reads parallelized. NOT a RAM/CPU/DB problem — DB is 23 MB
+total; the cost was payload transfer + browser parse/render. Next lever if it
+regrows: drop photos/photoThumbnails from list payload (detail dialog already
+fetches /:id) — mind the photo-thumbnails invariant + micro-cache version stamp.

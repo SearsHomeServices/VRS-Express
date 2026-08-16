@@ -1411,20 +1411,23 @@ function TicketOverviewSection() {
   // below still runs over whichever source is active — it matches the same
   // fields the server search does, so it only ever narrows, never hides.
   const rawTicketsUnbounded = (searchActive ? searchData?.submissions : allData?.submissions) || [];
+  // Perf 2026-08-16: the whole derived pipeline below (To-cutoff → request
+  // type → PDC → counts → status filter → sort → search) used to re-run on
+  // EVERY render of this component — at 10k+ rows that's several full O(N)
+  // passes plus an O(N log N) sort with per-comparison Date parsing, on
+  // every keystroke/state change. Memoized per stage so it only recomputes
+  // when its actual inputs change.
+  //
   // Custom "To" cutoff (inclusive end of day) — client-side, before the
   // status counts so the cards reflect the selected range too. Skipped
   // while searching (search is explicitly all-time).
-  const rawTickets = (!searchActive && createdBeforeMs != null)
-    ? rawTicketsUnbounded.filter((t: any) => {
-        const created = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
-        return !isNaN(created) && created <= createdBeforeMs;
-      })
-    : rawTicketsUnbounded;
-  const requestTypedTickets = requestTypeFilter === "all"
-    ? rawTickets
-    : requestTypeFilter === "nla"
-    ? rawTickets.filter((t: any) => t.requestType === "parts_nla")
-    : rawTickets.filter((t: any) => t.requestType !== "parts_nla");
+  const rawTickets = useMemo(() => {
+    if (searchActive || createdBeforeMs == null) return rawTicketsUnbounded;
+    return rawTicketsUnbounded.filter((t: any) => {
+      const created = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
+      return !isNaN(created) && created <= createdBeforeMs;
+    });
+  }, [rawTicketsUnbounded, searchActive, createdBeforeMs]);
 
   // Task #43 — Tech PDC filter applied BEFORE statusCounts so the count
   // cards and status dropdown reflect the narrowed set. Any non-"all" value
@@ -1432,80 +1435,108 @@ function TicketOverviewSection() {
   // Task #45 — predicate extracted to shared/tech-pdc-filter.ts so the
   // export-parity test asserts the server's `pdc` param against the exact
   // definition the table uses.
-  const allTickets = pdcFilter === "all"
-    ? requestTypedTickets
-    : requestTypedTickets.filter((t: any) => matchesTechPdcFilter(t, pdcFilter));
+  const allTickets = useMemo(() => {
+    const requestTypedTickets = requestTypeFilter === "all"
+      ? rawTickets
+      : requestTypeFilter === "nla"
+      ? rawTickets.filter((t: any) => t.requestType === "parts_nla")
+      : rawTickets.filter((t: any) => t.requestType !== "parts_nla");
+    return pdcFilter === "all"
+      ? requestTypedTickets
+      : requestTypedTickets.filter((t: any) => matchesTechPdcFilter(t, pdcFilter));
+  }, [rawTickets, requestTypeFilter, pdcFilter]);
 
-  const statusCounts = {
-    all: allTickets.length,
-    queued: allTickets.filter(t => t.ticketStatus === "queued").length,
-    pending: allTickets.filter(t => t.ticketStatus === "pending").length,
-    completed: allTickets.filter(t => t.ticketStatus === "completed").length,
-    rejected: allTickets.filter(t => t.ticketStatus === "rejected").length,
-    rejected_closed: allTickets.filter(t => t.ticketStatus === "rejected_closed").length,
-    invalid: allTickets.filter(t => t.ticketStatus === "invalid").length,
-  };
+  const statusCounts = useMemo(() => {
+    const counts = { all: allTickets.length, queued: 0, pending: 0, completed: 0, rejected: 0, rejected_closed: 0, invalid: 0 };
+    for (const t of allTickets) {
+      if (t.ticketStatus in counts) (counts as any)[t.ticketStatus]++;
+    }
+    return counts;
+  }, [allTickets]);
 
-  let filteredTickets = statusFilter === "all"
-    ? allTickets
-    : allTickets.filter(t => t.ticketStatus === statusFilter);
+  const filteredTickets = useMemo(() => {
+    let out = statusFilter === "all"
+      ? allTickets
+      : allTickets.filter(t => t.ticketStatus === statusFilter);
 
-  // Tyler 2026-05-15 — every column in the Ticket Overview table is sortable.
-  // When ticketSortField is null we keep the existing FIFO behavior for the
-  // "queued" tab so the live queue stays oldest-first by default.
-  if (ticketSortField === null) {
-    if (statusFilter === "queued") {
-      filteredTickets = [...filteredTickets].sort((a, b) =>
-        (safeDate(a.createdAt)?.getTime() || 0) - (safeDate(b.createdAt)?.getTime() || 0)
+    // Tyler 2026-05-15 — every column in the Ticket Overview table is sortable.
+    // When ticketSortField is null we keep the existing FIFO behavior for the
+    // "queued" tab so the live queue stays oldest-first by default.
+    if (ticketSortField === null) {
+      if (statusFilter === "queued") {
+        out = [...out].sort((a, b) =>
+          (safeDate(a.createdAt)?.getTime() || 0) - (safeDate(b.createdAt)?.getTime() || 0)
+        );
+      }
+    } else {
+      const dir = ticketSortDir === "asc" ? 1 : -1;
+      const field = ticketSortField;
+      const ts = (v: any) => safeDate(v)?.getTime() || 0;
+      const num = (t: any): number => {
+        switch (field) {
+          case "lastUpdated": return ts(t.updatedAt || t.statusChangedAt || t.createdAt);
+          case "intakeForm": return ts(t.intakeFormCompletedAt);
+          case "queueWait": return t.claimedAt ? ts(t.claimedAt) - ts(t.createdAt) : Infinity;
+          case "handleTime": return t.claimedAt && t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.claimedAt) : -1;
+          case "totalTime": return t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.createdAt) : -1;
+          default: return 0;
+        }
+      };
+      const str = (t: any): string => {
+        switch (field) {
+          case "serviceOrder": return (t.serviceOrder || "").toString().toLowerCase();
+          case "status": return (t.ticketStatus || "").toString().toLowerCase();
+          case "assigned": return (t.assignedAgentName || "").toString().toLowerCase();
+          case "technician": return (t.technicianName || "").toString().toLowerCase();
+          case "division": return (t.applianceType || "").toString().toLowerCase();
+          case "warranty": return (t.warrantyType || "").toString().toLowerCase();
+          default: return "";
+        }
+      };
+      // Perf 2026-08-16: decorate-sort-undecorate — compute each row's sort
+      // key once (O(N)) instead of inside the comparator (O(N log N) date
+      // parses).
+      const numeric = TICKET_NUMERIC_FIELDS.includes(field);
+      const decorated = out.map((t): [number | string, any] => [numeric ? num(t) : str(t), t]);
+      decorated.sort((a, b) => {
+        if (numeric) {
+          const av = a[0] as number; const bv = b[0] as number;
+          if (av === Infinity && bv === Infinity) return 0;
+          if (av === Infinity) return 1;
+          if (bv === Infinity) return -1;
+          return (av - bv) * dir;
+        }
+        return a[0] < b[0] ? -dir : a[0] > b[0] ? dir : 0;
+      });
+      out = decorated.map(d => d[1]);
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      out = out.filter(t =>
+        t.serviceOrder?.toLowerCase().includes(q) ||
+        t.technicianName?.toLowerCase().includes(q) ||
+        t.technicianLdapId?.toLowerCase().includes(q) ||
+        t.assignedAgentName?.toLowerCase().includes(q)
       );
     }
-  } else {
-    const dir = ticketSortDir === "asc" ? 1 : -1;
-    const field = ticketSortField;
-    const ts = (v: any) => safeDate(v)?.getTime() || 0;
-    const num = (t: any): number => {
-      switch (field) {
-        case "lastUpdated": return ts(t.updatedAt || t.statusChangedAt || t.createdAt);
-        case "intakeForm": return ts(t.intakeFormCompletedAt);
-        case "queueWait": return t.claimedAt ? ts(t.claimedAt) - ts(t.createdAt) : Infinity;
-        case "handleTime": return t.claimedAt && t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.claimedAt) : -1;
-        case "totalTime": return t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.createdAt) : -1;
-        default: return 0;
-      }
-    };
-    const str = (t: any): string => {
-      switch (field) {
-        case "serviceOrder": return (t.serviceOrder || "").toString().toLowerCase();
-        case "status": return (t.ticketStatus || "").toString().toLowerCase();
-        case "assigned": return (t.assignedAgentName || "").toString().toLowerCase();
-        case "technician": return (t.technicianName || "").toString().toLowerCase();
-        case "division": return (t.applianceType || "").toString().toLowerCase();
-        case "warranty": return (t.warrantyType || "").toString().toLowerCase();
-        default: return "";
-      }
-    };
-    filteredTickets = [...filteredTickets].sort((a, b) => {
-      if (TICKET_NUMERIC_FIELDS.includes(field)) {
-        const av = num(a); const bv = num(b);
-        if (av === Infinity && bv === Infinity) return 0;
-        if (av === Infinity) return 1;
-        if (bv === Infinity) return -1;
-        return (av - bv) * dir;
-      }
-      const av = str(a); const bv = str(b);
-      return av < bv ? -dir : av > bv ? dir : 0;
-    });
-  }
+    return out;
+  }, [allTickets, statusFilter, ticketSortField, ticketSortDir, searchQuery]);
 
-  if (searchQuery.trim()) {
-    const q = searchQuery.toLowerCase().trim();
-    filteredTickets = filteredTickets.filter(t =>
-      t.serviceOrder?.toLowerCase().includes(q) ||
-      t.technicianName?.toLowerCase().includes(q) ||
-      t.technicianLdapId?.toLowerCase().includes(q) ||
-      t.assignedAgentName?.toLowerCase().includes(q)
-    );
-  }
+  // Perf 2026-08-16: render at most a page of rows at a time. Rendering all
+  // 10k+ filtered rows creates hundreds of thousands of DOM nodes and made
+  // the tab progressively slower as ticket volume grew. Counts, exports and
+  // filters still operate on the FULL filtered set — only the visible table
+  // body is capped, with a "Show more" footer.
+  const TICKETS_PAGE_SIZE = 100;
+  const [visibleRowCount, setVisibleRowCount] = useState(TICKETS_PAGE_SIZE);
+  useEffect(() => {
+    setVisibleRowCount(TICKETS_PAGE_SIZE);
+  }, [statusFilter, pdcFilter, requestTypeFilter, searchQuery, debouncedSearch, searchActive, createdAfterWindow, customFrom, customTo, ticketSortField, ticketSortDir]);
+  const visibleTickets = useMemo(
+    () => (filteredTickets.length > visibleRowCount ? filteredTickets.slice(0, visibleRowCount) : filteredTickets),
+    [filteredTickets, visibleRowCount]
+  );
 
   // Task #43 — show the Tech PDC column whenever negative-outcome rows can
   // appear in the table (any PDC filter active, the All view, or a negative
@@ -1915,7 +1946,7 @@ function TicketOverviewSection() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredTickets.map((ticket: any) => {
+                  {visibleTickets.map((ticket: any) => {
                     // Tyler 2026-04-29: row-aging highlight (red = urgent
                     // ≥4h, amber = aging ≥2h) now uses business-hours
                     // elapsed too, so an overnight queued ticket isn't
@@ -2184,6 +2215,21 @@ function TicketOverviewSection() {
                   })}
                 </TableBody>
               </Table>
+              {filteredTickets.length > visibleTickets.length && (
+                <div className="flex items-center justify-center gap-3 py-3 border-t">
+                  <span className="text-xs text-muted-foreground" data-testid="text-visible-row-count">
+                    Showing {visibleTickets.length} of {filteredTickets.length} tickets
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVisibleRowCount(c => c + 500)}
+                    data-testid="button-show-more-tickets"
+                  >
+                    Show more
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

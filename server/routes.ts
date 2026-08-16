@@ -2379,7 +2379,12 @@ export async function registerRoutes(
       const submission = await storage.getSubmission(id);
       if (!submission) return res.status(404).json({ error: "Submission not found" });
 
-      const smsLogs = await storage.getSmsNotifications(id);
+      // Perf 2026-08-16 — independent reads fetched in parallel; this
+      // endpoint gates the admin ticket-detail dialog open time.
+      const [smsLogs, allRelated] = await Promise.all([
+        storage.getSmsNotifications(id),
+        storage.getSubmissionHistory(submission.serviceOrder),
+      ]);
 
       // Tyler 2026-05-09 (VRS request): admin ticket detail must show the
       // tech's and agent's notes from PRIOR submissions in the same SO#
@@ -2388,7 +2393,6 @@ export async function registerRoutes(
       // submission + all rows whose `resubmissionOf` points at the root,
       // sorted oldest-first. Excludes the current submission so the UI
       // can render it as a distinct "previous submissions" section.
-      const allRelated = await storage.getSubmissionHistory(submission.serviceOrder);
       const rootId = submission.resubmissionOf || submission.id;
       const fullChain = allRelated
         .filter(s => s.id === rootId || s.resubmissionOf === rootId)
@@ -2408,11 +2412,13 @@ export async function registerRoutes(
         if (p.stage2ReviewedBy) userIds.add(p.stage2ReviewedBy);
       });
 
+      // Perf 2026-08-16 — one parallel batch instead of a sequential
+      // per-user query loop.
       const userNames: Record<number, string> = {};
-      for (const uid of userIds) {
+      await Promise.all(Array.from(userIds).map(async (uid) => {
         const u = await storage.getUser(uid);
         if (u) userNames[uid] = u.name;
-      }
+      }));
 
       function safeIso(val: any): string {
         if (!val) return new Date().toISOString();
