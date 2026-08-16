@@ -158,6 +158,7 @@ import {
 import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
 import { parseVideoUrls } from "@/lib/videoUrls";
+import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc-filter";
 
 interface AnalyticsData {
   submissionsToday: number;
@@ -1428,20 +1429,12 @@ function TicketOverviewSection() {
   // Task #43 — Tech PDC filter applied BEFORE statusCounts so the count
   // cards and status dropdown reflect the narrowed set. Any non-"all" value
   // first limits to negative-outcome rows (the only ones with PDC state).
-  const NEGATIVE_TICKET_STATUSES = ["rejected", "rejected_closed", "invalid"];
+  // Task #45 — predicate extracted to shared/tech-pdc-filter.ts so the
+  // export-parity test asserts the server's `pdc` param against the exact
+  // definition the table uses.
   const allTickets = pdcFilter === "all"
     ? requestTypedTickets
-    : requestTypedTickets.filter((t: any) => {
-        if (!NEGATIVE_TICKET_STATUSES.includes(t.ticketStatus)) return false;
-        switch (pdcFilter) {
-          case "sent": return t.techPdcStatus === "sent";
-          case "not_sent": return !t.techPdcStatus;
-          case "pending": return t.techPdcStatus === "pending";
-          case "failed": return t.techPdcStatus === "failed";
-          case "missing_notes": return !(t.coachingNotes || "").trim();
-          default: return true;
-        }
-      });
+    : requestTypedTickets.filter((t: any) => matchesTechPdcFilter(t, pdcFilter));
 
   const statusCounts = {
     all: allTickets.length,

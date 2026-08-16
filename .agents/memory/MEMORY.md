@@ -19,3 +19,4 @@
 - [stage1Status = overall outcome](stage1status-overall-outcome.md) — two-stage negatives must keep stage1Status as the FINAL result (analytics read it for approval-rate/completed-today/queue); record Stage-2 audit additively in stage2* cols.
 - [Submissions list micro-cache](submissions-list-micro-cache.md) — every new submissions/intake_forms write must bump the data-version stamp; never cache the redacted tech branch; key before time-derived default filters.
 - [Photo thumbnails identity invariant](photo-thumbnails-invariant.md) — thumb map swaps grid img src ONLY; full paths stay the identity for rejection/lightbox/download/resubmit.
+- [Tech PDC filter parity](tech-pdc-filter-parity.md) — client table predicate lives in shared/tech-pdc-filter.ts; server pdc copy must match; run test:tech-pdc-parity after touching either.
