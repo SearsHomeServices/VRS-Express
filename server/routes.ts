@@ -6504,6 +6504,10 @@ export async function registerRoutes(
     const createdBefore = query.createdBefore ? new Date(query.createdBefore as string) : null;
     const status = (query.status as string) || "all";
     const requestType = (query.requestType as string) || "all";
+    // Task #43 — Tech PDC status filter, mirrors the Ticket Overview's new
+    // Tech PDC dropdown so exports/bulk pushes match the visible table.
+    // Values: all | sent | not_sent | pending | failed | missing_notes.
+    const pdc = (query.pdc as string) || "all";
     const search = ((query.search as string) || "").toLowerCase().trim();
 
     const all = await storage.getAllSubmissions(
@@ -6525,9 +6529,21 @@ export async function registerRoutes(
     }
     if ((NEGATIVE_STATUSES as readonly string[]).includes(status)) {
       rows = rows.filter(s => s.ticketStatus === status);
+    } else if (status !== "all") {
+      // Task #43 — an explicitly selected non-negative status (queued /
+      // pending / completed) can never contain coaching records, so the
+      // visible table has zero negative rows. Return an empty set instead of
+      // silently ignoring the status, otherwise the export / bulk push would
+      // act on tickets the admin cannot see in the filtered table.
+      rows = [];
     }
     if (requestType === "nla") rows = rows.filter(s => s.requestType === "parts_nla");
     else if (requestType === "auth") rows = rows.filter(s => s.requestType !== "parts_nla");
+    if (pdc === "sent") rows = rows.filter(s => s.techPdcStatus === "sent");
+    else if (pdc === "not_sent") rows = rows.filter(s => !s.techPdcStatus);
+    else if (pdc === "pending") rows = rows.filter(s => s.techPdcStatus === "pending");
+    else if (pdc === "failed") rows = rows.filter(s => s.techPdcStatus === "failed");
+    else if (pdc === "missing_notes") rows = rows.filter(s => !(s.coachingNotes || "").trim());
     if (search) {
       rows = rows.filter(s =>
         s.serviceOrder?.toLowerCase().includes(search) ||

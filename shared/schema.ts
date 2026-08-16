@@ -291,6 +291,13 @@ export type SubmissionListItem = Pick<Submission,
   // the detail panel renders media from the slim row before the heavy
   // detail fetch resolves, and the grid needs the thumb map at that moment.
   | "photoThumbnails"
+  // Task #43 (Tech PDC at a glance) — the admin Ticket Overview shows a
+  // per-row Tech PDC status badge + missing-coaching-notes marker for
+  // negative-outcome rows, and a filter over these. techPdcStatus /
+  // techPdcSentAt are tiny; coachingNotes is text but only populated on
+  // rejection paths (bounded 5000 chars, rare rows), so payload impact
+  // is negligible.
+  | "techPdcStatus" | "techPdcSentAt" | "coachingNotes"
 >;
 
 export type SubmissionListItemWithTech = SubmissionListItem & {

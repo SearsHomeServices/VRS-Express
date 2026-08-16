@@ -1221,6 +1221,12 @@ export class DatabaseStorage implements IStorage {
           photoThumbnails: submissions.photoThumbnails,
           videoUrl: submissions.videoUrl,
           voiceNoteUrl: submissions.voiceNoteUrl,
+          // Task #43 (Tech PDC at a glance) — status badge + coaching-notes
+          // marker in the admin Ticket Overview. See SubmissionListItem
+          // comment in shared/schema.ts.
+          techPdcStatus: submissions.techPdcStatus,
+          techPdcSentAt: submissions.techPdcSentAt,
+          coachingNotes: submissions.coachingNotes,
         },
         technicianName: users.name,
         technicianPhone: users.phone,

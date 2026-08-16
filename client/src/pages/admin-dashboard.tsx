@@ -1219,6 +1219,11 @@ function TicketOverviewSection() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
+  // Task #43 — Tech PDC coaching-status filter. Only negative-outcome rows
+  // (rejected / rejected_closed / invalid) carry Tech PDC state, so any
+  // non-"all" selection implicitly narrows to those rows. Server exports and
+  // the bulk push receive the same value via coachingFilterParams().
+  const [pdcFilter, setPdcFilter] = useState<"all" | "sent" | "not_sent" | "pending" | "failed" | "missing_notes">("all");
   const [searchQuery, setSearchQuery] = useState("");
   // Tyler 2026-07-08 — search covers ALL tickets, not just the visible
   // window. The table defaults to the last 30 days ("auto-archive"), but
@@ -1389,11 +1394,29 @@ function TicketOverviewSection() {
         return !isNaN(created) && created <= createdBeforeMs;
       })
     : rawTicketsUnbounded;
-  const allTickets = requestTypeFilter === "all"
+  const requestTypedTickets = requestTypeFilter === "all"
     ? rawTickets
     : requestTypeFilter === "nla"
     ? rawTickets.filter((t: any) => t.requestType === "parts_nla")
     : rawTickets.filter((t: any) => t.requestType !== "parts_nla");
+
+  // Task #43 — Tech PDC filter applied BEFORE statusCounts so the count
+  // cards and status dropdown reflect the narrowed set. Any non-"all" value
+  // first limits to negative-outcome rows (the only ones with PDC state).
+  const NEGATIVE_TICKET_STATUSES = ["rejected", "rejected_closed", "invalid"];
+  const allTickets = pdcFilter === "all"
+    ? requestTypedTickets
+    : requestTypedTickets.filter((t: any) => {
+        if (!NEGATIVE_TICKET_STATUSES.includes(t.ticketStatus)) return false;
+        switch (pdcFilter) {
+          case "sent": return t.techPdcStatus === "sent";
+          case "not_sent": return !t.techPdcStatus;
+          case "pending": return t.techPdcStatus === "pending";
+          case "failed": return t.techPdcStatus === "failed";
+          case "missing_notes": return !(t.coachingNotes || "").trim();
+          default: return true;
+        }
+      });
 
   const statusCounts = {
     all: allTickets.length,
@@ -1466,6 +1489,12 @@ function TicketOverviewSection() {
     );
   }
 
+  // Task #43 — show the Tech PDC column whenever negative-outcome rows can
+  // appear in the table (any PDC filter active, the All view, or a negative
+  // status tab). Hidden on queued/pending/completed-only views where it
+  // would always be "—".
+  const showPdcColumn = pdcFilter !== "all" || statusFilter === "all" || NEGATIVE_TICKET_STATUSES.includes(statusFilter);
+
   const tabs: { key: TicketStatusFilter; label: string; color: string }[] = [
     { key: "all", label: "All Tickets", color: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200" },
     { key: "queued", label: "In Queue", color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
@@ -1486,6 +1515,7 @@ function TicketOverviewSection() {
     if (createdBeforeMs != null) params.set("createdBefore", new Date(createdBeforeMs).toISOString());
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (requestTypeFilter !== "all") params.set("requestType", requestTypeFilter);
+    if (pdcFilter !== "all") params.set("pdc", pdcFilter);
     if (debouncedSearch) params.set("search", debouncedSearch);
     return params;
   };
@@ -1668,6 +1698,25 @@ function TicketOverviewSection() {
             </SelectContent>
           </Select>
         </div>
+        {/* Task #43 — Tech PDC coaching-status filter. Narrows to
+            negative-outcome rows carrying the selected PDC state; counts,
+            exports, and the bulk push all honor it. */}
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">Tech PDC</Label>
+          <Select value={pdcFilter} onValueChange={(v) => setPdcFilter(v as typeof pdcFilter)}>
+            <SelectTrigger className="h-8 w-[170px] text-xs" data-testid="select-pdc-filter">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="option-pdc-all">All</SelectItem>
+              <SelectItem value="sent" data-testid="option-pdc-sent">Sent</SelectItem>
+              <SelectItem value="not_sent" data-testid="option-pdc-not_sent">Not Sent</SelectItem>
+              <SelectItem value="pending" data-testid="option-pdc-pending">Pending</SelectItem>
+              <SelectItem value="failed" data-testid="option-pdc-failed">Failed</SelectItem>
+              <SelectItem value="missing_notes" data-testid="option-pdc-missing_notes">Missing Coaching Notes</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="flex items-center gap-2 ml-auto">
           <Button
             variant="outline"
@@ -1787,6 +1836,11 @@ function TicketOverviewSection() {
                         SO # <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
+                    {showPdcColumn && (
+                      <TableHead className="whitespace-nowrap" title="Tech PDC coaching delivery status (rejected / invalid tickets)">
+                        Tech PDC
+                      </TableHead>
+                    )}
                     <TableHead>
                       <button className="flex items-center gap-1 hover:text-foreground whitespace-nowrap" onClick={() => handleTicketSort("status")} data-testid="sort-ticket-status">
                         Status <ArrowUpDown className="w-3 h-3" />
@@ -1872,6 +1926,50 @@ function TicketOverviewSection() {
                         <TableCell className="font-mono font-semibold text-sm text-primary underline-offset-2 hover:underline" data-testid={`so-${ticket.id}`}>
                           {ticket.serviceOrder}
                         </TableCell>
+                        {showPdcColumn && (
+                          <TableCell data-testid={`pdc-status-${ticket.id}`}>
+                            {NEGATIVE_TICKET_STATUSES.includes(ticket.ticketStatus) ? (
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <span
+                                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${
+                                    ticket.techPdcStatus === "sent"
+                                      ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                                      : ticket.techPdcStatus === "failed"
+                                      ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                      : ticket.techPdcStatus === "pending"
+                                      ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                                      : "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                                  }`}
+                                  title={
+                                    ticket.techPdcStatus === "sent" && ticket.techPdcSentAt
+                                      ? `Sent ${formatDate(ticket.techPdcSentAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}`
+                                      : undefined
+                                  }
+                                  data-testid={`badge-pdc-${ticket.id}`}
+                                >
+                                  {ticket.techPdcStatus === "sent"
+                                    ? "SENT"
+                                    : ticket.techPdcStatus === "failed"
+                                    ? "FAILED"
+                                    : ticket.techPdcStatus === "pending"
+                                    ? "PENDING"
+                                    : "NOT SENT"}
+                                </span>
+                                {!(ticket.coachingNotes || "").trim() && (
+                                  <span
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700"
+                                    title="No coaching notes recorded for this ticket"
+                                    data-testid={`badge-pdc-no-notes-${ticket.id}`}
+                                  >
+                                    NO NOTES
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell>
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusColor(ticket.ticketStatus)}`}>
