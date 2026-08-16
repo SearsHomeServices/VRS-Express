@@ -1349,6 +1349,31 @@ function TicketOverviewSection() {
     (u: any) => (u.role === "vrs_agent" || u.role === "admin" || u.role === "super_admin") && u.isActive
   );
 
+  // Task #44 — row-level Tech PDC push. Tracks the in-flight row id so only
+  // that row's button shows a spinner; on success/failure the submissions
+  // list is invalidated so the status badge refreshes in place.
+  const [rowPushingId, setRowPushingId] = useState<number | null>(null);
+  const rowPdcPushMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/submissions/${id}/tech-pdc-push`, {});
+      return await res.json();
+    },
+    onMutate: (id: number) => setRowPushingId(id),
+    onSuccess: (_data, id) => {
+      toast({ title: "Sent to Tech PDC" });
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/submissions", id, "audit"] });
+    },
+    onError: (error: Error, id) => {
+      toast({ title: "Tech PDC Push Failed", description: error.message, variant: "destructive" });
+      // The push may have recorded a "failed" status server-side — refresh
+      // the table so the badge reflects it.
+      queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string).startsWith("/api/submissions") });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/submissions", id, "audit"] });
+    },
+    onSettled: () => setRowPushingId(null),
+  });
+
   const reassignMutation = useMutation({
     mutationFn: async ({ id, agentId, notes }: { id: number; agentId?: number; notes?: string }) => {
       const res = await apiRequest("PATCH", `/api/submissions/${id}/reassign`, { agentId, notes });
@@ -1963,6 +1988,49 @@ function TicketOverviewSection() {
                                   >
                                     NO NOTES
                                   </span>
+                                )}
+                                {/* Task #44 — inline push/retry. Eligible when a
+                                    root cause is saved and the record isn't
+                                    already sent or mid-flight. Otherwise a
+                                    shortcut to the detail dialog's coaching
+                                    section to add the root cause. */}
+                                {ticket.techPdcStatus !== "sent" && ticket.techPdcStatus !== "pending" && (
+                                  ticket.techPdcRootCause ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-6 px-2 text-[10px]"
+                                      disabled={rowPushingId === ticket.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rowPdcPushMutation.mutate(ticket.id);
+                                      }}
+                                      title={`Root cause: ${ticket.techPdcRootCause}`}
+                                      data-testid={`button-row-pdc-push-${ticket.id}`}
+                                    >
+                                      {rowPushingId === ticket.id ? (
+                                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                      ) : (
+                                        <Send className="w-3 h-3 mr-1" />
+                                      )}
+                                      {rowPushingId === ticket.id ? "Sending…" : ticket.techPdcStatus === "failed" ? "Retry" : "Push"}
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 px-2 text-[10px] text-amber-700 dark:text-amber-400 hover:text-amber-800"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedTicketId(ticket.id);
+                                      }}
+                                      title="A root cause is required before this record can be sent to Tech PDC. Opens the ticket detail to add one in the coaching section."
+                                      data-testid={`button-row-pdc-add-root-cause-${ticket.id}`}
+                                    >
+                                      <Pencil className="w-3 h-3 mr-1" />
+                                      Needs root cause
+                                    </Button>
+                                  )
                                 )}
                               </div>
                             ) : (

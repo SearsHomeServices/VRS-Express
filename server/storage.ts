@@ -1227,6 +1227,9 @@ export class DatabaseStorage implements IStorage {
           techPdcStatus: submissions.techPdcStatus,
           techPdcSentAt: submissions.techPdcSentAt,
           coachingNotes: submissions.coachingNotes,
+          // Task #44 (row-level Tech PDC push) — eligibility check for the
+          // inline Push button (root cause required by the Tech PDC API).
+          techPdcRootCause: submissions.techPdcRootCause,
         },
         technicianName: users.name,
         technicianPhone: users.phone,

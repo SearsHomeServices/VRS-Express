@@ -298,6 +298,10 @@ export type SubmissionListItem = Pick<Submission,
   // rejection paths (bounded 5000 chars, rare rows), so payload impact
   // is negligible.
   | "techPdcStatus" | "techPdcSentAt" | "coachingNotes"
+  // Task #44 (row-level Tech PDC push) — the inline Push button in the
+  // Ticket Overview needs to know whether a root cause is set to decide
+  // eligibility client-side. Tiny enum-like text column.
+  | "techPdcRootCause"
 >;
 
 export type SubmissionListItemWithTech = SubmissionListItem & {
