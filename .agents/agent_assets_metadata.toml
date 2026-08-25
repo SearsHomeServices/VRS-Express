@@ -25,3 +25,10 @@ uri = "file://.agents/outputs/ih-techs-not-signed-in-2026-08-12.csv"
 type = "table"
 title = "IH Technicians Not Yet Signed Into VRS Express"
 description = "335 active in-home technicians with no VRS Express login, sorted by district and manager (LDAP ID, name, district, manager, phone)."
+
+[[outputs]]
+id = "Bd1DI4FnoAGbpeuJoYEnq"
+uri = "file://output/reports/current-active-techs-never-logged-in-2026-08-25.csv"
+type = "table"
+title = "Current active technicians who never logged in"
+description = "Production snapshot of active Snowflake-synced technicians with no matching VRS Express user account, generated August 25, 2026."
