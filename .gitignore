@@ -5,3 +5,6 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .worktrees/
+
+# Generated reports may contain sensitive operational data.
+/output/reports/
