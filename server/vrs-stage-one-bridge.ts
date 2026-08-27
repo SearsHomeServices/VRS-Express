@@ -4,6 +4,7 @@ import type {
   VrsAuthorizeEnrichment,
   VrsBridgeStore,
 } from "./vrs-sasha-queue";
+import { isValidVrsExpressCallbackUrl } from "./vrs-sasha-contract";
 
 export type VrsStageOneBridgeResult =
   | { kind: "not_applicable" }
@@ -24,28 +25,96 @@ export interface VrsStageOneBridgeConfig {
 
 type VrsStageOneEnvironment = Readonly<Record<string, string | undefined>>;
 
-export function resolveVrsStageOneBridgeConfig(
+export type VrsAiBridgeActivation =
+  | { kind: "active"; config: VrsStageOneBridgeConfig }
+  | {
+      kind: "disabled" | "invalid";
+      code: "VRS_AI_BRIDGE_DISABLED" | "VRS_AI_BRIDGE_NOT_CONFIGURED";
+      message: string;
+    };
+
+export function resolveVrsAiBridgeActivation(
   env: VrsStageOneEnvironment,
-): VrsStageOneBridgeConfig | undefined {
-  const baseUrl = env.VRS_AI_BASE_URL;
-  const apiKey = env.VRS_AI_API_KEY
-    || (env.NODE_ENV === "development" ? env.VRS_SASHA_API_KEY : undefined);
-  const callbackSecret = env.VRS_AI_WEBHOOK_SECRET;
-  let callbackUrl = env.VRS_AI_CALLBACK_URL;
-  if (!callbackUrl && env.VRS_EXPRESS_PUBLIC_URL) {
+): VrsAiBridgeActivation {
+  if (
+    env.NODE_ENV === "production" &&
+    env.VRS_AI_PRODUCTION_ENABLED !== "true"
+  ) {
+    return {
+      kind: "disabled",
+      code: "VRS_AI_BRIDGE_DISABLED",
+      message:
+        "VRS AI bridge intake is disabled in production. Set VRS_AI_PRODUCTION_ENABLED=true only after the outbound bridge and callback are fully configured.",
+    };
+  }
+
+  const baseUrl = env.VRS_AI_BASE_URL?.trim();
+  const apiKey =
+    env.VRS_AI_API_KEY?.trim() ||
+    (env.NODE_ENV === "development"
+      ? env.VRS_SASHA_API_KEY?.trim()
+      : undefined);
+  const callbackSecret = env.VRS_AI_WEBHOOK_SECRET?.trim();
+  let callbackUrl = env.VRS_AI_CALLBACK_URL?.trim();
+  let publicCallbackUrl: string | undefined;
+  if (env.VRS_EXPRESS_PUBLIC_URL) {
     try {
-      callbackUrl = new URL(
+      publicCallbackUrl = new URL(
         "/api/integrations/vrs-ai/v1/webhook",
         env.VRS_EXPRESS_PUBLIC_URL,
       ).toString();
     } catch {
-      callbackUrl = undefined;
+      publicCallbackUrl = undefined;
     }
   }
-  if (!baseUrl || !apiKey || !callbackSecret || !callbackUrl) {
-    return undefined;
+  callbackUrl ||= publicCallbackUrl;
+
+  let validBaseUrl = false;
+  if (baseUrl) {
+    try {
+      const parsedBaseUrl = new URL(baseUrl);
+      validBaseUrl =
+        parsedBaseUrl.protocol === "https:" &&
+        !parsedBaseUrl.username &&
+        !parsedBaseUrl.password &&
+        !parsedBaseUrl.search &&
+        !parsedBaseUrl.hash &&
+        parsedBaseUrl.pathname === "/";
+    } catch {
+      validBaseUrl = false;
+    }
   }
-  return { baseUrl, apiKey, callbackUrl, callbackSecret };
+
+  if (
+    !validBaseUrl ||
+    !apiKey ||
+    !callbackSecret ||
+    callbackSecret.length < 16 ||
+    callbackSecret.length > 512 ||
+    !callbackUrl ||
+    !isValidVrsExpressCallbackUrl(callbackUrl) ||
+    (env.NODE_ENV === "production" &&
+      (!publicCallbackUrl || callbackUrl !== publicCallbackUrl))
+  ) {
+    return {
+      kind: "invalid",
+      code: "VRS_AI_BRIDGE_NOT_CONFIGURED",
+      message:
+        "VRS AI bridge intake is unavailable because the outbound bridge or callback configuration is incomplete or invalid.",
+    };
+  }
+
+  return {
+    kind: "active",
+    config: { baseUrl: baseUrl!, apiKey, callbackUrl, callbackSecret },
+  };
+}
+
+export function resolveVrsStageOneBridgeConfig(
+  env: VrsStageOneEnvironment,
+): VrsStageOneBridgeConfig | undefined {
+  const activation = resolveVrsAiBridgeActivation(env);
+  return activation.kind === "active" ? activation.config : undefined;
 }
 
 type VrsStageOneBridgeStore = Pick<

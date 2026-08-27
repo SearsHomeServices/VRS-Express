@@ -13,6 +13,7 @@ import {
   resolveVrsPhotoUrls,
 } from "./vrs-sasha-queue";
 import type { VrsServiceOrderReader } from "./vrs-sasha-store";
+import type { VrsAiBridgeActivation } from "./vrs-stage-one-bridge";
 
 export type ReceiveVrsIntakeResult =
   | {
@@ -44,6 +45,7 @@ export interface VrsExpressIntake {
 interface RegisterVrsSashaApiDependencies {
   apiKey?: string;
   intake: VrsExpressIntake;
+  resolveBridgeActivation?: () => VrsAiBridgeActivation;
   serviceOrders?: VrsServiceOrderReader;
   signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
   now?: () => Date;
@@ -87,6 +89,14 @@ export function registerVrsSashaApi(
   app.post("/vrs/authorize", async (req, res) => {
     if (!authenticateVrsSashaApiKey(req, res, deps.apiKey)) {
       return;
+    }
+
+    const activation = deps.resolveBridgeActivation?.();
+    if (activation && activation.kind !== "active") {
+      return res.status(503).json({
+        error: activation.code,
+        message: activation.message,
+      });
     }
 
     const parsed = safeParseVrsAuthorizeRequest(req.body);

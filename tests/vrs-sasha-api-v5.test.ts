@@ -70,6 +70,9 @@ function makeIntakeApp(
     source?: ConstructorParameters<typeof FakeServiceOrders>[0];
     signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
     now?: () => Date;
+    activation?: ReturnType<
+      typeof import("../server/vrs-stage-one-bridge").resolveVrsAiBridgeActivation
+    >;
   },
 ) {
   const app = express();
@@ -77,6 +80,9 @@ function makeIntakeApp(
   (apiModule.registerVrsSashaApi as any)(app, {
     apiKey: "test-vrs-api-key",
     intake,
+    resolveBridgeActivation: serviceOrderOptions?.activation
+      ? () => serviceOrderOptions.activation!
+      : undefined,
     serviceOrders: new FakeServiceOrders(serviceOrderOptions?.source),
     signObjectPhotoUrl: serviceOrderOptions?.signObjectPhotoUrl,
     now: serviceOrderOptions?.now,
@@ -242,6 +248,74 @@ describe("VRS Express bridge — V5 contract boundary", () => {
       message: "VRS SASHA API key is not configured",
     });
     expect(intake.received).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "disabled",
+      {
+        kind: "disabled" as const,
+        code: "VRS_AI_BRIDGE_DISABLED" as const,
+        message: "VRS AI bridge intake is disabled in production.",
+      },
+    ],
+    [
+      "incompletely configured",
+      {
+        kind: "invalid" as const,
+        code: "VRS_AI_BRIDGE_NOT_CONFIGURED" as const,
+        message: "VRS AI bridge intake configuration is incomplete.",
+      },
+    ],
+  ])(
+    "fails closed before parsing or creating intake when production automation is %s",
+    async (_state, activation) => {
+      const intake = new FakeIntake({
+        kind: "accepted",
+        callId: "must-not-run",
+        serviceOrder: "13538277",
+        createdAt: new Date(),
+      });
+
+      const response = await request(makeIntakeApp(intake, { activation }))
+        .post("/vrs/authorize")
+        .set("X-API-Key", "test-vrs-api-key")
+        .send({ malformed: true });
+
+      expect(response.status).toBe(503);
+      expect(response.body).toEqual({
+        error: activation.code,
+        message: activation.message,
+      });
+      expect(intake.received).toBeUndefined();
+    },
+  );
+
+  it("accepts intake when production automation is fully enabled", async () => {
+    const intake = new FakeIntake({
+      kind: "accepted",
+      callId: "vrs_call_bridge_enabled",
+      serviceOrder: "13538277",
+      createdAt: new Date("2026-08-27T12:00:00.000Z"),
+    });
+    const activation = {
+      kind: "active" as const,
+      config: {
+        baseUrl: "https://vrs-ai.example.test",
+        apiKey: "outbound-key",
+        callbackUrl:
+          "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+        callbackSecret: "callback-secret",
+      },
+    };
+
+    const response = await request(makeIntakeApp(intake, { activation }))
+      .post("/vrs/authorize")
+      .set("X-API-Key", "test-vrs-api-key")
+      .send(validPayload);
+
+    expect(response.status).toBe(202);
+    expect(intake.received).toEqual(validPayload);
   });
 
   it("returns V8 validation fields for an authenticated partial V8 request", async () => {

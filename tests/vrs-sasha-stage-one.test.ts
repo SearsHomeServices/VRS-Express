@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   decideVrsStageOneBridge,
+  resolveVrsAiBridgeActivation,
   resolveVrsStageOneBridgeConfig,
   runVrsStageOneRouteGate,
   type VrsStageOneBridgeOptions,
@@ -84,23 +85,104 @@ describe("VRS Stage 1 bridge boundary", () => {
       NODE_ENV: "development",
       VRS_AI_BASE_URL: "https://vrs-ai.example.test",
       VRS_SASHA_API_KEY: "existing-contract-key",
-      VRS_AI_WEBHOOK_SECRET: "callback-secret",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
       VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
     })).toEqual({
       baseUrl: "https://vrs-ai.example.test",
       apiKey: "existing-contract-key",
       callbackUrl:
         "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
-      callbackSecret: "callback-secret",
+      callbackSecret: "callback-secret-long-enough",
     });
 
     expect(resolveVrsStageOneBridgeConfig({
       NODE_ENV: "production",
+      VRS_AI_PRODUCTION_ENABLED: "true",
       VRS_AI_BASE_URL: "https://vrs-ai.example.test",
       VRS_SASHA_API_KEY: "development-only-key",
-      VRS_AI_WEBHOOK_SECRET: "callback-secret",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
       VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
     })).toBeUndefined();
+  });
+
+  it("requires an explicit production activation setting", () => {
+    const env = {
+      NODE_ENV: "production",
+      VRS_AI_BASE_URL: "https://vrs-ai.example.test",
+      VRS_AI_API_KEY: "outbound-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+    };
+
+    expect(resolveVrsAiBridgeActivation(env)).toMatchObject({
+      kind: "disabled",
+      code: "VRS_AI_BRIDGE_DISABLED",
+    });
+    expect(resolveVrsStageOneBridgeConfig(env)).toBeUndefined();
+  });
+
+  it("rejects explicitly enabled production with incomplete or invalid settings", () => {
+    expect(resolveVrsAiBridgeActivation({
+      NODE_ENV: "production",
+      VRS_AI_PRODUCTION_ENABLED: "true",
+      VRS_AI_BASE_URL: "http://vrs-ai.example.test",
+      VRS_AI_API_KEY: "outbound-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+    })).toMatchObject({
+      kind: "invalid",
+      code: "VRS_AI_BRIDGE_NOT_CONFIGURED",
+    });
+  });
+
+  it.each([
+    [
+      "a too-short callback secret",
+      {
+        VRS_AI_WEBHOOK_SECRET: "too-short",
+      },
+    ],
+    [
+      "a callback URL on a different origin",
+      {
+        VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
+        VRS_AI_CALLBACK_URL:
+          "https://other.example.test/api/integrations/vrs-ai/v1/webhook",
+      },
+    ],
+  ])("rejects production with %s", (_case, overrides) => {
+    expect(resolveVrsAiBridgeActivation({
+      NODE_ENV: "production",
+      VRS_AI_PRODUCTION_ENABLED: "true",
+      VRS_AI_BASE_URL: "https://vrs-ai.example.test",
+      VRS_AI_API_KEY: "outbound-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+      ...overrides,
+    })).toMatchObject({
+      kind: "invalid",
+      code: "VRS_AI_BRIDGE_NOT_CONFIGURED",
+    });
+  });
+
+  it("activates production only when the deliberate gate and all settings are valid", () => {
+    expect(resolveVrsAiBridgeActivation({
+      NODE_ENV: "production",
+      VRS_AI_PRODUCTION_ENABLED: "true",
+      VRS_AI_BASE_URL: "https://vrs-ai.example.test",
+      VRS_AI_API_KEY: "outbound-key",
+      VRS_AI_WEBHOOK_SECRET: "callback-secret-long-enough",
+      VRS_EXPRESS_PUBLIC_URL: "https://vrs-express.example.test",
+    })).toEqual({
+      kind: "active",
+      config: {
+        baseUrl: "https://vrs-ai.example.test",
+        apiKey: "outbound-key",
+        callbackUrl:
+          "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+        callbackSecret: "callback-secret-long-enough",
+      },
+    });
   });
 
   it("returns not_applicable before reading config or constructing a client for a manual ticket", async () => {
