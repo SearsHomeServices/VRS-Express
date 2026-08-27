@@ -21,3 +21,4 @@
 - [Photo thumbnails identity invariant](photo-thumbnails-invariant.md) — thumb map swaps grid img src ONLY; full paths stay the identity for rejection/lightbox/download/resubmit.
 - [Tech PDC filter parity](tech-pdc-filter-parity.md) — client table predicate lives in shared/tech-pdc-filter.ts; server pdc copy must match; run test:tech-pdc-parity after touching either.
 - [VRS AI bridge DEV pilot](vrs-ai-bridge-dev-pilot.md) — bridge pilot lives on DEV, prod vrs_ai_calls empty by design; VRS_AI_BASE_URL must be clean https origin; "fetch failed" hides e.cause; check orphan-process env.
+- [Technician roster source](technician-roster-source.md) — keep the daily roster on PRD_TPMS; Parts Supply Chain TPMS_EXTRACT is not the selected replacement.
