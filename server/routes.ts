@@ -1,3 +1,6 @@
+import { retryVrsApprovalNotification } from "./vrs-notification-retry";
+import { PostgresDirectResultReceipts } from "./vrs-direct-result-store";
+import { automatedCallbackContexts, validateAutomatedApproval, VrsCallbackError } from "./vrs-callback-safety";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import bcryptjs from "bcryptjs";
@@ -5,6 +8,7 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import {
   storage,
+  pool,
   db,
   getSubmissionsDataVersion,
 } from "./storage";
@@ -2743,6 +2747,11 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Submission not found" });
       }
 
+      const automation = automatedCallbackContexts.get(req);
+      if (automation) {
+        const tech = submission.technicianLdapId ? undefined : await storage.getUser(submission.technicianId);
+        validateAutomatedApproval({...submission, technicianLdapId:submission.technicianLdapId || tech?.racId}, automation.event);
+      }
       if (submission.ticketStatus !== "pending") {
         return res.status(400).json({ error: "Ticket must be in pending status to process" });
       }
@@ -2849,7 +2858,7 @@ export async function registerRoutes(
       const updateData: Record<string, unknown> = {
         reviewedBy: authReq.user!.id,
         reviewedAt: new Date(),
-        agentNotes: agentNotes || null,
+        agentNotes: automation ? [submission.agentNotes, agentNotes].filter(Boolean).join("\n\n") : agentNotes || null,
         updatedAt: new Date(),
       };
 
@@ -3182,8 +3191,13 @@ export async function registerRoutes(
       // assignee at write time for vrs_agent actors so an admin
       // reassign that lands between this route's read and write cannot
       // be silently overwritten by the original (now-stale) assignee.
+      if (automation) {
+        updateData.stage1Status = submission.stage1Status;
+        updateData.stage1ReviewedBy = submission.stage1ReviewedBy;
+        updateData.stage1ReviewedAt = submission.stage1ReviewedAt;
+      }
       const expectAssignee = authReq.user!.role === "vrs_agent" ? authReq.user!.id : undefined;
-      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any, expectAssignee);
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], updateData as any, expectAssignee, automation ? submission : undefined);
       if (!updated) {
         return res.status(409).json({
           error: "This ticket was already moved or reassigned. Please refresh and try again.",
@@ -3196,8 +3210,12 @@ export async function registerRoutes(
       // causing agent retries on an already-moved ticket.
       const reviewSmsPhone = submission.phoneOverride || submission.phone;
       try {
-        await sendSms(submission.id, reviewSmsPhone, smsType, smsMessage);
+        const notification = await sendSms(submission.id, reviewSmsPhone, smsType, smsMessage);
+        if (automation) automation.notification = notification.success
+          ? {status:"accepted",notificationId:notification.notificationId}
+          : {status:notification.retrySafe === false ? "unknown" : "failed",notificationId:notification.notificationId,message:notification.error || "Notification failed; ticket approval must not be repeated."};
       } catch (smsErr) {
+        if (automation) automation.notification = {status:"unknown",message:"Notification outcome needs operator review; ticket approval must not be repeated."};
         console.error(`[process:${action}] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
       }
 
@@ -3276,6 +3294,7 @@ export async function registerRoutes(
 
       return res.status(200).json({ submission: updated });
     } catch (error) {
+      if (error instanceof VrsCallbackError) return res.status(error.status).json({error:error.message,code:error.code});
       console.error("Process ticket error:", error);
       return res.status(500).json({ error: "Failed to process ticket" });
     }
@@ -3306,6 +3325,10 @@ export async function registerRoutes(
                 `Submission ${submissionId} for VRS AI callback was not found`,
               );
             }
+
+            // Recovery shortcuts still require matching identity and workflow.
+            const callbackTech = submission.technicianLdapId ? undefined : await storage.getUser(submission.technicianId);
+            validateAutomatedApproval({...submission,technicianLdapId:submission.technicianLdapId || callbackTech?.racId},callbackEvent);
 
             // A webhook retry can arrive after the ticket transition won but
             // before its event-ledger stamp committed. Recognize the exact
@@ -3386,6 +3409,7 @@ export async function registerRoutes(
               ldapId: reviewer.racId ?? undefined,
             };
 
+            automatedCallbackContexts.set(internalRequest, {event:callbackEvent});
             const { res: capturedRes, captured } = makeCapturedResponse();
             await processSubmissionHandler(internalRequest, capturedRes);
             if (captured.statusCode >= 400) {
@@ -3446,47 +3470,28 @@ export async function registerRoutes(
   // close itself runs through processSubmissionHandler, so SMS, audit
   // columns, optimistic locking, and WS broadcasts behave exactly as they do
   // for a human agent approval.
+  const directResultReceipts = new PostgresDirectResultReceipts(pool);
+  void directResultReceipts.ensureSchema().catch(error => {
+    console.warn("[vrs-ai-call-result] Receipt setup unavailable; callbacks will return 503:", error instanceof Error ? error.message : String(error));
+  });
   registerVrsAiCallResultApi(app, {
     apiKey: process.env.VRS_SASHA_API_KEY,
-    async loadTicketCandidates({ callId, soNo, techId: _techId }) {
-      const candidates: VrsAiCallResultCandidate[] = [];
-
-      // 1) Authoritative link: the bridge row for this call id (falling back
-      // to an active bridge for the same service order).
-      const bridge =
-        (await vrsBridgeStore.getByProviderCallId(callId)) ??
-        (await vrsBridgeStore.findActiveByServiceOrder(soNo));
-      if (bridge?.submissionId) {
-        const linked = await storage.getSubmission(bridge.submissionId);
-        if (linked) {
-          candidates.push({
-            submissionId: linked.id,
-            serviceOrder: linked.serviceOrder,
-            ticketStatus: linked.ticketStatus,
-            authCode: linked.authCode,
-            technicianLdapId: linked.technicianLdapId ?? linked.racId ?? null,
-            createdAt: linked.createdAt,
-            linkedByCallId: true,
-          });
-        }
+    receipts: directResultReceipts,
+    enabled: () => process.env.VRS_AI_CALL_RESULT_ENABLED !== "false",
+    async loadTicketCandidates({ callId, soNo, techId, boundSubmissionId }) {
+      const bridge = await vrsBridgeStore.getByAnyCallId(callId);
+      if (bridge && boundSubmissionId && bridge.submissionId !== boundSubmissionId) throw new VrsCallbackError("TICKET_BINDING_CONFLICT", "Call mapping changed after this result was recorded.");
+      const id = boundSubmissionId ?? bridge?.submissionId;
+      if (id) {
+        const linked = await storage.getSubmission(id);
+        if (!linked) return [];
+        const tech = linked.technicianLdapId ? undefined : await storage.getUser(linked.technicianId);
+        return [{...linked,submissionId:linked.id,technicianLdapId:linked.technicianLdapId || tech?.racId || null,linkedByCallId:true}];
       }
-
-      // 2) Fallback for tickets with no bridge row (PWA / manual submissions):
-      // match the dashed Express service order on its eight-digit suffix.
-      const bySuffix =
-        await storage.getSubmissionCandidatesByServiceOrderSuffix(soNo);
-      for (const row of bySuffix) {
-        if (
-          candidates.some(
-            (candidate) => candidate.submissionId === row.submissionId,
-          )
-        ) {
-          continue;
-        }
-        candidates.push({ ...row, linkedByCallId: false });
-      }
-
-      return candidates;
+      // Exact technician filtering happens before LIMIT. Two rows are enough
+      // to prove ambiguity; neither status nor creation time breaks the tie.
+      const rows = await storage.getSubmissionCandidatesByServiceOrderSuffix(soNo, 2, techId);
+      return rows.map(row => ({...row, linkedByCallId:false}));
     },
     async closeTicket({ ticket, result }) {
       const submission = await storage.getSubmission(ticket.submissionId);
@@ -3559,6 +3564,8 @@ export async function registerRoutes(
         ldapId: reviewer.racId ?? undefined,
       };
 
+      const callbackContext = {event:result} as import("./vrs-callback-safety").AutomatedCallbackContext;
+      automatedCallbackContexts.set(internalRequest, callbackContext);
       const { res: capturedRes, captured } = makeCapturedResponse();
       await processSubmissionHandler(internalRequest, capturedRes);
       const body = captured.body as any;
@@ -3594,8 +3601,31 @@ export async function registerRoutes(
         kind: "closed",
         ticketStatus: closed?.ticketStatus ?? "completed",
         authCode: closed?.authCode ?? result.authNumber,
+        notification: callbackContext.notification ?? {status:"unknown"},
       };
     },
+  });
+
+  app.get("/api/admin/vrs-ai/notifications/:id/retry", authenticateToken, requireRole("admin", "super_admin"), async (req,res) => {
+    const id=Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({error:"INVALID_NOTIFICATION_ID"});
+    try {
+      const row=(await pool.query("SELECT notification_id,actor_id,state,result,updated_at FROM vrs_ai_notification_retries WHERE notification_id=$1",[id])).rows[0];
+      return row ? res.json(row) : res.status(404).json({error:"RETRY_NOT_FOUND"});
+    } catch { return res.status(503).json({error:"RECOVERY_NOT_READY"}); }
+  });
+
+  app.post("/api/admin/vrs-ai/notifications/:id/retry", authenticateToken, requireRole("admin", "super_admin"), async (req,res) => {
+    const id=Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({error:"INVALID_NOTIFICATION_ID"});
+    try {
+      const actor=(req as AuthenticatedRequest).user!;
+      const result=await retryVrsApprovalNotification(pool,id,actor.id,req.body?.confirmUndelivered === true,sendSms);
+      return res.status(result.ok?200:502).json(result);
+    } catch(error) {
+      if (error instanceof VrsCallbackError) return res.status(error.status).json({error:error.code,message:error.message});
+      return res.status(500).json({error:"NOTIFICATION_RETRY_FAILED",message:"Unable to retry this notification; inspect its recorded state before trying again."});
+    }
   });
 
   // ========================================================================

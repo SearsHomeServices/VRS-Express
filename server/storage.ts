@@ -239,7 +239,8 @@ export interface IStorage {
     id: number,
     expectedStatuses: string[],
     data: Partial<InsertSubmission>,
-    expectedAssignedTo?: number | null
+    expectedAssignedTo?: number | null,
+    automatedSnapshot?: Pick<Submission, "updatedAt" | "serviceOrder" | "technicianId" | "warrantyProvider" | "warrantyType" | "partNumbers">
   ): Promise<Submission | undefined>;
   deleteSubmission(id: number): Promise<boolean>;
   getAllSubmissions(startDate?: Date | null, endDate?: Date | null, techLdap?: string | null): Promise<Submission[]>;
@@ -289,6 +290,7 @@ export interface IStorage {
   getSubmissionCandidatesByServiceOrderSuffix(
     soNo: string,
     limit?: number,
+    techId?: string,
   ): Promise<Array<{
     submissionId: number;
     serviceOrder: string;
@@ -296,6 +298,12 @@ export interface IStorage {
     authCode: string | null;
     technicianLdapId: string | null;
     createdAt: Date | null;
+    requestType: string;
+    submissionApproved: boolean | null;
+    stage1Status: string | null;
+    warrantyProvider: string | null;
+    warrantyType: string;
+    partNumbers: string | null;
   }>>;
 
   // External v1 API reads — bounded ExternalSubmissionRow projection only.
@@ -859,7 +867,8 @@ export class DatabaseStorage implements IStorage {
     id: number,
     expectedStatuses: string[],
     data: Partial<InsertSubmission>,
-    expectedAssignedTo?: number | null
+    expectedAssignedTo?: number | null,
+    automatedSnapshot?: Pick<Submission, "updatedAt" | "serviceOrder" | "technicianId" | "warrantyProvider" | "warrantyType" | "partNumbers">
   ): Promise<Submission | undefined> {
     if (!expectedStatuses || expectedStatuses.length === 0) {
       // Defensive: caller must supply at least one expected status. We
@@ -882,6 +891,16 @@ export class DatabaseStorage implements IStorage {
       } else {
         predicates.push(eq(submissions.assignedTo, expectedAssignedTo));
       }
+    }
+    if (automatedSnapshot) {
+      predicates.push(eq(submissions.requestType, "authorization"));
+      predicates.push(or(eq(submissions.submissionApproved, true), eq(submissions.stage1Status, "approved"))!);
+      predicates.push(eq(submissions.serviceOrder, automatedSnapshot.serviceOrder));
+      predicates.push(eq(submissions.technicianId, automatedSnapshot.technicianId));
+      predicates.push(sql`${submissions.warrantyProvider} IS NOT DISTINCT FROM ${automatedSnapshot.warrantyProvider}`);
+      predicates.push(sql`${submissions.warrantyType} IS NOT DISTINCT FROM ${automatedSnapshot.warrantyType}`);
+      predicates.push(sql`${submissions.partNumbers} IS NOT DISTINCT FROM ${automatedSnapshot.partNumbers}`);
+      predicates.push(sql`date_trunc('milliseconds', ${submissions.updatedAt}) IS NOT DISTINCT FROM ${automatedSnapshot.updatedAt}`);
     }
     const result = await db
       .update(submissions)
@@ -1771,7 +1790,8 @@ export class DatabaseStorage implements IStorage {
   // right row via selectVrsAiCallResultTicket.
   async getSubmissionCandidatesByServiceOrderSuffix(
     soNo: string,
-    limit = 10,
+    limit = 2,
+    techId?: string,
   ): Promise<Array<{
     submissionId: number;
     serviceOrder: string;
@@ -1779,6 +1799,12 @@ export class DatabaseStorage implements IStorage {
     authCode: string | null;
     technicianLdapId: string | null;
     createdAt: Date | null;
+    requestType: string;
+    submissionApproved: boolean | null;
+    stage1Status: string | null;
+    warrantyProvider: string | null;
+    warrantyType: string;
+    partNumbers: string | null;
   }>> {
     if (!/^\d{8}$/.test(soNo)) return [];
     const tech = alias(users, "tech");
@@ -1792,10 +1818,19 @@ export class DatabaseStorage implements IStorage {
         // technician's RAC ID so older tickets still match on tech.
         technicianLdapId: sql<string | null>`coalesce(${submissions.technicianLdapId}, ${tech.racId})`,
         createdAt: submissions.createdAt,
+        requestType: submissions.requestType,
+        submissionApproved: submissions.submissionApproved,
+        stage1Status: submissions.stage1Status,
+        warrantyProvider: submissions.warrantyProvider,
+        warrantyType: submissions.warrantyType,
+        partNumbers: submissions.partNumbers,
       })
       .from(submissions)
       .leftJoin(tech, eq(tech.id, submissions.technicianId))
-      .where(sql`${submissions.serviceOrder} LIKE ${`%-${soNo}`}`)
+      .where(and(
+        sql`${submissions.serviceOrder} LIKE ${`%-${soNo}`}`,
+        techId ? sql`lower(trim(coalesce(${submissions.technicianLdapId}, ${tech.racId}, ''))) = ${techId.trim().toLowerCase()}` : undefined,
+      ))
       .orderBy(desc(submissions.createdAt))
       .limit(limit);
     return rows;

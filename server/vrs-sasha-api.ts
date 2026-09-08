@@ -1,3 +1,4 @@
+import { VrsCallbackError } from "./vrs-callback-safety";
 import { timingSafeEqual } from "crypto";
 import type { Express, Request, Response } from "express";
 import {
@@ -333,6 +334,7 @@ export function registerVrsAiWebhookApi(
           deduped: outcome === "duplicate",
         });
       } catch (error) {
+        if (error instanceof VrsCallbackError) return res.status(error.status).json({error:error.code,message:error.message});
         console.error(
           "[vrs-ai-webhook] Failed to apply callback:",
           error instanceof Error ? error.message : String(error),

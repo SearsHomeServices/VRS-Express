@@ -1,3 +1,4 @@
+import { apiNotFound } from "./api-not-found";
 import express, { type Request, Response, NextFunction } from "express";
 import compression from "compression";
 import { registerRoutes } from "./routes";
@@ -128,6 +129,7 @@ app.use((req, res, next) => {
   await loadBusinessHoursConfig();
 
   await registerRoutes(httpServer, app);
+  app.use(apiNotFound);
   setupWebSocket(httpServer);
 
   // Tyler 2026-06-27 (scalability) — agent_activity_log retention sweep.

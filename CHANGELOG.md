@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Callback release safety and recovery (2026-09-08)
+- Preserved both callback routes and all existing manual, PWA, NLA and V5/V8/V9
+  routes. Automated closes now require matching call/order/technician/known
+  part data and approved authorization workflow. Optional submissionId keeps
+  ambiguous manual/PWA history resolvable without guessing.
+- Added durable direct-result receipts bound before ticket effects. Validation
+  failures remain correctable; accepted results remain immutable across retries
+  and crashes. Completed-ticket recovery verifies the recorded callback note.
+- Serialized signed application and forwarding; enforce event/payload ownership,
+  terminal state ordering, durable forwarding claims and stale-worker fencing.
+  Local callback lock reservations are capped to preserve shared DB capacity,
+  and lost lock connections are handled without an unhandled client error.
+- Unknown APIs return JSON 404 before SPA fallback. False HTML/error receipts
+  are rejected, while the legacy empty-200 signed partner acknowledgment and
+  original upstream envelope are preserved.
+- Automated actions append notes and preserve human Stage 1 audit stamps.
+  Failed or unknown SMS outcomes are distinct from completion. Production
+  missing-provider configuration cannot report a mock success. Added an
+  admin-only, confirmed-undelivered notification retry with a durable claim,
+  preserving the original failure and never reapproving the ticket.
+- Two additive receipt/recovery tables use bounded best-effort startup setup;
+  no existing table definitions, UI source or dependencies changed. No actual
+  activation setting, production data, real notification or Publish changed.
+- Validation: 281/281 safe tests pass, including real isolated PostgreSQL concurrency,
+  interruption/recovery, real conditional UPDATE and callback-handler probes;
+  production build passed. Exact normalized TypeScript diagnostics match the
+  existing 56-error baseline. Independent review findings were repaired and
+  the targeted re-review found no remaining Important issues.
+
+
 ### Fixed - Approval callback metadata (2026-09-08)
 - Existing VRS AI webhook accepts optional partId, techId, and partDescription
   on approved events, preserving them in the event ledger and upstream callback.

@@ -1,3 +1,4 @@
+import { VrsCallbackError } from "./vrs-callback-safety";
 import type {
   VrsAiAuthorizeResult,
   VrsAuthorizeRequest,
@@ -285,6 +286,8 @@ export interface VrsBridgeRecord {
 }
 
 export interface VrsBridgeStore {
+  claimWebhookForwarding?(id:number,eventId:string):Promise<{kind:"claimed";claimedAt:Date}|{kind:"duplicate"|"in_progress"|"superseded"}>;
+  withWebhookApplicationLock?<T>(id:number,work:()=>Promise<T>):Promise<T>;
   getBySubmissionId(submissionId: number): Promise<VrsBridgeRecord | undefined>;
   getByProviderCallId(
     providerCallId: string,
@@ -313,11 +316,13 @@ export interface VrsBridgeStore {
     id: number,
     eventId: string,
     result: { delivered: boolean; attempts: number; status?: number },
+    claimedAt?: Date,
   ): Promise<void>;
   markWebhookFailed(
     id: number,
     eventId: string,
     message: string,
+    claimedAt?: Date,
   ): Promise<void>;
 }
 
@@ -512,6 +517,8 @@ export async function processVrsAiWebhookEvent(options: {
     | "markWebhookApplied"
     | "markWebhookForwarded"
     | "markWebhookFailed"
+    | "withWebhookApplicationLock"
+    | "claimWebhookForwarding"
   >;
   decryptCallbackSecret(encrypted: {
     cipher: string;
@@ -533,38 +540,44 @@ export async function processVrsAiWebhookEvent(options: {
     options.event.callId,
   );
   if (!record) {
-    throw new Error(`Unknown VRS AI call id: ${options.event.callId}`);
+    throw new VrsCallbackError("CALL_NOT_FOUND", `Unknown VRS AI call id: ${options.event.callId}`, 404);
   }
   if (
     record.requestPayload?.service_order &&
     record.requestPayload.service_order !== options.event.soNo
   ) {
-    throw new Error(
+    throw new VrsCallbackError("CALL_ORDER_MISMATCH",
       `VRS AI callback service order ${options.event.soNo} does not match bridge request ${record.requestPayload.service_order}`,
     );
   }
 
-  const claim = await options.store.beginWebhookEvent(
-    record.id,
-    options.event,
-  );
-  if (claim.kind === "duplicate") {
-    return "duplicate";
-  }
-  if (claim.kind === "in_progress") {
-    throw new Error(`VRS AI event ${options.event.eventId} is already processing`);
-  }
-
-  try {
-    if (!claim.alreadyApplied) {
-      await options.applyResult(record.submissionId, options.event);
-      await options.store.markWebhookApplied(
-        record.id,
-        options.event.eventId,
-        options.event,
-      );
+  const apply = async (): Promise<boolean> => {
+    const claim = await options.store.beginWebhookEvent(record.id,options.event);
+    if (claim.kind === "duplicate") return true;
+    if (claim.kind === "in_progress") throw new VrsCallbackError("EVENT_IN_PROGRESS", `VRS AI event ${options.event.eventId} is already processing`);
+    try {
+      if (!claim.alreadyApplied) {
+        await options.applyResult(record.submissionId,options.event);
+        await options.store.markWebhookApplied(record.id,options.event.eventId,options.event);
+      }
+      return false;
+    } catch(error) {
+      await options.store.markWebhookFailed(record.id,options.event.eventId,error instanceof Error?error.message:String(error));
+      throw error;
     }
-
+  };
+  // Lock only local application, not the potentially slow upstream HTTP retry.
+  const duplicate = options.store.withWebhookApplicationLock
+    ? await options.store.withWebhookApplicationLock(record.id,apply)
+    : await apply();
+  if (duplicate) return "duplicate";
+  // Delivery has its own durable claim. Contention is not a failed delivery.
+  const forwarding = options.store.claimWebhookForwarding ? await options.store.claimWebhookForwarding(record.id,options.event.eventId) : {kind:"claimed" as const,claimedAt:undefined};
+  if (forwarding.kind === "duplicate" || forwarding.kind === "superseded") return "duplicate";
+  if (forwarding.kind === "in_progress") throw new VrsCallbackError("EVENT_IN_PROGRESS", "Upstream delivery is already in progress. Retry the same event shortly.");
+  const forwardingClaimedAt = "claimedAt" in forwarding ? forwarding.claimedAt : undefined;
+  let deliveryRecorded = false;
+  try {
     const callbackSecret = options.decryptCallbackSecret({
       cipher: record.callbackSecretCipher ?? "",
       iv: record.callbackSecretIv ?? "",
@@ -575,26 +588,31 @@ export async function processVrsAiWebhookEvent(options: {
       callbackUrl: record.callbackUrl ?? "",
       callbackSecret,
       event: {
-        ...options.event,
+        ...upstreamVrsWebhookEvent(options.event),
         callId: record.callId,
       },
     });
-    await options.store.markWebhookForwarded(
-      record.id,
-      options.event.eventId,
-      delivery,
-    );
+    if (forwardingClaimedAt) await options.store.markWebhookForwarded(record.id,options.event.eventId,delivery,forwardingClaimedAt);
+    else await options.store.markWebhookForwarded(record.id,options.event.eventId,delivery);
+    deliveryRecorded = true;
     if (!delivery.delivered) {
       throw new Error("Unable to forward VRS AI result to SASHA");
     }
     return "processed";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await options.store.markWebhookFailed(
+    if (!deliveryRecorded) await options.store.markWebhookFailed(
       record.id,
       options.event.eventId,
       message,
+      forwardingClaimedAt,
     );
     throw error;
   }
+}
+
+export function upstreamVrsWebhookEvent(event: VrsWebhookEvent): VrsWebhookEvent {
+  if (event.state !== "approved") return event;
+  const {partId: _part,techId: _tech,partDescription: _description,...upstream} = event;
+  return upstream;
 }

@@ -61,7 +61,7 @@ function getTwilioClient(): { client: ReturnType<typeof twilio>; phone: string }
 export async function sendSmsMessage(
   recipientPhone: string,
   messageBody: string
-): Promise<{ success: boolean; twilioSid?: string; error?: string }> {
+): Promise<{ success: boolean; twilioSid?: string; error?: string; notificationId?: number; retrySafe?: boolean }> {
   const twilioConfig = getTwilioClient();
   const normalizedPhone = normalizePhone(recipientPhone);
 
@@ -79,6 +79,7 @@ export async function sendSmsMessage(
       return { success: false, error: err.message };
     }
   } else {
+    if (process.env.NODE_ENV === "production") return {success:false,error:"Twilio is not configured; no message was sent.",retrySafe:true};
     console.log(`[SMS MOCK] To: ${recipientPhone} | Body: ${messageBody}`);
     return { success: true, twilioSid: `MOCK_${Date.now()}` };
   }
@@ -89,7 +90,7 @@ export async function sendSms(
   recipientPhone: string,
   messageType: string,
   messageBody: string
-): Promise<{ success: boolean; twilioSid?: string; error?: string }> {
+): Promise<{ success: boolean; twilioSid?: string; error?: string; notificationId?: number; retrySafe?: boolean }> {
   if (!recipientPhone) {
     console.error(`[SMS] No phone number for submission ${submissionId}, type: ${messageType}`);
     return { success: false, error: "No recipient phone number" };
@@ -111,29 +112,23 @@ export async function sendSms(
       console.log(`[SMS] Sent ${messageType} to ${normalizedPhone} (input: ${recipientPhone}) for submission ${submissionId}, SID: ${message.sid}`);
     } catch (err: any) {
       console.error(`[SMS] Failed to send ${messageType} to ${recipientPhone} for submission ${submissionId}:`, err.message);
-      await storage.createSmsNotification({
-        submissionId,
-        recipientPhone,
-        messageType,
-        messageBody,
-        twilioSid: `ERROR: ${err.message}`,
+      const failed = await storage.createSmsNotification({
+        submissionId,recipientPhone,messageType,messageBody,twilioSid: `ERROR: ${err.message}`.slice(0, 100),
       });
-      return { success: false, error: err.message };
+      return {success:false,error:err.message,notificationId:failed.id,retrySafe:typeof err.status === "number" && err.status >= 400 && err.status < 500};
     }
   } else {
+    if (process.env.NODE_ENV === "production") {
+      const error = "Twilio is not configured; no message was sent.";
+      const failed = await storage.createSmsNotification({submissionId,recipientPhone,messageType,messageBody,twilioSid:`ERROR: ${error}`});
+      return {success:false,error,notificationId:failed.id,retrySafe:true};
+    }
     console.log(`[SMS MOCK] To: ${recipientPhone} | Type: ${messageType} | Body: ${messageBody}`);
     twilioSid = `MOCK_${Date.now()}`;
   }
 
-  await storage.createSmsNotification({
-    submissionId,
-    recipientPhone,
-    messageType,
-    messageBody,
-    twilioSid,
-  });
-
-  return { success: true, twilioSid: twilioSid || undefined };
+  const notification = await storage.createSmsNotification({submissionId,recipientPhone,messageType,messageBody,twilioSid});
+  return {success:true,twilioSid:twilioSid || undefined,notificationId:notification.id};
 }
 
 // ============================================================================

@@ -1,3 +1,4 @@
+import { testReceipts } from "./helpers/direct-result-receipts";
 import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
@@ -16,29 +17,30 @@ const API_KEY = "test-vrs-api-key";
 const validCallResult = {
   version: 1,
   eventId: "8f3a5e10-58a4-4fe0-a3a1-95038a7e4ee6",
-  callId: "vrs_536",
-  soNo: "10866426",
+  callId: "fixture-call",
+  soNo: "99090801",
   occurredAt: "2026-09-08T14:01:45.289Z",
   state: "approved",
   authNumber: "AHS-001",
   authorizedAmount: 380.6,
   durationSec: 187,
   partId: "EAD61906701",
-  techId: "BCURTI",
+  techId: "TESTTECH",
   partDescription: "Dishwasher Wire Harness",
   recordingUrl:
-    "https://agentic-vrs-agent-dev.stage.nextgen.shs.com/recordings/536_combined.wav",
+    "https://recordings.example.test/fixture.wav",
 } as const;
 
 function pendingTicket(
   overrides: Partial<VrsAiCallResultCandidate> = {},
 ): VrsAiCallResultCandidate {
   return {
+    requestType:"authorization", submissionApproved:true, stage1Status:"approved", warrantyProvider:"AHS", partNumbers:'["EAD61906701"]',
     submissionId: 4211,
-    serviceOrder: "8175-10866426",
+    serviceOrder: "0001-99090801",
     ticketStatus: "pending",
     authCode: null,
-    technicianLdapId: "BCURTI",
+    technicianLdapId: "TESTTECH",
     createdAt: new Date("2026-09-08T13:40:00.000Z"),
     ...overrides,
   };
@@ -72,11 +74,13 @@ function makeApp(options: {
   closer?: FakeCloser;
   apiKey?: string | undefined;
   loadThrows?: boolean;
+  boundSubmissionId?: number;
 } = {}) {
   const closer = options.closer ?? new FakeCloser();
   const app = express();
   app.use(express.json());
   registerVrsAiCallResultApi(app, {
+    receipts: testReceipts(options.boundSubmissionId),
     apiKey: "apiKey" in options ? options.apiKey : API_KEY,
     loadTicketCandidates: async () => {
       if (options.loadThrows) throw new Error("db down");
@@ -102,10 +106,10 @@ describe("POST /api/integrations/vrs-ai/v1/call-result", () => {
       closed: true,
       deduped: false,
       submission_id: 4211,
-      service_order: "8175-10866426",
+      service_order: "0001-99090801",
       ticket_status: "completed",
       auth_number: "AHS-001",
-      call_id: "vrs_536",
+      call_id: "fixture-call",
       event_id: "8f3a5e10-58a4-4fe0-a3a1-95038a7e4ee6",
     });
 
@@ -116,7 +120,7 @@ describe("POST /api/integrations/vrs-ai/v1/call-result", () => {
       authorizedAmount: 380.6,
       partId: "EAD61906701",
       partDescription: "Dishwasher Wire Harness",
-      techId: "BCURTI",
+      techId: "TESTTECH",
       durationSec: 187,
     });
   });
@@ -228,14 +232,15 @@ describe("POST /api/integrations/vrs-ai/v1/call-result", () => {
 
     expect(response.status).toBe(404);
     expect(response.body.error).toBe("TICKET_NOT_FOUND");
-    expect(response.body.message).toContain("10866426");
+    expect(response.body.message).toContain("99090801");
     expect(closer.calls).toHaveLength(0);
   });
 
-  it("is idempotent — a replay of the same approval does not re-close", async () => {
+  it("resumes a receipt-bound approval without re-closing the ticket", async () => {
     const { app, closer } = makeApp({
+      boundSubmissionId:4211,
       candidates: [
-        pendingTicket({ ticketStatus: "completed", authCode: "AHS-001" }),
+        pendingTicket({ ticketStatus: "completed", authCode: "AHS-001", agentNotes: buildVrsAiCallResultAgentNotes(validCallResult) }),
       ],
     });
 
@@ -303,7 +308,7 @@ describe("POST /api/integrations/vrs-ai/v1/call-result", () => {
 
 describe("selectVrsAiCallResultTicket", () => {
   it("returns undefined with no candidates", () => {
-    expect(selectVrsAiCallResultTicket([], "BCURTI")).toBeUndefined();
+    expect(selectVrsAiCallResultTicket([], "TESTTECH")).toBeUndefined();
   });
 
   it("prefers the bridge-linked ticket over every service-order match", () => {
@@ -319,7 +324,7 @@ describe("selectVrsAiCallResultTicket", () => {
     });
 
     expect(
-      selectVrsAiCallResultTicket([newerUnlinked, linked], "BCURTI")
+      selectVrsAiCallResultTicket([newerUnlinked, linked], "TESTTECH")
         ?.submissionId,
     ).toBe(900);
   });
@@ -332,24 +337,22 @@ describe("selectVrsAiCallResultTicket", () => {
     });
     const ourTech = pendingTicket({
       submissionId: 11,
-      technicianLdapId: "bcurti",
+      technicianLdapId: "testtech",
       createdAt: new Date("2026-09-08T10:00:00.000Z"),
     });
 
     expect(
-      selectVrsAiCallResultTicket([otherTech, ourTech], "BCURTI")?.submissionId,
+      selectVrsAiCallResultTicket([otherTech, ourTech], "TESTTECH")?.submissionId,
     ).toBe(11);
   });
 
-  it("falls back to all candidates when the tech id matches none", () => {
+  it("rejects when the tech id matches none", () => {
     const only = pendingTicket({ submissionId: 12, technicianLdapId: "ZZZZ" });
 
-    expect(
-      selectVrsAiCallResultTicket([only], "BCURTI")?.submissionId,
-    ).toBe(12);
+    expect(() => selectVrsAiCallResultTicket([only], "TESTTECH")).toThrow("No ticket matches");
   });
 
-  it("prefers a pending ticket over a newer non-pending one", () => {
+  it("rejects ambiguous pending and completed candidates", () => {
     const newerCompleted = pendingTicket({
       submissionId: 20,
       ticketStatus: "completed",
@@ -361,13 +364,10 @@ describe("selectVrsAiCallResultTicket", () => {
       createdAt: new Date("2026-09-08T09:00:00.000Z"),
     });
 
-    expect(
-      selectVrsAiCallResultTicket([newerCompleted, olderPending], "BCURTI")
-        ?.submissionId,
-    ).toBe(21);
+    expect(() => selectVrsAiCallResultTicket([newerCompleted, olderPending], "TESTTECH")).toThrow("Multiple tickets");
   });
 
-  it("picks the newest pending ticket when several are pending", () => {
+  it("rejects multiple pending candidates instead of guessing by age", () => {
     const older = pendingTicket({
       submissionId: 30,
       createdAt: new Date("2026-09-08T08:00:00.000Z"),
@@ -377,12 +377,10 @@ describe("selectVrsAiCallResultTicket", () => {
       createdAt: new Date("2026-09-08T12:00:00.000Z"),
     });
 
-    expect(
-      selectVrsAiCallResultTicket([older, newer], "BCURTI")?.submissionId,
-    ).toBe(31);
+    expect(() => selectVrsAiCallResultTicket([older,newer], "TESTTECH")).toThrow("Multiple tickets");
   });
 
-  it("returns the newest candidate when nothing is pending, so the caller can explain why", () => {
+  it("rejects ambiguous completed history without a durable receipt", () => {
     const older = pendingTicket({
       submissionId: 40,
       ticketStatus: "rejected",
@@ -394,9 +392,7 @@ describe("selectVrsAiCallResultTicket", () => {
       createdAt: new Date("2026-09-08T12:00:00.000Z"),
     });
 
-    expect(
-      selectVrsAiCallResultTicket([older, newer], "BCURTI")?.submissionId,
-    ).toBe(41);
+    expect(() => selectVrsAiCallResultTicket([older,newer], "TESTTECH")).toThrow("Multiple tickets");
   });
 });
 
@@ -408,12 +404,12 @@ describe("buildVrsAiCallResultAgentNotes", () => {
 
     expect(notes).toContain("$380.60");
     expect(notes).toContain("AHS-001");
-    expect(notes).toContain("vrs_536");
+    expect(notes).toContain("fixture-call");
     expect(notes).toContain("EAD61906701");
     expect(notes).toContain("Dishwasher Wire Harness");
-    expect(notes).toContain("BCURTI");
+    expect(notes).toContain("TESTTECH");
     expect(notes).toContain("187s");
-    expect(notes).toContain("536_combined.wav");
+    expect(notes).toContain("fixture.wav");
   });
 
   it("omits duration and recording when they are absent", () => {

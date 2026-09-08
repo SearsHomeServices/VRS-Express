@@ -1,6 +1,8 @@
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import type { PoolClient } from "pg";
+import { callbackFingerprint, VrsCallbackError } from "./vrs-callback-safety";
+import { and, desc, eq, inArray, lt, gt, ne, isNull, or, sql } from "drizzle-orm";
 import { submissions, vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
-import { db } from "./storage";
+import { db, pool } from "./storage";
 import {
   projectVrsBridgeReviewContext,
   type VrsBridgeRecord,
@@ -24,6 +26,7 @@ export const ACTIVE_VRS_BRIDGE_STATES = [
   "awaiting_decision",
   "requires_info",
   "in_progress",
+  "reviewing",
 ] as const;
 
 const TERMINAL_VRS_AI_STATES = [
@@ -226,6 +229,9 @@ function eventResultUpdate(event: VrsWebhookEvent) {
   };
 }
 
+// Reserve at most four of the shared pool connections for local callback locks.
+let webhookApplicationsInFlight = 0;
+
 export class DrizzleVrsBridgeStore
   implements VrsBridgeStore, VrsBridgeIntakeStore, VrsServiceOrderReader {
   private readonly statusRowLoader: VrsAiBridgeStatusRowLoader;
@@ -366,6 +372,12 @@ export class DrizzleVrsBridgeStore
     return row ? projectVrsAiBridgeStatus(row) : null;
   }
 
+  async getByAnyCallId(callId:string):Promise<VrsBridgeRecord|undefined> {
+    const rows=await db.select().from(vrsAiCalls).where(or(eq(vrsAiCalls.providerCallId,callId),eq(vrsAiCalls.callId,callId))).limit(2);
+    if(rows.length>1)throw new VrsCallbackError("AMBIGUOUS_CALL_ID", "This identifier matches more than one bridge call.");
+    return rows[0] ? toBridgeRecord(rows[0]) : undefined;
+  }
+
   async getByProviderCallId(
     providerCallId: string,
   ): Promise<VrsBridgeRecord | undefined> {
@@ -431,6 +443,36 @@ export class DrizzleVrsBridgeStore
       .where(eq(vrsAiCalls.id, id));
   }
 
+  async withWebhookApplicationLock<T>(id:number, work:()=>Promise<T>): Promise<T> {
+    if (webhookApplicationsInFlight >= 4) throw new VrsCallbackError("CALLBACK_CAPACITY", "Callback processing is busy. Retry the same event shortly.",429);
+    webhookApplicationsInFlight++;
+    let client: PoolClient | undefined;
+    let locked = false;
+    let connectionLost = false;
+    const onConnectionError = () => { connectionLost = true; };
+    const key = `vrs-ai-application:${id}`;
+    try {
+      client = await pool.connect();
+      client.on("error",onConnectionError);
+      locked = Boolean((await client.query("SELECT pg_try_advisory_lock(hashtext($1)) AS locked",[key])).rows[0]?.locked);
+      if (!locked) throw new VrsCallbackError("EVENT_IN_PROGRESS", "Another result for this call is applying. Retry the same event shortly.");
+      const result=await work();
+      if(connectionLost)throw new VrsCallbackError("CALLBACK_LOCK_LOST","Callback connection was interrupted; retry the same event.",503);
+      return result;
+    } finally {
+      if (client) {
+        let discard = connectionLost;
+        if (locked && !connectionLost) {
+          try { await client.query("SELECT pg_advisory_unlock(hashtext($1))",[key]); }
+          catch { discard = true; }
+        }
+        client.removeListener("error",onConnectionError);
+        client.release(discard);
+      }
+      webhookApplicationsInFlight--;
+    }
+  }
+
   async beginWebhookEvent(
     id: number,
     event: VrsWebhookEvent,
@@ -440,84 +482,73 @@ export class DrizzleVrsBridgeStore
     | { kind: "in_progress" }
   > {
     return db.transaction(async (transaction) => {
-      await transaction.execute(
-        sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-event:${event.eventId}`}))`,
-      );
-      const [existing] = await transaction
-        .select()
-        .from(vrsAiCallEvents)
-        .where(eq(vrsAiCallEvents.eventId, event.eventId))
-        .limit(1);
-
-      if (!existing) {
-        const [call] = await transaction
-          .select({ state: vrsAiCalls.state })
-          .from(vrsAiCalls)
-          .where(eq(vrsAiCalls.id, id))
-          .limit(1);
-        if (
-          call &&
-          (TERMINAL_VRS_AI_STATES as readonly string[]).includes(call.state)
-        ) {
-          return { kind: "duplicate" as const };
-        }
-        await transaction.insert(vrsAiCallEvents).values({
-          vrsAiCallId: id,
-          eventId: event.eventId,
-          state: event.state,
-          payload: event as Record<string, unknown>,
-          processingState: "processing",
-        });
-        return {
-          kind: "claimed" as const,
-          alreadyApplied: false,
-        };
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-call:${id}`}))`);
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-event:${event.eventId}`}))`);
+      const [existing] = await transaction.select().from(vrsAiCallEvents).where(eq(vrsAiCallEvents.eventId,event.eventId)).limit(1);
+      if (existing && (existing.vrsAiCallId !== id || callbackFingerprint(existing.payload) !== callbackFingerprint(event))) {
+        throw new VrsCallbackError("EVENT_CONFLICT", "Event ID is already bound to a different call or payload.");
       }
-      if (existing.forwardedAt) return { kind: "duplicate" as const };
-
-      const processingIsFresh =
-        existing.processingState === "processing" &&
-        existing.updatedAt.getTime() > Date.now() - 2 * 60_000;
-      if (processingIsFresh) return { kind: "in_progress" as const };
-
-      await transaction
-        .update(vrsAiCallEvents)
-        .set({
-          processingState: "processing",
-          lastError: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(vrsAiCallEvents.id, existing.id));
-      return {
-        kind: "claimed" as const,
-        alreadyApplied: Boolean(existing.appliedAt),
-      };
+      if (existing?.forwardedAt) return {kind:"duplicate" as const};
+      const [call] = await transaction.select({state:vrsAiCalls.state,webhookEventId:vrsAiCalls.webhookEventId}).from(vrsAiCalls).where(eq(vrsAiCalls.id,id)).limit(1);
+      if (!call) throw new VrsCallbackError("CALL_NOT_FOUND", "Callback call no longer exists.",404);
+      const [latest] = call.webhookEventId
+        ? await transaction.select().from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),eq(vrsAiCallEvents.eventId,call.webhookEventId))).limit(1)
+        : [];
+      if (call.webhookEventId !== event.eventId) {
+        if ((TERMINAL_VRS_AI_STATES as readonly string[]).includes(call.state)) {
+          if (event.state === "requires_info") return {kind:"duplicate" as const};
+          throw new VrsCallbackError("TERMINAL_RESULT_CONFLICT", "This call already has a terminal result. Review conflicting outcomes instead of applying another.");
+        }
+        if (latest && new Date(String(latest.payload.occurredAt)).getTime() > new Date(event.occurredAt).getTime()) {
+          throw new VrsCallbackError("STALE_EVENT", "An older event cannot replace a newer call state.");
+        }
+      }
+      const freshBefore = new Date(Date.now()-2*60_000);
+      const [busy] = await transaction.select({id:vrsAiCallEvents.id}).from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),ne(vrsAiCallEvents.eventId,event.eventId),eq(vrsAiCallEvents.processingState,"processing"),gt(vrsAiCallEvents.updatedAt,freshBefore))).limit(1);
+      if (busy || existing && ["processing","forwarding"].includes(existing.processingState) && existing.updatedAt > freshBefore) return {kind:"in_progress" as const};
+      if (!existing) {
+        await transaction.insert(vrsAiCallEvents).values({vrsAiCallId:id,eventId:event.eventId,state:event.state,payload:event as Record<string,unknown>,processingState:"processing"});
+      } else {
+        await transaction.update(vrsAiCallEvents).set({processingState:"processing",lastError:null,updatedAt:new Date()}).where(eq(vrsAiCallEvents.id,existing.id));
+      }
+      return {kind:"claimed" as const,alreadyApplied:Boolean(existing?.appliedAt)};
     });
   }
 
-  async markWebhookApplied(
-    id: number,
-    eventId: string,
-    event: VrsWebhookEvent,
-  ): Promise<void> {
-    await db.transaction(async (transaction) => {
-      await transaction
-        .update(vrsAiCalls)
-        .set(eventResultUpdate(event))
-        .where(eq(vrsAiCalls.id, id));
-      await transaction
-        .update(vrsAiCallEvents)
-        .set({
-          appliedAt: new Date(),
-          processingState: "applied",
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(vrsAiCallEvents.vrsAiCallId, id),
-            eq(vrsAiCallEvents.eventId, eventId),
-          ),
-        );
+  async markWebhookApplied(id:number,eventId:string,event:VrsWebhookEvent): Promise<void> {
+    await db.transaction(async transaction => {
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-call:${id}`}))`);
+      const [call] = await transaction.select({state:vrsAiCalls.state,webhookEventId:vrsAiCalls.webhookEventId}).from(vrsAiCalls).where(eq(vrsAiCalls.id,id)).limit(1).for("update");
+      const [receipt] = await transaction.select().from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),eq(vrsAiCallEvents.eventId,eventId))).limit(1);
+      if (!receipt || callbackFingerprint(receipt.payload) !== callbackFingerprint(event)) throw new VrsCallbackError("EVENT_CONFLICT", "Event receipt does not match the applied result.");
+      if (!call) throw new VrsCallbackError("CALL_NOT_FOUND", "Callback call no longer exists.",404);
+      if (call.webhookEventId !== eventId) {
+        if ((TERMINAL_VRS_AI_STATES as readonly string[]).includes(call.state)) throw new VrsCallbackError("STALE_EVENT", "A terminal result cannot be overwritten by a different event.");
+        const [latest] = call.webhookEventId ? await transaction.select().from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),eq(vrsAiCallEvents.eventId,call.webhookEventId))).limit(1) : [];
+        if (latest && new Date(String(latest.payload.occurredAt)).getTime() > new Date(event.occurredAt).getTime()) throw new VrsCallbackError("STALE_EVENT", "An older event cannot replace a newer call state.");
+      }
+      await transaction.update(vrsAiCalls).set(eventResultUpdate(event)).where(eq(vrsAiCalls.id,id));
+      await transaction.update(vrsAiCallEvents).set({appliedAt:new Date(),processingState:"applied",updatedAt:new Date()}).where(eq(vrsAiCallEvents.id,receipt.id));
+    });
+  }
+
+  async claimWebhookForwarding(id:number,eventId:string):Promise<{kind:"claimed";claimedAt:Date}|{kind:"duplicate"|"in_progress"|"superseded"}> {
+    return db.transaction(async transaction=>{
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-call:${id}`}))`);
+      const [event]=await transaction.select().from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),eq(vrsAiCallEvents.eventId,eventId))).limit(1);
+      if(!event?.appliedAt)throw new VrsCallbackError("EVENT_NOT_APPLIED","This event has not been applied locally.");
+      if(event.forwardedAt)return {kind:"duplicate" as const};
+      if(event.processingState==="superseded")return {kind:"superseded" as const};
+      const [busy]=await transaction.select({id:vrsAiCallEvents.id}).from(vrsAiCallEvents).where(and(eq(vrsAiCallEvents.vrsAiCallId,id),eq(vrsAiCallEvents.processingState,"forwarding"),gt(vrsAiCallEvents.updatedAt,new Date(Date.now()-2*60_000)))).limit(1);
+      if(busy)return {kind:"in_progress" as const};
+      const [call]=await transaction.select({eventId:vrsAiCalls.webhookEventId}).from(vrsAiCalls).where(eq(vrsAiCalls.id,id)).limit(1);
+      if(call?.eventId && call.eventId!==eventId){
+        await transaction.update(vrsAiCallEvents).set({processingState:"superseded",lastError:"A newer applied event superseded this pending delivery.",updatedAt:new Date()}).where(eq(vrsAiCallEvents.id,event.id));
+        return {kind:"superseded" as const};
+      }
+      const claimedAt=new Date();
+      await transaction.update(vrsAiCallEvents).set({processingState:"forwarding",updatedAt:claimedAt}).where(eq(vrsAiCallEvents.id,event.id));
+      return {kind:"claimed" as const,claimedAt};
     });
   }
 
@@ -525,10 +556,12 @@ export class DrizzleVrsBridgeStore
     id: number,
     eventId: string,
     result: { delivered: boolean; attempts: number; status?: number },
+    claimedAt?: Date,
   ): Promise<void> {
     const now = new Date();
     await db.transaction(async (transaction) => {
-      await transaction
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-ai-call:${id}`}))`);
+      const written = await transaction
         .update(vrsAiCallEvents)
         .set({
           processingState: result.delivered ? "completed" : "forward_failed",
@@ -541,8 +574,13 @@ export class DrizzleVrsBridgeStore
           and(
             eq(vrsAiCallEvents.vrsAiCallId, id),
             eq(vrsAiCallEvents.eventId, eventId),
+            isNull(vrsAiCallEvents.forwardedAt),
+            claimedAt ? eq(vrsAiCallEvents.updatedAt,claimedAt) : undefined,
+            claimedAt ? eq(vrsAiCallEvents.processingState,"forwarding") : undefined,
+            ne(vrsAiCallEvents.processingState,"superseded"),
           ),
-        );
+        ).returning({id:vrsAiCallEvents.id});
+      if (!written.length) return;
       await transaction
         .update(vrsAiCalls)
         .set({
@@ -552,7 +590,7 @@ export class DrizzleVrsBridgeStore
           webhookDeliveredAt: result.delivered ? now : null,
           updatedAt: now,
         })
-        .where(eq(vrsAiCalls.id, id));
+        .where(and(eq(vrsAiCalls.id, id), eq(vrsAiCalls.webhookEventId, eventId)));
     });
   }
 
@@ -560,6 +598,7 @@ export class DrizzleVrsBridgeStore
     id: number,
     eventId: string,
     message: string,
+    claimedAt?: Date,
   ): Promise<void> {
     await db
       .update(vrsAiCallEvents)
@@ -572,6 +611,10 @@ export class DrizzleVrsBridgeStore
         and(
           eq(vrsAiCallEvents.vrsAiCallId, id),
           eq(vrsAiCallEvents.eventId, eventId),
+          isNull(vrsAiCallEvents.forwardedAt),
+          claimedAt ? eq(vrsAiCallEvents.updatedAt,claimedAt) : undefined,
+          claimedAt ? eq(vrsAiCallEvents.processingState,"forwarding") : undefined,
+          ne(vrsAiCallEvents.processingState,"superseded"),
         ),
       );
   }

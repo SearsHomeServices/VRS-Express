@@ -1173,11 +1173,9 @@ describe("VRS Express bridge orchestration", () => {
         }),
       }),
     ).rejects.toThrow("Unable to forward VRS AI result to SASHA");
-    expect(store.markWebhookFailed).toHaveBeenCalledWith(
-      9,
-      "evt_forward_failure",
-      "Unable to forward VRS AI result to SASHA",
-    );
+    expect(store.markWebhookForwarded).toHaveBeenCalledWith(9,"evt_forward_failure",{delivered:false,attempts:5,status:503});
+    // A second failure write could clear a retry's newly acquired delivery claim.
+    expect(store.markWebhookFailed).not.toHaveBeenCalled();
   });
 
   it("maps terminal AI outcomes into the existing ticket/SMS actions", () => {

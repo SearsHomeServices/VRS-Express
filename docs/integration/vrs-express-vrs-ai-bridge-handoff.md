@@ -17,7 +17,8 @@ placeholders only in the controlled development environment.
 Use the existing `POST /api/integrations/vrs-ai/v1/webhook`. Approved events
 also accept optional nonblank string fields `partId` (100 characters),
 `techId` (50), and `partDescription` (2000). These are audit metadata, preserved
-in the event payload and forwarded upstream. They do not select a ticket.
+in the local event payload. The upstream callback retains its original approved
+envelope, without these three optional metadata fields. They do not select a ticket.
 `callId` must be the provider `call_id` stored from the VRS AI admission
 response, and `soNo` must match that call's eight-digit service order.
 Unknown calls or mismatched orders do not close a ticket.
@@ -34,7 +35,9 @@ and body but refresh the timestamp header; `occurredAt` stays the event time.
 Approved callbacks reuse the existing completion handler and its technician
 notification behavior. A successful response is HTTP 200 with
 `{"ok":true,"eventId":"evt_example","deduped":false}`; a completed replay
-returns `deduped:true`. Upstream forwarding failure can return HTTP 500 after
+returns `deduped:true`. Event-ID/payload conflicts and stale terminal transitions
+return a conflict instead of changing another call. Timestamps use milliseconds.
+Upstream forwarding failure can return HTTP 500 after
 local completion; retry the same event so the existing ledger resumes
 forwarding without repeating the ticket action.
 

@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "crypto";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
+import { bareCallbackOrder, normalizeCallbackTech, validateAutomatedApproval, VrsCallbackError, type AutomatedApprovalTicket } from "./vrs-callback-safety";
+import type { DirectResultReceipts, DirectResultBinding, DirectResultResponse } from "./vrs-direct-result-store";
 
 // ============================================================================
 // VRS AI CALL RESULT — close an Express ticket from a VRS AI call outcome
@@ -18,7 +20,7 @@ import { z } from "zod";
 //     technician fields (partId, partDescription, techId) — resolves the
 //     corresponding Express ticket, and closes it.
 //
-// It does NOT write the event ledger and does NOT forward anything to SASHA.
+// It writes a separate direct-result receipt and does NOT forward anything to SASHA.
 // Use /webhook when the upstream partner hop is required.
 //
 // Auth is the same X-API-Key VRS AI already presents on inbound authorize and
@@ -43,6 +45,7 @@ export const vrsAiCallResultSchema = z
     version: z.literal(1),
     eventId: requiredText("eventId", 100),
     callId: requiredText("callId", 100),
+    submissionId: z.number().int().positive().optional(),
     soNo: z.string().regex(/^\d{8}$/, "soNo must be 8 digits"),
     occurredAt: z.string().datetime({ offset: true }),
     state: z.literal("approved"),
@@ -59,11 +62,12 @@ export const vrsAiCallResultSchema = z
 export type VrsAiCallResult = z.infer<typeof vrsAiCallResultSchema>;
 
 // One Express ticket that could correspond to an incoming call result.
-export interface VrsAiCallResultCandidate {
+export interface VrsAiCallResultCandidate extends AutomatedApprovalTicket {
   submissionId: number;
   serviceOrder: string;
   ticketStatus: string;
   authCode: string | null;
+  agentNotes?: string | null;
   technicianLdapId: string | null;
   createdAt: Date | null;
   // True when this ticket was reached through the bridge row for the call id
@@ -73,15 +77,18 @@ export interface VrsAiCallResultCandidate {
 }
 
 export type CloseVrsAiTicketOutcome =
-  | { kind: "closed"; ticketStatus: string; authCode: string | null }
+  | { kind: "closed"; ticketStatus: string; authCode: string | null; notification?: {status: "accepted" | "failed" | "unknown"; message?: string; notificationId?: number} }
   | { kind: "failed"; status: number; message: string };
 
 export interface VrsAiCallResultDependencies {
   apiKey?: string;
+  enabled?: () => boolean;
+  receipts: DirectResultReceipts;
   loadTicketCandidates(input: {
     callId: string;
     soNo: string;
     techId: string;
+    boundSubmissionId?: number;
   }): Promise<readonly VrsAiCallResultCandidate[]>;
   closeTicket(input: {
     ticket: VrsAiCallResultCandidate;
@@ -93,42 +100,24 @@ function normalizeTechId(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-/**
- * Pick the Express ticket a call result belongs to.
- *
- * 1. A bridge-linked ticket (matched on the call id) always wins.
- * 2. `techId` narrows the service-order matches when it matches at least one
- *    of them. It is a hint, not a hard filter — roster casing/format can drift
- *    between VRS AI and the Express roster, and dropping every candidate over
- *    that would strand a legitimate close.
- * 3. Prefer a `pending` ticket, since that is the only closable state.
- * 4. Otherwise return the newest candidate so the caller can report the real
- *    reason it is not closable (already completed, still queued, ...).
- */
+/** Only an exact, unique identity can choose a ticket; never guess by status or age. */
 export function selectVrsAiCallResultTicket(
-  candidates: readonly VrsAiCallResultCandidate[],
-  techId: string,
+  candidates: readonly VrsAiCallResultCandidate[], techId: string, soNo?: string,
 ): VrsAiCallResultCandidate | undefined {
-  if (candidates.length === 0) return undefined;
-
-  const linked = candidates.find((candidate) => candidate.linkedByCallId);
-  if (linked) return linked;
-
-  const wantedTech = normalizeTechId(techId);
-  const techMatches = candidates.filter(
-    (candidate) => normalizeTechId(candidate.technicianLdapId) === wantedTech,
-  );
-  const pool = techMatches.length > 0 ? techMatches : candidates;
-
-  const newestFirst = [...pool].sort(
-    (left, right) =>
-      (right.createdAt?.getTime() ?? 0) - (left.createdAt?.getTime() ?? 0),
-  );
-
-  return (
-    newestFirst.find((candidate) => candidate.ticketStatus === "pending") ??
-    newestFirst[0]
-  );
+  if (!candidates.length) return undefined;
+  const linked = candidates.filter(candidate => candidate.linkedByCallId);
+  if (linked.length > 1) throw new VrsCallbackError("AMBIGUOUS_TICKET", "More than one ticket is linked to this call.");
+  if (linked.length) {
+    if (soNo && bareCallbackOrder(linked[0].serviceOrder) !== soNo) throw new VrsCallbackError("CALL_ORDER_MISMATCH", "The call does not belong to the supplied order.");
+    if (normalizeCallbackTech(linked[0].technicianLdapId) !== normalizeCallbackTech(techId)) throw new VrsCallbackError("TECHNICIAN_MISMATCH", "The call does not belong to the supplied technician.");
+    return linked[0];
+  }
+  const matching = candidates.filter(candidate =>
+    normalizeCallbackTech(candidate.technicianLdapId) === normalizeCallbackTech(techId) &&
+    (!soNo || bareCallbackOrder(candidate.serviceOrder) === soNo));
+  if (!matching.length) throw new VrsCallbackError("TECHNICIAN_MISMATCH", "No ticket matches this order and technician.");
+  if (matching.length !== 1) throw new VrsCallbackError("AMBIGUOUS_TICKET", "Multiple tickets match. Supply submissionId or a correctly linked call; no ticket was changed.");
+  return matching[0];
 }
 
 function authenticateVrsAiCallResultApiKey(
@@ -166,6 +155,16 @@ export function registerVrsAiCallResultApi(
   app: Express,
   deps: VrsAiCallResultDependencies,
 ): void {
+  app.get("/api/integrations/vrs-ai/v1/call-results/:eventId", async (req,res) => {
+    if (!authenticateVrsAiCallResultApiKey(req,res,deps.apiKey)) return;
+    const eventId=String(req.params.eventId);
+    if (!eventId || eventId.length>100) return res.status(400).json({error:"INVALID_EVENT_ID"});
+    try {
+      if (!deps.receipts?.getStatus) return res.status(503).json({error:"RECEIPTS_NOT_READY"});
+      const receipt=await deps.receipts.getStatus(eventId);
+      return receipt ? res.json(receipt) : res.status(404).json({error:"EVENT_NOT_FOUND"});
+    } catch { return res.status(503).json({error:"RECEIPTS_NOT_READY"}); }
+  });
   app.post("/api/integrations/vrs-ai/v1/call-result", async (req, res) => {
     if (!authenticateVrsAiCallResultApiKey(req, res, deps.apiKey)) {
       return;
@@ -194,102 +193,33 @@ export function registerVrsAiCallResultApi(
     }
 
     const result = parsed.data;
-
-    let candidates: readonly VrsAiCallResultCandidate[];
+    if (deps.enabled && !deps.enabled()) return res.status(503).json({error:"CALL_RESULT_DISABLED",message:"Direct call results are paused. Retry the same event after activation."});
     try {
-      candidates = await deps.loadTicketCandidates({
-        callId: result.callId,
-        soNo: result.soNo,
-        techId: result.techId,
+      if (!deps.receipts) throw new VrsCallbackError("RECEIPTS_NOT_READY", "Durable callback receipts are not configured.", 503);
+      const response = await deps.receipts.execute(result, async (binding: DirectResultBinding): Promise<DirectResultResponse> => {
+        const candidates = await deps.loadTicketCandidates({callId:result.callId,soNo:result.soNo,techId:result.techId,boundSubmissionId:binding.submissionId ?? result.submissionId});
+        const ticket = selectVrsAiCallResultTicket(candidates, result.techId, result.soNo);
+        if (!ticket) return {status:404,body:{error:"TICKET_NOT_FOUND",message:`No ticket matches service order ${result.soNo} and the callback identity.`,call_id:result.callId,event_id:result.eventId}};
+        validateAutomatedApproval(ticket, result);
+        const alreadyBound = binding.submissionId === ticket.submissionId;
+        if (binding.submissionId !== null && !alreadyBound) throw new VrsCallbackError("TICKET_BINDING_CONFLICT", "This event is bound to another ticket.");
+        const responseBody = (closed: boolean, authCode: string | null, notification?: unknown) => ({ok:true,closed,deduped:!closed,submission_id:ticket.submissionId,service_order:ticket.serviceOrder,ticket_status:"completed",auth_number:authCode,call_id:result.callId,event_id:result.eventId,...(notification?{notification}:{})});
+        if (ticket.ticketStatus === "completed" && alreadyBound && ticket.authCode === result.authNumber && ticket.agentNotes?.includes(buildVrsAiCallResultAgentNotes(result))) {
+          return {status:200,body:responseBody(false,ticket.authCode,{status:"unknown",message:"Ticket was already applied; notification was not repeated."})};
+        }
+        if (ticket.ticketStatus !== "pending") return {status:409,body:{error:"TICKET_NOT_CLOSABLE",message:`Ticket ${ticket.submissionId} is ${ticket.ticketStatus}; no approval was applied.`,submission_id:ticket.submissionId,ticket_status:ticket.ticketStatus,call_id:result.callId,event_id:result.eventId}};
+        await binding.bind(ticket.submissionId);
+        const outcome = await deps.closeTicket({ticket,result});
+        if (outcome.kind === "failed") return {status:outcome.status,body:{error:"TICKET_CLOSE_FAILED",message:outcome.message,submission_id:ticket.submissionId,call_id:result.callId,event_id:result.eventId}};
+        if (outcome.ticketStatus !== "completed" || outcome.authCode !== result.authNumber) throw new VrsCallbackError("UNEXPECTED_CLOSE_RESULT", "Ticket outcome does not match this authorization; operator review is required.");
+        return {status:200,body:responseBody(true,outcome.authCode,outcome.notification)};
       });
+      return res.status(response.status).json(response.body);
     } catch (error) {
-      console.error(
-        "[vrs-ai-call-result] Failed to load ticket candidates:",
-        error instanceof Error ? error.message : String(error),
-      );
-      return res.status(500).json({
-        error: "INTERNAL",
-        message: "Unable to load the ticket for this call result",
-      });
+      if (error instanceof VrsCallbackError) return res.status(error.status).json({error:error.code,message:error.message,event_id:result.eventId,call_id:result.callId});
+      console.error("[vrs-ai-call-result] Callback failed:",error instanceof Error?error.message:String(error));
+      return res.status(500).json({error:"INTERNAL",message:"Unable to apply the call result. Retry the same event unchanged."});
     }
-
-    const ticket = selectVrsAiCallResultTicket(candidates, result.techId);
-    if (!ticket) {
-      return res.status(404).json({
-        error: "TICKET_NOT_FOUND",
-        message: `No VRS Express ticket was found for service order ${result.soNo}`,
-        call_id: result.callId,
-        event_id: result.eventId,
-      });
-    }
-
-    // Idempotent replay: this exact approval already closed the ticket. A
-    // retry from VRS AI must not re-approve or re-text the technician.
-    const alreadyClosed =
-      ticket.ticketStatus === "completed" &&
-      ticket.authCode === result.authNumber;
-    if (alreadyClosed) {
-      return res.status(200).json({
-        ok: true,
-        closed: false,
-        deduped: true,
-        submission_id: ticket.submissionId,
-        service_order: ticket.serviceOrder,
-        ticket_status: ticket.ticketStatus,
-        auth_number: result.authNumber,
-        call_id: result.callId,
-        event_id: result.eventId,
-      });
-    }
-
-    // `pending` is the only state the ticket process path will close. Anything
-    // else is reported as-is rather than forced.
-    if (ticket.ticketStatus !== "pending") {
-      return res.status(409).json({
-        error: "TICKET_NOT_CLOSABLE",
-        message: `Ticket ${ticket.submissionId} for service order ${ticket.serviceOrder} is "${ticket.ticketStatus}", not "pending", so it cannot be closed by this call result.`,
-        submission_id: ticket.submissionId,
-        ticket_status: ticket.ticketStatus,
-        call_id: result.callId,
-        event_id: result.eventId,
-      });
-    }
-
-    let outcome: CloseVrsAiTicketOutcome;
-    try {
-      outcome = await deps.closeTicket({ ticket, result });
-    } catch (error) {
-      console.error(
-        "[vrs-ai-call-result] Failed to close ticket:",
-        error instanceof Error ? error.message : String(error),
-      );
-      return res.status(500).json({
-        error: "INTERNAL",
-        message: "Unable to close the ticket for this call result",
-      });
-    }
-
-    if (outcome.kind === "failed") {
-      return res.status(outcome.status).json({
-        error: "TICKET_CLOSE_FAILED",
-        message: outcome.message,
-        submission_id: ticket.submissionId,
-        call_id: result.callId,
-        event_id: result.eventId,
-      });
-    }
-
-    return res.status(200).json({
-      ok: true,
-      closed: true,
-      deduped: false,
-      submission_id: ticket.submissionId,
-      service_order: ticket.serviceOrder,
-      ticket_status: outcome.ticketStatus,
-      auth_number: outcome.authCode,
-      call_id: result.callId,
-      event_id: result.eventId,
-    });
   });
 }
 
@@ -303,7 +233,7 @@ export function buildVrsAiCallResultAgentNotes(
 ): string {
   const parts = [
     `VRS AI approved $${result.authorizedAmount.toFixed(2)} (auth ${result.authNumber}, event ${result.eventId}, call ${result.callId}).`,
-    `Part ${result.partId} — ${result.partDescription}.`,
+    `Part ${result.partId}: ${result.partDescription}.`,
     `Tech ${result.techId}.`,
   ];
   if (typeof result.durationSec === "number") {

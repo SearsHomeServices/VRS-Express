@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, index, boolean, jsonb, pgEnum, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, index, boolean, jsonb, pgEnum, foreignKey, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -924,6 +924,33 @@ export type InsertVrsAiCallEvent = z.infer<
   typeof insertVrsAiCallEventSchema
 >;
 export type VrsAiCallEvent = typeof vrsAiCallEvents.$inferSelect;
+
+// Additive callback receipts. No existing table/column is changed. Startup
+// creation is isolated and best effort; callback handlers fail closed if absent.
+export const vrsAiDirectResults = pgTable("vrs_ai_direct_results", {
+  id: serial("id").primaryKey(),
+  eventId: varchar("event_id", {length:100}).notNull().unique("vrs_ai_direct_results_event_id_key"),
+  callId: varchar("call_id", {length:100}).notNull().unique("vrs_ai_direct_results_call_id_key"),
+  payloadHash: varchar("payload_hash", {length:64}).notNull(),
+  payload: jsonb("payload").notNull(),
+  submissionId: integer("submission_id"),
+  processingState: text("processing_state").notNull().default("processing"),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", {withTimezone:true}),
+  response: jsonb("response"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", {withTimezone:true}).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
+});
+export const vrsAiNotificationRetries = pgTable("vrs_ai_notification_retries", {
+  id: serial("id").primaryKey(),
+  notificationId: integer("notification_id").notNull().unique("vrs_ai_notification_retries_notification_id_key"),
+  actorId: integer("actor_id").notNull(),
+  state: text("state").notNull().default("processing"),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at", {withTimezone:true}).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
+});
 
 // ============================================================================
 // TECHNICIAN USER VIEW (for admin Field Technicians tab)

@@ -501,6 +501,11 @@ export type VrsAiAuthorizeResult =
       message: string;
     };
 
+export function normalizeVrsProviderState(state: unknown): string {
+  const active = ["queued","dialing","connected","awaiting_decision","requires_info","in_progress","reviewing"];
+  return typeof state === "string" && active.includes(state) ? state : "queued";
+}
+
 export async function sendVrsAuthorizeRequest(options: {
   baseUrl: string;
   apiKey: string;
@@ -571,7 +576,7 @@ export async function sendVrsAuthorizeRequest(options: {
       return {
         kind: "accepted",
         callId: body.call_id,
-        state: typeof body.state === "string" ? body.state : "queued",
+        state: normalizeVrsProviderState(body.state),
         duplicate: false,
       };
     }
@@ -590,7 +595,7 @@ export async function sendVrsAuthorizeRequest(options: {
       return {
         kind: "accepted",
         callId: body.existing_call_id,
-        state: typeof body.state === "string" ? body.state : "in_progress",
+        state: normalizeVrsProviderState(body.state),
         duplicate: true,
       };
     }
@@ -671,7 +676,19 @@ export async function deliverVrsWebhook(options: {
       });
 
       if (response.status === 200) {
-        return { delivered: true, attempts: attempt, status: response.status };
+        const body = await response.text();
+        // Preserve the documented empty-200 legacy acknowledgment. Explicit
+        // HTML, error bodies and conflicting event IDs are never receipts.
+        let acknowledged = !body.trim() && !response.headers.get("content-type")?.includes("text/html");
+        if (body.trim()) {
+          try {
+            const ack = JSON.parse(body);
+            acknowledged = Boolean(ack && typeof ack === "object" && !Array.isArray(ack) && !ack.error && ack.ok !== false &&
+              (ack.eventId === undefined || ack.eventId === event.eventId) &&
+              (ack.event_id === undefined || ack.event_id === event.eventId));
+          } catch { acknowledged = false; }
+        }
+        return { delivered: acknowledged, attempts: attempt, status: response.status };
       }
 
       if (!retryableStatuses.has(response.status) || attempt === maxAttempts) {
