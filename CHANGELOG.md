@@ -16,6 +16,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   baseline diagnostics, with none in the changed runtime or test file.
 - No real callback was sent and no ticket or production data was changed.
 
+### Added — VRS AI call-result ticket close route (2026-09-08)
+- New `POST /api/integrations/vrs-ai/v1/call-result` accepts the richer
+  call-result payload VRS AI emits for a completed approval — the approved
+  callback envelope (`version`, `eventId`, `callId`, `soNo`, `occurredAt`,
+  `state`, `authNumber`, `authorizedAmount`, optional `durationSec` /
+  `recordingUrl`) PLUS the required `partId`, `partDescription`, and `techId`
+  fields — resolves the corresponding Express ticket and closes it.
+- Deliberately separate from the signed partner webhook at
+  `POST /api/integrations/vrs-ai/v1/webhook`, which is left untouched: this
+  route does NOT write the `vrs_ai_call_events` ledger and does NOT forward
+  the result upstream to SASHA. Use `/webhook` when the partner hop matters.
+- Auth reuses the existing `VRS_SASHA_API_KEY` `X-API-Key` (timing-safe
+  compare), the same credential VRS AI already presents on inbound authorize
+  and the service-order lookup. No new Secret, no schema change.
+- Ticket resolution prefers the authoritative bridge row for the call id, then
+  falls back to matching the bare eight-digit `soNo` against the dashed
+  `submissions.service_order` suffix, so PWA/manual tickets with no bridge row
+  can still be closed. `techId` narrows service-order matches when it matches
+  at least one of them, `pending` is preferred, then newest.
+- The close runs through `processSubmissionHandler` with `action: "approve"`,
+  so SMS, audit columns, optimistic locking, and WS broadcasts behave exactly
+  as they do for a human agent approval. The part/tech/duration/recording
+  fields are written into the ticket's agent notes so the approval is fully
+  reconstructable from the ticket alone.
+- Idempotent: a replay of an approval that already closed the ticket returns
+  `200 { closed: false, deduped: true }` without re-approving or re-texting the
+  technician. A ticket that is not `pending` returns `409 TICKET_NOT_CLOSABLE`
+  with its real status rather than being forced.
+- New `storage.getSubmissionCandidatesByServiceOrderSuffix(soNo, limit)` —
+  bounded projection, parameterized `LIKE '%-<soNo>'`, `LIMIT 10`.
+- Verification: 21/21 new tests in `tests/vrs-ai-call-result.test.ts` pass, the
+  existing bridge suite still passes 179/179, the production build passes, and
+  TypeScript is unchanged at the 56-diagnostic repository baseline with zero
+  diagnostics in the new module. NOT yet exercised against a live database —
+  the DB-backed resolver/closer wiring is typechecked and bundled but
+  unexecuted; see ADR-016. No publish, no push, no schema or Secret change.
 
 ### Added — V9 bridge contract compatibility (2026-08-14)
 - Added strict V9 selection on the existing `POST /vrs/authorize` route when
