@@ -1233,6 +1233,18 @@ components:
               maxLength: 100
             authorizedAmount:
               $ref: '#/components/schemas/Money'
+            partId:
+              type: string
+              minLength: 1
+              maxLength: 100
+            techId:
+              type: string
+              minLength: 1
+              maxLength: 50
+            partDescription:
+              type: string
+              minLength: 1
+              maxLength: 2000
             durationSec:
               type: integer
               minimum: 0

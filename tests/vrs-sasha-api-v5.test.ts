@@ -734,6 +734,51 @@ describe("VRS Express bridge — V5 contract boundary", () => {
     expect(sink.receive).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts approval part and technician metadata without stripping it", async () => {
+    const event = {
+      version: 1,
+      eventId: "evt_approval_metadata",
+      callId: "vrs_test_536",
+      soNo: "99090801",
+      occurredAt: "2026-09-08T14:01:45.289Z",
+      state: "approved",
+      authNumber: "AHS-TEST-001",
+      authorizedAmount: 380.6,
+      durationSec: 187,
+      partId: "TEST-PART-001",
+      techId: "TESTTECH",
+      partDescription: "Dishwasher Wire Harness",
+      recordingUrl: "https://recordings.example.test/test_combined.wav",
+    };
+    const rawBody = JSON.stringify(event);
+    const sink = { receive: vi.fn().mockResolvedValue("processed") };
+    const response = await request(makeWebhookApp(sink))
+      .post("/api/integrations/vrs-ai/v1/webhook")
+      .set("Content-Type", "application/json")
+      .set("X-VRS-Signature", contractModule.createVrsWebhookSignature(
+        rawBody, "express-ai-webhook-secret",
+      ))
+      .set("X-VRS-Event-Id", event.eventId)
+      .set("X-VRS-Timestamp", String(Date.now()))
+      .send(rawBody);
+    expect(response.status).toBe(200);
+    expect(sink.receive).toHaveBeenCalledWith(event);
+  });
+
+  it.each([
+    { partId: 123 },
+    { techId: [] },
+    { partDescription: {} },
+    { unexpected: true },
+  ])("rejects malformed or unknown callback metadata: %j", (metadata) => {
+    expect(contractModule.vrsWebhookEventSchema.safeParse({
+      version: 1, eventId: "evt_bad_metadata", callId: "vrs_test_536",
+      soNo: "99090801", occurredAt: "2026-09-08T14:01:45.289Z",
+      state: "approved", authNumber: "AHS-TEST-001", authorizedAmount: 380.6,
+      ...metadata,
+    }).success).toBe(false);
+  });
+
   it("rejects an invalid VRS AI callback signature before applying it", async () => {
     const sink = { receive: vi.fn() };
     const response = await request(makeWebhookApp(sink))

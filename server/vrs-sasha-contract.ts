@@ -405,6 +405,9 @@ export const vrsWebhookEventSchema = z.discriminatedUnion("state", [
       state: z.literal("approved"),
       authNumber: requiredText("authNumber", 100),
       authorizedAmount: money,
+      partId: requiredText("partId", 100).optional(),
+      techId: requiredText("techId", 50).optional(),
+      partDescription: requiredText("partDescription", 2_000).optional(),
       ...terminalRecordingFields,
     })
     .strict(),

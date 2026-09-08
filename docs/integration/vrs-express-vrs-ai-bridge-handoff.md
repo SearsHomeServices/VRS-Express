@@ -12,6 +12,32 @@ system. It is the exact development handoff for both directions and contains
 no live URL, key, or customer data. Substitute the four approved URL
 placeholders only in the controlled development environment.
 
+## Approval callback metadata (2026-09-08)
+
+Use the existing `POST /api/integrations/vrs-ai/v1/webhook`. Approved events
+also accept optional nonblank string fields `partId` (100 characters),
+`techId` (50), and `partDescription` (2000). These are audit metadata, preserved
+in the event payload and forwarded upstream. They do not select a ticket.
+`callId` must be the provider `call_id` stored from the VRS AI admission
+response, and `soNo` must match that call's eight-digit service order.
+Unknown calls or mismatched orders do not close a ticket.
+
+Send `Content-Type: application/json`, `X-VRS-Event-Id` equal to `eventId`,
+`X-VRS-Timestamp` as the current Unix time in **milliseconds** (within five
+minutes), and `X-VRS-Signature: sha256=HEX_DIGEST`.
+HEX_DIGEST is the hex HMAC-SHA256 of the exact raw JSON. The signing key is
+the `callback_secret` provided by Express on dispatch,
+configured in Express as `VRS_AI_WEBHOOK_SECRET`. An intake `X-API-Key` does
+not substitute for the callback signature. Retries keep the same event ID
+and body but refresh the timestamp header; `occurredAt` stays the event time.
+
+Approved callbacks reuse the existing completion handler and its technician
+notification behavior. A successful response is HTTP 200 with
+`{"ok":true,"eventId":"evt_example","deduped":false}`; a completed replay
+returns `deduped:true`. Upstream forwarding failure can return HTTP 500 after
+local completion; retry the same event so the existing ledger resumes
+forwarding without repeating the ticket action.
+
 ## 1. What each platform does
 
 | Platform | Responsibility |

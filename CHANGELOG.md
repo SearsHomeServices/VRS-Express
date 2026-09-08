@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Approval callback metadata (2026-09-08)
+- Existing VRS AI webhook accepts optional partId, techId, and partDescription
+  on approved events, preserving them in the event ledger and upstream callback.
+  Call/order correlation, signature validation, and duplicate handling remain
+  enforced. Updated the OpenAPI contract and partner integration handoff.
+- Verification: regression reproduced HTTP 400 before the change; all 192
+  bridge tests and the production build pass. TypeScript has the same 56
+  baseline diagnostics, with none in the changed runtime or test file.
+- No real callback was sent and no ticket or production data was changed.
+
+
 ### Added — V9 bridge contract compatibility (2026-08-14)
 - Added strict V9 selection on the existing `POST /vrs/authorize` route when
   either `cta_no` or `district_number` is present. V9 requires the complete V8
