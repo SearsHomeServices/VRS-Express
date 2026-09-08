@@ -284,6 +284,20 @@ export interface IStorage {
     reviewedAt: Date | null;
   }>>;
 
+  // VRS AI call-result close route — matches the bare eight-digit soNo
+  // against the dashed service_order suffix. Bounded projection + LIMIT.
+  getSubmissionCandidatesByServiceOrderSuffix(
+    soNo: string,
+    limit?: number,
+  ): Promise<Array<{
+    submissionId: number;
+    serviceOrder: string;
+    ticketStatus: string;
+    authCode: string | null;
+    technicianLdapId: string | null;
+    createdAt: Date | null;
+  }>>;
+
   // External v1 API reads — bounded ExternalSubmissionRow projection only.
   getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]>;
   getSubmissionsForExternal(filters: {
@@ -1747,6 +1761,44 @@ export class DatabaseStorage implements IStorage {
       .where(eq(submissions.serviceOrder, serviceOrder))
       .orderBy(desc(submissions.createdAt));
     return rows as any;
+  }
+
+  // VRS AI call results carry only the bare eight-digit service order
+  // (`soNo`), while submissions.service_order is the canonical dashed
+  // DDDD-SSSSSSSS form. Match on the suffix so a call result can find its
+  // ticket without knowing the district. Bounded projection + LIMIT: this
+  // backs POST /api/integrations/vrs-ai/v1/call-result, which then picks the
+  // right row via selectVrsAiCallResultTicket.
+  async getSubmissionCandidatesByServiceOrderSuffix(
+    soNo: string,
+    limit = 10,
+  ): Promise<Array<{
+    submissionId: number;
+    serviceOrder: string;
+    ticketStatus: string;
+    authCode: string | null;
+    technicianLdapId: string | null;
+    createdAt: Date | null;
+  }>> {
+    if (!/^\d{8}$/.test(soNo)) return [];
+    const tech = alias(users, "tech");
+    const rows = await db
+      .select({
+        submissionId: submissions.id,
+        serviceOrder: submissions.serviceOrder,
+        ticketStatus: submissions.ticketStatus,
+        authCode: submissions.authCode,
+        // technician_ldap_id is only populated on newer rows; fall back to the
+        // technician's RAC ID so older tickets still match on tech.
+        technicianLdapId: sql<string | null>`coalesce(${submissions.technicianLdapId}, ${tech.racId})`,
+        createdAt: submissions.createdAt,
+      })
+      .from(submissions)
+      .leftJoin(tech, eq(tech.id, submissions.technicianId))
+      .where(sql`${submissions.serviceOrder} LIKE ${`%-${soNo}`}`)
+      .orderBy(desc(submissions.createdAt))
+      .limit(limit);
+    return rows;
   }
 
   async getSubmissionsByServiceOrderForExternal(serviceOrder: string): Promise<ExternalSubmissionRow[]> {

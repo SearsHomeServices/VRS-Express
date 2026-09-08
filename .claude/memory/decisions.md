@@ -13,6 +13,21 @@ Use this format for new entries:
 
 ---
 
+### ADR-016: VRS AI call results close tickets on a separate route, not by loosening the signed webhook
+**Date**: 2026-09-08
+**Status**: Active
+**Context**: VRS AI emits a completed-approval payload that is the approved-callback envelope plus three fields with no place in the current contract: `partId`, `partDescription`, and `techId`. It needs to close the corresponding Express ticket. The existing signed partner webhook (`POST /api/integrations/vrs-ai/v1/webhook`) would reject that payload outright — `vrsWebhookEventSchema` is a `.strict()` discriminated union, so the three extra keys are unrecognized keys. Two ways forward: relax the webhook's schema to tolerate/consume the new fields, or add a dedicated route.
+**Decision**: Add a dedicated route, `POST /api/integrations/vrs-ai/v1/call-result`, in a new dependency-injected module `server/vrs-ai-call-result.ts`. Leave `/webhook` byte-for-byte alone. The new route authenticates with the existing `VRS_SASHA_API_KEY` `X-API-Key` (timing-safe compare, same as inbound authorize and the service-order lookup), validates the payload strictly, resolves the ticket (bridge row for the call id first, then the bare 8-digit `soNo` matched against the dashed `service_order` suffix via a new bounded storage query), and closes it by calling `processSubmissionHandler` with `action: "approve"` under the ticket's human reviewer — the same mechanism the webhook sink already uses. The three new fields are written into the ticket's agent notes.
+**Consequences**:
+- (+) The documented V5/V8/V9 partner contract, its OpenAPI file, the handoff docs, and the HMAC/ledger/forward chain are all untouched. The bridge suite still passes 179/179 unmodified, so nothing in the V9 chain regressed.
+- (+) Reusing `processSubmissionHandler` means SMS, audit columns, the optimistic lock, and WS broadcasts are identical to a human agent approval — no second, divergent close path to keep in sync.
+- (+) The `soNo`-suffix fallback lets the route close tickets that have no bridge row at all (PWA / manual submissions), which is the likely shape of most DEV testing.
+- (−) **This route has no HMAC signature check and no timestamp window.** It is API-key-only, so it is materially weaker than `/webhook` and must not be treated as a replacement for the partner hop. If VRS AI's result must reach SASHA, `/webhook` is still the only path that forwards it.
+- (−) **It writes no `vrs_ai_call_events` ledger row**, so its idempotency is weaker than the webhook's: it dedupes by observing that the ticket is already `completed` with the same `authNumber`. That covers the realistic retry, but two *different* approvals for one ticket are not ordered by a ledger.
+- (−) The close inherits the `approve` path's requirement that a daily RGC code exist for the ET day. With no code set, every close fails (surfaced as `422 TICKET_CLOSE_FAILED` carrying the real message). This is existing policy, not new, but it makes an automated close dependent on a human having set the day's code.
+- (−) `state` is pinned to `"approved"`; `denied` / `partial` / `failed` / `requires_info` are rejected with 400 rather than silently mapped, since "close the ticket" has no defined meaning for them. If those need handling here, decide per-state behavior explicitly (tracked in todos).
+- The ticket-selection rule lives in the pure exported `selectVrsAiCallResultTicket` so it is unit-testable without a DB: bridge link wins; `techId` narrows the service-order matches only when it matches at least one (roster casing/format can drift, and hard-filtering would strand a legitimate close); prefer `pending`; else newest.
+
 ### ADR-015: SHSAI Service Order History migrated from Telluride UAT to Sears-hosted prod
 **Date**: 2026-05-20
 **Status**: Active

@@ -30,6 +30,11 @@ import {
   registerVrsSashaApi,
 } from "./vrs-sasha-api";
 import { createVrsSashaIntake } from "./vrs-sasha-intake";
+import {
+  buildVrsAiCallResultAgentNotes,
+  registerVrsAiCallResultApi,
+  type VrsAiCallResultCandidate,
+} from "./vrs-ai-call-result";
 import { vrsBridgeStore } from "./vrs-sasha-store";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
@@ -3427,6 +3432,166 @@ export async function registerRoutes(
         }
         return outcome;
       },
+    },
+  });
+
+  // VRS AI can also POST a completed call result straight to Express to close
+  // the corresponding ticket. Unlike the signed /webhook above, this route
+  // does NOT write the vrs_ai_call_events ledger and does NOT forward the
+  // result upstream to SASHA — it is the direct "close my ticket" path for
+  // the richer call-result payload (part + technician fields included). The
+  // close itself runs through processSubmissionHandler, so SMS, audit
+  // columns, optimistic locking, and WS broadcasts behave exactly as they do
+  // for a human agent approval.
+  registerVrsAiCallResultApi(app, {
+    apiKey: process.env.VRS_SASHA_API_KEY,
+    async loadTicketCandidates({ callId, soNo, techId: _techId }) {
+      const candidates: VrsAiCallResultCandidate[] = [];
+
+      // 1) Authoritative link: the bridge row for this call id (falling back
+      // to an active bridge for the same service order).
+      const bridge =
+        (await vrsBridgeStore.getByProviderCallId(callId)) ??
+        (await vrsBridgeStore.findActiveByServiceOrder(soNo));
+      if (bridge?.submissionId) {
+        const linked = await storage.getSubmission(bridge.submissionId);
+        if (linked) {
+          candidates.push({
+            submissionId: linked.id,
+            serviceOrder: linked.serviceOrder,
+            ticketStatus: linked.ticketStatus,
+            authCode: linked.authCode,
+            technicianLdapId: linked.technicianLdapId ?? linked.racId ?? null,
+            createdAt: linked.createdAt,
+            linkedByCallId: true,
+          });
+        }
+      }
+
+      // 2) Fallback for tickets with no bridge row (PWA / manual submissions):
+      // match the dashed Express service order on its eight-digit suffix.
+      const bySuffix =
+        await storage.getSubmissionCandidatesByServiceOrderSuffix(soNo);
+      for (const row of bySuffix) {
+        if (
+          candidates.some(
+            (candidate) => candidate.submissionId === row.submissionId,
+          )
+        ) {
+          continue;
+        }
+        candidates.push({ ...row, linkedByCallId: false });
+      }
+
+      return candidates;
+    },
+    async closeTicket({ ticket, result }) {
+      const submission = await storage.getSubmission(ticket.submissionId);
+      if (!submission) {
+        return {
+          kind: "failed",
+          status: 404,
+          message: `Submission ${ticket.submissionId} was not found`,
+        };
+      }
+
+      // The close is attributed to the human who owns the ticket, exactly as
+      // the signed webhook sink does.
+      const reviewerId =
+        submission.assignedTo ??
+        submission.stage1ReviewedBy ??
+        submission.reviewedBy;
+      if (!reviewerId) {
+        return {
+          kind: "failed",
+          status: 409,
+          message: `Ticket ${ticket.submissionId} has no assigned agent to attribute the close to.`,
+        };
+      }
+      const reviewer = await storage.getUser(reviewerId);
+      if (!reviewer) {
+        return {
+          kind: "failed",
+          status: 409,
+          message: `Reviewer ${reviewerId} for ticket ${ticket.submissionId} was not found.`,
+        };
+      }
+
+      let callbackHost = "vrs-express.invalid";
+      try {
+        callbackHost = new URL(
+          process.env.VRS_EXPRESS_PUBLIC_URL ??
+            process.env.VRS_AI_CALLBACK_URL ??
+            "https://vrs-express.invalid",
+        ).host;
+      } catch {
+        // Only used to build tech-facing links on negative outcomes, which
+        // this approve-only route never takes.
+      }
+
+      const internalRequest = {
+        params: { id: String(ticket.submissionId) },
+        body: {
+          action: "approve",
+          authCode: result.authNumber,
+          agentNotes: buildVrsAiCallResultAgentNotes(result),
+        },
+        protocol: "https",
+        get(name: string) {
+          const header = name.toLowerCase();
+          if (header === "host") return callbackHost;
+          if (header === "x-forwarded-proto") return "https";
+          return undefined;
+        },
+      } as unknown as Request;
+      (internalRequest as AuthenticatedRequest).user = {
+        id: reviewer.id,
+        email: reviewer.email ?? "",
+        name: reviewer.name,
+        // Same deliberate bypass as the signed webhook sink: apply the result
+        // even if the ticket was reassigned after dispatch, while keeping the
+        // human reviewer id in the audit columns. Never crosses the auth
+        // middleware.
+        role: "admin",
+        ldapId: reviewer.racId ?? undefined,
+      };
+
+      const { res: capturedRes, captured } = makeCapturedResponse();
+      await processSubmissionHandler(internalRequest, capturedRes);
+      const body = captured.body as any;
+      if (captured.statusCode >= 400) {
+        return {
+          kind: "failed",
+          status: captured.statusCode === 409 ? 409 : 422,
+          message:
+            typeof body?.error === "string"
+              ? body.error
+              : `Unable to close ticket ${ticket.submissionId}`,
+        };
+      }
+
+      const closed = body?.submission;
+      try {
+        broadcastToAgent(reviewerId, {
+          type: "ticket_updated",
+          payload: {
+            submissionId: ticket.submissionId,
+            ticketStatus: closed?.ticketStatus,
+            vrsAiState: result.state,
+          },
+        });
+      } catch (broadcastErr) {
+        console.error(
+          `[vrs-ai-call-result] reviewer broadcast failed for submission ${ticket.submissionId}:`,
+          broadcastErr,
+        );
+      }
+
+      return {
+        kind: "closed",
+        ticketStatus: closed?.ticketStatus ?? "completed",
+        authCode: closed?.authCode ?? result.authNumber,
+      };
     },
   });
 
