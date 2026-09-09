@@ -268,7 +268,7 @@ describe("VRS Express bridge — V5 contract boundary", () => {
       },
     ],
   ])(
-    "fails closed before parsing or creating intake when production automation is %s",
+    "keeps intake validation reachable when outbound automation is %s",
     async (_state, activation) => {
       const intake = new FakeIntake({
         kind: "accepted",
@@ -282,11 +282,8 @@ describe("VRS Express bridge — V5 contract boundary", () => {
         .set("X-API-Key", "test-vrs-api-key")
         .send({ malformed: true });
 
-      expect(response.status).toBe(503);
-      expect(response.body).toEqual({
-        error: activation.code,
-        message: activation.message,
-      });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe("VALIDATION_ERROR");
       expect(intake.received).toBeUndefined();
     },
   );

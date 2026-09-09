@@ -14,7 +14,6 @@ import {
   resolveVrsPhotoUrls,
 } from "./vrs-sasha-queue";
 import type { VrsServiceOrderReader } from "./vrs-sasha-store";
-import type { VrsAiBridgeActivation } from "./vrs-stage-one-bridge";
 
 export type ReceiveVrsIntakeResult =
   | {
@@ -46,7 +45,6 @@ export interface VrsExpressIntake {
 interface RegisterVrsSashaApiDependencies {
   apiKey?: string;
   intake: VrsExpressIntake;
-  resolveBridgeActivation?: () => VrsAiBridgeActivation;
   serviceOrders?: VrsServiceOrderReader;
   signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
   now?: () => Date;
@@ -92,14 +90,8 @@ export function registerVrsSashaApi(
       return;
     }
 
-    const activation = deps.resolveBridgeActivation?.();
-    if (activation && activation.kind !== "active") {
-      return res.status(503).json({
-        error: activation.code,
-        message: activation.message,
-      });
-    }
-
+    // Receiving a reviewed-workflow request is independent of starting an AI
+    // phone call. Outbound activation remains enforced at Stage 1 dispatch.
     const parsed = safeParseVrsAuthorizeRequest(req.body);
     if (!parsed.success) {
       const fields = Array.from(

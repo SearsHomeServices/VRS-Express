@@ -167,7 +167,9 @@ session. No recovery action was executed against a real recipient during testing
   callback response; it never falls back to unsafe processing.
 - No production DDL, database writes or Publish were run during development.
   Table creation at the next deployment is a release consideration for Tyler.
-- `VRS_AI_PRODUCTION_ENABLED` retains its existing intake/dispatch meaning.
+- `POST /vrs/authorize` remains available with its existing key and V5/V8/V9
+  contracts regardless of outbound AI activation. Intake does not start a call.
+  `VRS_AI_PRODUCTION_ENABLED` controls outbound production AI dispatch only.
   `VRS_AI_CALL_RESULT_ENABLED=false` can separately pause direct processing;
   omission preserves direct-route availability. No actual secret or activation
   setting was changed by the repair.

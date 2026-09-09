@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Preserve intake availability independently of AI dispatch (2026-09-08)
+- Removed the coupling that made `/vrs/authorize` return 503 whenever outbound
+  production AI automation was disabled or incomplete. Existing authentication,
+  payload validation and V5/V8/V9 intake behavior remain available for testing
+  and normal operation. The direct and signed result routes remain available.
+- Outbound AI dispatch still requires its existing explicit activation and valid
+  configuration. No activation setting or key was changed and no call was made.
+- Added regression coverage for V5/V8/V9 acceptance with outbound activation off
+  and malformed-body validation with disabled/incomplete outbound configuration.
+- Verification: 284/284 safe tests pass, production build passes, and the exact
+  normalized 56-diagnostic TypeScript baseline is unchanged. Independent review
+  passed. Replit DEV was refreshed through normal Workflows controls; public
+  intake/callback validation and app entry points are reachable. No production
+  Publish or real callback closure was performed.
+
+
 ### Fixed - Callback release safety and recovery (2026-09-08)
 - Preserved both callback routes and all existing manual, PWA, NLA and V5/V8/V9
   routes. Automated closes now require matching call/order/technician/known

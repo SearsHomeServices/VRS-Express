@@ -56,7 +56,6 @@ import {
   encryptVrsCallbackSecret,
 } from "./vrs-sasha-secret";
 import {
-  resolveVrsAiBridgeActivation,
   resolveVrsStageOneBridgeConfig,
   runVrsStageOneRouteGate,
 } from "./vrs-stage-one-bridge";
@@ -1674,8 +1673,6 @@ export async function registerRoutes(
   registerVrsSashaApi(app, {
     apiKey: process.env.VRS_SASHA_API_KEY,
     intake: vrsExpressIntake,
-    resolveBridgeActivation: () =>
-      resolveVrsAiBridgeActivation(process.env),
     serviceOrders: vrsBridgeStore,
     signObjectPhotoUrl: (objectPath) =>
       vrsObjectStorageService.getObjectEntityReadURL(
