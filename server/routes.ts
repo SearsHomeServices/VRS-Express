@@ -2097,12 +2097,16 @@ export async function registerRoutes(
           return res.status(403).json({ error: "Not your submission" });
         }
         if (user.role === "vrs_agent") {
-          const isAssignedToAgent = sub.assignedTo === user.id;
+          // Tyler 2026-09-11 - post-close notes. Any VRS agent may read and
+          // add notes on a ticket that is NOT queued (in review, completed,
+          // rejected, invalid, or closed by VRS AI). The old gate required
+          // assignedTo === me || reviewedBy === me, which locked every other
+          // agent out: a close nulls the claim on rejects, and an AI close is
+          // attributed to whichever human happened to hold the ticket
+          // (server/routes.ts closeTicket), so nobody else could follow up.
+          // Queued tickets keep the division-specialization gate below - an
+          // unclaimed ticket outside your division still is not yours.
           const isQueued = sub.ticketStatus === "queued";
-          const isReviewer = sub.reviewedBy === user.id;
-          if (!isAssignedToAgent && !isQueued && !isReviewer) {
-            return res.status(403).json({ error: "Access denied" });
-          }
           if (isQueued) {
             const specs = await storage.getSpecializations(user.id);
             const divisions = specs.map((s: any) => s.division);
@@ -2150,12 +2154,16 @@ export async function registerRoutes(
           return res.status(403).json({ error: "Access denied" });
         }
         if (user.role === "vrs_agent") {
-          const isAssignedToAgent = sub.assignedTo === user.id;
+          // Tyler 2026-09-11 - post-close notes. Any VRS agent may read and
+          // add notes on a ticket that is NOT queued (in review, completed,
+          // rejected, invalid, or closed by VRS AI). The old gate required
+          // assignedTo === me || reviewedBy === me, which locked every other
+          // agent out: a close nulls the claim on rejects, and an AI close is
+          // attributed to whichever human happened to hold the ticket
+          // (server/routes.ts closeTicket), so nobody else could follow up.
+          // Queued tickets keep the division-specialization gate below - an
+          // unclaimed ticket outside your division still is not yours.
           const isQueued = sub.ticketStatus === "queued";
-          const isReviewer = sub.reviewedBy === user.id;
-          if (!isAssignedToAgent && !isQueued && !isReviewer) {
-            return res.status(403).json({ error: "Access denied" });
-          }
           if (isQueued) {
             const specs = await storage.getSpecializations(user.id);
             const divisions = specs.map((s: any) => s.division);
@@ -6902,6 +6910,104 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Weekly report generation error:", error);
       return res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  // ========================================================================
+  // WEEKLY EXECUTIVE SUMMARY (Tyler 2026-09-11)
+  // Wednesdays 4:00 PM ET, emailed via SendGrid to the VRS Express owners.
+  // See server/services/weekly-exec-summary.ts. Admin-only: list, preview
+  // (renders without saving or sending), run now, and recipient management.
+  // ========================================================================
+  app.get("/api/admin/reports/exec-summary", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
+    try {
+      const { getLatestExecSummaries, getExecSummaryRecipients } = await import("./services/weekly-exec-summary");
+      const { isEmailConfigured, resolveFromAddress } = await import("./services/email");
+      return res.json({
+        reports: await getLatestExecSummaries(),
+        recipients: await getExecSummaryRecipients(),
+        from: resolveFromAddress(),
+        emailConfigured: isEmailConfigured(),
+      });
+    } catch (error) {
+      console.error("Exec summary list error:", error);
+      return res.status(500).json({ error: "Failed to list executive summaries" });
+    }
+  });
+
+  // Renders THIS MOMENT's summary as the email would look. Writes nothing to
+  // weekly_reports and sends nothing — safe to hit as often as you like.
+  // ?format=html returns the email body itself so it can be eyeballed in a
+  // browser tab; the default JSON carries the same html plus the raw numbers.
+  app.get("/api/admin/reports/exec-summary/preview", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const { computeExecSummary, renderExecSummaryHtml, renderExecSummaryText, execSummarySubject, getExecSummaryRecipients } =
+        await import("./services/weekly-exec-summary");
+      const data = await computeExecSummary();
+      const html = renderExecSummaryHtml(data);
+      if (String(req.query.format || "").toLowerCase() === "html") {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.send(html);
+      }
+      return res.json({
+        subject: execSummarySubject(data),
+        recipients: await getExecSummaryRecipients(),
+        data,
+        html,
+        text: renderExecSummaryText(data),
+      });
+    } catch (error) {
+      console.error("Exec summary preview error:", error);
+      return res.status(500).json({ error: "Failed to build executive summary preview" });
+    }
+  });
+
+  // Generate now. Body: { send?: boolean, dryRun?: boolean }.
+  //   send:false   -> persist the report, email nobody.
+  //   dryRun:true  -> persist, log the intended recipients, call no provider.
+  // Default (no body) persists AND emails, so the UI must confirm first.
+  app.post("/api/admin/reports/exec-summary/run", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const { generateAndSendExecSummary } = await import("./services/weekly-exec-summary");
+      const body = (req.body || {}) as { send?: boolean; dryRun?: boolean };
+      const result = await generateAndSendExecSummary({
+        send: body.send !== false,
+        dryRun: body.dryRun === true,
+      });
+      return res.json({
+        report: result.report
+          ? { id: result.report.id, generatedAt: result.report.generatedAt, summary: result.report.summary }
+          : null,
+        email: result.email,
+        skipped: result.skipped ?? null,
+      });
+    } catch (error) {
+      console.error("Exec summary run error:", error);
+      return res.status(500).json({ error: "Failed to generate executive summary" });
+    }
+  });
+
+  app.put("/api/admin/reports/exec-summary/recipients", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const { EXEC_SUMMARY_RECIPIENTS_SETTING, getExecSummaryRecipients } = await import("./services/weekly-exec-summary");
+      const { isPlausibleEmail } = await import("./services/email");
+      const raw = (req.body || {}).recipients;
+      const list = Array.isArray(raw) ? raw : String(raw ?? "").split(/[,;\s]+/);
+      const cleaned = Array.from(
+        new Set(list.map((s: unknown) => String(s).trim()).filter((s: string) => s.length > 0)),
+      );
+      const invalid = cleaned.filter((s: string) => !isPlausibleEmail(s));
+      if (invalid.length) {
+        return res.status(400).json({ error: `Not valid email addresses: ${invalid.join(", ")}` });
+      }
+      if (cleaned.length === 0) {
+        return res.status(400).json({ error: "At least one recipient is required" });
+      }
+      await storage.setSystemSetting(EXEC_SUMMARY_RECIPIENTS_SETTING, cleaned.join(","));
+      return res.json({ recipients: await getExecSummaryRecipients() });
+    } catch (error) {
+      console.error("Exec summary recipients error:", error);
+      return res.status(500).json({ error: "Failed to update recipients" });
     }
   });
 

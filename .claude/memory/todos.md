@@ -1,3 +1,25 @@
+## Open — weekly executive summary (2026-09-11)
+
+- [ ] BLOCKING BEFORE FIRST SEND: confirm `notifications@shs.com` is a verified
+      Sender Identity (or that shs.com is an authenticated domain) on the
+      SendGrid account behind `SENDGRID_API_KEY`. If it is not, SendGrid returns
+      403 and nothing is delivered. `POST /api/admin/reports/exec-summary/run`
+      with `{"dryRun": false}` surfaces the exact cause.
+- [ ] Align the email's content with what Meghna Saraf actually asked for. The
+      current section set (governing thought, 3 KPIs, MECE stage table, top
+      rejection reasons, top districts, turnaround) was chosen from what VRS
+      Express measures, NOT from her request — her message could not be located
+      in Teams via search or the Graph connector on 2026-09-11.
+- [ ] No admin UI yet for the exec summary. List / preview / run / recipients
+      are API-only. Add a card to the admin dashboard next to the existing
+      weekly-report controls.
+- [ ] `msUntilNextWednesday4pmET` duplicates the DST-safe scheduler math in
+      `weekly-tech-report.ts` (`msUntilNextWednesday5pmET`). Deliberately not
+      refactored — the 5 PM report is live and unrelated to this change. Extract
+      a shared `msUntilNextWeeklyEt(dow, hour)` when one of them next changes.
+- [x] Agent notes after an AI close — implemented 2026-09-11 (server RBAC +
+      `submission-notes-thread.tsx` on the agent dashboard).
+
 # Tasks
 
 ## In Progress

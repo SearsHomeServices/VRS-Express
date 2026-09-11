@@ -1,3 +1,40 @@
+## 2026-09-11 — Weekly exec summary + post-close agent notes
+
+**Raw fetch to SendGrid, not `@sendgrid/mail`.** A new npm dependency is a live
+deploy risk on this app specifically: `browser-image-compression` shipped once
+and the Replit build quietly skipped its install. The v3 Mail Send API is a
+single POST, so the dependency buys nothing and costs a failure mode.
+
+**Email failures never throw.** `sendEmail` returns `{ sent, reason }`. A
+scheduler tick that throws would kill the weekly loop; a report that generated
+correctly should still persist even when delivery fails.
+
+**Latency numbers come from `storage.getAnalytics()`, not fresh SQL.** The
+dashboard's averages are business-hours aware. Computing wall-clock averages
+here would have printed a number that contradicts the Analytics page for the
+same metric. They are all-time rather than windowed and are labelled that way.
+
+**Durations are formatted by magnitude, not fixed to hours.** Measured
+2026-09-11: average time to auth code is ~0.02 h (auth lands in about a minute),
+which one-decimal hours rendered as "0 h". Raw milliseconds are stored and the
+unit is chosen at render time.
+
+**AI-closed tickets are detected by the `agent_notes` prefix, not
+`vrs_ai_calls`.** Measured 2026-09-11 on dev: all 50 `vrs_ai_calls` rows had
+`auth_number IS NULL` while 7 submissions carried the
+`'VRS AI approved%'` marker that `buildVrsAiCallResultAgentNotes` writes on every
+close. Do not switch to the `vrs_ai_calls` column without re-measuring.
+
+**Post-close notes open to ANY vrs_agent, not just the closer.** The old gate
+was `assignedTo === me || queued || reviewedBy === me`. Because a close nulls the
+claim and an AI close is attributed to whoever held the ticket, only one person
+could ever follow up. Queued tickets keep the division-specialization gate:
+an unclaimed ticket outside your division is still not yours to touch.
+
+**Recipients live in `system_settings`, not an env var.** Changing who gets the
+weekly email should not require a redeploy. Code defaults cover the three owners
+so it works before anyone configures anything.
+
 # Architectural Decisions
 
 Use this format for new entries:

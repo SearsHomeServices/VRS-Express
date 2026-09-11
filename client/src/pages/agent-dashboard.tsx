@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
+import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
@@ -4756,6 +4757,17 @@ export default function AgentDashboard() {
                         </CardContent>
                       </Card>
                     )}
+
+                    {/* Tyler 2026-09-11 - note thread, every view and every
+                        status. This is the only place an agent can write to
+                        submission_notes; before this the dashboard had no note
+                        UI, so a ticket closed by VRS AI could not be annotated
+                        by anyone. Notes are internal: posting one does not text
+                        the technician and does not call VRS AI. */}
+                    <SubmissionNotesThread
+                      submissionId={selectedSubmission.id}
+                      closedAt={selectedSubmission.reviewedAt}
+                    />
                   </div>
                 </ScrollArea>
                 {/* Tyler 2026-04-30: drag-to-resize splitter. Only renders

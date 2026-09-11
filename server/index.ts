@@ -173,6 +173,17 @@ app.use((req, res, next) => {
     scheduleWeeklyTechNoLoginReport(log);
   }
 
+  // Weekly VRS Express executive summary, Wednesdays 4:00 PM ET, emailed to
+  // the app owners via SendGrid. Production only for the same reason as the
+  // report above: a dev restart would re-arm the timer repeatedly. The admin
+  // preview and "Run now" endpoints work in every environment, and the run is
+  // idempotent per ET day under an advisory lock, so a restart on a Wednesday
+  // cannot send twice.
+  if (process.env.NODE_ENV === "production") {
+    const { scheduleWeeklyExecSummary } = await import("./services/weekly-exec-summary");
+    scheduleWeeklyExecSummary(log);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

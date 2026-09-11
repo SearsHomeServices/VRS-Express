@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Agent notes after an AI close (2026-09-11)
+- VRS agents can now read and add notes on a ticket after it has been closed,
+  including tickets closed automatically by VRS AI. Two separate gaps were
+  fixed. (1) The agent dashboard had no note UI at all: `submission_notes` rows
+  could only ever be written from the technician's own detail page, so no agent
+  had anywhere to record follow-up on any ticket, closed or open. A new
+  `client/src/components/submission-notes-thread.tsx` renders the thread plus a
+  post box on every ticket in every dashboard view. (2) `POST/GET
+  /api/submissions/:id/notes` gated `vrs_agent` on
+  `assignedTo === me || ticketStatus === 'queued' || reviewedBy === me`. A
+  rejected close nulls `assignedTo`, and an AI close is attributed to whichever
+  human happened to hold the ticket, so every other agent got 403. Non-queued
+  tickets are now open to any VRS agent; queued tickets keep the existing
+  division-specialization gate, and technicians remain limited to their own
+  submissions.
+- Notes are internal only. Posting one does not text the technician and does not
+  call VRS AI. Notes created after the close timestamp are badged "after close"
+  so the sequence is visible at a glance.
+
+### Added - Weekly executive summary email via SendGrid (2026-09-11)
+- New `server/services/weekly-exec-summary.ts` generates a one-week operating
+  summary every Wednesday at 4:00 PM ET, persists it to `weekly_reports`
+  (`report_type = 'exec_summary'`), and emails it to the app owners. Replaces
+  the manual weekly "ask the Replit agent for an executive summary" loop.
+- New `server/services/email.ts` is the app's first outbound email path
+  (previously SMS-only via Twilio). It calls the SendGrid v3 REST API with raw
+  `fetch` rather than adding `@sendgrid/mail`, so a rebuild that skips
+  `npm install` cannot take the report down — the same failure mode that bit
+  `browser-image-compression`. It fails soft: a missing key, an unverified
+  sender, or a SendGrid outage returns `{ sent: false, reason }` and logs,
+  never throwing into a scheduler tick. 401 and 403 responses are translated
+  into the actual cause (bad key vs unverified Sender Identity).
+- Sender defaults to `notifications@shs.com` (`SENDGRID_FROM_EMAIL` overrides).
+  Recipients default to the three VRS Express owners and are overridable at
+  runtime via the `vrs_exec_summary_recipients` system setting, so the
+  distribution list changes without a redeploy.
+- Admin routes: `GET /api/admin/reports/exec-summary` (list + config),
+  `GET .../preview` (renders the current summary without saving or sending;
+  `?format=html` returns the email body itself), `POST .../run`
+  (`{ send, dryRun }`), and `PUT .../recipients`.
+- Scheduler mirrors the existing Wednesday 5:00 PM tech-no-login report:
+  DST-safe ET wall clock, a distinct advisory lock, and once-per-ET-day
+  idempotence, so a restart on a Wednesday cannot send the summary twice.
+  Registered production-only; preview and run-now work in every environment.
+- Content follows the house exec format: a governing sentence carrying the
+  headline number, three KPI cards, then a MECE stage table ordered by
+  certainty. Two reporting corrections found during verification: the governing
+  sentence no longer says "closed N of them" (arrivals and closures are
+  different cohorts and closures can exceed arrivals), and durations are
+  formatted by magnitude rather than rounded to hours, because average time to
+  auth code is about a minute and was rendering as "0 h".
+- Verification: TypeScript diagnostics unchanged at the normalized 56 baseline
+  with none in the new or changed files. Test suite 294 passed / 42 skipped;
+  `tests/intake-confirm.test.ts` fails identically on pristine HEAD and is
+  pre-existing. Metrics and both renderers executed against the live dev
+  database; the send path exercised with `dryRun` (correct sender, correct three
+  recipients, no provider call). No email has been sent and nothing published.
+
 ### Fixed - Preserve intake availability independently of AI dispatch (2026-09-08)
 - Removed the coupling that made `/vrs/authorize` return 503 whenever outbound
   production AI automation was disabled or incomplete. Existing authentication,
