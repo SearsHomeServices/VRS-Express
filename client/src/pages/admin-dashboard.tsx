@@ -3359,13 +3359,30 @@ export default function AdminDashboard() {
     });
 
     // 2026-08-12 — weekly IH tech no-login report ready (Wednesdays 5 PM ET).
+    // Tyler 2026-09-12 - TWO Wednesday reports now publish on this one
+    // channel: the IH tech no-login report (5:00 PM ET) and the executive
+    // summary (4:00 PM ET). This handler used to assume the tech report and
+    // read payload.notSignedIn / payload.activeRoster unconditionally, so an
+    // exec-summary broadcast toasted every admin
+    // "undefined of undefined active IH techs have never signed in" and fired
+    // a browser notification saying the same. Branch on reportType, which both
+    // producers set, and invalidate only that report's own query key.
     const unsubWeeklyReport = subscribe("weekly_report_ready", (payload: any) => {
       playNotificationDing();
-      const title = `Weekly tech sign-in report ready`;
-      const desc = `${payload.notSignedIn} of ${payload.activeRoster} active IH techs have never signed in. Download it from Ticket Overview.`;
+      const isExecSummary = payload?.reportType === "exec_summary";
+      const title = isExecSummary
+        ? `Weekly executive summary ready`
+        : `Weekly tech sign-in report ready`;
+      const desc = isExecSummary
+        ? `${payload.received ?? 0} submissions this week${payload.approvalRate == null ? "" : `, ${payload.approvalRate}% approved`}. Emailed to the VRS Express owners.`
+        : `${payload.notSignedIn} of ${payload.activeRoster} active IH techs have never signed in. Download it from Ticket Overview.`;
       toast({ title, description: desc, duration: 12000 });
       showBrowserNotification(title, desc);
-      scheduleWsInvalidate(["/api/admin/reports/tech-no-login"]);
+      scheduleWsInvalidate([
+        isExecSummary
+          ? "/api/admin/reports/exec-summary"
+          : "/api/admin/reports/tech-no-login",
+      ]);
     });
 
     // 2026-08-07 — admins are notified when a VRS agent (not an admin)

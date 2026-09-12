@@ -140,16 +140,28 @@ export async function computeExecSummary(): Promise<ExecSummaryData> {
   // rejection_reasons is a JSON string array ('["Photos do not meet ..."]').
   // Guard the cast with the regex: a row that is not a JSON array would abort
   // the whole query.
-  const reasons = await db.execute(sql`
-    SELECT reason, count(*)::int AS count
-    FROM submissions s,
-         LATERAL json_array_elements_text(s.rejection_reasons::json) AS reason
-    WHERE s.rejection_reasons ~ '^\\s*\\['
-      AND s.reviewed_at >= now() - interval '7 days'
-    GROUP BY reason
-    ORDER BY count DESC, reason ASC
-    LIMIT 5
-  `);
+  // The regex only proves the value STARTS with '[', not that it parses, and
+  // Postgres has no try_cast: one malformed row ('[unclosed') would abort the
+  // cast and take the whole weekly summary down with it. The reasons block is
+  // the least important section here, so it degrades to empty rather than
+  // costing the report. Isolated in its own try so the counts above survive.
+  let reasons: { rows: any[] } = { rows: [] };
+  try {
+    reasons = await db.execute(sql`
+      SELECT reason, count(*)::int AS count
+      FROM submissions s,
+           LATERAL json_array_elements_text(s.rejection_reasons::json) AS reason
+      WHERE s.rejection_reasons ~ '^\\s*\\['
+        AND s.reviewed_at >= now() - interval '7 days'
+      GROUP BY reason
+      ORDER BY count DESC, reason ASC
+      LIMIT 5
+    `) as any;
+  } catch (err: any) {
+    console.error(
+      `[exec-summary] rejection-reason rollup failed (likely a non-JSON rejection_reasons value); continuing without it: ${err?.message || err}`,
+    );
+  }
 
   const districts = await db.execute(sql`
     SELECT coalesce(nullif(district_code, ''), 'Unknown') AS district, count(*)::int AS count
