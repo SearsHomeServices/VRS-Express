@@ -19,6 +19,30 @@ import { db, storage } from "../storage";
 import { weeklyReports, type WeeklyReport } from "@shared/schema";
 import { broadcastToAdmins } from "../websocket";
 import { sendEmail, isEmailConfigured, isPlausibleEmail, type SendEmailResult } from "./email";
+import {
+  buildExecSummaryMetrics as buildPureExecSummaryMetrics,
+  getExecSummaryWindow as getPureExecSummaryWindow,
+  type DateLike,
+  type DailyVolumeRow,
+  type ExecSummaryData as PureExecSummaryData,
+  type ExecSummaryMetricRow,
+  type ExecSummaryMode,
+} from "./weekly-exec-summary-metrics";
+
+export {
+  buildExecSummaryMetrics,
+  getExecSummaryWindow,
+  previousSameLocalWeekdayTime,
+} from "./weekly-exec-summary-metrics";
+export type {
+  DateLike,
+  DailyVolumeRow,
+  ExecSummaryBounds,
+  ExecSummaryMetadata,
+  ExecSummaryMetricRow,
+  ExecSummaryMetrics,
+  ExecSummaryMode,
+} from "./weekly-exec-summary-metrics";
 
 export const EXEC_SUMMARY_REPORT_TYPE = "exec_summary";
 
@@ -60,198 +84,66 @@ export async function getExecSummaryRecipients(): Promise<string[]> {
 }
 
 // --- Metrics ---------------------------------------------------------------
-//
-// ⛔ THE SHAPE OF THIS REPORT IS NOT A CHOICE. It mirrors, field for field, the
-// weekly summary the Replit Agent has been producing on request for the VRS
-// Express owners. A second, differently-computed version of the same week is
-// worse than no email: the first draft of this file reported a 69.1% approval
-// rate against their 75.6% for the identical week, because it divided by
-// approved+rejected+invalid where they divide by approved+rejected only.
-//
-// Definitions, all locked to their report:
-//   cohort        submissions CREATED in the current Mon-Sun ET week, to date
-//   approval rate approved / (approved + rejected)   <- invalid EXCLUDED
-//   invalid rate  invalid / cohort
-//   resolved      cohort - pending, over cohort
-//   pending       unreviewed WITHIN THIS WEEK'S COHORT, not the all-time backlog
-//   review time   created_at -> stage1_reviewed_at, wall clock, this cohort
-//                 (the Analytics page's figure is all-time AND business-hours
-//                  aware, so it is a different number on purpose; never mix)
-// Buckets count on stage1_status, the column storage.getAnalytics() uses.
+// The pure metrics module owns ET windows, cohort membership, outcome
+// classification, review durations, daily volume, and rejection reasons.
 
-const TZ_SQL = "America/New_York";
+export type ExecSummaryReportMode = ExecSummaryMode;
 
-export interface DailyVolumeRow {
-  /** ET calendar date, YYYY-MM-DD. */
-  date: string;
-  label: string;
-  /** null = the day has not happened yet ("Not yet included"). */
-  submissions: number | null;
-  approved: number | null;
-  rejected: number | null;
-  /** True for the day the snapshot was taken on: the day is incomplete. */
-  partial: boolean;
+export type ExecSummaryData = PureExecSummaryData;
+
+export interface ComputeExecSummaryOptions {
+  reportMode?: ExecSummaryReportMode;
+  mode?: ExecSummaryMode;
+  /** Optional ET date anchor for a full historical week. */
+  weekStart?: DateLike;
+  /** Defaults to the instant at which the computation starts. */
+  cutoffAt?: DateLike;
 }
 
-export interface ExecSummaryData {
-  weekStart: string;
-  weekEnd: string;
-  snapshotAt: string;
-  latestSubmissionAt: string | null;
-  submissions: number;
-  uniqueTechnicians: number;
-  approved: number;
-  rejected: number;
-  invalid: number;
-  pending: number;
-  approvalRate: number | null;
-  invalidRate: number | null;
-  resolvedRate: number | null;
-  avgReviewMinutes: number | null;
-  medianReviewMinutes: number | null;
-  daily: DailyVolumeRow[];
-  /** Same cohort measured at the same weekday+time one week earlier. */
-  prior: {
-    submissions: number;
-    approvalRate: number | null;
-    invalidRate: number | null;
-    avgReviewMinutes: number | null;
-    medianReviewMinutes: number | null;
-  };
-  topRejectionReasons: Array<{ reason: string; count: number }>;
-}
-
-function rate(n: number, d: number): number | null {
-  if (!d) return null;
-  return Math.round((n / d) * 1000) / 10;
-}
-function mins(v: any): number | null {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.round(n * 10) / 10 : null;
-}
-
-export async function computeExecSummary(): Promise<ExecSummaryData> {
-  // One cohort query. `weeks_back` = 0 for this week, 1 for the same slice of
-  // last week, so the comparison is always like-for-like: Monday through this
-  // exact weekday and time, never a full week against a partial one.
-  const cohort = async (weeksBack: number) => {
-    const res = await db.execute(sql`
-      WITH bounds AS (
-        SELECT
-          (date_trunc('week', (now() AT TIME ZONE ${TZ_SQL}))
-             - make_interval(weeks => ${weeksBack})) AT TIME ZONE ${TZ_SQL} AS week_start,
-          ((now() AT TIME ZONE ${TZ_SQL}) - make_interval(weeks => ${weeksBack}))
-             AT TIME ZONE ${TZ_SQL} AS cutoff
-      )
-      SELECT
-        count(*)::int AS submissions,
-        count(DISTINCT coalesce(nullif(technician_ldap_id, ''), technician_id::text))::int AS unique_techs,
-        count(*) FILTER (WHERE stage1_status = 'approved')::int AS approved,
-        count(*) FILTER (WHERE stage1_status = 'rejected')::int AS rejected,
-        count(*) FILTER (WHERE stage1_status = 'invalid')::int  AS invalid,
-        count(*) FILTER (WHERE stage1_status = 'pending')::int  AS pending,
-        avg(EXTRACT(EPOCH FROM (stage1_reviewed_at - created_at)) / 60.0)
-          FILTER (WHERE stage1_reviewed_at IS NOT NULL)          AS avg_review_min,
-        percentile_cont(0.5) WITHIN GROUP (
-          ORDER BY EXTRACT(EPOCH FROM (stage1_reviewed_at - created_at)) / 60.0
-        ) FILTER (WHERE stage1_reviewed_at IS NOT NULL)          AS median_review_min,
-        max(created_at)                                          AS latest_submission
-      FROM submissions, bounds
-      WHERE created_at >= bounds.week_start AND created_at <= bounds.cutoff
-    `);
-    return res.rows[0] as Record<string, any>;
-  };
-
-  const [cur, prev] = await Promise.all([cohort(0), cohort(1)]);
-
-  const dailyRes = await db.execute(sql`
-    WITH bounds AS (
-      SELECT (date_trunc('week', (now() AT TIME ZONE ${TZ_SQL}))) AT TIME ZONE ${TZ_SQL} AS week_start,
-             (now() AT TIME ZONE ${TZ_SQL})::date AS today_et
-    ),
-    days AS (
-      SELECT generate_series(
-        (SELECT (week_start AT TIME ZONE ${TZ_SQL})::date FROM bounds),
-        (SELECT (week_start AT TIME ZONE ${TZ_SQL})::date FROM bounds) + 6,
-        interval '1 day'
-      )::date AS d
-    )
-    SELECT
-      to_char(days.d, 'YYYY-MM-DD') AS date,
-      to_char(days.d, 'FMDay, FMMon. FMDD') AS label,
-      (days.d >  (SELECT today_et FROM bounds)) AS future,
-      (days.d =  (SELECT today_et FROM bounds)) AS partial,
-      count(s.id) FILTER (WHERE s.id IS NOT NULL)::int AS submissions,
-      count(s.id) FILTER (WHERE s.stage1_status = 'approved')::int AS approved,
-      count(s.id) FILTER (WHERE s.stage1_status = 'rejected')::int AS rejected
-    FROM days
-    LEFT JOIN submissions s
-      ON (s.created_at AT TIME ZONE ${TZ_SQL})::date = days.d
-    GROUP BY days.d
-    ORDER BY days.d
-  `);
-
-  let reasons: { rows: any[] } = { rows: [] };
-  try {
-    reasons = await db.execute(sql`
-      WITH bounds AS (
-        SELECT (date_trunc('week', (now() AT TIME ZONE ${TZ_SQL}))) AT TIME ZONE ${TZ_SQL} AS week_start
-      )
-      SELECT reason, count(*)::int AS count
-      FROM submissions s, bounds,
-           LATERAL json_array_elements_text(s.rejection_reasons::json) AS reason
-      WHERE s.rejection_reasons ~ '^\s*\['
-        AND s.created_at >= bounds.week_start
-      GROUP BY reason
-      ORDER BY count DESC, reason ASC
-      LIMIT 5
-    `) as any;
-  } catch (err: any) {
-    console.error(`[exec-summary] rejection-reason rollup skipped: ${err?.message || err}`);
+export async function computeExecSummary(
+  opts: ComputeExecSummaryOptions = {},
+): Promise<ExecSummaryData> {
+  const snapshotAt = opts.cutoffAt == null ? new Date() : new Date(opts.cutoffAt);
+  if (!Number.isFinite(snapshotAt.getTime())) {
+    throw new Error("Invalid cutoffAt for executive summary");
   }
+  const window = getPureExecSummaryWindow(snapshotAt, {
+    mode: opts.mode ?? opts.reportMode ?? "wtd",
+    weekStart: opts.weekStart,
+  });
 
-  const daily: DailyVolumeRow[] = (dailyRes.rows as any[]).map((r) => ({
-    date: String(r.date),
-    label: String(r.label).replace(/\s+/g, " ").trim(),
-    submissions: r.future ? null : Number(r.submissions),
-    approved: r.future ? null : Number(r.approved),
-    rejected: r.future ? null : Number(r.rejected),
-    partial: Boolean(r.partial),
-  }));
-
-  const decided = cur.approved + cur.rejected;
-  const prevDecided = prev.approved + prev.rejected;
-
-  return {
-    weekStart: daily[0]?.date ?? "",
-    weekEnd: daily[daily.length - 1]?.date ?? "",
-    snapshotAt: new Date().toISOString(),
-    latestSubmissionAt: cur.latest_submission ? new Date(cur.latest_submission).toISOString() : null,
-    submissions: cur.submissions,
-    uniqueTechnicians: cur.unique_techs,
-    approved: cur.approved,
-    rejected: cur.rejected,
-    invalid: cur.invalid,
-    pending: cur.pending,
-    approvalRate: rate(cur.approved, decided),
-    invalidRate: rate(cur.invalid, cur.submissions),
-    resolvedRate: rate(cur.submissions - cur.pending, cur.submissions),
-    avgReviewMinutes: mins(cur.avg_review_min),
-    medianReviewMinutes: mins(cur.median_review_min),
-    daily,
-    prior: {
-      submissions: prev.submissions,
-      approvalRate: rate(prev.approved, prevDecided),
-      invalidRate: rate(prev.invalid, prev.submissions),
-      avgReviewMinutes: mins(prev.avg_review_min),
-      medianReviewMinutes: mins(prev.median_review_min),
-    },
-    topRejectionReasons: (reasons.rows as any[]).map((r) => ({
-      reason: String(r.reason),
-      count: Number(r.count),
-    })),
-  };
+  // One query is intentionally used for both cohorts.  It captures one
+  // present-outcome snapshot; the pure builder applies the identical
+  // created-at bounds to headlines, daily volume, and reasons.
+  const result = await db.execute(sql`
+    SELECT
+      s.id,
+      s.created_at,
+      s.ticket_status,
+      s.reviewed_at,
+      s.rejection_reasons,
+      COALESCE(
+        NULLIF(trim(s.technician_ldap_id), ''),
+        NULLIF(trim(u.rac_id), ''),
+        'user:' || s.technician_id::text
+      ) AS technician_ldap_id,
+      s.technician_id
+    FROM submissions s
+    LEFT JOIN users u ON u.id = s.technician_id
+    WHERE s.created_at >= ${window.priorWeekStart}
+      AND s.created_at < ${window.cutoff}
+  `);
+  const data = buildPureExecSummaryMetrics(result.rows as ExecSummaryMetricRow[], {
+    mode: window.mode,
+    weekStart: window.weekStart,
+    weekEndExclusive: window.weekEndExclusive,
+    cutoff: window.cutoff,
+    snapshotAt,
+    priorWeekStart: window.priorWeekStart,
+    priorWeekEndExclusive: window.priorWeekEndExclusive,
+    priorCutoff: window.priorCutoff,
+  });
+  return data;
 }
 
 // --- Rendering -------------------------------------------------------------
@@ -289,19 +181,26 @@ function etClock(iso: string): string {
 function pointMove(cur: number | null, prior: number | null): string {
   if (cur == null || prior == null) return "no comparable prior week";
   const d = Math.round((cur - prior) * 10) / 10;
-  if (d === 0) return "unchanged from the same point last week";
-  return `${d > 0 ? "up" : "down"} ${Math.abs(d)} percentage point${Math.abs(d) === 1 ? "" : "s"} from the same point last week`;
+  if (d === 0) return "unchanged from the prior comparison cohort";
+  return `${d > 0 ? "up" : "down"} ${Math.abs(d)} percentage point${Math.abs(d) === 1 ? "" : "s"} from the prior comparison cohort`;
 }
 
 export function execSummarySubject(d: ExecSummaryData): string {
-  return `VRS Express weekly update: ${etRange(d.weekStart, d.weekEnd)}`;
+  return `VRS Express ${d.metadata.reportMode === "full_week" ? "full-week" : "week-to-date"} update: ${etRange(d.weekStart, d.weekEnd)}`;
 }
 
 function provenance(d: ExecSummaryData): string {
   const latest = d.latestSubmissionAt
     ? `; latest submission at approximately ${etClock(d.latestSubmissionAt)}`
     : "";
-  return `Week-to-date: production snapshot queried ${etLong(d.snapshotAt)} at ${etClock(d.snapshotAt)}${latest}.`;
+  const mode = d.metadata.reportMode === "full_week" ? "Full week" : "Week-to-date";
+  return `${mode}: submissions created before ${etLong(d.metadata.cutoffAt)} at ${etClock(d.metadata.cutoffAt)}${latest}. Outcomes queried ${etLong(d.snapshotAt)} at ${etClock(d.snapshotAt)}. Comparison uses ${d.metadata.comparisonBasis}.`;
+}
+
+const METRIC_DEFINITIONS = "Completed (approved) means ticket status completed; rejected includes rejected_closed; pending includes queued. Other statuses are shown separately, not treated as resolved. Approval rate = completed / (completed + rejected). Review time is wall-clock created_at to reviewed_at, excluding missing or negative durations. Technicians are counted by trimmed, case-insensitive LDAP, with the linked user identity as fallback.";
+
+function cohortPeriod(d: ExecSummaryData): string {
+  return d.metadata.reportMode === "full_week" ? "during the reported week" : "so far this week";
 }
 
 function takeaways(d: ExecSummaryData): string[] {
@@ -329,13 +228,24 @@ function takeaways(d: ExecSummaryData): string[] {
       ? `No submissions from this week's cohort remain pending at the snapshot.`
       : `${d.pending} submission${d.pending === 1 ? "" : "s"} from this week's cohort remain${d.pending === 1 ? "s" : ""} pending at the snapshot.`,
   );
-  out.push(`This is a week-to-date update, not a final seven-day report.`);
+  out.push(
+    d.metadata.reportMode === "full_week"
+       ? "This report covers a full seven-day submission cohort; outcomes reflect the query snapshot."
+      : "This is a week-to-date update, not a final seven-day report.",
+  );
   return out;
 }
 
-function dayCells(r: DailyVolumeRow): [string, string, string] {
-  if (r.submissions == null) return ["Not yet included", "-", "-"];
-  return [String(r.submissions), String(r.approved ?? 0), String(r.rejected ?? 0)];
+function dayCells(r: DailyVolumeRow): [string, string, string, string, string, string] {
+  if (r.submissions == null) return ["Not yet included", "-", "-", "-", "-", "-"];
+  return [
+    String(r.submissions),
+    String(r.approved ?? 0),
+    String(r.rejected ?? 0),
+    String(r.invalid ?? 0),
+    String(r.pending ?? 0),
+    String(r.other ?? 0),
+  ];
 }
 
 export function renderExecSummaryText(d: ExecSummaryData): string {
@@ -344,13 +254,14 @@ export function renderExecSummaryText(d: ExecSummaryData): string {
   L.push(etRange(d.weekStart, d.weekEnd));
   L.push(provenance(d));
   L.push("");
-  L.push(`VRS Express has received ${d.submissions} submissions from ${d.uniqueTechnicians} unique technicians so far this week.`);
+  L.push(`VRS Express has received ${d.submissions} submissions from ${d.uniqueTechnicians} unique technicians ${cohortPeriod(d)}.`);
   L.push("");
   L.push("OUTCOMES");
-  L.push(`  ${d.approved} approved`);
+  L.push(`  ${d.approved} Completed (approved)`);
   L.push(`  ${d.rejected} rejected`);
   L.push(`  ${d.invalid} invalid`);
   L.push(`  ${d.pending} pending`);
+  L.push(`  ${d.other} other`);
   L.push(`  ${d.approvalRate ?? "n/a"}% approval rate among approved/rejected decisions`);
   L.push(`  ${d.invalidRate ?? "n/a"}% invalid rate`);
   L.push(`  ${d.resolvedRate ?? "n/a"}% of submissions resolved`);
@@ -360,10 +271,10 @@ export function renderExecSummaryText(d: ExecSummaryData): string {
   L.push(`  ${d.medianReviewMinutes ?? "n/a"} minutes median review time`);
   L.push("");
   L.push("DAILY VOLUME");
-  L.push(`  ${"Day".padEnd(22)}${"Submissions".padStart(17)}${"Approved".padStart(10)}${"Rejected".padStart(10)}`);
+  L.push(`  ${"Day".padEnd(22)}${"Submissions".padStart(17)}${"Completed (approved)".padStart(22)}${"Rejected".padStart(10)}${"Invalid".padStart(10)}${"Pending".padStart(10)}${"Other".padStart(8)}`);
   for (const r of d.daily) {
-    const [s, a, j] = dayCells(r);
-    L.push(`  ${(r.label + (r.partial ? "*" : "")).padEnd(22)}${s.padStart(17)}${a.padStart(10)}${j.padStart(10)}`);
+    const [s, a, j, i, p, o] = dayCells(r);
+    L.push(`  ${(r.label + (r.partial ? "*" : "")).padEnd(22)}${s.padStart(17)}${a.padStart(22)}${j.padStart(10)}${i.padStart(10)}${p.padStart(10)}${o.padStart(8)}`);
   }
   if (d.daily.some((r) => r.partial)) L.push("  * partial day at the time of the snapshot.");
   L.push("");
@@ -376,6 +287,7 @@ export function renderExecSummaryText(d: ExecSummaryData): string {
   for (const t of takeaways(d)) L.push(`  - ${t}`);
   L.push("");
   L.push("Generated automatically by VRS Express every Wednesday at 4:00 PM ET.");
+  L.push(METRIC_DEFINITIONS);
   return L.join("\n");
 }
 
@@ -387,13 +299,16 @@ function bullet(t: string): string {
 
 export function renderExecSummaryHtml(d: ExecSummaryData): string {
   const dayRows = d.daily.map((r) => {
-    const [s, a, j] = dayCells(r);
+    const [s, a, j, i, p, o] = dayCells(r);
     const muted = r.submissions == null;
     return `<tr>
       <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};">${esc(r.label)}${r.partial ? "*" : ""}</td>
       <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:${muted ? "400" : "700"} 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(s)}</td>
       <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(a)}</td>
-      <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(j)}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(j)}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(i)}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(p)}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid #eef0f3;font:400 14px/1.4 ${F};color:${muted ? "#9ca3af" : "#111827"};text-align:right;">${esc(o)}</td>
     </tr>`;
   }).join("");
 
@@ -417,17 +332,18 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
     <div style="font:700 20px/1.3 ${F};color:#111827;">${esc(etRange(d.weekStart, d.weekEnd))}</div>
     <div style="font:italic 400 12.5px/1.5 ${F};color:#6b7280;margin-top:4px;">${esc(provenance(d))}</div>
     <div style="font:400 15px/1.6 ${F};color:#111827;margin-top:12px;">
-      VRS Express has received <strong>${d.submissions} submissions</strong> from <strong>${d.uniqueTechnicians} unique technicians</strong> so far this week.
+      VRS Express has received <strong>${d.submissions} submissions</strong> from <strong>${d.uniqueTechnicians} unique technicians</strong> ${cohortPeriod(d)}.
     </div>
   </td></tr>
 
   <tr><td style="padding:18px 22px 0;">
     <div style="font:700 15px/1.3 ${F};color:#111827;margin-bottom:8px;">Outcomes</div>
     <ul style="margin:0;padding-left:20px;">
-      ${outcome("approved", String(d.approved))}
+       ${outcome("Completed (approved)", String(d.approved))}
       ${outcome("rejected", String(d.rejected))}
       ${outcome("invalid", String(d.invalid))}
       ${outcome("pending", String(d.pending))}
+       ${outcome("other", String(d.other))}
       ${outcome("approval rate among approved/rejected decisions", `${d.approvalRate ?? "n/a"}%`)}
       ${outcome("invalid rate", `${d.invalidRate ?? "n/a"}%`)}
       ${outcome("of submissions resolved", `${d.resolvedRate ?? "n/a"}%`)}
@@ -448,8 +364,11 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
       <tr style="background:#f9fafb;">
         <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;">Day</td>
         <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Submissions</td>
-        <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Approved</td>
+        <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Completed (approved)</td>
         <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Rejected</td>
+        <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Invalid</td>
+        <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Pending</td>
+        <td style="padding:7px 12px;font:600 12px/1.3 ${F};color:#6b7280;text-align:right;">Other</td>
       </tr>
       ${dayRows}
     </table>
@@ -468,6 +387,7 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
 
   <tr><td style="padding:14px 22px 20px;font:400 12px/1.5 ${F};color:#9ca3af;">
     Generated automatically by VRS Express every Wednesday at 4:00 PM ET.
+    <br>${esc(METRIC_DEFINITIONS)}
   </td></tr>
 
 </table>
