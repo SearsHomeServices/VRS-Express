@@ -4,6 +4,7 @@ import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
+import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
@@ -1155,6 +1156,20 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                 </div>
               </div>
             )}
+
+            {/* Tyler 2026-09-12 - the note thread also belongs HERE, not just
+                on the agent dashboard. Admins and super_admins work closed
+                tickets from this Ticket Overview dialog, so shipping notes to
+                the agent dashboard alone left every admin (including the people
+                who asked for the feature) with no way to add one. Outside the
+                tab switch on purpose: notes are the point of opening a closed
+                ticket, so they should not be hidden behind a tab. */}
+            <div className="mt-2">
+              <SubmissionNotesThread
+                submissionId={sub.id}
+                closedAt={sub.reviewedAt}
+              />
+            </div>
           </div>
         )}
       </DialogContent>
