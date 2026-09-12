@@ -3389,7 +3389,7 @@ export default function AdminDashboard() {
         ? `Weekly executive summary ready`
         : `Weekly tech sign-in report ready`;
       const desc = isExecSummary
-        ? `${payload.received ?? 0} submissions this week${payload.approvalRate == null ? "" : `, ${payload.approvalRate}% approved`}. Emailed to the VRS Express owners.`
+        ? `${payload.submissions ?? 0} submissions this week${payload.approvalRate == null ? "" : `, ${payload.approvalRate}% approved`}. Emailed to the VRS Express owners.`
         : `${payload.notSignedIn} of ${payload.activeRoster} active IH techs have never signed in. Download it from Ticket Overview.`;
       toast({ title, description: desc, duration: 12000 });
       showBrowserNotification(title, desc);
