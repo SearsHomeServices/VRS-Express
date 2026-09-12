@@ -503,6 +503,23 @@ function redactWarrantyForProvider<T extends Record<string, any>>(role: string, 
   return (Array.isArray(payload) ? payload.map(strip) : strip(payload)) as T;
 }
 
+type ExecSummaryRouteServices = {
+  getLatestExecSummaries: (limit?: number) => Promise<Array<{ id: number }>>;
+  retryExecSummaryDelivery: (
+    reportId: number,
+    options: { resend: boolean; requestKey: string },
+  ) => Promise<{ action?: string; delivery?: unknown }>;
+  generateAndSendExecSummary: (options: {
+    send?: boolean;
+    dryRun?: boolean;
+    skipIfGeneratedToday?: boolean;
+  }) => Promise<{
+    report: { id: number; generatedAt: Date | string; summary: unknown } | null;
+    email: unknown;
+    delivery?: unknown;
+    skipped?: string;
+  }>;
+};
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -1013,7 +1030,7 @@ export async function registerRoutes(
 
       const enhanced = await enhanceDescription(parsed.data.description, parsed.data.applianceType);
       return res.status(200).json({ enhanced, original: parsed.data.description });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("AI enhance error:", error);
       return res.status(500).json({ error: "AI enhancement unavailable. You can still submit your original description." });
     }
@@ -6913,16 +6930,22 @@ export async function registerRoutes(
   // ========================================================================
   app.get("/api/admin/reports/exec-summary", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
     try {
-      const { getLatestExecSummaries, getExecSummaryRecipients } = await import("./services/weekly-exec-summary");
-      const { isEmailConfigured, resolveFromAddress } = await import("./services/email");
-      return res.json({
-        reports: await getLatestExecSummaries(),
-        recipients: await getExecSummaryRecipients(),
-        from: resolveFromAddress(),
-        emailConfigured: isEmailConfigured(),
-      });
-    } catch (error) {
-      console.error("Exec summary list error:", error);
+      const { getLatestExecSummaries, getExecSummaryRecipients } =
+        await import("./services/weekly-exec-summary");
+      const {
+        getEmailConfigurationStatus,
+        isEmailConfigured,
+        resolveFromAddress,
+      } = await import("./services/email");
+      return createExecSummaryHistoryHandler({
+        getLatestExecSummaries,
+        getExecSummaryRecipients,
+        getEmailConfigurationStatus,
+        isEmailConfigured,
+        resolveFromAddress,
+      })(_req, res);
+    } catch (error: unknown) {
+      console.error("Exec summary list error:", error instanceof Error ? error.message : "unknown error");
       return res.status(500).json({ error: "Failed to list executive summaries" });
     }
   });
@@ -6948,33 +6971,98 @@ export async function registerRoutes(
         html,
         text: renderExecSummaryText(data),
       });
-    } catch (error) {
-      console.error("Exec summary preview error:", error);
+    } catch (error: unknown) {
+      console.error("Exec summary preview error:", error instanceof Error ? error.message : "unknown error");
       return res.status(500).json({ error: "Failed to build executive summary preview" });
+    }
+  });
+
+  // Read one report's durable delivery ledger. The route is deliberately
+  // separate from the report list so a status refresh never regenerates a
+  // report or attempts an email.
+  app.get("/api/admin/reports/exec-summary/:id/delivery", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const reportId = Number(req.params.id);
+      if (!Number.isSafeInteger(reportId) || reportId <= 0) {
+        return res.status(400).json({ error: "Invalid report id" });
+      }
+      const { getExecSummaryDeliveryStatus } =
+        await import("./services/weekly-exec-summary");
+      const delivery = await getExecSummaryDeliveryStatus(reportId);
+      // A generate-only report intentionally has no delivery row. Returning
+      // 200 with a null ledger lets the admin distinguish "generated only"
+      // from an API failure without creating delivery intent.
+      return res.json({ reportId, delivery });
+    } catch (error: unknown) {
+      // Do not serialize database/provider errors. They can contain SQL,
+      // recipient addresses, or provider response details.
+      console.error("Exec summary delivery status error:", error instanceof Error ? error.message : "unknown error");
+      return res.status(500).json({ error: "Failed to load executive summary delivery status" });
+    }
+  });
+
+  // Send an already-generated report (or the latest report when reportId is
+  // omitted). A request key is required so repeated/concurrent clicks resolve
+  // to the same durable attempt instead of creating duplicate sends. The
+  // service owns the accepted/unknown safety rules; `resend:true` is the
+  // explicit operator acknowledgement needed for accepted or unknown state.
+  app.post("/api/admin/reports/exec-summary/send", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const { getLatestExecSummaries, retryExecSummaryDelivery } =
+        await import("./services/weekly-exec-summary");
+      return createExecSummarySendHandler({
+        getLatestExecSummaries,
+        retryExecSummaryDelivery,
+      })(req, res);
+    } catch (error: unknown) {
+      console.error("Exec summary send route setup error:", error instanceof Error ? error.message : "unknown error");
+      return res.status(500).json({ error: "Failed to send executive summary" });
+    }
+  });
+
+  app.post("/api/admin/reports/exec-summary/:id/retry", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
+    try {
+      const reportId = Number(req.params.id);
+      if (!Number.isSafeInteger(reportId) || reportId <= 0) {
+        return res.status(400).json({ error: "Invalid report id" });
+      }
+      const parsed = z.object({
+        resend: z.boolean().default(false),
+        requestKey: z.string().trim().min(8).max(200),
+      }).safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "resend and a valid requestKey are required" });
+      }
+
+      const { retryExecSummaryDelivery } =
+        await import("./services/weekly-exec-summary");
+      const deliveryResult = await retryExecSummaryDelivery(reportId, {
+        resend: parsed.data.resend,
+        requestKey: parsed.data.requestKey,
+      });
+      return res.json({
+        reportId,
+        action: deliveryResult?.action,
+        delivery: deliveryResult?.delivery ?? deliveryResult,
+      });
+    } catch (error: unknown) {
+      console.error("Exec summary retry error:", error instanceof Error ? error.message : "unknown error");
+      return res.status(500).json({ error: "Failed to retry executive summary delivery" });
     }
   });
 
   // Generate now. Body: { send?: boolean, dryRun?: boolean }.
   //   send:false   -> persist the report, email nobody.
   //   dryRun:true  -> persist, log the intended recipients, call no provider.
-  // Default (no body) persists AND emails, so the UI must confirm first.
+  // Default (no body) retains scheduler compatibility and persists + sends.
+  // Explicit sends of an existing/current report belong to /send above.
   app.post("/api/admin/reports/exec-summary/run", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
-      const { generateAndSendExecSummary } = await import("./services/weekly-exec-summary");
-      const body = (req.body || {}) as { send?: boolean; dryRun?: boolean };
-      const result = await generateAndSendExecSummary({
-        send: body.send !== false,
-        dryRun: body.dryRun === true,
-      });
-      return res.json({
-        report: result.report
-          ? { id: result.report.id, generatedAt: result.report.generatedAt, summary: result.report.summary }
-          : null,
-        email: result.email,
-        skipped: result.skipped ?? null,
-      });
-    } catch (error) {
-      console.error("Exec summary run error:", error);
+      const { generateAndSendExecSummary } =
+        await import("./services/weekly-exec-summary");
+      return createExecSummaryGenerateHandler({ generateAndSendExecSummary })(req, res);
+    } catch (error: unknown) {
+      console.error("Exec summary run route setup error:", error instanceof Error ? error.message : "unknown error");
       return res.status(500).json({ error: "Failed to generate executive summary" });
     }
   });
@@ -6997,8 +7085,8 @@ export async function registerRoutes(
       }
       await storage.setSystemSetting(EXEC_SUMMARY_RECIPIENTS_SETTING, cleaned.join(","));
       return res.json({ recipients: await getExecSummaryRecipients() });
-    } catch (error) {
-      console.error("Exec summary recipients error:", error);
+    } catch (error: unknown) {
+      console.error("Exec summary recipients error:", error instanceof Error ? error.message : "unknown error");
       return res.status(500).json({ error: "Failed to update recipients" });
     }
   });
@@ -8590,4 +8678,158 @@ export async function registerRoutes(
   // ==========================================================================
 
   return httpServer;
+}
+
+export function createExecSummaryGenerateHandler(
+  services: Pick<ExecSummaryRouteServices, "generateAndSendExecSummary">,
+) {
+  return async (req: Request, res: Response) => {
+    try {
+      const parsed = z.object({
+        send: z.boolean().optional(),
+        dryRun: z.boolean().optional(),
+        skipIfGeneratedToday: z.boolean().optional(),
+      }).safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid executive summary generation options" });
+      }
+      const result = await services.generateAndSendExecSummary({
+        send: parsed.data.send !== false,
+        dryRun: parsed.data.dryRun === true,
+        skipIfGeneratedToday: parsed.data.skipIfGeneratedToday,
+      });
+      return res.json({
+        report: result.report
+          ? { id: result.report.id, generatedAt: result.report.generatedAt, summary: result.report.summary }
+          : null,
+        email: result.email,
+        delivery: result.delivery ?? null,
+        skipped: result.skipped ?? null,
+      });
+    } catch (error: unknown) {
+      console.error("Exec summary run error:", error instanceof Error ? error.message : error);
+      return res.status(500).json({ error: "Failed to generate executive summary" });
+    }
+  };
+}
+
+type ExecSummaryEmailServices = {
+  getExecSummaryRecipients: () => Promise<string[]>;
+  getEmailConfigurationStatus: () => {
+    configured: boolean;
+    apiKeyPresent: boolean;
+    fromEmail: string;
+    fromEmailValid: boolean;
+    issues: string[];
+  };
+  isEmailConfigured: () => boolean;
+  resolveFromAddress: () => { email: string; name: string };
+};
+
+/**
+ * Recipient configuration is intentionally best-effort for this read-only
+ * endpoint. A malformed setting must not hide the saved report/delivery audit.
+ * The response exposes only stable issue identifiers; the thrown error is
+ * never returned (or logged here).
+ */
+export function createExecSummaryHistoryHandler(
+  services: Pick<ExecSummaryRouteServices, "getLatestExecSummaries"> & ExecSummaryEmailServices,
+) {
+  return async (_req: Request, res: Response) => {
+    try {
+      const reports = await services.getLatestExecSummaries();
+      let recipients: string[] = [];
+      let recipientIssues: string[] = [];
+      try {
+        recipients = await services.getExecSummaryRecipients();
+        const { isPlausibleEmail } = await import("./services/email");
+        if (!recipients.length || recipients.some((address) => !isPlausibleEmail(address))) {
+          recipients = [];
+          recipientIssues = ["invalid_recipient"];
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message.toLowerCase() : "";
+        const code = error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code || "").toLowerCase()
+          : "";
+        // The service intentionally normalizes malformed/blank settings to a
+        // safe error. Keep both identifiers so operators can distinguish a
+        // bad value from a storage outage without exposing either detail.
+        const invalidRecipient = code.includes("invalid") ||
+          code.includes("recipient") ||
+          message.includes("invalid") ||
+          message.includes("malformed") ||
+          message.includes("empty") ||
+          message.includes("recipient");
+        recipientIssues = invalidRecipient
+          ? ["invalid_recipient", "recipients_unavailable"]
+          : ["recipients_unavailable"];
+      }
+
+      const baseEmailConfiguration = services.getEmailConfigurationStatus();
+      const emailConfiguration = recipientIssues.length > 0
+        ? {
+            ...baseEmailConfiguration,
+            configured: false,
+            issues: Array.from(new Set([...baseEmailConfiguration.issues, ...recipientIssues])),
+          }
+        : baseEmailConfiguration;
+      return res.json({
+        reports,
+        recipients,
+        from: services.resolveFromAddress(),
+        emailConfigured: emailConfiguration.configured && services.isEmailConfigured(),
+        emailConfiguration,
+      });
+    } catch (error: unknown) {
+      console.error("Exec summary list error:", error instanceof Error ? error.message : "unknown error");
+      return res.status(500).json({ error: "Failed to list executive summaries" });
+    }
+  };
+}
+
+/**
+ * The two mutating executive-summary handlers are kept as small dependency
+ * injection seams. Besides making their validation explicit, this lets route
+ * tests exercise generate-only -> send and concurrent request-key behavior
+ * without importing the database-backed route registration.
+ */
+export function createExecSummarySendHandler(services: Pick<
+  ExecSummaryRouteServices,
+  "getLatestExecSummaries" | "retryExecSummaryDelivery"
+>) {
+  return async (req: Request, res: Response) => {
+    try {
+      const parsed = z.object({
+        reportId: z.number().int().positive().optional(),
+        resend: z.boolean().default(false),
+        requestKey: z.string().trim().min(8).max(200),
+      }).safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "reportId, resend, and a valid requestKey are required" });
+      }
+
+      let reportId = parsed.data.reportId;
+      if (reportId === undefined) {
+        const latest = await services.getLatestExecSummaries(1);
+        reportId = latest[0]?.id;
+      }
+      if (!reportId) {
+        return res.status(404).json({ error: "No executive summary has been generated yet" });
+      }
+
+      const deliveryResult = await services.retryExecSummaryDelivery(reportId, {
+        resend: parsed.data.resend,
+        requestKey: parsed.data.requestKey,
+      });
+      return res.json({
+        reportId,
+        action: deliveryResult.action,
+        delivery: deliveryResult.delivery ?? deliveryResult,
+      });
+    } catch (error: unknown) {
+      console.error("Exec summary send error:", error instanceof Error ? error.message : error);
+      return res.status(500).json({ error: "Failed to send executive summary" });
+    }
+  };
 }

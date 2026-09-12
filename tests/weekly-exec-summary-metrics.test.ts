@@ -19,6 +19,7 @@ const rendererMocks = vi.hoisted(() => ({
 // Keep this suite a renderer regression test: importing it must not open a DB
 // connection or require an email configuration.
 vi.mock("../server/storage", () => ({
+  pool: { query: vi.fn(), connect: vi.fn() },
   db: { execute: rendererMocks.dbExecute, transaction: vi.fn() },
   storage: { getSystemSetting: rendererMocks.getSystemSetting },
 }));

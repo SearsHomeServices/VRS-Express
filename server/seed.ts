@@ -1,5 +1,6 @@
 import bcryptjs from "bcryptjs";
-import { storage, db } from "./storage";
+import { storage, db, pool } from "./storage";
+import { ensureExecSummaryDeliverySchema } from "./services/exec-summary-delivery";
 import { technicians, users, submissions, smsNotifications, communicationSendAudit, communicationTemplates } from "@shared/schema";
 import { sql, isNull, isNotNull, and, eq } from "drizzle-orm";
 
@@ -97,6 +98,9 @@ export async function seedDatabase() {
   // so they must exist BEFORE the first submissions query (same reasoning).
   await ensureCoachingColumns();
   await ensureWeeklyReportsTable();
+  // Must precede scheduler startup and any report-delivery query on a fresh
+  // dev/prod database.  This table is an audit ledger, not seed data.
+  await ensureExecSummaryDeliverySchema(pool);
   for (const seedUser of SEED_USERS) {
     let user = seedUser.racId ? await storage.getUserByRacId(seedUser.racId) : null;
 
@@ -1120,4 +1124,3 @@ async function purgeTestSubmissionsProdOneTime() {
     `User records (testtech1, tmorri1) preserved.`
   );
 }
-

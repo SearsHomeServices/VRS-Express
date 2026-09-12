@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -236,7 +236,7 @@ function formatDuration(ms: number | null): string {
 
 type SafeUser = Omit<User, "password">;
 
-type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback" | "health";
+type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback" | "health" | "exec-summary";
 
 const DIVISION_KEYS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"] as const;
 
@@ -1582,6 +1582,9 @@ function TicketOverviewSection() {
   const [summaryRecipients, setSummaryRecipients] = useState<string[]>([]);
   const [summaryFrom, setSummaryFrom] = useState<string>("");
   const [summaryEmailConfigured, setSummaryEmailConfigured] = useState(true);
+  const [summaryLatestReportId, setSummaryLatestReportId] = useState<number | null>(null);
+  const [summaryLatestDeliveryState, setSummaryLatestDeliveryState] = useState<string | null>(null);
+  const [summaryRequestKey, setSummaryRequestKey] = useState<string | null>(null);
   const coachingFilterParams = () => {
     const params = new URLSearchParams();
     if (createdAfterIso) params.set("createdAfter", createdAfterIso);
@@ -1630,7 +1633,11 @@ function TicketOverviewSection() {
       const j = await res.json();
       setSummaryRecipients(Array.isArray(j.recipients) ? j.recipients : []);
       setSummaryFrom(j?.from?.email || "");
-      setSummaryEmailConfigured(Boolean(j.emailConfigured));
+      setSummaryEmailConfigured(Boolean(j?.emailConfiguration?.configured ?? j.emailConfigured));
+      const latest = Array.isArray(j.reports) ? j.reports[0] : null;
+      setSummaryLatestReportId(Number.isSafeInteger(latest?.id) ? latest.id : null);
+      setSummaryLatestDeliveryState(execSummaryDeliveryState(latest ? execSummaryDelivery(latest) : null));
+      setSummaryRequestKey(execSummaryRequestKey());
       setSummaryConfirmOpen(true);
     } catch (err: any) {
       toast({
@@ -1649,25 +1656,38 @@ function TicketOverviewSection() {
   const handleSendWeeklySummary = async () => {
     try {
       setSummarySending(true);
-      const res = await apiRequest("POST", "/api/admin/reports/exec-summary/run", { send: true });
+      if (!summaryLatestReportId) {
+        throw new Error("Generate a report before sending the current summary.");
+      }
+      if (!summaryRequestKey) {
+        throw new Error("Reopen the confirmation before sending the current summary.");
+      }
+      const resend = summaryLatestDeliveryState === "accepted" || summaryLatestDeliveryState === "unknown";
+      const res = await apiRequest("POST", "/api/admin/reports/exec-summary/send", {
+        reportId: summaryLatestReportId,
+        resend,
+        requestKey: summaryRequestKey,
+      });
       const j = await res.json();
-      if (j?.email?.sent) {
+      const state = execSummaryDeliveryState(j?.delivery);
+      if (state === "accepted") {
         toast({
-          title: "Weekly summary sent",
-          description: `Emailed to ${summaryRecipients.length} recipient${summaryRecipients.length === 1 ? "" : "s"}: ${summaryRecipients.join(", ")}`,
+          title: "Weekly summary accepted by provider",
+          description: `The provider accepted the request for ${summaryRecipients.length} recipient${summaryRecipients.length === 1 ? "" : "s"}. Mailbox delivery is not confirmed.`,
           duration: 10000,
         });
-      } else if (j?.skipped) {
+      } else if (state === "unknown") {
         toast({
-          title: "Already generated today",
-          description: "A summary was already generated today, so a duplicate was not sent.",
-          duration: 9000,
+          title: "Provider outcome unknown",
+          description: "The provider timed out. Do not resend unless you intentionally accept possible duplication.",
+          variant: "destructive",
+          duration: 12000,
         });
       } else {
         toast({
-          title: "Summary generated but NOT emailed",
-          description: String(j?.email?.reason || "The email provider did not accept the message."),
-          variant: "destructive",
+          title: execSummaryDeliveryLabel(j?.delivery),
+          description: "The delivery ledger was updated. Check Executive Summary for retry details.",
+          variant: state === "failed" ? "destructive" : undefined,
           duration: 15000,
         });
       }
@@ -2430,9 +2450,19 @@ function TicketOverviewSection() {
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
-                  This emails the current week-to-date summary immediately. The automatic
-                  Wednesday 4:00 PM ET send is not affected.
+                  This sends the already-generated current summary immediately. It does not
+                  generate a new report, and the automatic Wednesday 4:00 PM ET send is not affected.
                 </p>
+                {!summaryLatestReportId && (
+                  <p className="text-destructive font-medium">
+                    No generated report is available. Use Executive Summary → Generate only first.
+                  </p>
+                )}
+                {(summaryLatestDeliveryState === "accepted" || summaryLatestDeliveryState === "unknown") && (
+                  <p className="text-amber-700 dark:text-amber-400 font-medium">
+                    This report is already accepted or has an unknown provider timeout. Resending may create a duplicate email.
+                  </p>
+                )}
                 <div>
                   <div className="font-medium text-foreground">Recipients</div>
                   <ul className="list-disc pl-5" data-testid="list-summary-recipients">
@@ -2458,10 +2488,10 @@ function TicketOverviewSection() {
             <AlertDialogCancel data-testid="button-cancel-send-summary">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); handleSendWeeklySummary(); }}
-              disabled={summarySending || summaryRecipients.length === 0}
+              disabled={summarySending || summaryRecipients.length === 0 || !summaryLatestReportId}
               data-testid="button-confirm-send-summary"
             >
-              {summarySending ? "Sending…" : "Send now"}
+              {summarySending ? "Sending…" : summaryLatestDeliveryState === "accepted" || summaryLatestDeliveryState === "unknown" ? "Resend intentionally" : "Send now"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3430,6 +3460,18 @@ function HealthSection() {
   );
 }
 
+type ExecSummaryAttemptLike = {
+  id?: number | string | null;
+  attemptNumber?: number | null;
+  state?: string | null;
+  providerMessageId?: string | null;
+  messageId?: string | null;
+  providerStatus?: number | null;
+  reason?: string | null;
+  attemptedAt?: string | null;
+  completedAt?: string | null;
+  requestKey?: string | null;
+};
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const portal1099Enabled = usePortal1099Enabled();
@@ -4358,6 +4400,16 @@ export default function AdminDashboard() {
                   </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton
+                      onClick={() => setActiveView("exec-summary")}
+                      data-active={activeView === "exec-summary"}
+                      data-testid="nav-exec-summary"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Executive Summary</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
                       onClick={() => navigate("/agent/dashboard")}
                       data-testid="nav-agent-view"
                     >
@@ -4442,6 +4494,7 @@ export default function AdminDashboard() {
                 {activeView === "tickets" && "Ticket Overview"}
                 {activeView === "feedback" && "Technician Feedback"}
                 {activeView === "health" && "System Health"}
+                {activeView === "exec-summary" && "Executive Summary"}
               </h1>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -5728,6 +5781,9 @@ export default function AdminDashboard() {
             {activeView === "health" && (
               <HealthSection />
             )}
+            {activeView === "exec-summary" && (
+              <ExecSummarySection />
+            )}
           </div>
         </div>
       </div>
@@ -6073,4 +6129,463 @@ export default function AdminDashboard() {
       </Dialog>
     </SidebarProvider>
   );
+}
+
+type ExecSummaryDeliveryLike = {
+  state?: string | null;
+  status?: string | null;
+  deliveryStatus?: string | null;
+  attemptCount?: number | null;
+  attempts?: number | ExecSummaryAttemptLike[] | null;
+  providerMessageId?: string | null;
+  providerId?: string | null;
+  messageId?: string | null;
+  nextAttemptAt?: string | null;
+  nextRetryAt?: string | null;
+  acceptedAt?: string | null;
+  lastError?: string | null;
+  error?: string | null;
+  [key: string]: unknown;
+};
+
+function execSummaryDeliveryState(delivery: ExecSummaryDeliveryLike | null): string | null {
+  if (!delivery) return null;
+  const state = String(delivery.state || delivery.status || delivery.deliveryStatus || "").toLowerCase();
+  if (state === "retry" || state === "retrying") return "retrying";
+  if (state === "sending" || state === "in_progress") return "queued";
+  if (state === "accepted" || state === "provider_accepted") return "accepted";
+  if (state === "unknown" || state === "unknown_timeout" || state === "timeout" || state === "ambiguous") return "unknown";
+  if (state === "failed" || state === "failure") return "failed";
+  if (state === "queued" || state === "pending" || state === "in_progress") return "queued";
+  return state || null;
+}
+
+function ExecSummarySection() {
+  const { toast } = useToast();
+  const [sendTarget, setSendTarget] = useState<{
+    reportId: number;
+    resend: boolean;
+    requestKey: string;
+  } | null>(null);
+  const retryRequestKeys = useRef(new Map<number, string>());
+
+  const summaryQuery = useQuery<{
+    reports: ExecSummaryReportLike[];
+    recipients?: string[];
+    from?: { email?: string; name?: string };
+    emailConfigured?: boolean;
+    emailConfiguration?: {
+      configured?: boolean;
+      apiKeyPresent?: boolean;
+      fromEmail?: string;
+      fromEmailValid?: boolean;
+      issues?: string[];
+    };
+  }>({
+    queryKey: ["/api/admin/reports/exec-summary"],
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
+    staleTime: 5000,
+    refetchOnWindowFocus: false,
+  });
+
+  const reports = summaryQuery.data?.reports || [];
+  const latestReport = reports[0];
+
+  const invalidateSummary = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/reports/exec-summary"] });
+  };
+
+  const generateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/reports/exec-summary/run", { send: false });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      invalidateSummary();
+      toast({
+        title: "Executive summary generated",
+        description: result?.report?.id
+          ? `Report #${result.report.id} was saved. It was not queued or emailed.`
+          : "The report was saved without sending email.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Generation failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: async (input: { reportId: number; resend: boolean; requestKey: string }) => {
+      const res = await apiRequest("POST", "/api/admin/reports/exec-summary/send", input);
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      setSendTarget(null);
+      invalidateSummary();
+      const delivery = result?.delivery;
+      toast({
+        title: execSummaryDeliveryLabel(delivery),
+        description: "The delivery ledger was updated. Provider acceptance is not mailbox delivery.",
+        duration: 10000,
+      });
+    },
+    onError: (error: Error) => {
+      invalidateSummary();
+      toast({ title: "Send failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (input: { reportId: number; resend: boolean; requestKey: string }) => {
+      const res = await apiRequest("POST", `/api/admin/reports/exec-summary/${input.reportId}/retry`, {
+        resend: input.resend,
+        requestKey: input.requestKey,
+      });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      invalidateSummary();
+      toast({
+        title: execSummaryDeliveryLabel(result?.delivery),
+        description: "The delivery ledger was updated. Provider acceptance is not mailbox delivery.",
+        duration: 10000,
+      });
+    },
+    onError: (error: Error) => {
+      invalidateSummary();
+      toast({ title: "Retry failed", description: error.message, variant: "destructive" });
+    },
+    onSettled: (_result, _error, input) => {
+      if (input && retryRequestKeys.current.get(input.reportId) === input.requestKey) {
+        retryRequestKeys.current.delete(input.reportId);
+      }
+    },
+  });
+
+  const openSendConfirmation = (report: ExecSummaryReportLike | undefined) => {
+    if (!report) {
+      toast({
+        title: "Generate a report first",
+        description: "There is no saved executive summary to send.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const delivery = execSummaryDelivery(report);
+    const state = execSummaryDeliveryState(delivery);
+    const resend = state === "accepted" || state === "unknown";
+    setSendTarget((current) =>
+      current?.reportId === report.id && current.resend === resend
+        ? current
+        : { reportId: report.id, resend, requestKey: execSummaryRequestKey() },
+    );
+  };
+
+  const confirmSend = () => {
+    if (!sendTarget) return;
+    // Keep the key in the confirmation state. A repeated confirmation event,
+    // browser retry, or concurrent tab request therefore addresses one
+    // durable attempt instead of creating another provider submission.
+    sendMutation.mutate(sendTarget);
+  };
+
+  const retryFailed = (reportId: number, resend: boolean) => {
+    let requestKey = retryRequestKeys.current.get(reportId);
+    if (!requestKey) {
+      requestKey = execSummaryRequestKey();
+      retryRequestKeys.current.set(reportId, requestKey);
+    }
+    retryMutation.mutate({ reportId, resend, requestKey });
+  };
+
+  const configuration = summaryQuery.data?.emailConfiguration;
+  const emailConfigured = configuration?.configured ?? summaryQuery.data?.emailConfigured ?? false;
+  const configIssues = (configuration?.issues || []).map((issue) =>
+    issue.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+  );
+
+  return (
+    <div className="space-y-4 p-4" data-testid="exec-summary-section">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">Weekly Executive Summary</CardTitle>
+              <CardDescription>
+                Generated reports and the durable email audit ledger. Accepted means the provider accepted the request; it does not mean delivered.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => summaryQuery.refetch()}
+                disabled={summaryQuery.isFetching}
+                data-testid="button-refresh-exec-summary"
+              >
+                {summaryQuery.isFetching ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <RotateCcw className="w-3 h-3 mr-1.5" />}
+                Refresh status
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => generateMutation.mutate()}
+                disabled={generateMutation.isPending}
+                data-testid="button-generate-exec-summary"
+              >
+                {generateMutation.isPending ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <FileText className="w-3 h-3 mr-1.5" />}
+                Generate only
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => openSendConfirmation(latestReport)}
+                disabled={sendMutation.isPending || !latestReport}
+                data-testid="button-send-existing-exec-summary"
+              >
+                {sendMutation.isPending ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <Send className="w-3 h-3 mr-1.5" />}
+                Send current report
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className={emailConfigured ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}>
+              <span className="font-medium">Email configuration:</span> {emailConfigured ? "ready" : "incomplete"}
+            </span>
+            {summaryQuery.data?.from?.email && (
+              <span className="text-muted-foreground">From {summaryQuery.data.from.email}</span>
+            )}
+            {!emailConfigured && configIssues.length > 0 && (
+              <span className="text-amber-700 dark:text-amber-400">{configIssues.join(", ")}.</span>
+            )}
+            {summaryQuery.data?.recipients && (
+              <span className="text-muted-foreground">
+                {summaryQuery.data.recipients.length} configured recipient{summaryQuery.data.recipients.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+
+          {summaryQuery.isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="text-exec-summary-loading">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading delivery history…
+            </div>
+          ) : summaryQuery.isError ? (
+            <p className="text-sm text-destructive" data-testid="text-exec-summary-error">
+              Delivery history is unavailable. Use Refresh status to try again.
+            </p>
+          ) : reports.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-5 text-center" data-testid="text-exec-summary-empty">
+              No executive summaries have been generated.
+            </p>
+          ) : (
+            <div className="border rounded-md overflow-x-auto">
+              <Table className="min-w-[940px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Generated</TableHead>
+                    <TableHead>Report</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Attempts / audit</TableHead>
+                    <TableHead>Provider ID</TableHead>
+                    <TableHead>Next retry</TableHead>
+                    <TableHead>Audit / action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {reports.map((report) => {
+                    const delivery = execSummaryDelivery(report);
+                    const state = execSummaryDeliveryState(delivery);
+                    const attemptCount = delivery?.attemptCount ?? delivery?.attempts;
+                    const providerId = delivery?.providerMessageId || delivery?.providerId || delivery?.messageId;
+                    const nextRetry = delivery?.nextAttemptAt || delivery?.nextRetryAt;
+                    const error = delivery?.lastError || delivery?.error;
+                    const attempts: ExecSummaryAttemptLike[] = Array.isArray(delivery?.attempts) ? delivery.attempts : [];
+                    const canRetry = state === "failed";
+                    const canResend = state === "accepted" || state === "unknown";
+                    return (
+                      <TableRow key={report.id} data-testid={`row-exec-summary-${report.id}`}>
+                        <TableCell className="text-xs whitespace-nowrap">
+                          {report.generatedAt ? new Date(report.generatedAt).toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">#{report.id}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={state === "failed" || state === "unknown" ? "destructive" : state === "accepted" ? "secondary" : "outline"}
+                            data-testid={`badge-exec-summary-status-${report.id}`}
+                          >
+                            {execSummaryDeliveryLabel(delivery)}
+                          </Badge>
+                          {error && (
+                            <div className="max-w-[230px] truncate text-[10px] text-destructive mt-1" title={String(error)}>
+                              {String(error)}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          <div>{typeof attemptCount === "number" ? attemptCount : "—"}</div>
+                          {attempts.length > 0 && (
+                            <details className="mt-1 text-[10px] text-muted-foreground" data-testid={`details-exec-summary-attempts-${report.id}`}>
+                              <summary className="cursor-pointer hover:text-foreground">
+                                View full audit ({attempts.length})
+                              </summary>
+                              <div className="mt-1 space-y-1.5 min-w-[280px]">
+                                {attempts.map((attempt) => {
+                                  const attemptedAt = attempt.attemptedAt ? new Date(String(attempt.attemptedAt)).toLocaleString() : "—";
+                                  const completedAt = attempt.completedAt ? new Date(String(attempt.completedAt)).toLocaleString() : "in progress";
+                                  const attemptProviderId = attempt.providerMessageId || attempt.messageId;
+                                  return (
+                                    <div
+                                      key={String(attempt.id || attempt.attemptNumber)}
+                                      className="rounded border px-1.5 py-1"
+                                      data-testid={`exec-summary-attempt-${report.id}-${String(attempt.id || attempt.attemptNumber)}`}
+                                    >
+                                      <div className="font-medium text-foreground">
+                                        Attempt #{String(attempt.attemptNumber ?? "—")} · id {String(attempt.id ?? "—")}
+                                      </div>
+                                      <div>State: {String(attempt.state || "—")} · HTTP: {String(attempt.providerStatus ?? "—")}</div>
+                                      <div>Attempted: {attemptedAt}</div>
+                                      <div>Completed: {completedAt}</div>
+                                      <div className="break-all">Message ID: {attemptProviderId ? String(attemptProviderId) : "—"}</div>
+                                      {Boolean(attempt.reason) && (
+                                        <div className="break-words">Reason: {String(attempt.reason)}</div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </details>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-[10px] max-w-[170px] truncate" title={providerId ? String(providerId) : undefined}>
+                          {providerId ? String(providerId) : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">
+                          {nextRetry ? new Date(String(nextRetry)).toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1.5">
+                            {canRetry && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => retryFailed(report.id, false)}
+                                disabled={retryMutation.isPending}
+                                data-testid={`button-retry-exec-summary-${report.id}`}
+                              >
+                                <RotateCcw className="w-3 h-3 mr-1" /> Retry failed
+                              </Button>
+                            )}
+                            {canResend && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openSendConfirmation(report)}
+                                disabled={sendMutation.isPending}
+                                data-testid={`button-resend-exec-summary-${report.id}`}
+                              >
+                                <Send className="w-3 h-3 mr-1" /> Intentional resend
+                              </Button>
+                            )}
+                            {!canRetry && !canResend && (
+                              <span className="text-[11px] text-muted-foreground">Audit retained</span>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={!!sendTarget} onOpenChange={(open) => { if (!open && !sendMutation.isPending) setSendTarget(null); }}>
+        <AlertDialogContent data-testid="dialog-send-existing-exec-summary">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{sendTarget?.resend ? "Intentionally resend this summary?" : "Send the current summary?"}</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This action is recorded in the delivery audit history. A provider acceptance is not proof that recipients received the message.
+                </p>
+                {sendTarget?.resend && (
+                  <p className="font-medium text-amber-700 dark:text-amber-400">
+                    This report is already accepted or has an unknown timeout. Resending may create a duplicate email.
+                  </p>
+                )}
+                {!emailConfigured && (
+                  <p className="font-medium text-amber-700 dark:text-amber-400">
+                    Email configuration is incomplete. The report remains generated, but no provider request can be accepted until configuration is fixed.
+                  </p>
+                )}
+                {summaryQuery.data?.recipients && (
+                  <p className="text-muted-foreground">
+                    Recipients: {summaryQuery.data.recipients.join(", ") || "none configured"}
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-send-existing-exec-summary">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); confirmSend(); }}
+              disabled={sendMutation.isPending || !sendTarget}
+              data-testid="button-confirm-send-existing-exec-summary"
+            >
+              {sendMutation.isPending ? "Sending…" : sendTarget?.resend ? "Resend intentionally" : "Send now"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+type ExecSummaryReportLike = {
+  id: number;
+  generatedAt: string;
+  summary?: Record<string, unknown>;
+  delivery?: ExecSummaryDeliveryLike | null;
+  deliveryRecord?: ExecSummaryDeliveryLike | null;
+  deliveryRecords?: ExecSummaryDeliveryLike[];
+  deliveries?: ExecSummaryDeliveryLike[];
+  deliveryHistory?: ExecSummaryDeliveryLike[];
+  [key: string]: unknown;
+};
+
+function execSummaryDeliveryLabel(delivery: ExecSummaryDeliveryLike | null): string {
+  const state = execSummaryDeliveryState(delivery);
+  if (!state) return "Generated only";
+  if (state === "queued") return "Queued";
+  if (state === "retrying") return "Retry scheduled";
+  if (state === "accepted") return "Accepted by provider";
+  if (state === "failed") return "Failed";
+  if (state === "unknown") return "Unknown (timeout)";
+  return state.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function execSummaryRequestKey(): string {
+  // One key is created per button action and sent unchanged through retries
+  // caused by a double click or a transient client replay.
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `exec-summary-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function execSummaryDelivery(report: ExecSummaryReportLike): ExecSummaryDeliveryLike | null {
+  if (report.delivery && typeof report.delivery === "object") return report.delivery;
+  if (report.deliveryRecord && typeof report.deliveryRecord === "object") return report.deliveryRecord;
+  const records = Array.isArray(report.deliveryRecords)
+    ? report.deliveryRecords
+    : Array.isArray(report.deliveries)
+      ? report.deliveries
+      : Array.isArray(report.deliveryHistory)
+        ? report.deliveryHistory
+        : [];
+  return records[records.length - 1] || null;
 }

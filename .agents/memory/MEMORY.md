@@ -24,3 +24,4 @@
 - [Technician roster source](technician-roster-source.md) — keep the daily roster on PRD_TPMS; Parts Supply Chain TPMS_EXTRACT is not the selected replacement.
 - [Executive reporting definitions](executive-reporting-definitions.md) — executive ticket outcomes differ from operational Stage-1 analytics; comparisons are current outcomes, not historical snapshots.
 - [Post-close note audience](post-close-note-audience.md) — new notes on terminal tickets are staff-only; historical notes remain shared; non-queued agent access stays cross-division.
+- [Email delivery ambiguity](email-delivery-ambiguity.md) — timeouts may already be accepted; require intentional resend, and never equate provider acceptance with mailbox delivery.

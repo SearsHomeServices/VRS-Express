@@ -493,6 +493,36 @@ export const weeklyReports = pgTable(
 );
 export type WeeklyReport = typeof weeklyReports.$inferSelect;
 
+export const execSummaryDeliveries = pgTable(
+  "exec_summary_deliveries",
+  {
+    id: serial("id").primaryKey(),
+    // Do not cascade: report + delivery history are an audit record. Executive
+    // reports are intentionally excluded from the generic 26-report pruning.
+    reportId: integer("report_id").notNull().references(() => weeklyReports.id),
+    // Scheduled runs use an ET-week key (for example 2026-09-14); manual
+    // runs leave this null so previews/generate-only cannot consume a run.
+    scheduleKey: varchar("schedule_key", { length: 16 }),
+    state: varchar("state", { length: 24 }).notNull().default("pending"),
+    payload: jsonb("payload").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    leaseToken: uuid("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    providerMessageId: varchar("provider_message_id", { length: 255 }),
+    lastStatus: integer("last_status"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    reportUnique: uniqueIndex("exec_summary_deliveries_report_uidx").on(table.reportId),
+    scheduleUnique: uniqueIndex("exec_summary_deliveries_schedule_uidx")
+      .on(table.scheduleKey).where(sql`schedule_key IS NOT NULL`),
+    retryIdx: index("exec_summary_deliveries_retry_idx").on(table.state, table.nextAttemptAt),
+  }),
+);
 export const systemHealthLog = pgTable(
   "system_health_log",
   {
@@ -972,3 +1002,39 @@ export interface TechnicianUserView {
   approvedCount: number;
   rejectedCount: number;
 }
+
+export type ExecSummaryDelivery = typeof execSummaryDeliveries.$inferSelect;
+
+export const execSummaryDeliveryAttempts = pgTable(
+  "exec_summary_delivery_attempts",
+  {
+    id: serial("id").primaryKey(),
+    deliveryId: integer("delivery_id").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    // A caller-supplied key makes a double-click/replayed HTTP request an
+    // audit lookup rather than a second provider submission.
+    requestKey: varchar("request_key", { length: 200 }).notNull(),
+    state: varchar("state", { length: 24 }).notNull().default("sending"),
+    providerMessageId: varchar("provider_message_id", { length: 255 }),
+    providerStatus: integer("provider_status"),
+    reason: text("reason"),
+    retryable: boolean("retryable"),
+    ambiguous: boolean("ambiguous").notNull().default(false),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    requestUnique: uniqueIndex("exec_summary_delivery_attempts_request_uidx").on(table.requestKey),
+    deliveryAttemptUnique: unique("exec_summary_delivery_attempts_delivery_attempt_unique").on(table.deliveryId, table.attemptNumber),
+    deliveryHistoryIdx: index("exec_summary_delivery_attempts_delivery_idx").on(table.deliveryId, table.attemptedAt.desc()),
+    // Pin the short name; Drizzle's generated FK name exceeds PostgreSQL's
+    // 63-character identifier limit and otherwise causes migration drift.
+    deliveryFk: foreignKey({
+      columns: [table.deliveryId],
+      foreignColumns: [execSummaryDeliveries.id],
+      name: "exec_summary_attempt_delivery_fk",
+    }).onDelete("cascade"),
+  }),
+);
+
+export type ExecSummaryDeliveryAttempt = typeof execSummaryDeliveryAttempts.$inferSelect;

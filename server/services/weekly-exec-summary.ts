@@ -11,14 +11,21 @@
 // certainty.
 //
 // Scheduler mirrors weekly-tech-report.ts (DST-safe ET wall clock, advisory
-// lock, once-per-ET-day idempotence). Best-effort: a failed run logs and waits
-// for next week rather than crashing the process.
+// lock). Delivery is a durable per-report state machine with catch-up and
+// bounded safe retries; it never mistakes provider acceptance for mailbox
+// delivery.
 // ---------------------------------------------------------------------------
 import { sql, desc, eq } from "drizzle-orm";
-import { db, storage } from "../storage";
-import { weeklyReports, type WeeklyReport } from "@shared/schema";
+import { db, storage, pool } from "../storage";
+import { weeklyReports, execSummaryDeliveries, type WeeklyReport } from "@shared/schema";
 import { broadcastToAdmins } from "../websocket";
-import { sendEmail, isEmailConfigured, isPlausibleEmail, type SendEmailResult } from "./email";
+import { sendEmail, isEmailConfigured, type SendEmailResult } from "./email";
+import {
+  ensureExecSummaryDeliverySchema,
+  PostgresExecSummaryDeliveryStore,
+  type ExecSummaryDeliveryPayload,
+  type ProviderEmailResult,
+} from "./exec-summary-delivery";
 import {
   buildExecSummaryMetrics as buildPureExecSummaryMetrics,
   getExecSummaryWindow as getPureExecSummaryWindow,
@@ -53,11 +60,6 @@ const TZ = "America/New_York";
 // Distinct from the tech-no-login lock (0x7ec4_0001) so the two Wednesday jobs
 // never block each other.
 const REPORT_LOCK_KEY = 0x7ec4_0002;
-const KEEP_REPORTS_PER_TYPE = 26;
-
-// The three people who own VRS Express. Overridable at runtime without a
-// redeploy via the system_settings key below (comma-separated), so the
-// distribution list can change from the admin side.
 export const EXEC_SUMMARY_RECIPIENTS_SETTING = "vrs_exec_summary_recipients";
 export const DEFAULT_EXEC_SUMMARY_RECIPIENTS = [
   "Tyler.Morgan@transformco.com",
@@ -68,19 +70,22 @@ export const DEFAULT_EXEC_SUMMARY_RECIPIENTS = [
 export async function getExecSummaryRecipients(): Promise<string[]> {
   try {
     const raw = await storage.getSystemSetting(EXEC_SUMMARY_RECIPIENTS_SETTING);
-    if (raw && raw.trim()) {
-      const parsed = raw
-        .split(/[,;\s]+/)
-        .map((s) => s.trim())
-        .filter((s) => isPlausibleEmail(s));
-      if (parsed.length) return parsed;
+    // Defaults are for an absent setting only.  A configured-but-blank,
+    // malformed, or unreadable distribution list must fail closed rather than
+    // unexpectedly sending management reporting to a stale default list.
+    if (raw === undefined) return [...DEFAULT_EXEC_SUMMARY_RECIPIENTS];
+    const parsed = raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+    if (!parsed.length) {
+      throw new Error("The executive-summary recipient setting is empty.");
     }
+    // Do not discard malformed values here. email.ts validates the complete
+    // recipient set atomically so a typo cannot silently omit an intended
+    // executive from a send.
+    return parsed;
   } catch (err: any) {
-    console.error(
-      `[exec-summary] could not read ${EXEC_SUMMARY_RECIPIENTS_SETTING}, using defaults: ${err?.message || err}`,
-    );
+    console.error(`[exec-summary] recipient configuration unavailable: ${err?.message || err}`);
+    throw new Error("Executive-summary recipients are not configured correctly.");
   }
-  return [...DEFAULT_EXEC_SUMMARY_RECIPIENTS];
 }
 
 // --- Metrics ---------------------------------------------------------------
@@ -401,20 +406,45 @@ export interface ExecSummaryRunResult {
   report: WeeklyReport | null;
   data: ExecSummaryData | null;
   email: SendEmailResult | null;
+  /** Durable state; accepted means provider accepted, never mailbox delivered. */
+  delivery?: Record<string, any> | null;
   skipped?: string;
 }
 
+export type ExecSummaryGenerateOptions = {
+  skipIfGeneratedToday?: boolean;
+  dryRun?: boolean;
+  send?: boolean;
+  /** Internal scheduler key. Manual/generate-only runs never set this. */
+  scheduleKey?: string;
+};
 export async function generateAndSendExecSummary(
-  opts: { skipIfGeneratedToday?: boolean; dryRun?: boolean; send?: boolean } = {},
+  opts: ExecSummaryGenerateOptions = {},
 ): Promise<ExecSummaryRunResult> {
-  const send = opts.send !== false;
+  const plan = execSummaryDeliveryPlan(opts);
+  const send = plan.send;
+  // Legacy /run has no client request key.  A live manual run therefore uses
+  // an ET-day durable intent key: concurrent/double-clicked /run requests
+  // converge on one report + provider attempt.  Generate-only and dry-run
+  // deliberately do not create this key and cannot suppress the scheduler.
+  const deliveryKey = plan.deliveryKey;
 
   // Persist under the advisory lock so two scheduler ticks (or a tick racing a
   // manual run) cannot double-generate and double-send.
   const persisted = await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${REPORT_LOCK_KEY})`);
 
-    if (opts.skipIfGeneratedToday) {
+    // A schedule key, not "a report was generated today", is the durable
+    // idempotency boundary.  Preview, dry-run, and generate-only reports must
+    // never suppress the real Wednesday delivery.
+    if (deliveryKey) {
+      const existingSchedule = await tx.execute(sql`
+        SELECT report_id FROM exec_summary_deliveries
+        WHERE schedule_key = ${deliveryKey}
+        LIMIT 1
+      `);
+      if (existingSchedule.rows.length) return null;
+    } else if (opts.skipIfGeneratedToday) {
       const existing = await tx.execute(sql`
         SELECT id FROM weekly_reports
         WHERE report_type = ${EXEC_SUMMARY_REPORT_TYPE}
@@ -439,16 +469,29 @@ export async function generateAndSendExecSummary(
       })
       .returning();
 
-    await tx.execute(sql`
-      DELETE FROM weekly_reports
-      WHERE report_type = ${EXEC_SUMMARY_REPORT_TYPE}
-        AND id NOT IN (
-          SELECT id FROM weekly_reports
-          WHERE report_type = ${EXEC_SUMMARY_REPORT_TYPE}
-          ORDER BY generated_at DESC, id DESC
-          LIMIT ${KEEP_REPORTS_PER_TYPE}
-        )
-    `);
+    // Do not use the generic bounded-report cleanup for executive summaries.
+    // Each report is the parent of an immutable delivery/audit ledger and the
+    // FK intentionally prevents deleting that evidence.
+    // A dry-run/generate-only request has no delivery intent and therefore
+    // cannot reserve the scheduled key.  A live send is durably enqueued
+    // before the provider is contacted.
+    if (plan.createDelivery) {
+      // Recipient/configuration resolution is live-send-only. Generate-only
+      // and dry-run still persist reports when the distribution list is bad.
+      const payload: ExecSummaryDeliveryPayload = {
+        to: await getExecSummaryRecipients(),
+        subject: execSummarySubject(data),
+        html: renderExecSummaryHtml(data),
+        text: renderExecSummaryText(data),
+      };
+      await tx.insert(execSummaryDeliveries).values({
+        reportId: report.id,
+        scheduleKey: deliveryKey,
+        state: "pending",
+        payload: payload as any,
+        nextAttemptAt: new Date(),
+      });
+    }
 
     return { report, data };
   });
@@ -471,24 +514,36 @@ export async function generateAndSendExecSummary(
     },
   });
 
-  if (!send) return { report, data, email: null };
+  if (!send || opts.dryRun) {
+    // Dry-run is a generation diagnostic, not a provider operation. It must
+    // not resolve recipients/configuration or create durable retry work.
+    const email = opts.dryRun
+      ? { sent: false, reason: "dryRun", retryable: false, ambiguous: false }
+      : null;
+    return { report, data, email, delivery: null };
+  }
 
-  // Sending is deliberately outside the transaction: a SendGrid failure must
-  // not roll back a report that was correctly generated.
-  const recipients = await getExecSummaryRecipients();
-  const email = await sendEmail({
-    to: recipients,
-    subject: execSummarySubject(data),
-    html: renderExecSummaryHtml(data),
-    text: renderExecSummaryText(data),
-    dryRun: opts.dryRun,
-  });
+  // Sending is deliberately outside the report transaction.  The durable
+  // claim/attempt is already committed, so crashes and concurrent clicks are
+  // recoverable without a second provider submission.
+  const deliveryResult = await deliveryStore.deliver(
+    report.id,
+    { requestKey: `generate:${report.id}`, automatic: true },
+    sendPersistedExecSummary,
+  );
 
-  return { report, data, email };
+  return {
+    report,
+    data,
+    email: (deliveryResult.provider as SendEmailResult | undefined) ?? null,
+    delivery: deliveryResult.delivery,
+  };
 }
 
-export async function getLatestExecSummaries(limit = 8): Promise<Array<Omit<WeeklyReport, "csv">>> {
-  return db
+export async function getLatestExecSummaries(
+  limit = 8,
+): Promise<Array<Omit<WeeklyReport, "csv"> & { delivery: Record<string, any> | null }>> {
+  const reports = await db
     .select({
       id: weeklyReports.id,
       reportType: weeklyReports.reportType,
@@ -498,16 +553,22 @@ export async function getLatestExecSummaries(limit = 8): Promise<Array<Omit<Week
     .from(weeklyReports)
     .where(eq(weeklyReports.reportType, EXEC_SUMMARY_REPORT_TYPE))
     .orderBy(desc(weeklyReports.generatedAt))
-    .limit(limit) as any;
+    .limit(limit) as Array<Omit<WeeklyReport, "csv">>;
+  // The report list is small and this preserves complete attempt history for
+  // the admin endpoint without making a generated-only report create delivery
+  // intent.  `delivery:null` is a meaningful generated-only state.
+  return Promise.all(reports.map(async (report) => ({
+    ...report,
+    delivery: await deliveryStore.getStatus(report.id),
+  })));
 }
 
-// --- Scheduler -------------------------------------------------------------
-
+const deliveryStore = new PostgresExecSummaryDeliveryStore(pool);
 function etParts(d: Date) {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     hour12: false,
-    weekday: "short",
+    weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -516,12 +577,21 @@ function etParts(d: Date) {
   const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
     dow: dowMap[parts.weekday],
+    year: parseInt(parts.year, 10),
+    month: parseInt(parts.month, 10),
+    day: parseInt(parts.day, 10),
     hour: parseInt(parts.hour, 10) % 24,
     minute: parseInt(parts.minute, 10),
     second: parseInt(parts.second, 10),
   };
 }
 
+/** Monday ET date that identifies this Wednesday's scheduled report. */
+export function execSummaryScheduleKey(now: Date = new Date()): string {
+  const et = etParts(now);
+  const mondayUtc = new Date(Date.UTC(et.year, et.month - 1, et.day - ((et.dow + 6) % 7)));
+  return mondayUtc.toISOString().slice(0, 10);
+}
 /**
  * Milliseconds until the next Wednesday 4:00 PM ET. Same DST-safe approach as
  * weekly-tech-report.ts: compute naively, then re-check the ET wall clock at
@@ -547,21 +617,38 @@ export function msUntilNextWednesday4pmET(now: Date = new Date()): number {
 }
 
 export function scheduleWeeklyExecSummary(log: (msg: string) => void): void {
+  // The production bootstrap is the only caller, but this guard protects
+  // restart/scheduler tests from ever touching a real provider if they invoke
+  // the exported scheduler directly.
+  if (process.env.NODE_ENV !== "production") {
+    log("[exec-summary] scheduler disabled outside production.");
+    return;
+  }
+
   if (!isEmailConfigured()) {
     log(
       "[exec-summary] SENDGRID_API_KEY is not set; the weekly summary will still generate and persist, but no email will be sent.",
     );
   }
+  const runScheduledCatchup = async () => {
+    if (!isExecSummaryDue()) return;
+    const scheduleKey = execSummaryScheduleKey();
+    if (await deliveryStore.hasSchedule(scheduleKey)) return;
+    const r = await generateAndSendExecSummary({ send: true, scheduleKey });
+    if (r.skipped) log(`[exec-summary] catch-up skipped: ${r.skipped}`);
+    else log(`[exec-summary] catch-up report #${r.report?.id} ${r.delivery?.state || "created"}`);
+  };
+
   const scheduleNext = () => {
     const delay = msUntilNextWednesday4pmET();
     log(`[exec-summary] next executive summary in ${(delay / 3600000).toFixed(2)}h (Wednesdays 4:00 PM ET)`);
     setTimeout(async () => {
       try {
-        const r = await generateAndSendExecSummary({ skipIfGeneratedToday: true });
+        const r = await generateAndSendExecSummary({ send: true, scheduleKey: execSummaryScheduleKey() });
         if (r.skipped) {
           log(`[exec-summary] skipped: ${r.skipped}`);
         } else if (r.email?.sent) {
-          log(`[exec-summary] report #${r.report?.id} generated and emailed`);
+          log(`[exec-summary] report #${r.report?.id} provider accepted; mailbox delivery remains unconfirmed`);
         } else {
           log(
             `[exec-summary] report #${r.report?.id} generated but NOT emailed: ${r.email?.reason || "unknown reason"}`,
@@ -574,5 +661,157 @@ export function scheduleWeeklyExecSummary(log: (msg: string) => void): void {
       }
     }, delay);
   };
-  scheduleNext();
+  // Seed normally performs this migration first.  Await here too because this
+  // service can be embedded independently and must not race a fresh database.
+  void (async () => {
+    // A temporary database failure during startup must not permanently kill
+    // next-Wednesday scheduling.  Every poll re-runs catch-up, so once the DB
+    // recovers it creates only the latest ET-week intent key.
+    let deliverySchemaReady = false;
+    const recover = async () => {
+      // Keep attempting the idempotent ensure on every recovery tick until
+      // success. A brief database outage during boot must not leave this
+      // process permanently unable to catch up or poll durable attempts.
+      if (!deliverySchemaReady) {
+        try {
+          await ensureExecSummaryDeliverySchema(pool);
+          deliverySchemaReady = true;
+        } catch (error: any) {
+          log(`[exec-summary] delivery storage setup failed: ${error?.message || error}`);
+          return;
+        }
+      }
+      try {
+        await runScheduledCatchup();
+      } catch (error: any) {
+        log(`[exec-summary] catch-up failed: ${error?.message || error}`);
+      }
+      try {
+        await processDueExecSummaryDeliveries();
+      } catch (error: any) {
+        log(`[exec-summary] retry poll failed: ${error?.message || error}`);
+      }
+    };
+    await recover();
+    setInterval(() => { void recover(); }, 5 * 60_000);
+    scheduleNext();
+  })();
+}
+
+async function ensureSavedExecSummaryDelivery(reportId: number): Promise<void> {
+  if (await deliveryStore.getStatus(reportId)) return;
+  // Generate-only rows have no delivery intent.  Turning one into a manual
+  // send must use the saved report snapshot — never compute current metrics.
+  const result = await db.execute(sql`
+    SELECT id, report_type, summary, csv
+    FROM weekly_reports
+    WHERE id = ${reportId} AND report_type = ${EXEC_SUMMARY_REPORT_TYPE}
+    LIMIT 1
+  `);
+  const report = result.rows[0] as { id: number; summary: unknown; csv: string } | undefined;
+  if (!report || !report.summary || typeof report.summary !== "object" || typeof report.csv !== "string") {
+    throw new Error("Executive summary report was not found or its saved snapshot is invalid.");
+  }
+  const data = report.summary as ExecSummaryData;
+  if (!data.weekStart || !data.weekEnd || !data.snapshotAt) {
+    throw new Error("Executive summary report is missing required saved snapshot fields.");
+  }
+  const payload: ExecSummaryDeliveryPayload = {
+    to: await getExecSummaryRecipients(),
+    subject: execSummarySubject(data),
+    html: renderExecSummaryHtml(data),
+    text: report.csv,
+  };
+  // Concurrent first-send clicks race safely on the report_id unique index;
+  // the losing process then claims the durable row created by the winner.
+  await deliveryStore.create(reportId, payload);
+}
+
+/** Run only already-due, provider-safe retries; ambiguous outcomes stay put. */
+export async function processDueExecSummaryDeliveries(): Promise<number> {
+  const ids = await deliveryStore.listDueReportIds();
+  for (const reportId of ids) {
+    await deliveryStore.deliver(
+      reportId,
+      { requestKey: `automatic:${reportId}:${Date.now()}`, automatic: true },
+      sendPersistedExecSummary,
+    ).catch((error) => {
+      console.error(`[exec-summary] retry for report #${reportId} failed: ${error?.message || error}`);
+    });
+  }
+  return ids.length;
+}
+
+/**
+ * Report delivery and full attempt history for admin report APIs.  `accepted`
+ * is provider acceptance only; deliveryConfirmed is intentionally always false
+ * until a provider webhook is implemented.
+ */
+export async function getExecSummaryDeliveryStatus(reportId: number) {
+  return deliveryStore.getStatus(reportId);
+}
+
+function execSummaryEtDate(now: Date = new Date()): string {
+  const et = etParts(now);
+  return `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
+}
+
+/**
+ * The current Monday–Sunday ET week has passed its Wednesday 4 PM instant.
+ * Catch-up deliberately covers this current reporting week only: older weeks
+ * remain visible/auditable but are not silently backfilled after an outage.
+ */
+export function isExecSummaryDue(now: Date = new Date()): boolean {
+  const et = etParts(now);
+  return et.dow === 0 || et.dow > REPORT_DOW_ET ||
+    (et.dow === REPORT_DOW_ET && et.hour >= REPORT_HOUR_ET);
+}
+
+export async function listExecSummaryDeliveryHistory(reportId: number) {
+  return getExecSummaryDeliveryStatus(reportId);
+}
+
+export async function retryExecSummaryDelivery(
+  reportId: number,
+  options: { resend: boolean; requestKey: string },
+) {
+  const requestKey = String(options.requestKey || "").trim();
+  if (!requestKey || requestKey.length > 200) {
+    throw new Error("A requestKey of 1–200 characters is required to safely retry a delivery.");
+  }
+  await ensureSavedExecSummaryDelivery(reportId);
+  return deliveryStore.deliver(
+    reportId,
+    { resend: options.resend === true, requestKey, automatic: false },
+    sendPersistedExecSummary,
+  );
+}
+
+async function sendPersistedExecSummary(payload: ExecSummaryDeliveryPayload): Promise<ProviderEmailResult> {
+  // SendEmailResult gained retry metadata in Task 57.  Keep this cast
+  // compatible with the existing route-facing return type while email.ts is
+  // upgraded independently.
+  return sendEmail(payload) as Promise<ProviderEmailResult>;
+}
+
+/**
+ * Pure orchestration policy used by generation and mocked service tests.
+ * Crucially, no delivery key means no recipient lookup, provider validation,
+ * persisted envelope, or chance of suppressing the scheduled run.
+ */
+export function execSummaryDeliveryPlan(
+  opts: ExecSummaryGenerateOptions = {},
+  now: Date = new Date(),
+) {
+  const send = opts.send !== false;
+  const createDelivery = send && !opts.dryRun;
+  return {
+    send,
+    createDelivery,
+    dryRunDiagnostic: opts.dryRun ? "dryRun" : null,
+    deliveryKey: createDelivery
+      ? (opts.scheduleKey ??
+        (isExecSummaryDue(now) ? execSummaryScheduleKey(now) : `m:${execSummaryEtDate(now)}`))
+      : undefined,
+  };
 }
