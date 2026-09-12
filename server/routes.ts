@@ -67,6 +67,10 @@ import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import { is1099PortalEnabled, isTechHubPhotosEnabled } from "./featureFlags";
+import {
+  STAFF_NOTE_ROLES,
+  canAccessTicketNotes,
+} from "./submission-note-policy";
 import { fetchTechHubPartsPhotosForServiceOrder, TECHHUB_ALLOWED_HOSTS } from "./services/snowflake";
 import { normalizeLdapId } from "@shared/ldap";
 import {
@@ -2082,6 +2086,24 @@ export async function registerRoutes(
   // SUBMISSION NOTES — post-submission follow-up notes
   // ========================================================================
 
+  const authorizeSubmissionNotes = async (user: any, sub: any): Promise<string | null> => {
+    let divisions: string[] | undefined;
+    if (user.role === "vrs_agent" && sub.ticketStatus === "queued") {
+      const specs = await storage.getSpecializations(user.id);
+      divisions = specs.map((s: any) => s.division);
+    }
+    return canAccessTicketNotes({
+      role: user.role,
+      userId: user.id,
+      technicianId: sub.technicianId,
+      ticketStatus: sub.ticketStatus,
+      requestType: sub.requestType,
+      applianceType: sub.applianceType,
+      divisions,
+      allDivisionCount: ALL_DIVISIONS.length,
+    }) ? null : "Access denied";
+  };
+
   app.post(
     "/api/submissions/:id/notes",
     authenticateToken,
@@ -2093,31 +2115,8 @@ export async function registerRoutes(
         if (!sub) return res.status(404).json({ error: "Submission not found" });
 
         const user = (req as any).user;
-        if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
-          return res.status(403).json({ error: "Not your submission" });
-        }
-        if (user.role === "vrs_agent") {
-          // Tyler 2026-09-11 - post-close notes. Any VRS agent may read and
-          // add notes on a ticket that is NOT queued (in review, completed,
-          // rejected, invalid, or closed by VRS AI). The old gate required
-          // assignedTo === me || reviewedBy === me, which locked every other
-          // agent out: a close nulls the claim on rejects, and an AI close is
-          // attributed to whichever human happened to hold the ticket
-          // (server/routes.ts closeTicket), so nobody else could follow up.
-          // Queued tickets keep the division-specialization gate below - an
-          // unclaimed ticket outside your division still is not yours.
-          const isQueued = sub.ticketStatus === "queued";
-          if (isQueued) {
-            const specs = await storage.getSpecializations(user.id);
-            const divisions = specs.map((s: any) => s.division);
-            const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
-            const isNlaTicket = sub.requestType === "parts_nla";
-            if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(sub.applianceType))) {
-              return res.status(403).json({ error: "Access denied" });
-            }
-          }
-        }
-
+        const accessError = await authorizeSubmissionNotes(user, sub);
+        if (accessError) return res.status(403).json({ error: accessError });
         const noteSchema = z.object({
           body: z.string().min(1, "Note cannot be empty").max(2000, "Note must be 2000 characters or less"),
         });
@@ -2126,13 +2125,26 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Invalid note", details: parsed.error.flatten() });
         }
 
-        const note = await storage.createSubmissionNote({
+        let divisions: string[] | undefined;
+        if (user.role === "vrs_agent") {
+          divisions = (await storage.getSpecializations(user.id)).map((s: any) => s.division);
+        }
+        const result = await storage.atomicCreateSubmissionNote({
           submissionId: id,
           authorId: user.id,
           authorRole: user.role,
           body: parsed.data.body,
+          divisions,
+          allDivisionCount: ALL_DIVISIONS.length,
         });
-        return res.status(201).json({ note });
+        if (!result.ok) {
+          if (result.reason === "not_found") return res.status(404).json({ error: "Submission not found" });
+          if (result.reason === "closed_to_owner") {
+            return res.status(403).json({ error: "Only admin-panel users can add notes after a ticket is closed" });
+          }
+          return res.status(403).json({ error: "Access denied" });
+        }
+        return res.status(201).json({ note: result.note });
       } catch (error) {
         console.error("Create submission note error:", error);
         return res.status(500).json({ error: "Failed to add note" });
@@ -2150,31 +2162,9 @@ export async function registerRoutes(
         const sub = await storage.getSubmission(id);
         if (!sub) return res.status(404).json({ error: "Submission not found" });
         const user = (req as any).user;
-        if ((user.role === "technician" || user.role === "provider_1099") && sub.technicianId !== user.id) {
-          return res.status(403).json({ error: "Access denied" });
-        }
-        if (user.role === "vrs_agent") {
-          // Tyler 2026-09-11 - post-close notes. Any VRS agent may read and
-          // add notes on a ticket that is NOT queued (in review, completed,
-          // rejected, invalid, or closed by VRS AI). The old gate required
-          // assignedTo === me || reviewedBy === me, which locked every other
-          // agent out: a close nulls the claim on rejects, and an AI close is
-          // attributed to whichever human happened to hold the ticket
-          // (server/routes.ts closeTicket), so nobody else could follow up.
-          // Queued tickets keep the division-specialization gate below - an
-          // unclaimed ticket outside your division still is not yours.
-          const isQueued = sub.ticketStatus === "queued";
-          if (isQueued) {
-            const specs = await storage.getSpecializations(user.id);
-            const divisions = specs.map((s: any) => s.division);
-            const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
-            const isNlaTicket = sub.requestType === "parts_nla";
-            if (!isGeneralist && !(isNlaTicket ? divisions.includes("nla") : divisions.includes(sub.applianceType))) {
-              return res.status(403).json({ error: "Access denied" });
-            }
-          }
-        }
-        const notes = await storage.getSubmissionNotes(id);
+        const accessError = await authorizeSubmissionNotes(user, sub);
+        if (accessError) return res.status(403).json({ error: accessError });
+        const notes = await storage.getSubmissionNotes(id, STAFF_NOTE_ROLES.has(user.role));
         return res.status(200).json({ notes });
       } catch (error) {
         console.error("Get submission notes error:", error);
@@ -2350,6 +2340,7 @@ export async function registerRoutes(
           submissionId: id,
           authorId: user.id,
           authorRole: user.role,
+          visibility: "shared",
           body: `Added ${totalAdded} additional attachment(s)${addedIssueCount ? ` — ${addedIssueCount} issue photo(s)` : ""}${addedEstimateCount ? ` — ${addedEstimateCount} model/serial/estimate photo(s)` : ""}${addedVideoCount ? ` — ${addedVideoCount} video(s)` : ""}${addedVoiceNote ? " — 1 voice note" : ""}.`,
         });
       } catch (noteErr) {
@@ -5257,6 +5248,7 @@ export async function registerRoutes(
           submissionId: id,
           authorId: authReq.user!.id,
           authorRole: authReq.user!.role,
+          visibility: "shared",
           body: `Request type corrected from Infestation/Non-Accessible to Authorization by ${authReq.user!.name}.${parsed.data.notes ? ` Note: ${parsed.data.notes}` : ""}`,
         });
       } catch (noteErr) {

@@ -66,7 +66,7 @@ export default function SubmissionDetailPage() {
     enabled: !!id,
   });
 
-  const notesQuery = useQuery<{ notes: Array<{ id: number; body: string; authorName: string; authorRole: string; createdAt: string }> }>({
+  const notesQuery = useQuery<{ notes: Array<{ id: number; body: string; authorName: string; authorRole: string; visibility: "shared" | null; createdAt: string }> }>({
     queryKey: ["/api/submissions", id, "notes"],
     enabled: !!id,
   });
@@ -1157,7 +1157,7 @@ export default function SubmissionDetailPage() {
                 <div className="whitespace-pre-wrap mt-1">{n.body}</div>
               </div>
             ))}
-            <div className="space-y-2">
+            {!["completed", "approved", "rejected", "rejected_closed", "invalid"].includes(status) && <div className="space-y-2">
               <Textarea
                 value={noteDraft}
                 onChange={(e) => setNoteDraft(e.target.value)}
@@ -1174,7 +1174,7 @@ export default function SubmissionDetailPage() {
               >
                 {postingNote ? "Posting…" : "Add note"}
               </Button>
-            </div>
+            </div>}
           </CardContent>
         </Card>
 

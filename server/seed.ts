@@ -92,6 +92,7 @@ export async function seedDatabase() {
   // cleanupTestSubmissions below select all columns). Awaited, not
   // fire-and-forget, for the same reason as ensureProviderCompanyColumn.
   await ensurePhotoThumbnailsColumn();
+  await ensureSubmissionNoteVisibilityColumn();
   // 2026-08-06 — coaching/Tech PDC columns: referenced by the Drizzle schema,
   // so they must exist BEFORE the first submissions query (same reasoning).
   await ensureCoachingColumns();
@@ -365,6 +366,12 @@ async function ensurePhotoThumbnailsColumn() {
   } catch (err: any) {
     console.warn(`[photo-thumbnails] Failed to ensure column: ${err?.message || err}`);
   }
+}
+
+async function ensureSubmissionNoteVisibilityColumn() {
+  await db.execute(sql.raw(
+    `ALTER TABLE submission_notes ADD COLUMN IF NOT EXISTS visibility text`
+  ));
 }
 
 // Task #12 — B2B Approved Replacement column. Same one-shot idempotent

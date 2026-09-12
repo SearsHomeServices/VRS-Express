@@ -1167,7 +1167,8 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
             <div className="mt-2">
               <SubmissionNotesThread
                 submissionId={sub.id}
-                closedAt={sub.reviewedAt}
+                ticketStatus={sub.ticketStatus}
+                statusChangedAt={sub.statusChangedAt}
               />
             </div>
           </div>

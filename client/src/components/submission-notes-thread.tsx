@@ -28,6 +28,7 @@ export interface SubmissionNote {
   body: string;
   authorName: string | null;
   authorRole: string;
+  visibility: "shared" | "staff_only" | null;
   createdAt: string;
 }
 
@@ -53,7 +54,8 @@ function roleLabel(role: string): string {
 
 export function SubmissionNotesThread({
   submissionId,
-  closedAt,
+  ticketStatus,
+  statusChangedAt,
 }: {
   submissionId: number;
   /**
@@ -61,7 +63,8 @@ export function SubmissionNotesThread({
    * timestamp are flagged "after close" so a reader can tell at a glance that
    * the note landed on an already-closed order.
    */
-  closedAt?: string | Date | null;
+  ticketStatus: string;
+  statusChangedAt?: string | Date | null;
 }) {
   const { toast } = useToast();
   const [draft, setDraft] = useState("");
@@ -73,7 +76,8 @@ export function SubmissionNotesThread({
     enabled: Number.isFinite(submissionId),
   });
 
-  const closedMs = closedAt ? new Date(closedAt).getTime() : NaN;
+  const terminal = ["completed", "approved", "rejected", "rejected_closed", "invalid"].includes(ticketStatus);
+  const closedMs = terminal && statusChangedAt ? new Date(statusChangedAt).getTime() : NaN;
 
   async function postNote() {
     const body = draft.trim();
@@ -124,8 +128,8 @@ export function SubmissionNotesThread({
         )}
 
         {notes.map((n) => {
-          const afterClose =
-            Number.isFinite(closedMs) && new Date(n.createdAt).getTime() > closedMs;
+          const afterClose = n.visibility === "staff_only" ||
+            (n.visibility == null && Number.isFinite(closedMs) && new Date(n.createdAt).getTime() > closedMs);
           return (
             <div
               key={n.id}
@@ -160,10 +164,13 @@ export function SubmissionNotesThread({
         })}
 
         <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground" data-testid="text-note-audience">
+            {terminal ? "Audience: admin-panel users only" : "Audience: staff and the ticket owner"}
+          </p>
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Add a note — follow-up, correction, what the tech reported after the fact…"
+            placeholder="Add a note — follow-up, correction, or additional context…"
             rows={3}
             maxLength={MAX_NOTE_LENGTH}
             data-testid="input-agent-note-body"

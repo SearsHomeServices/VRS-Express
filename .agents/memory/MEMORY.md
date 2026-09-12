@@ -23,3 +23,4 @@
 - [VRS AI bridge DEV pilot](vrs-ai-bridge-dev-pilot.md) — bridge pilot lives on DEV, prod vrs_ai_calls empty by design; VRS_AI_BASE_URL must be clean https origin; "fetch failed" hides e.cause; check orphan-process env.
 - [Technician roster source](technician-roster-source.md) — keep the daily roster on PRD_TPMS; Parts Supply Chain TPMS_EXTRACT is not the selected replacement.
 - [Executive reporting definitions](executive-reporting-definitions.md) — executive ticket outcomes differ from operational Stage-1 analytics; comparisons are current outcomes, not historical snapshots.
+- [Post-close note audience](post-close-note-audience.md) — new notes on terminal tickets are staff-only; historical notes remain shared; non-queued agent access stays cross-division.

@@ -4766,7 +4766,8 @@ export default function AgentDashboard() {
                         the technician and does not call VRS AI. */}
                     <SubmissionNotesThread
                       submissionId={selectedSubmission.id}
-                      closedAt={selectedSubmission.reviewedAt}
+                      ticketStatus={selectedSubmission.ticketStatus}
+                      statusChangedAt={selectedSubmission.statusChangedAt}
                     />
                   </div>
                 </ScrollArea>

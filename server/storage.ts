@@ -52,6 +52,11 @@ import {
 import { isTerminalTicketStatusForIntake } from "@shared/intake-form-config";
 import { normalizeLdapId } from "@shared/ldap";
 import { getCachedProfile as getCachedBusinessHoursProfile } from "./business-hours-config";
+import {
+  canAccessTicketNotes,
+  noteVisibilityForPost,
+  type NoteVisibility,
+} from "./submission-note-policy";
 
 // External lookup payload row (used by API-key-protected
 // GET /api/external/service-order/:so/nla). Kept here so the IStorage
@@ -363,8 +368,19 @@ export interface IStorage {
   updateFeedback(id: number, data: Partial<InsertFeedback>): Promise<Feedback | undefined>;
 
   createSubmissionNote(data: InsertSubmissionNote): Promise<SubmissionNote>;
+  atomicCreateSubmissionNote(data: {
+    submissionId: number;
+    authorId: number;
+    authorRole: string;
+    body: string;
+    divisions?: string[];
+    allDivisionCount: number;
+  }): Promise<
+    | { ok: true; note: SubmissionNote }
+    | { ok: false; reason: "not_found" | "access_denied" | "closed_to_owner" }
+  >;
   updateSubmissionIfStatusAndPhotos(id: number, expectedStatuses: string[], expectedPhotos: string | null, data: Partial<InsertSubmission>, expectedVideoUrl?: string | null, expectedVoiceNoteUrl?: string | null): Promise<Submission | undefined>;
-  getSubmissionNotes(submissionId: number): Promise<(SubmissionNote & { authorName: string })[]>;
+  getSubmissionNotes(submissionId: number, includeStaffOnly?: boolean): Promise<(SubmissionNote & { authorName: string })[]>;
 
   getAnalytics(): Promise<{
     submissionsToday: number;
@@ -2519,8 +2535,61 @@ export class DatabaseStorage implements IStorage {
     return note;
   }
 
+  async atomicCreateSubmissionNote(data: {
+    submissionId: number;
+    authorId: number;
+    authorRole: string;
+    body: string;
+    divisions?: string[];
+    allDivisionCount: number;
+  }): Promise<
+    | { ok: true; note: SubmissionNote }
+    | { ok: false; reason: "not_found" | "access_denied" | "closed_to_owner" }
+  > {
+    return db.transaction(async (tx) => {
+      const result = await tx.execute(sql`
+        SELECT technician_id, ticket_status, request_type, appliance_type
+        FROM submissions
+        WHERE id = ${data.submissionId}
+        FOR UPDATE
+      `);
+      const row = (result.rows as any[])[0] as {
+        technician_id: number;
+        ticket_status: string;
+        request_type: string;
+        appliance_type: string;
+      } | undefined;
+      if (!row) return { ok: false as const, reason: "not_found" as const };
+
+      if (!canAccessTicketNotes({
+        role: data.authorRole,
+        userId: data.authorId,
+        technicianId: row.technician_id,
+        ticketStatus: row.ticket_status,
+        requestType: row.request_type,
+        applianceType: row.appliance_type,
+        divisions: data.divisions,
+        allDivisionCount: data.allDivisionCount,
+      })) {
+        return { ok: false as const, reason: "access_denied" as const };
+      }
+      const visibility = noteVisibilityForPost(data.authorRole, row.ticket_status);
+      if (!visibility) return { ok: false as const, reason: "closed_to_owner" as const };
+
+      const [note] = await tx.insert(submissionNotes).values({
+        submissionId: data.submissionId,
+        authorId: data.authorId,
+        authorRole: data.authorRole,
+        visibility: visibility as NoteVisibility,
+        body: data.body,
+      }).returning();
+      return { ok: true as const, note };
+    });
+  }
+
   async getSubmissionNotes(
-    submissionId: number
+    submissionId: number,
+    includeStaffOnly = true,
   ): Promise<(SubmissionNote & { authorName: string })[]> {
     const rows = await db
       .select({
@@ -2528,13 +2597,19 @@ export class DatabaseStorage implements IStorage {
         submissionId: submissionNotes.submissionId,
         authorId: submissionNotes.authorId,
         authorRole: submissionNotes.authorRole,
+        visibility: submissionNotes.visibility,
         body: submissionNotes.body,
         createdAt: submissionNotes.createdAt,
         authorName: users.name,
       })
       .from(submissionNotes)
       .leftJoin(users, eq(submissionNotes.authorId, users.id))
-      .where(eq(submissionNotes.submissionId, submissionId))
+      .where(includeStaffOnly
+        ? eq(submissionNotes.submissionId, submissionId)
+        : and(
+            eq(submissionNotes.submissionId, submissionId),
+            or(isNull(submissionNotes.visibility), eq(submissionNotes.visibility, "shared")),
+          ))
       .orderBy(submissionNotes.createdAt);
     return rows.map((r) => ({ ...r, authorName: r.authorName ?? "Unknown" }));
   }

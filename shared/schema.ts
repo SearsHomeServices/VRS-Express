@@ -323,6 +323,9 @@ export const submissionNotes = pgTable("submission_notes", {
     .notNull()
     .references(() => users.id),
   authorRole: text("author_role").notNull(), // 'technician', 'vrs_agent', 'admin'
+  // NULL preserves the historical shared audience. New writes explicitly use
+  // shared or staff_only; existing rows are never silently reclassified.
+  visibility: text("visibility"),
   body: text("body").notNull(),
   createdAt: timestamp("created_at").default(sql`now()`),
 }, (table) => ({
