@@ -630,15 +630,6 @@ export function scheduleWeeklyExecSummary(log: (msg: string) => void): void {
       "[exec-summary] SENDGRID_API_KEY is not set; the weekly summary will still generate and persist, but no email will be sent.",
     );
   }
-  const runScheduledCatchup = async () => {
-    if (!isExecSummaryDue()) return;
-    const scheduleKey = execSummaryScheduleKey();
-    if (await deliveryStore.hasSchedule(scheduleKey)) return;
-    const r = await generateAndSendExecSummary({ send: true, scheduleKey });
-    if (r.skipped) log(`[exec-summary] catch-up skipped: ${r.skipped}`);
-    else log(`[exec-summary] catch-up report #${r.report?.id} ${r.delivery?.state || "created"}`);
-  };
-
   const scheduleNext = () => {
     const delay = msUntilNextWednesday4pmET();
     log(`[exec-summary] next executive summary in ${(delay / 3600000).toFixed(2)}h (Wednesdays 4:00 PM ET)`);
@@ -681,11 +672,17 @@ export function scheduleWeeklyExecSummary(log: (msg: string) => void): void {
           return;
         }
       }
-      try {
-        await runScheduledCatchup();
-      } catch (error: any) {
-        log(`[exec-summary] catch-up failed: ${error?.message || error}`);
-      }
+      // ⛔ Tyler 2026-09-12 - NO SEND ON BOOT. This loop used to call a
+      // catch-up that emailed the owners whenever the process started after
+      // Wednesday 4:00 PM ET without a delivery row for that week. Every
+      // publish, crash and VM recycle is a process start, so it sent an
+      // unrequested email on startup (it did, from a production-bundle smoke
+      // test, to all three owners). Sends now happen only on the Wednesday
+      // timer below or from the admin "Send Weekly Summary" button. Trade-off,
+      // accepted: if the process is down at the exact Wednesday 4:00 PM moment,
+      // that week is not sent automatically - an owner sends it from the button.
+      // The retry poll below only re-attempts deliveries that already exist and
+      // failed retryably; it never creates a new send.
       try {
         await processDueExecSummaryDeliveries();
       } catch (error: any) {

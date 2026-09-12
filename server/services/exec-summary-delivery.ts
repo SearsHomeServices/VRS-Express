@@ -335,13 +335,22 @@ export class PostgresExecSummaryDeliveryStore {
     // Finalize the delivery and its attempt in one transaction.  A crash
     // between these rows would otherwise falsely leave an accepted attempt
     // displayed as "sending" in the audit ledger.
+    // ⛔ Tyler 2026-09-12 - $3 is used twice below: assigned into state (a
+    // varchar column) and compared to the literal 'accepted'. Uncast, Postgres
+    // deduced varchar for one use and text for the other and rejected the whole
+    // statement with "inconsistent types deduced for parameter $3". This is the
+    // update that runs AFTER the provider accepts the email, so every real send
+    // failed to record itself: the row sat at 'sending', later became
+    // 'ambiguous', and provider_message_id / accepted_at stayed NULL even though
+    // the email was delivered (observed: SendGrid message kYgErRC8Tbql6iok1icKYg).
+    // Both uses are now cast to the same type. Keep them identical if edited.
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const complete = await client.query(
         `UPDATE exec_summary_deliveries
-         SET state=$3, lease_token=NULL, lease_until=NULL, next_attempt_at=$4,
-             accepted_at=CASE WHEN $3='accepted' THEN now() ELSE accepted_at END,
+         SET state=$3::varchar, lease_token=NULL, lease_until=NULL, next_attempt_at=$4,
+             accepted_at=CASE WHEN $3::varchar='accepted' THEN now() ELSE accepted_at END,
              provider_message_id=COALESCE($5, provider_message_id),
              last_status=$6,last_error=$7,updated_at=now()
          WHERE id=$1 AND lease_token=$2 RETURNING *`,
