@@ -68,11 +68,12 @@ export interface ExecSummaryData {
   completed: { current: number; prior: number };
   rejected: { current: number; prior: number };
   invalid: { current: number; prior: number };
-  /** Of this week's completions, how many VRS AI closed without a human. */
-  aiClosed: number;
-  openQueued: number;
-  openInReview: number;
-  openAwaitingAuth: number;
+  /**
+   * Awaiting a first review RIGHT NOW. Same definition as the Analytics
+   * page's pendingCount (stage1_status = 'pending'), so the two can never
+   * disagree.
+   */
+  openPending: number;
   approvalRateCurrent: number | null;
   approvalRatePrior: number | null;
   // All-time, business-hours aware — the same numbers the admin dashboard
@@ -80,7 +81,6 @@ export interface ExecSummaryData {
   // come back in about a minute (measured 2026-09-11, 0.02 h), so pre-rounding
   // to hours printed a meaningless "0 h".
   avgMsToStage1AllTime: number | null;
-  avgMsToAuthCodeAllTime: number | null;
   topRejectionReasons: Array<{ reason: string; count: number }>;
   topDistricts: Array<{ district: string; count: number }>;
 }
@@ -97,42 +97,39 @@ export async function computeExecSummary(): Promise<ExecSummaryData> {
 
   // One pass over submissions for every count, so the headline number and the
   // stage table can never disagree with each other.
+  // ⛔ EVERY bucket below counts on stage1_status, NOT ticket_status.
+  // Measured 2026-09-12 against production: the first version of this report
+  // counted open work on ticket_status and reported "0 open right now" while
+  // the Analytics page showed 2,559 pending. Both columns exist and they do
+  // not agree. storage.getAnalytics() - which is what the admin dashboard
+  // renders - filters on stage1_status, so this does too. If these numbers
+  // ever disagree with the Analytics page again, this report is the one
+  // that is wrong.
   const counts = await db.execute(sql`
     SELECT
       count(*) FILTER (WHERE created_at >= now() - interval '7 days')::int AS received_cur,
       count(*) FILTER (WHERE created_at >= now() - interval '14 days'
                          AND created_at <  now() - interval  '7 days')::int AS received_prior,
 
-      count(*) FILTER (WHERE ticket_status = 'completed'
-                         AND reviewed_at >= now() - interval '7 days')::int AS completed_cur,
-      count(*) FILTER (WHERE ticket_status = 'completed'
-                         AND reviewed_at >= now() - interval '14 days'
-                         AND reviewed_at <  now() - interval  '7 days')::int AS completed_prior,
+      count(*) FILTER (WHERE stage1_status = 'approved'
+                         AND stage1_reviewed_at >= now() - interval '7 days')::int AS completed_cur,
+      count(*) FILTER (WHERE stage1_status = 'approved'
+                         AND stage1_reviewed_at >= now() - interval '14 days'
+                         AND stage1_reviewed_at <  now() - interval  '7 days')::int AS completed_prior,
 
-      count(*) FILTER (WHERE ticket_status IN ('rejected','rejected_closed')
-                         AND reviewed_at >= now() - interval '7 days')::int AS rejected_cur,
-      count(*) FILTER (WHERE ticket_status IN ('rejected','rejected_closed')
-                         AND reviewed_at >= now() - interval '14 days'
-                         AND reviewed_at <  now() - interval  '7 days')::int AS rejected_prior,
+      count(*) FILTER (WHERE stage1_status = 'rejected'
+                         AND stage1_reviewed_at >= now() - interval '7 days')::int AS rejected_cur,
+      count(*) FILTER (WHERE stage1_status = 'rejected'
+                         AND stage1_reviewed_at >= now() - interval '14 days'
+                         AND stage1_reviewed_at <  now() - interval  '7 days')::int AS rejected_prior,
 
-      count(*) FILTER (WHERE ticket_status = 'invalid'
-                         AND reviewed_at >= now() - interval '7 days')::int AS invalid_cur,
-      count(*) FILTER (WHERE ticket_status = 'invalid'
-                         AND reviewed_at >= now() - interval '14 days'
-                         AND reviewed_at <  now() - interval  '7 days')::int AS invalid_prior,
+      count(*) FILTER (WHERE stage1_status = 'invalid'
+                         AND stage1_reviewed_at >= now() - interval '7 days')::int AS invalid_cur,
+      count(*) FILTER (WHERE stage1_status = 'invalid'
+                         AND stage1_reviewed_at >= now() - interval '14 days'
+                         AND stage1_reviewed_at <  now() - interval  '7 days')::int AS invalid_prior,
 
-      -- VRS AI writes this exact prefix into agent_notes on every close it
-      -- makes (buildVrsAiCallResultAgentNotes). Measured 2026-09-11: this is
-      -- the reliable marker. vrs_ai_calls.auth_number was NULL on all 50 dev
-      -- rows even where the close had landed, so do not switch to that column
-      -- without re-measuring it first.
-      count(*) FILTER (WHERE ticket_status = 'completed'
-                         AND reviewed_at >= now() - interval '7 days'
-                         AND agent_notes LIKE 'VRS AI approved%')::int AS ai_closed_cur,
-
-      count(*) FILTER (WHERE ticket_status = 'queued')::int   AS open_queued,
-      count(*) FILTER (WHERE ticket_status = 'pending')::int  AS open_in_review,
-      count(*) FILTER (WHERE ticket_status = 'approved')::int AS open_awaiting_auth
+      count(*) FILTER (WHERE stage1_status = 'pending')::int AS open_pending
     FROM submissions
   `);
   const c = counts.rows[0] as Record<string, number>;
@@ -175,12 +172,14 @@ export async function computeExecSummary(): Promise<ExecSummaryData> {
   // Latency comes from the same helper the admin dashboard renders, so the
   // email cannot print a number that contradicts the screen. It is all-time
   // and business-hours aware, and it is labelled that way in the email.
+  // Only time-to-first-review is reported. avgTimeToAuthCodeMs is deliberately
+  // NOT shown: measured on production 2026-09-12 it returns 0.0102 ms, which is
+  // not a duration, and formatting it produced "under a minute" - a broken
+  // metric reading as a headline win. It stays out until it means something.
   let avgMsToStage1AllTime: number | null = null;
-  let avgMsToAuthCodeAllTime: number | null = null;
   try {
     const analytics = await storage.getAnalytics();
     avgMsToStage1AllTime = analytics.avgTimeToStage1Ms ?? null;
-    avgMsToAuthCodeAllTime = analytics.avgTimeToAuthCodeMs ?? null;
   } catch (err: any) {
     console.error(`[exec-summary] analytics lookup failed: ${err?.message || err}`);
   }
@@ -195,14 +194,10 @@ export async function computeExecSummary(): Promise<ExecSummaryData> {
     completed: { current: c.completed_cur, prior: c.completed_prior },
     rejected: { current: c.rejected_cur, prior: c.rejected_prior },
     invalid: { current: c.invalid_cur, prior: c.invalid_prior },
-    aiClosed: c.ai_closed_cur,
-    openQueued: c.open_queued,
-    openInReview: c.open_in_review,
-    openAwaitingAuth: c.open_awaiting_auth,
+    openPending: c.open_pending,
     approvalRateCurrent: pct(c.completed_cur, closedCur),
     approvalRatePrior: pct(c.completed_prior, closedPrior),
     avgMsToStage1AllTime,
-    avgMsToAuthCodeAllTime,
     topRejectionReasons: (reasons.rows as any[]).map((r) => ({
       reason: String(r.reason),
       count: Number(r.count),
@@ -270,16 +265,12 @@ export function execSummarySubject(d: ExecSummaryData): string {
 function governingThought(d: ExecSummaryData): string {
   const closed = d.completed.current + d.rejected.current + d.invalid.current;
   const rate = d.approvalRateCurrent == null ? "n/a" : `${d.approvalRateCurrent}%`;
-  const openTotal = d.openQueued + d.openInReview + d.openAwaitingAuth;
-  const aiShare =
-    d.completed.current > 0
-      ? ` VRS AI closed ${d.aiClosed} of the ${d.completed.current} approvals with no human touch (${pct(d.aiClosed, d.completed.current)}%).`
-      : "";
+  const openTotal = d.openPending;
   // Received and closed are deliberately NOT the same cohort — a ticket closed
   // this week may have arrived last week — so the sentence never says "closed
   // N of them", which reads as a subset and invites an exec to catch it when
   // closures exceed arrivals.
-  return `VRS Express received ${d.received.current} submissions this week (${delta(d.received.current, d.received.prior)}) and closed ${closed} tickets at a ${rate} approval rate, with ${openTotal} open right now.${aiShare}`;
+  return `VRS Express received ${d.received.current} submissions this week (${delta(d.received.current, d.received.prior)}) and closed ${closed} tickets at a ${rate} approval rate, with ${openTotal} still awaiting a first review.`;
 }
 
 export function renderExecSummaryText(d: ExecSummaryData): string {
@@ -293,16 +284,14 @@ export function renderExecSummaryText(d: ExecSummaryData): string {
   lines.push(
     `Approval rate: ${d.approvalRateCurrent == null ? "n/a" : d.approvalRateCurrent + "%"} (${ratePoints(d.approvalRateCurrent, d.approvalRatePrior)})`,
   );
-  lines.push(`Closed by VRS AI, no human: ${d.aiClosed}`);
+  lines.push(`Awaiting first review right now: ${d.openPending}`);
   lines.push("");
   lines.push("WHERE THE WEEK LANDED");
   lines.push("  (counted by the week a ticket CLOSED, so it can include tickets received earlier)");
   lines.push(`  Approved / completed   ${d.completed.current}  (${delta(d.completed.current, d.completed.prior)})`);
   lines.push(`  Rejected               ${d.rejected.current}  (${delta(d.rejected.current, d.rejected.prior)})`);
   lines.push(`  Invalid                ${d.invalid.current}  (${delta(d.invalid.current, d.invalid.prior)})`);
-  lines.push(`  Open — awaiting auth   ${d.openAwaitingAuth}`);
-  lines.push(`  Open — in review       ${d.openInReview}`);
-  lines.push(`  Open — unclaimed queue ${d.openQueued}`);
+  lines.push(`  Awaiting first review  ${d.openPending}  (open right now, not a weekly figure)`);
   lines.push("");
   if (d.topRejectionReasons.length) {
     lines.push("TOP REJECTION REASONS THIS WEEK");
@@ -316,7 +305,6 @@ export function renderExecSummaryText(d: ExecSummaryData): string {
   }
   lines.push("TURNAROUND (all tickets to date, business hours)");
   lines.push(`  To first review: ${formatDurationMs(d.avgMsToStage1AllTime)}`);
-  lines.push(`  To auth code:    ${formatDurationMs(d.avgMsToAuthCodeAllTime)}`);
   lines.push("");
   lines.push("Generated automatically by VRS Express every Wednesday at 4:00 PM ET.");
   return lines.join("\n");
@@ -346,7 +334,7 @@ function stageRow(label: string, count: number, note: string, accent: string): s
 
 export function renderExecSummaryHtml(d: ExecSummaryData): string {
   const rate = d.approvalRateCurrent == null ? "n/a" : `${d.approvalRateCurrent}%`;
-  const aiShare = d.completed.current > 0 ? `${pct(d.aiClosed, d.completed.current)}% of approvals` : "no approvals this week";
+  const openNote = "open right now";
 
   const reasonRows = d.topRejectionReasons.length
     ? d.topRejectionReasons
@@ -393,7 +381,7 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
       ${kpiCard("Submissions received", String(d.received.current), delta(d.received.current, d.received.prior))}
       ${kpiCard("Approval rate", rate, ratePoints(d.approvalRateCurrent, d.approvalRatePrior))}
-      ${kpiCard("Closed by VRS AI", String(d.aiClosed), aiShare)}
+      ${kpiCard("Awaiting first review", String(d.openPending), openNote)}
     </tr></table>
   </td></tr>
 
@@ -405,9 +393,7 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
         ${stageRow("Approved / completed", d.completed.current, delta(d.completed.current, d.completed.prior), "#16a34a")}
         ${stageRow("Rejected", d.rejected.current, delta(d.rejected.current, d.rejected.prior), "#dc2626")}
         ${stageRow("Invalid", d.invalid.current, delta(d.invalid.current, d.invalid.prior), "#9ca3af")}
-        ${stageRow("Open — awaiting auth code", d.openAwaitingAuth, "open now", "#2563eb")}
-        ${stageRow("Open — in review", d.openInReview, "open now", "#f59e0b")}
-        ${stageRow("Open — unclaimed queue", d.openQueued, "open now", "#f59e0b")}
+        ${stageRow("Awaiting first review", d.openPending, "open right now", "#f59e0b")}
       </table>
     </div>
   </td></tr>
@@ -433,8 +419,7 @@ export function renderExecSummaryHtml(d: ExecSummaryData): string {
     <div style="border:1px solid #e2e5ea;border-radius:8px;background:#ffffff;padding:12px 14px;">
       <div style="font:600 12px/1.3 -apple-system,Segoe UI,Arial,sans-serif;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Turnaround</div>
       <div style="font:400 14px/1.7 -apple-system,Segoe UI,Arial,sans-serif;color:#111827;margin-top:6px;">
-        To first review: <strong>${esc(formatDurationMs(d.avgMsToStage1AllTime))}</strong><br>
-        To auth code: <strong>${esc(formatDurationMs(d.avgMsToAuthCodeAllTime))}</strong>
+        To first review: <strong>${esc(formatDurationMs(d.avgMsToStage1AllTime))}</strong>
       </div>
       <div style="font:400 12px/1.4 -apple-system,Segoe UI,Arial,sans-serif;color:#6b7280;margin-top:6px;">All tickets to date, business hours only. Same basis as the Analytics page.</div>
     </div>
@@ -521,6 +506,7 @@ export async function generateAndSendExecSummary(
       generatedAt: report.generatedAt,
       received: data.received.current,
       approvalRate: data.approvalRateCurrent,
+      openPending: data.openPending,
     },
   });
 
