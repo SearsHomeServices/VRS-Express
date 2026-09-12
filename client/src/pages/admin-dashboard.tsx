@@ -1573,6 +1573,14 @@ function TicketOverviewSection() {
   const [coachingExporting, setCoachingExporting] = useState(false);
   const [pdcPushing, setPdcPushing] = useState(false);
   const [techReportDownloading, setTechReportDownloading] = useState(false);
+  // Tyler 2026-09-12 - manual "Send weekly summary". The Wednesday 4:00 PM ET
+  // scheduler is untouched; this is an on-demand send of the same report, so
+  // an owner can prove delivery without waiting for the cadence.
+  const [summarySending, setSummarySending] = useState(false);
+  const [summaryConfirmOpen, setSummaryConfirmOpen] = useState(false);
+  const [summaryRecipients, setSummaryRecipients] = useState<string[]>([]);
+  const [summaryFrom, setSummaryFrom] = useState<string>("");
+  const [summaryEmailConfigured, setSummaryEmailConfigured] = useState(true);
   const coachingFilterParams = () => {
     const params = new URLSearchParams();
     if (createdAfterIso) params.set("createdAfter", createdAfterIso);
@@ -1608,6 +1616,72 @@ function TicketOverviewSection() {
       setCoachingExporting(false);
     }
   };
+  // Tyler 2026-09-12 - open the confirm step for the weekly executive summary.
+  // Nothing is sent here: this only reads who the email would go to, so the
+  // recipient list is on screen BEFORE anyone commits to an outward send.
+  const handleOpenWeeklySummary = async () => {
+    try {
+      setSummarySending(true);
+      const res = await fetch("/api/admin/reports/exec-summary", {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error(`Could not load summary settings (${res.status})`);
+      const j = await res.json();
+      setSummaryRecipients(Array.isArray(j.recipients) ? j.recipients : []);
+      setSummaryFrom(j?.from?.email || "");
+      setSummaryEmailConfigured(Boolean(j.emailConfigured));
+      setSummaryConfirmOpen(true);
+    } catch (err: any) {
+      toast({
+        title: "Could not prepare the summary",
+        description: String(err?.message || err),
+        variant: "destructive",
+      });
+    } finally {
+      setSummarySending(false);
+    }
+  };
+
+  // The actual send. Reports the provider's own reason on failure rather than
+  // a generic error, because the usual cause is an unverified SendGrid sender
+  // and that is only fixable if the message says so.
+  const handleSendWeeklySummary = async () => {
+    try {
+      setSummarySending(true);
+      const res = await apiRequest("POST", "/api/admin/reports/exec-summary/run", { send: true });
+      const j = await res.json();
+      if (j?.email?.sent) {
+        toast({
+          title: "Weekly summary sent",
+          description: `Emailed to ${summaryRecipients.length} recipient${summaryRecipients.length === 1 ? "" : "s"}: ${summaryRecipients.join(", ")}`,
+          duration: 10000,
+        });
+      } else if (j?.skipped) {
+        toast({
+          title: "Already generated today",
+          description: "A summary was already generated today, so a duplicate was not sent.",
+          duration: 9000,
+        });
+      } else {
+        toast({
+          title: "Summary generated but NOT emailed",
+          description: String(j?.email?.reason || "The email provider did not accept the message."),
+          variant: "destructive",
+          duration: 15000,
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Send failed",
+        description: String(err?.message || err),
+        variant: "destructive",
+      });
+    } finally {
+      setSummarySending(false);
+      setSummaryConfirmOpen(false);
+    }
+  };
+
   // 2026-08-12 — download the latest weekly IH tech no-login report
   // (generated Wednesdays 5 PM ET; generates one on demand if none exists).
   const handleTechReportDownload = async () => {
@@ -1826,6 +1900,18 @@ function TicketOverviewSection() {
           >
             {techReportDownloading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
             Tech Sign-In Report
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={summarySending}
+            onClick={handleOpenWeeklySummary}
+            title="Email the weekly executive summary now. The automatic Wednesday 4 PM ET send is unaffected."
+            data-testid="button-send-weekly-summary"
+          >
+            {summarySending ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Send className="w-3 h-3 mr-1.5" />}
+            Send Weekly Summary
           </Button>
         </div>
         {!businessHoursActive && (
@@ -2335,6 +2421,50 @@ function TicketOverviewSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={summaryConfirmOpen} onOpenChange={setSummaryConfirmOpen}>
+        <AlertDialogContent data-testid="dialog-send-weekly-summary">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send the weekly executive summary?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This emails the current week-to-date summary immediately. The automatic
+                  Wednesday 4:00 PM ET send is not affected.
+                </p>
+                <div>
+                  <div className="font-medium text-foreground">Recipients</div>
+                  <ul className="list-disc pl-5" data-testid="list-summary-recipients">
+                    {summaryRecipients.length === 0 && <li>No recipients are configured.</li>}
+                    {summaryRecipients.map((r: string) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+                {summaryFrom && (
+                  <p className="text-muted-foreground">Sent from {summaryFrom}</p>
+                )}
+                {!summaryEmailConfigured && (
+                  <p className="text-destructive font-medium">
+                    No email provider key is configured on this deployment, so the report will
+                    generate but nothing will be delivered.
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-send-summary">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleSendWeeklySummary(); }}
+              disabled={summarySending || summaryRecipients.length === 0}
+              data-testid="button-confirm-send-summary"
+            >
+              {summarySending ? "Sending…" : "Send now"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
