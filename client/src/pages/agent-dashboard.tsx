@@ -126,6 +126,7 @@ import {
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
+import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
 // SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
@@ -210,7 +211,7 @@ export default function AgentDashboard() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const [activeView, setActiveView] = useState<"queue" | "mytickets" | "completed" | "nla_queue" | "nla_mytickets" | "nla_completed">("queue");
+  const [activeView, setActiveView] = useState<"queue" | "mytickets" | "completed" | "nla_queue" | "nla_mytickets" | "nla_completed" | "vrs_ai_pilot">("queue");
   const [queueMode, setQueueMode] = useState<"vrs" | "nla">("vrs");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">(() => getNotificationPermission());
@@ -219,6 +220,7 @@ export default function AgentDashboard() {
   const isMyTicketsView = activeView === "mytickets" || activeView === "nla_mytickets";
   const isQueueView = activeView === "queue" || activeView === "nla_queue";
   const isCompletedView = activeView === "completed" || activeView === "nla_completed";
+  const isVrsAiPilotView = activeView === "vrs_ai_pilot";
   const showNotifBanner = notifPermission !== "granted" && notifPermission !== "unsupported" && !notifBannerDismissed;
 
   // Tyler 2026-05-01: per-category business-hours profiles. Cached centrally
@@ -887,7 +889,13 @@ export default function AgentDashboard() {
     const params = new URLSearchParams();
     const isNlaView = activeView.startsWith("nla_");
 
-    if (activeView === "queue") {
+    if (activeView === "vrs_ai_pilot") {
+      // This is a read-only bridge-linked projection. Do not inherit queue
+      // filters or the ordinary list search, so the endpoint can return the
+      // complete authorized pilot set for client-side status/search filters.
+      params.set("vrsAiOnly", "true");
+      return params.toString();
+    } else if (activeView === "queue") {
       params.set("ticketStatus", "queued");
       params.set("excludeRequestType", "parts_nla");
     } else if (activeView === "mytickets") {
@@ -940,7 +948,7 @@ export default function AgentDashboard() {
   // and cuts server + client load ~4x. refetchOnWindowFocus disabled
   // for the same reason — WS keeps the cache fresh, no need to re-pull
   // a megabyte every time the user switches tabs.
-  const { data: submissionsData, isLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+  const { data: submissionsData, isLoading, error: submissionsError } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [submissionsUrl],
     // Tyler 2026-07-08 (perf) — jittered so polling clients drift apart
     // instead of all hitting the server in the same second.
@@ -1975,6 +1983,16 @@ export default function AgentDashboard() {
                       )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      onClick={() => { setActiveView("vrs_ai_pilot"); setSelectedId(null); }}
+                      data-active={activeView === "vrs_ai_pilot"}
+                      data-testid="nav-vrs-ai-pilot"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>VRS AI Pilot</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -2201,6 +2219,7 @@ export default function AgentDashboard() {
                 {activeView === "nla_queue" && `NLA Parts Queue (${statsData?.nlaQueueCount ?? 0})`}
                 {activeView === "nla_mytickets" && `My NLA Tickets (${statsData?.nlaPendingCount ?? 0})`}
                 {activeView === "nla_completed" && "NLA Completed Today"}
+                 {activeView === "vrs_ai_pilot" && "VRS AI Pilot Tracking"}
               </h1>
             </div>
             <div className="flex items-center gap-3">
@@ -2316,7 +2335,19 @@ export default function AgentDashboard() {
           </Dialog>
 
           <div className="flex flex-1 min-h-0">
-            <div className={`w-full md:w-[380px] border-r flex flex-col min-h-0 ${selectedId ? "hidden" : ""}`}>
+            {isVrsAiPilotView && !selectedId ? (
+              <div className="flex-1 min-w-0 overflow-auto">
+                <VrsAiPilotTable
+                  rows={submissions}
+                  isLoading={isLoading}
+                  errorMessage={submissionsError instanceof Error ? submissionsError.message : undefined}
+                  onOpenSubmission={setSelectedId}
+                  testIdPrefix="agent-vrs-ai-pilot"
+                />
+              </div>
+            ) : (
+            <>
+            <div className={`w-full md:w-[380px] border-r flex flex-col min-h-0 ${selectedId || isVrsAiPilotView ? "hidden" : ""}`}>
               <div className="px-3 py-2 border-b flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-sm text-muted-foreground" data-testid="text-queue-count">
                   {submissions.length} ticket{submissions.length !== 1 ? "s" : ""}
@@ -5100,6 +5131,8 @@ export default function AgentDashboard() {
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>

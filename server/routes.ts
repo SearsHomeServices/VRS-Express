@@ -67,6 +67,7 @@ import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import { is1099PortalEnabled, isTechHubPhotosEnabled } from "./featureFlags";
+import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 import {
   STAFF_NOTE_ROLES,
   canAccessTicketNotes,
@@ -1751,47 +1752,84 @@ export async function registerRoutes(
         // Tyler 2026-06-27 (scalability) — hard row cap for the admin all-time
         // Ticket Overview (set below). Agent views leave it unset.
         limit?: number;
+        // Narrow, read-only filter for the approved VRS AI Pilot tracking tab.
+        vrsAiOnly?: boolean;
+        // Existing VRS-agent detail authorization applied across all ticket
+        // statuses for the pilot tab (queue division, assignment, reviewer).
+        pilotAgentId?: number;
+        pilotDivisions?: string[];
       } = {};
 
+      const vrsAiOnly = req.query.vrsAiOnly === "true";
+      const canUsePilot = canUseVrsAiPilot(user.role);
+
       if (user.role === "technician" || user.role === "provider_1099") {
+        if (vrsAiOnly && !canUsePilot) {
+          // Pilot tracking is a staff-only view. Keep technician/provider
+          // ownership behavior unchanged for the ordinary list endpoint.
+          return res.status(403).json({ error: "VRS AI Pilot tracking is not available for this role" });
+        }
         // 1099 providers see only their own (company) submissions — same
         // ownership scoping as a field technician.
         filters.technicianId = user.id;
       } else if (user.role === "vrs_agent") {
-        const isCompletedToday = req.query.completedToday === "true";
-        // Tyler 2026-05-06 (Task #4): the agent Completed tabs now pass
-        // completedSince=<iso> (last-N-days window) instead of completedToday.
-        // Both signals mean "this is the Completed view" and must take the
-        // reviewedBy branch — see comment below for why assignedTo is wrong.
-        const isCompletedView = isCompletedToday || !!req.query.completedSince;
-        const ticketStatusFilter = req.query.ticketStatus as string | undefined;
-
-        if (ticketStatusFilter === "queued" && !isCompletedView) {
+        if (vrsAiOnly) {
           const specs = await storage.getSpecializations(user.id);
           const divisions = specs.map(s => s.division);
           if (divisions.length === 0) {
             return res.status(200).json({ submissions: [] });
           }
-          const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
-          if (!isGeneralist) {
-            filters.divisionFilter = divisions;
-          }
-        } else if (ticketStatusFilter === "pending") {
-          filters.assignedTo = user.id;
-        } else if (isCompletedView) {
-          // Tyler 2026-05-02: was `assignedTo = user.id`, but reject paths
-          // null `assignedTo` (routes.ts /process: ~1547, ~1585; /process-nla:
-          // ~1971), so every rejected ticket disappeared from the agent's
-          // Completed tab. `reviewedBy` is the auditable column and is set on
-          // every action via the base updateData (~1450) and every NLA branch.
-          // Tyler 2026-05-06 (Task #4): same reasoning applies to the new
-          // completedSince window — the user wants every ticket THEY processed
-          // in the window, including rejected/invalid ones whose assignedTo
-          // was nulled.
-          filters.reviewedBy = user.id;
+          filters.vrsAiOnly = true;
+          filters.pilotAgentId = user.id;
+          // Keep the full specialization list for the storage predicate.
+          // A generalist therefore carries all appliance divisions (including
+          // NLA), while an un-specialized agent returned above gets no rows.
+          filters.pilotDivisions = divisions;
         } else {
-          filters.assignedTo = user.id;
+          const isCompletedToday = req.query.completedToday === "true";
+          // Tyler 2026-05-06 (Task #4): the agent Completed tabs now pass
+          // completedSince=<iso> (last-N-days window) instead of completedToday.
+          // Both signals mean "this is the Completed view" and must take the
+          // reviewedBy branch — see comment below for why assignedTo is wrong.
+          const isCompletedView = isCompletedToday || !!req.query.completedSince;
+          const ticketStatusFilter = req.query.ticketStatus as string | undefined;
+
+          if (ticketStatusFilter === "queued" && !isCompletedView) {
+            const specs = await storage.getSpecializations(user.id);
+            const divisions = specs.map(s => s.division);
+            if (divisions.length === 0) {
+              return res.status(200).json({ submissions: [] });
+            }
+            const isGeneralist = divisions.length >= ALL_DIVISIONS.length;
+            if (!isGeneralist) {
+              filters.divisionFilter = divisions;
+            }
+          } else if (ticketStatusFilter === "pending") {
+            filters.assignedTo = user.id;
+          } else if (isCompletedView) {
+            // Tyler 2026-05-02: was `assignedTo = user.id`, but reject paths
+            // null `assignedTo` (routes.ts /process: ~1547, ~1585; /process-nla:
+            // ~1971), so every rejected ticket disappeared from the agent's
+            // Completed tab. `reviewedBy` is the auditable column and is set on
+            // every action via the base updateData (~1450) and every NLA branch.
+            // Tyler 2026-05-06 (Task #4): same reasoning applies to the new
+            // completedSince window — the user wants every ticket THEY processed
+            // in the window, including rejected/invalid ones whose assignedTo
+            // was nulled.
+            filters.reviewedBy = user.id;
+          } else {
+            filters.assignedTo = user.id;
+          }
         }
+      } else if (
+        vrsAiOnly &&
+        (user.role === "admin" || user.role === "super_admin")
+      ) {
+        // Admin and super-admin retain their established all-submission
+        // authorization; the bridge-only predicate is the sole new scope.
+        filters.vrsAiOnly = true;
+      } else if (vrsAiOnly && !canUsePilot) {
+        return res.status(403).json({ error: "VRS AI Pilot tracking is not available for this role" });
       }
 
       if (req.query.ticketStatus) {
@@ -1838,6 +1876,10 @@ export async function registerRoutes(
           stage2Status: filters.stage2Status ?? null,
           assignedTo: filters.assignedTo ?? null,
           reviewedBy: filters.reviewedBy ?? null,
+          pilotAgentId: filters.pilotAgentId ?? null,
+          pilotDivisions: filters.pilotDivisions
+            ? [...filters.pilotDivisions].sort()
+            : null,
           applianceType: filters.applianceType ?? null,
           requestType: filters.requestType ?? null,
           excludeRequestType: filters.excludeRequestType ?? null,
@@ -1847,6 +1889,7 @@ export async function registerRoutes(
           completedSince: filters.completedSince?.toISOString() ?? null,
           createdAfter: filters.createdAfter?.toISOString() ?? null,
           completedToday,
+          vrsAiOnly: filters.vrsAiOnly ?? false,
           search: ((req.query.search as string) || "").toLowerCase(),
         });
         // Version captured BEFORE the DB read: a write that lands during
@@ -1873,7 +1916,10 @@ export async function registerRoutes(
         // recent rows; a queued FIFO/ASC view would keep the front of the queue.
         // Both bounds sit far above current volume, so observable behavior is
         // unchanged today; they only engage at large scale. Tunable via env for ops.
-        if (user.role === "admin" || user.role === "super_admin") {
+        if (
+          (user.role === "admin" || user.role === "super_admin") &&
+          !filters.vrsAiOnly
+        ) {
           if (!filters.createdAfter) {
             const windowDays = parseInt(
               process.env.ADMIN_SUBMISSIONS_DEFAULT_WINDOW_DAYS || "1095",

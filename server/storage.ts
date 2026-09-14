@@ -10,6 +10,7 @@ import {
   InsertVrsAgentSpecialization,
   VrsAgentSpecialization,
   submissions,
+  vrsAiCalls,
   InsertSubmission,
   Submission,
   smsNotifications,
@@ -223,6 +224,14 @@ export interface IStorage {
     divisionFilter?: string[];
     completedSince?: Date;
     createdAfter?: Date;
+    /** Narrow, read-only VRS AI Pilot tracking filter. */
+    vrsAiOnly?: boolean;
+    /**
+     * Agent's existing detail-view authorization when loading the pilot tab:
+     * assigned/reviewed rows plus queued rows in an assigned division.
+     */
+    pilotAgentId?: number;
+    pilotDivisions?: string[];
   }, completedToday?: boolean): Promise<SubmissionListItemWithTech[]>;
   updateSubmission(
     id: number,
@@ -1137,6 +1146,9 @@ export class DatabaseStorage implements IStorage {
     divisionFilter?: string[];
     completedSince?: Date;
     createdAfter?: Date;
+    vrsAiOnly?: boolean;
+    pilotAgentId?: number;
+    pilotDivisions?: string[];
     // Tyler 2026-06-27 (scalability) — optional hard row cap. Set only by the
     // admin Ticket Overview so an all-time list can't return an unbounded
     // payload as the table grows. Agent views leave it unset (already scoped).
@@ -1204,6 +1216,44 @@ export class DatabaseStorage implements IStorage {
 
     if (filters?.createdAfter) {
       conditions.push(gte(submissions.createdAt, filters.createdAfter));
+    }
+
+    if (filters?.vrsAiOnly) {
+      // `submission_id` is the durable link between the ordinary ticket and
+      // the bridge call.  Do not infer pilot membership from request type or
+      // any submission-level AI flag.
+      conditions.push(sql`${vrsAiCalls.callId} IS NOT NULL`);
+    }
+
+    if (filters?.pilotAgentId !== undefined) {
+      const divisions = filters.pilotDivisions || [];
+      const applianceDivisions = divisions.filter(
+        (division) => division !== "nla" && division !== "generalist",
+      );
+      const queuedAccess = divisions.length === 0
+        ? sql`FALSE`
+        : divisions.includes("nla") && applianceDivisions.length > 0
+        ? or(
+            inArray(submissions.applianceType, applianceDivisions),
+            eq(submissions.requestType, "parts_nla"),
+          )
+        : divisions.includes("nla")
+        ? eq(submissions.requestType, "parts_nla")
+        : applianceDivisions.length > 0
+        ? inArray(submissions.applianceType, applianceDivisions)
+        : sql`TRUE`;
+
+      // This mirrors GET /api/submissions/:id's existing VRS-agent access
+      // rule without changing the normal queue/list path: a queued ticket
+      // must match a division, while assigned and previously reviewed tickets
+      // remain visible to the same agent.
+      conditions.push(
+        or(
+          eq(submissions.assignedTo, filters.pilotAgentId),
+          eq(submissions.reviewedBy, filters.pilotAgentId),
+          and(eq(submissions.ticketStatus, "queued"), queuedAccess),
+        ),
+      );
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -1280,6 +1330,16 @@ export class DatabaseStorage implements IStorage {
           // inline Push button (root cause required by the Tech PDC API).
           techPdcRootCause: submissions.techPdcRootCause,
         },
+        vrsAi: {
+          callId: vrsAiCalls.callId,
+          state: vrsAiCalls.state,
+          providerCallId: vrsAiCalls.providerCallId,
+          dispatchError: vrsAiCalls.dispatchError,
+          failureReason: vrsAiCalls.failureReason,
+          retryable: vrsAiCalls.retryable,
+          dispatchedAt: vrsAiCalls.dispatchedAt,
+          completedAt: vrsAiCalls.completedAt,
+        },
         technicianName: users.name,
         technicianPhone: users.phone,
         ldapTechName: technicians.name,
@@ -1295,6 +1355,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(users, eq(submissions.technicianId, users.id))
       .leftJoin(technicians, eq(submissions.technicianLdapId, technicians.ldapId))
       .leftJoin(assignedAgent, eq(submissions.assignedTo, assignedAgent.id))
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
       .where(whereClause)
       .orderBy(filters?.ticketStatus === "queued" ? asc(submissions.createdAt) : desc(submissions.createdAt));
 
@@ -1310,6 +1371,7 @@ export class DatabaseStorage implements IStorage {
 
     return result.map((r) => ({
       ...r.s,
+      vrsAi: r.vrsAi?.callId ? r.vrsAi : null,
       technicianName: r.ldapTechName || r.technicianName,
       technicianPhone: r.s.phoneOverride || r.ldapTechPhone || r.technicianPhone,
       assignedAgentName: r.assignedAgentName,

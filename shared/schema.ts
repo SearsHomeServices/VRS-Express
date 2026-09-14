@@ -304,11 +304,24 @@ export type SubmissionListItem = Pick<Submission,
   | "techPdcRootCause"
 >;
 
+export type SubmissionListVrsAiStatus = {
+  callId: string | null;
+  state: string | null;
+  providerCallId: string | null;
+  dispatchError: string | null;
+  failureReason: string | null;
+  retryable: boolean | null;
+  dispatchedAt: Date | null;
+  completedAt: Date | null;
+};
+
 export type SubmissionListItemWithTech = SubmissionListItem & {
   technicianName: string;
   technicianPhone: string | null;
   assignedAgentName: string | null;
   intakeFormCompletedAt: Date | null;
+  /** Present only when the row is linked to a VRS AI bridge call. */
+  vrsAi?: SubmissionListVrsAiStatus | null;
 };
 
 // ============================================================================

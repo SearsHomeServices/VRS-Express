@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
+import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
@@ -142,6 +143,7 @@ import {
   Check,
   ChevronsUpDown,
   Send,
+  Sparkles,
 } from "lucide-react";
 import {
   Command,
@@ -236,7 +238,7 @@ function formatDuration(ms: number | null): string {
 
 type SafeUser = Omit<User, "password">;
 
-type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "feedback" | "health" | "exec-summary";
+type ActiveView = "users" | "divisions" | "rgc" | "analytics" | "technicians" | "agent-status" | "business-hours" | "tickets" | "vrs-ai-pilot" | "feedback" | "health" | "exec-summary";
 
 const DIVISION_KEYS = ["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other", "nla"] as const;
 
@@ -1229,6 +1231,42 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
         </DialogPortal>
       </Dialog>
     </Dialog>
+  );
+}
+
+function VrsAiPilotSection() {
+  const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
+  const { data, isLoading, error } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+    queryKey: ["/api/submissions?vrsAiOnly=true"],
+    queryFn: async () => {
+      const response = await fetch("/api/submissions?vrsAiOnly=true", {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!response.ok) {
+        throw new Error("Failed to load VRS AI Pilot tickets");
+      }
+      return response.json();
+    },
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+
+  return (
+    <>
+      <VrsAiPilotTable
+        rows={data?.submissions || []}
+        isLoading={isLoading}
+        errorMessage={error instanceof Error ? error.message : undefined}
+        onOpenSubmission={setSelectedTicketId}
+        testIdPrefix="admin-vrs-ai-pilot"
+      />
+      <TicketDetailDialog
+        ticketId={selectedTicketId}
+        open={selectedTicketId !== null}
+        onClose={() => setSelectedTicketId(null)}
+      />
+    </>
   );
 }
 
@@ -4380,6 +4418,16 @@ export default function AdminDashboard() {
                   </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton
+                      onClick={() => setActiveView("vrs-ai-pilot")}
+                      data-active={activeView === "vrs-ai-pilot"}
+                      data-testid="nav-vrs-ai-pilot"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>VRS AI Pilot</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
                       onClick={() => setActiveView("feedback")}
                       data-active={activeView === "feedback"}
                       data-testid="nav-feedback"
@@ -4492,6 +4540,7 @@ export default function AdminDashboard() {
                 {activeView === "agent-status" && "Agent Status"}
                 {activeView === "business-hours" && "Business Hours"}
                 {activeView === "tickets" && "Ticket Overview"}
+                {activeView === "vrs-ai-pilot" && "VRS AI Pilot Tracking"}
                 {activeView === "feedback" && "Technician Feedback"}
                 {activeView === "health" && "System Health"}
                 {activeView === "exec-summary" && "Executive Summary"}
@@ -5774,6 +5823,9 @@ export default function AdminDashboard() {
             )}
             {activeView === "tickets" && (
               <TicketOverviewSection />
+            )}
+            {activeView === "vrs-ai-pilot" && (
+              <VrsAiPilotSection />
             )}
             {activeView === "feedback" && (
               <FeedbackSection />
