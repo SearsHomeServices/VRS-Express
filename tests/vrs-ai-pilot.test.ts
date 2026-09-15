@@ -72,6 +72,9 @@ describe("VRS AI Pilot projection", () => {
 
 describe("VRS AI Pilot route boundaries", () => {
   const source = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+  const storageSource = readFileSync(new URL("../server/storage.ts", import.meta.url), "utf8");
+  const agentDashboardSource = readFileSync(new URL("../client/src/pages/agent-dashboard.tsx", import.meta.url), "utf8");
+  const adminDashboardSource = readFileSync(new URL("../client/src/pages/admin-dashboard.tsx", import.meta.url), "utf8");
   const listRouteStart = source.indexOf('app.get("/api/submissions", authenticateToken');
   const listRouteEnd = source.indexOf('app.get("/api/submissions/:id", authenticateToken', listRouteStart);
   const listRoute = source.slice(listRouteStart, listRouteEnd);
@@ -104,5 +107,83 @@ describe("VRS AI Pilot route boundaries", () => {
       /else if \(isCompletedView\) \{[\s\S]*?filters\.reviewedBy = user\.id;/,
     );
     expect(legacyBranch).not.toContain("filters.vrsAiOnly = true");
+  });
+
+  it("keeps ordinary staff lists separate from the bridge-linked Pilot projection", () => {
+    expect(listRoute).toMatch(
+      /if \(!vrsAiOnly[\s\S]*?filters\.excludeVrsAiLinked = true;/,
+    );
+    expect(storageSource).toMatch(
+      /if \(filters\?\.excludeVrsAiLinked\)[\s\S]*?vrsAiCalls\.callId\} IS NULL/,
+    );
+    expect(storageSource).toMatch(
+      /if \(filters\?\.vrsAiOnly\)[\s\S]*?vrsAiCalls\.callId\} IS NOT NULL/,
+    );
+  });
+
+  it.each([
+    "getCompletedTodayCount",
+    "getAgentQueueCount",
+    "getDivisionQueueCount",
+    "getStage2QueueCount",
+    "getQueuedCount",
+    "getQueuedCountAll",
+    "getPendingCount",
+    "getNlaQueuedCount",
+    "getNlaPendingCount",
+    "getNlaCompletedTodayCount",
+    "getWarrantyProviderCounts",
+  ])("excludes bridge-linked rows from %s counts", (method) => {
+    const methodStart = storageSource.indexOf(`async ${method}`);
+    const nextMethod = storageSource.indexOf("\n  async ", methodStart + 1);
+    const methodSource = storageSource.slice(methodStart, nextMethod < 0 ? undefined : nextMethod);
+    expect(methodStart).toBeGreaterThanOrEqual(0);
+    expect(methodSource).toMatch(/leftJoin\(vrsAiCalls[\s\S]*?vrsAiCalls\.callId\} IS NULL/);
+  });
+
+  it("gates Pilot navigation and keeps admin tracking separate from Agent Queue View workflow", () => {
+    expect(agentDashboardSource).toContain("const canUsePilot = canUseVrsAiPilot(user?.role);");
+    expect(agentDashboardSource).toMatch(/\{canUsePilot && \([\s\S]*?data-testid="nav-vrs-ai-pilot"/);
+    expect(agentDashboardSource).toContain("const handlePilotOpen =");
+    expect(agentDashboardSource).toContain("handleClaimAndOpen(submissionId, true)");
+
+    const pilotSectionStart = adminDashboardSource.indexOf("function VrsAiPilotSection()");
+    const pilotSectionEnd = adminDashboardSource.indexOf("function TicketOverviewSection()", pilotSectionStart);
+    const pilotSection = adminDashboardSource.slice(pilotSectionStart, pilotSectionEnd);
+    expect(pilotSection).toContain("onOpenSubmission={setSelectedTicketId}");
+    expect(pilotSection).toContain("<TicketDetailDialog");
+    expect(pilotSection).not.toContain("claimMutation");
+  });
+
+  it("keeps terminal Pilot rows read-only even when the bridge state is still active", () => {
+    const handlePilotOpenStart = agentDashboardSource.indexOf("const handlePilotOpen =");
+    const handlePilotOpenEnd = agentDashboardSource.indexOf("const handleProcessSubmit =", handlePilotOpenStart);
+    const handlePilotOpen = agentDashboardSource.slice(handlePilotOpenStart, handlePilotOpenEnd);
+    const reviewCardStart = agentDashboardSource.indexOf(
+      'isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType !== "parts_nla"',
+    );
+
+    expect(handlePilotOpenStart).toBeGreaterThanOrEqual(0);
+    expect(handlePilotOpenEnd).toBeGreaterThan(handlePilotOpenStart);
+    expect(handlePilotOpen).toMatch(
+      /row\.ticketStatus === "pending"[\s\S]*?setPilotWorkflowId\(submissionId\)[\s\S]*?setSelectedId\(submissionId\)/,
+    );
+    expect(handlePilotOpen).toMatch(
+      /setPilotWorkflowId\(null\);\s*setSelectedId\(submissionId\);/,
+    );
+    expect(reviewCardStart).toBeGreaterThanOrEqual(0);
+
+    // A bridge row can retain an active provider state while its submission
+    // has already been closed by the direct call-result path. Display labels
+    // such as Authorization/Aging must not turn that terminal row back into
+    // a review workflow or allow an AI result to be re-approved.
+    const resolvedPilotRow = linkedRow({
+      assignedTo: 90,
+      ticketStatus: "completed",
+      submissionApproved: true,
+      vrsAi: { callId: "vrs-call-550", state: "reviewing" },
+    });
+    expect(resolvedPilotRow.ticketStatus).toBe("completed");
+    expect(handlePilotOpen).toContain('row.ticketStatus === "pending"');
   });
 });

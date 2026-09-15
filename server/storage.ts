@@ -227,6 +227,11 @@ export interface IStorage {
     /** Narrow, read-only VRS AI Pilot tracking filter. */
     vrsAiOnly?: boolean;
     /**
+     * Ordinary staff lists leave bridge-linked rows to the dedicated Pilot
+     * projection. Technician history and other storage paths do not set this.
+     */
+    excludeVrsAiLinked?: boolean;
+    /**
      * Agent's existing detail-view authorization when loading the pilot tab:
      * assigned/reviewed rows plus queued rows in an assigned division.
      */
@@ -1147,6 +1152,7 @@ export class DatabaseStorage implements IStorage {
     completedSince?: Date;
     createdAfter?: Date;
     vrsAiOnly?: boolean;
+    excludeVrsAiLinked?: boolean;
     pilotAgentId?: number;
     pilotDivisions?: string[];
     // Tyler 2026-06-27 (scalability) — optional hard row cap. Set only by the
@@ -1223,6 +1229,12 @@ export class DatabaseStorage implements IStorage {
       // the bridge call.  Do not infer pilot membership from request type or
       // any submission-level AI flag.
       conditions.push(sql`${vrsAiCalls.callId} IS NOT NULL`);
+    }
+    if (filters?.excludeVrsAiLinked) {
+      // Keep bridge-linked tickets exclusively in the VRS AI Pilot view.
+      // This is intentionally opt-in: technician-owned history, SO lookup,
+      // analytics, and audit/detail paths must continue seeing those rows.
+      conditions.push(sql`${vrsAiCalls.callId} IS NULL`);
     }
 
     if (filters?.pilotAgentId !== undefined) {
@@ -1403,12 +1415,13 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return result[0]?.count || 0;
   }
 
   async getAgentQueueCount(agentId?: number): Promise<number> {
-    const conditions = [
+    const conditions: any[] = [
       or(
         eq(submissions.stage1Status, "pending"),
         and(
@@ -1423,7 +1436,8 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return result[0]?.count || 0;
   }
 
@@ -1442,12 +1456,13 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return result[0]?.count || 0;
   }
 
   async getStage2QueueCount(agentId?: number): Promise<number> {
-    const conditions = [
+    const conditions: any[] = [
       eq(submissions.stage1Status, "approved"),
       eq(submissions.stage2Status, "pending"),
     ];
@@ -1457,7 +1472,8 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return result[0]?.count || 0;
   }
 
@@ -1477,7 +1493,8 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return result[0]?.count || 0;
   }
 
@@ -1485,7 +1502,11 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(eq(submissions.ticketStatus, "queued"));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(
+        eq(submissions.ticketStatus, "queued"),
+        sql`${vrsAiCalls.callId} IS NULL`,
+      ));
     return Number(result[0]?.count) || 0;
   }
 
@@ -1505,10 +1526,12 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
       .where(and(
         eq(submissions.ticketStatus, "pending"),
         eq(submissions.assignedTo, agentId),
-        sql`${submissions.requestType} != 'parts_nla'`
+        sql`${submissions.requestType} != 'parts_nla'`,
+        sql`${vrsAiCalls.callId} IS NULL`,
       ));
     return Number(result[0]?.count) || 0;
   }
@@ -1528,7 +1551,8 @@ export class DatabaseStorage implements IStorage {
         count: sql<number>`count(*)`,
       })
       .from(submissions)
-      .where(and(...conditions))
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`))
       .groupBy(sql`COALESCE(${submissions.warrantyProvider}, ${submissions.warrantyType})`);
 
     return result.map((r) => ({
@@ -2717,7 +2741,8 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return Number(result[0]?.count) || 0;
   }
 
@@ -2725,10 +2750,12 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
       .where(and(
         eq(submissions.ticketStatus, "pending"),
         eq(submissions.requestType, "parts_nla"),
-        eq(submissions.assignedTo, agentId)
+        eq(submissions.assignedTo, agentId),
+        sql`${vrsAiCalls.callId} IS NULL`,
       ));
     return Number(result[0]?.count) || 0;
   }
@@ -2755,7 +2782,8 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .select({ count: sql<number>`count(*)` })
       .from(submissions)
-      .where(and(...conditions));
+      .leftJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+      .where(and(...conditions, sql`${vrsAiCalls.callId} IS NULL`));
     return Number(result[0]?.count) || 0;
   }
 

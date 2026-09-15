@@ -1,3 +1,4 @@
+- [Pilot queue policy](pilot-queue-policy.md) — exclusive pilot staff queues; admins work through Agent Queue View, with legacy processing and technician history preserved.
 - [Test fixtures & login quirks](testing-fixtures.md) — dev seed purges tmorri1/testtech1 submissions on restart; all passwords reset to VRS2026!; tech form needs photos so test duplicate logic via API.
 - [Schema push before publish](schema-push-before-publish.md) — publish diffs dev DB vs prod DB, not code; a schema.ts table never db:push'd in dev silently never reaches prod → 500s on every use.
 - [Seed column-migration ordering](seed-migration-ordering.md) — a new Drizzle column must be ensured before the first query on that table, or boot crashes (Drizzle selects all columns).

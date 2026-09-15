@@ -1754,6 +1754,8 @@ export async function registerRoutes(
         limit?: number;
         // Narrow, read-only filter for the approved VRS AI Pilot tracking tab.
         vrsAiOnly?: boolean;
+        // Ordinary staff lists leave bridge-linked tickets to the Pilot tab.
+        excludeVrsAiLinked?: boolean;
         // Existing VRS-agent detail authorization applied across all ticket
         // statuses for the pilot tab (queue division, assignment, reviewer).
         pilotAgentId?: number;
@@ -1832,6 +1834,19 @@ export async function registerRoutes(
         return res.status(403).json({ error: "VRS AI Pilot tracking is not available for this role" });
       }
 
+      // Bridge-linked tickets are work items only in the dedicated Pilot
+      // projection. Keep the ordinary agent/admin queue, my-tickets,
+      // completed, NLA, and admin overview lists legacy-only. Technician and
+      // provider ownership paths above intentionally use getSubmissions()
+      // instead and are not affected.
+      if (!vrsAiOnly && (
+        user.role === "vrs_agent" ||
+        user.role === "admin" ||
+        user.role === "super_admin"
+      )) {
+        filters.excludeVrsAiLinked = true;
+      }
+
       if (req.query.ticketStatus) {
         filters.ticketStatus = req.query.ticketStatus as string;
       }
@@ -1890,6 +1905,7 @@ export async function registerRoutes(
           createdAfter: filters.createdAfter?.toISOString() ?? null,
           completedToday,
           vrsAiOnly: filters.vrsAiOnly ?? false,
+          excludeVrsAiLinked: filters.excludeVrsAiLinked ?? false,
           search: ((req.query.search as string) || "").toLowerCase(),
         });
         // Version captured BEFORE the DB read: a write that lands during

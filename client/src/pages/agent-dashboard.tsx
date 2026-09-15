@@ -127,6 +127,7 @@ import {
 } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
+import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
 // SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
@@ -216,7 +217,9 @@ export default function AgentDashboard() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">(() => getNotificationPermission());
   const [notifBannerDismissed, setNotifBannerDismissed] = useState(false);
+  const [pilotWorkflowId, setPilotWorkflowId] = useState<number | null>(null);
   const isAdminViewing = user?.role === "admin" || user?.role === "super_admin";
+  const canUsePilot = canUseVrsAiPilot(user?.role);
   const isMyTicketsView = activeView === "mytickets" || activeView === "nla_mytickets";
   const isQueueView = activeView === "queue" || activeView === "nla_queue";
   const isCompletedView = activeView === "completed" || activeView === "nla_completed";
@@ -237,6 +240,17 @@ export default function AgentDashboard() {
       setQueueMode("vrs");
     }
   }, [activeView]);
+
+  // The Pilot projection is limited to VRS agents and admin roles. This
+  // client-side guard keeps a stale/deep-linked view from issuing a Pilot
+  // request for an unauthorized role; the server remains the authority.
+  useEffect(() => {
+    if (activeView === "vrs_ai_pilot" && !canUsePilot) {
+      setActiveView("queue");
+      setSelectedId(null);
+      setPilotWorkflowId(null);
+    }
+  }, [activeView, canUsePilot]);
 
   useEffect(() => {
     if (isAdminViewing) return;
@@ -889,7 +903,7 @@ export default function AgentDashboard() {
     const params = new URLSearchParams();
     const isNlaView = activeView.startsWith("nla_");
 
-    if (activeView === "vrs_ai_pilot") {
+    if (activeView === "vrs_ai_pilot" && canUsePilot) {
       // This is a read-only bridge-linked projection. Do not inherit queue
       // filters or the ordinary list search, so the endpoint can return the
       // complete authorized pilot set for client-side status/search filters.
@@ -927,7 +941,7 @@ export default function AgentDashboard() {
       params.set("search", searchQuery.trim());
     }
     return params.toString();
-  }, [activeView, divisionFilter, requestTypeFilter, searchQuery, completedSinceIso]);
+  }, [activeView, canUsePilot, divisionFilter, requestTypeFilter, searchQuery, completedSinceIso]);
 
   const submissionsUrl = queryParams ? `/api/submissions?${queryParams}` : "/api/submissions";
 
@@ -979,6 +993,18 @@ export default function AgentDashboard() {
   // (see SubmissionListItem in shared/schema.ts) so this skeleton should
   // almost never actually render — it's a safety net.
   const photosStillLoading = !!selectedId && isSelectedFullLoading && !selectedFullData;
+
+  // Pilot rows stay in the Pilot projection after an agent/admin claims one,
+  // so the detail pane can continue using the existing workflow controls
+  // without reintroducing the bridge-linked row into ordinary My Tickets.
+  // Keep the workflow marker through terminal processing so the existing
+  // intake-form handoff remains mounted; completed/read-only Pilot rows never
+  // set this marker.
+  const isPilotTicketWorkView =
+    isVrsAiPilotView &&
+    selectedId !== null &&
+    selectedId === pilotWorkflowId;
+  const isTicketWorkView = isMyTicketsView || isPilotTicketWorkView;
 
   const { data: statsData } = useQuery<{ queueCount: number; pendingCount: number; completedToday: number; nlaQueueCount?: number; nlaPendingCount?: number; nlaCompletedToday?: number }>({
     queryKey: ["/api/agent/stats"],
@@ -1046,7 +1072,7 @@ export default function AgentDashboard() {
   // tickets are skipped — there is no useful SO history on a parts-only
   // request, and the SHSAI bot returns noise for those.
   useEffect(() => {
-    if (isMyTicketsView && selectedId && shsaiVisible) {
+    if (isTicketWorkView && selectedId && shsaiVisible) {
       const sub = (submissionsData?.submissions || []).find((s) => s.id === selectedId);
       if (sub && sub.requestType !== "parts_nla" && sub.id !== lastQueriedSubmissionId) {
         fetchShsaiData(sub.serviceOrder, sub.id);
@@ -1058,7 +1084,7 @@ export default function AgentDashboard() {
     // on the first pass and the effect never re-runs once the list
     // updates). VRS confirmed this caused empty Service Order History
     // panels on freshly-submitted tickets until manual page refresh.
-  }, [selectedId, activeView, shsaiVisible, submissionsData]);
+  }, [selectedId, activeView, isTicketWorkView, shsaiVisible, submissionsData]);
 
   const submissions = useMemo(() => {
     return submissionsData?.submissions || [];
@@ -1179,6 +1205,7 @@ export default function AgentDashboard() {
   useEffect(() => {
     if (!selectedId) {
       selectedSubmissionSnapshotRef.current = null;
+      setPilotWorkflowId(null);
     }
   }, [selectedId]);
 
@@ -1694,10 +1721,44 @@ export default function AgentDashboard() {
     },
   });
 
-  const handleClaimAndOpen = (submissionId: number) => {
+  const handleClaimAndOpen = (submissionId: number, keepPilotView = false) => {
     claimMutation.mutate(submissionId);
     setSelectedId(submissionId);
-    setActiveView(activeView === "nla_queue" ? "nla_mytickets" : "mytickets");
+    if (!keepPilotView) {
+      setActiveView(activeView === "nla_queue" ? "nla_mytickets" : "mytickets");
+    }
+  };
+
+  const handlePilotOpen = (submissionId: number) => {
+    const row = submissions.find((submission) => submission.id === submissionId);
+    if (!row) {
+      setPilotWorkflowId(null);
+      setSelectedId(submissionId);
+      return;
+    }
+
+    // A queued Pilot row follows the existing claim workflow. Keep the
+    // dedicated Pilot projection active so the claimed bridge-linked ticket
+    // remains visible there instead of leaking into ordinary My Tickets.
+    if (row.ticketStatus === "queued") {
+      setPilotWorkflowId(submissionId);
+      handleClaimAndOpen(submissionId, true);
+      return;
+    }
+
+    // Assigned pending rows use the same review/process screen. Completed,
+    // rejected, and rows assigned to another VRS agent remain read-only.
+    if (
+      row.ticketStatus === "pending" &&
+      (isAdminViewing || row.assignedTo === user?.id)
+    ) {
+      setPilotWorkflowId(submissionId);
+      setSelectedId(submissionId);
+      return;
+    }
+
+    setPilotWorkflowId(null);
+    setSelectedId(submissionId);
   };
 
   const handleProcessSubmit = () => {
@@ -1983,16 +2044,18 @@ export default function AgentDashboard() {
                       )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => { setActiveView("vrs_ai_pilot"); setSelectedId(null); }}
-                      data-active={activeView === "vrs_ai_pilot"}
-                      data-testid="nav-vrs-ai-pilot"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      <span>VRS AI Pilot</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+                  {canUsePilot && (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        onClick={() => { setActiveView("vrs_ai_pilot"); setSelectedId(null); }}
+                        data-active={activeView === "vrs_ai_pilot"}
+                        data-testid="nav-vrs-ai-pilot"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>VRS AI Pilot</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -2341,7 +2404,7 @@ export default function AgentDashboard() {
                   rows={submissions}
                   isLoading={isLoading}
                   errorMessage={submissionsError instanceof Error ? submissionsError.message : undefined}
-                  onOpenSubmission={setSelectedId}
+                  onOpenSubmission={handlePilotOpen}
                   testIdPrefix="agent-vrs-ai-pilot"
                 />
               </div>
@@ -2524,7 +2587,7 @@ export default function AgentDashboard() {
                     // VRS_INTAKE_FORM_NLA_BASE). Previously NLA was excluded
                     // entirely; agents now get the same SHSAI + Calculator +
                     // Intake-Form tab triplet for every request type.
-                    isMyTicketsView && shsaiVisible && effectiveSelectedSubmission
+                    isTicketWorkView && shsaiVisible && effectiveSelectedSubmission
                       ? ({ ["--right-panel-w" as any]: `${rightPanelWidthPct}%` } as React.CSSProperties)
                       : undefined
                   }
@@ -2542,7 +2605,7 @@ export default function AgentDashboard() {
                     panel below gets `md:w-[var(--right-panel-w)]`. The
                     splitter handle in between drives the percentage; min/max
                     clamps live in the drag handler (25%-75%). */}
-                <ScrollArea className={isMyTicketsView && shsaiVisible ? "w-full md:flex-1 md:w-auto border-r min-w-0" : "flex-1"}>
+                <ScrollArea className={isTicketWorkView && shsaiVisible ? "w-full md:flex-1 md:w-auto border-r min-w-0" : "flex-1"}>
                   <div className="p-4 md:p-6 max-w-3xl space-y-4 md:space-y-6">
                     <Button
                       variant="ghost"
@@ -2604,7 +2667,7 @@ export default function AgentDashboard() {
                             for parts_nla tickets so the agent can re-open the
                             right panel (which now hosts the NLA-specific
                             intake form via VRS_INTAKE_FORM_NLA_BASE). */}
-                        {isMyTicketsView && !shsaiVisible && selectedSubmission && (
+                        {isTicketWorkView && !shsaiVisible && selectedSubmission && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2615,7 +2678,7 @@ export default function AgentDashboard() {
                             Service History
                           </Button>
                         )}
-                        {isMyTicketsView && selectedSubmission?.requestType !== "parts_nla" && (
+                        {isTicketWorkView && selectedSubmission?.requestType !== "parts_nla" && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2629,7 +2692,7 @@ export default function AgentDashboard() {
                             Send to NLA
                           </Button>
                         )}
-                        {isMyTicketsView && selectedSubmission?.requestType === "parts_nla" && (
+                        {isTicketWorkView && selectedSubmission?.requestType === "parts_nla" && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2643,7 +2706,7 @@ export default function AgentDashboard() {
                             Send to VRS Authorization
                           </Button>
                         )}
-                        {isMyTicketsView && selectedSubmission?.requestType === "infestation_non_accessible" && (
+                        {isTicketWorkView && selectedSubmission?.requestType === "infestation_non_accessible" && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2658,7 +2721,7 @@ export default function AgentDashboard() {
                             Correct Type
                           </Button>
                         )}
-                        {isMyTicketsView && (user?.role === "admin" || user?.role === "super_admin") && (
+                        {isTicketWorkView && (user?.role === "admin" || user?.role === "super_admin") && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2738,7 +2801,7 @@ export default function AgentDashboard() {
                               <p className="text-sm font-medium" data-testid="text-detail-appliance">
                                 {APPLIANCE_LABELS[selectedSubmission.applianceType] || selectedSubmission.applianceType}
                               </p>
-                              {isMyTicketsView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.assignedTo === user?.id && (
+                              {isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.assignedTo === user?.id && (
                                 <Select
                                   value=""
                                   onValueChange={(val) => {
@@ -3458,7 +3521,7 @@ export default function AgentDashboard() {
                       </Card>
                     )}
 
-                    {isMyTicketsView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType === "parts_nla" && (
+                    {isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType === "parts_nla" && (
                       <Card>
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
@@ -3893,7 +3956,7 @@ export default function AgentDashboard() {
                         intake form just like the AUTH tickets". The previous
                         `requestType !== "parts_nla"` exclusion is removed;
                         the iframe + status query are now branch-agnostic. */}
-                    {isMyTicketsView && stage3Required && (
+                    {isTicketWorkView && stage3Required && (
                       <Card ref={stage3CardRef} data-testid="card-stage3-intake">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
@@ -3937,7 +4000,7 @@ export default function AgentDashboard() {
                         the gate is released. Tyler 2026-04-30: also
                         renders for NLA parts tickets (see Stage 3 card
                         above for rationale). */}
-                    {isMyTicketsView && stage3Recorded && (
+                    {isTicketWorkView && stage3Recorded && (
                       <Card data-testid="card-stage3-recorded">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2 text-green-700 dark:text-green-300">
@@ -3965,7 +4028,7 @@ export default function AgentDashboard() {
                         of truth for Stage 3 visibility, but selectedSubmission
                         comes from a separate query and may briefly still report
                         ticketStatus='pending' before refetch lands. */}
-                    {isMyTicketsView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType !== "parts_nla" && !stage3Required && !stage3Recorded && (
+                    {isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType !== "parts_nla" && !stage3Required && !stage3Recorded && (
                       <Card>
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
@@ -4812,7 +4875,7 @@ export default function AgentDashboard() {
                     including parts_nla (NLA intake form is routed server-side
                     via VRS_INTAKE_FORM_NLA_BASE). Predicate kept in sync with
                     the right panel gate immediately below. */}
-                {isMyTicketsView && shsaiVisible && effectiveSelectedSubmission && (
+                {isTicketWorkView && shsaiVisible && effectiveSelectedSubmission && (
                   <div
                     role="separator"
                     aria-orientation="vertical"
@@ -4837,7 +4900,7 @@ export default function AgentDashboard() {
                     the entire 3-tab right panel unmounts and the auto-fire
                     timer's setRightPanelView("intake") lands on a destroyed
                     Tabs container. */}
-                {isMyTicketsView && shsaiVisible && effectiveSelectedSubmission && (
+                {isTicketWorkView && shsaiVisible && effectiveSelectedSubmission && (
                   <div
                     className="hidden md:flex md:w-[var(--right-panel-w)] shrink-0 flex-col min-h-0 min-w-0"
                     data-testid="panel-shsai"
