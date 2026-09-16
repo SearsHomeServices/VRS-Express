@@ -1,5 +1,7 @@
 import React, { type ReactNode } from "react";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
+import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
+import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 
 function ReviewField({
   label,
@@ -31,6 +33,7 @@ export function VrsAiBridgeReview({
   bridge: VrsAiBridgeStatus;
 }) {
   const context = bridge.reviewContext;
+  const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   if (!context) return null;
 
   const total = context.labor_amount + context.tax_amount + context.part_price;
@@ -223,27 +226,10 @@ export function VrsAiBridgeReview({
         ) : null}
 
         {context.appliance_photos?.length ? (
-          <div>
-            <span className="text-muted-foreground">Sender photos</span>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {context.appliance_photos.map((photo, index) => (
-                <a
-                  key={`${photo}-${index}`}
-                  href={photo}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="block overflow-hidden rounded-md border bg-background"
-                >
-                  <img
-                    src={photo}
-                    referrerPolicy="no-referrer"
-                    alt={`Sender appliance ${index + 1}`}
-                    className="h-36 w-full object-cover"
-                  />
-                </a>
-              ))}
-            </div>
-          </div>
+          <VrsAiBridgePhotos
+            photos={context.appliance_photos}
+            proxyEnabled={bridgePhotoProxyEnabled}
+          />
         ) : null}
       </div>
     </details>
@@ -284,6 +270,28 @@ export function VrsAiBridgePanel({
         </p>
       )}
       <VrsAiBridgeReview bridge={bridge} />
+    </div>
+  );
+}
+
+// The Pilot table deliberately keeps terminal rows read-only. Keep the
+// bridge-only sender gallery available there in DEV proxy mode without
+// mounting the workflow/status controls used for active reviews.
+export function VrsAiPilotReadOnlySenderPhotos({
+  bridge,
+}: {
+  bridge: VrsAiBridgeStatus | null | undefined;
+}) {
+  const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
+  const photos = bridge?.reviewContext?.appliance_photos;
+  if (!bridgePhotoProxyEnabled || !photos?.length) return null;
+
+  return (
+    <div
+      className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
+      data-testid="vrs-ai-pilot-read-only-sender-photos"
+    >
+      <VrsAiBridgePhotos photos={photos} proxyEnabled />
     </div>
   );
 }

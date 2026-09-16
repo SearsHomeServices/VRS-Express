@@ -26,3 +26,4 @@
 - [Executive reporting definitions](executive-reporting-definitions.md) — executive ticket outcomes differ from operational Stage-1 analytics; comparisons are current outcomes, not historical snapshots.
 - [Post-close note audience](post-close-note-audience.md) — new notes on terminal tickets are staff-only; historical notes remain shared; non-queued agent access stays cross-division.
 - [Email delivery ambiguity](email-delivery-ambiguity.md) — timeouts may already be accepted; require intentional resend, and never equate provider acceptance with mailbox delivery.
+- [Bridge photo scope](bridge-photo-scope.md) — DEV-only photo delivery; expired Sasha links need an approved refresh or storage design, not just a proxy.

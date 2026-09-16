@@ -1,0 +1,41 @@
+Show SHSAI photos inline with secure zoom and lasting access,” in the DEV environment only.
+Before making changes:
+1.	Inspect the existing Bridge photo implementation in client/src/components/vrs-ai-bridge-review.tsx.
+2.	Inspect the existing authenticated production-media routes and PhotoLightbox implementation so they can be reused where appropriate.
+3.	Create a checkpoint.
+4.	Do not modify production data, production environment variables, or production deployment settings.
+Implementation requirements:
+1.	Add a server-side, authenticated, same-origin endpoint for Bridge photos.
+2.	The endpoint must accept a Bridge call/submission identifier and photo index. It must never accept or proxy an arbitrary URL supplied by the browser.
+3.	Verify that the logged-in user is authorized to view the requested Bridge submission.
+4.	Read the original photo URL from the stored Bridge payload.
+5.	Initially permit only the exact DEV hostname sasha-dev.stage.nextgen.shs.com. Reject all other hosts, redirects to unapproved hosts, malformed URLs, and non-HTTPS URLs.
+6.	Fetch the image server-side with sensible timeout, maximum-size, redirect, status-code, and MIME-type protections.
+7.	Return the valid image from the VRS Express origin without forwarding SHSAI’s blocking Cross-Origin-Resource-Policy: same-origin header.
+8.	Update the Bridge interface to use the same-origin endpoint and reuse the existing PhotoLightbox for zoom, panning, next/previous navigation, touch zoom, and download.
+9.	Add a clear image-load error state.
+10.	Investigate how SHSAI URLs can be refreshed before expiration. If the application has no supported refresh mechanism, report that limitation before implementing permanent storage. Do not invent an undocumented SHSAI API.
+11.	Do not expose signed SHSAI URLs or their query strings in logs, errors, client responses, or test output.
+DEV-only safety requirements:
+•	Gate the server route and Bridge interface changes behind VRS_BRIDGE_PHOTO_PROXY_ENABLED.
+•	Treat the feature as disabled when the variable is missing, blank, malformed, or not exactly true.
+•	Enable the variable only in the DEV deployment.
+•	Keep production behavior unchanged.
+•	Do not add the production SHSAI hostname to the allowlist.
+•	Do not change normal submission or TechHub photo behavior.
+Testing requirements:
+•	Run the existing test suite and type checking.
+•	Add tests for authorization, disabled feature flag, invalid photo index, unapproved host, redirect to an unapproved host, timeout, oversized response, non-image response, and expired SHSAI link.
+•	In DEV, verify SO 7995-10850577 displays all three photos inline.
+•	Verify zoom, navigation, touch behavior, download, and error handling.
+•	Confirm that signed URLs do not appear in browser-visible errors or logs.
+•	Confirm production remains disabled by default.
+After completing the work, stop and provide:
+1.	A summary of changed files.
+2.	Test and type-check results.
+3.	DEV verification results.
+4.	The exact DEV environment variable that must be configured.
+5.	Confirmation that production remains disabled.
+6.	Any unresolved limitation involving the two-hour URL expiration.
+Do not publish or deploy to production.
+

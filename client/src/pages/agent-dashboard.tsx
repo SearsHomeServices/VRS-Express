@@ -125,7 +125,10 @@ import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
-import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
+import {
+  VrsAiBridgePanel,
+  VrsAiPilotReadOnlySenderPhotos,
+} from "@/components/vrs-ai-bridge-review";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 
@@ -2785,6 +2788,13 @@ export default function AgentDashboard() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    {isVrsAiPilotView &&
+                      selectedSubmission.ticketStatus === "completed" && (
+                        <VrsAiPilotReadOnlySenderPhotos
+                          bridge={selectedSubmission.vrsAi}
+                        />
+                      )}
 
                     <Card>
                       <CardHeader className="pb-3">

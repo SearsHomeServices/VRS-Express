@@ -66,7 +66,15 @@ import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import { isValidProvider1099Company } from "@shared/provider1099";
-import { is1099PortalEnabled, isTechHubPhotosEnabled } from "./featureFlags";
+import {
+  is1099PortalEnabled,
+  isTechHubPhotosEnabled,
+  isVrsBridgePhotoProxyEnabled,
+} from "./featureFlags";
+import {
+  registerVrsBridgePhotoProxy,
+  browserBridgeStatus,
+} from "./vrs-bridge-photo-proxy";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 import {
   STAFF_NOTE_ROLES,
@@ -642,7 +650,11 @@ export async function registerRoutes(
   // Public runtime config — lets the client hide feature-flagged affordances
   // (e.g. the 1099 provider portal) without a rebuild.
   app.get("/api/config", (_req, res) => {
-    res.json({ portal1099Enabled: is1099PortalEnabled(), techHubPhotosEnabled: isTechHubPhotosEnabled() });
+    res.json({
+      portal1099Enabled: is1099PortalEnabled(),
+      techHubPhotosEnabled: isTechHubPhotosEnabled(),
+      vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
+    });
   });
 
   app.post("/api/auth/login", async (req, res) => {
@@ -2063,7 +2075,11 @@ export async function registerRoutes(
           : await vrsBridgeStore.getStatusBySubmissionId(submission.id);
       return res.status(200).json({
         submission: redactWarrantyForProvider(user.role, submission),
-        vrsAi,
+        vrsAi: browserBridgeStatus(
+          vrsAi,
+          submission.id,
+          isVrsBridgePhotoProxyEnabled(),
+        ),
       });
     } catch (error) {
       console.error("Get submission error:", error);
@@ -2986,9 +3002,14 @@ export async function registerRoutes(
           console.error(`[process:approve_submission] SMS send failed for submission ${submission.id} (DB committed; agent will see success):`, smsErr);
         }
 
+        const vrsAi = await vrsBridgeStore.getStatusBySubmissionId(id);
         return res.status(200).json({
           submission: updated,
-          vrsAi: await vrsBridgeStore.getStatusBySubmissionId(id),
+          vrsAi: browserBridgeStatus(
+            vrsAi,
+            id,
+            isVrsBridgePhotoProxyEnabled(),
+          ),
         });
       }
 
@@ -7686,6 +7707,17 @@ export async function registerRoutes(
       console.error("Batch media token error:", error);
       return res.status(500).json({ error: "Failed to issue media tokens" });
     }
+  });
+
+  // DEV-only Bridge sender-photo endpoint. It reads the stored Bridge payload
+  // server-side and never accepts an upstream URL from the browser.
+  registerVrsBridgePhotoProxy(app, {
+    authenticate: authenticateToken,
+    getSubmission: (id) => storage.getSubmission(id),
+    getBridge: (submissionId) => vrsBridgeStore.getBySubmissionId(submissionId),
+    getSpecializations: (userId) => storage.getSpecializations(userId),
+    allDivisionCount: ALL_DIVISIONS.length,
+    isEnabled: isVrsBridgePhotoProxyEnabled,
   });
 
   // ========================================================================

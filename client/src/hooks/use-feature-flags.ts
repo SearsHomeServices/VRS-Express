@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 
 interface AppConfig {
   portal1099Enabled: boolean;
+  techHubPhotosEnabled: boolean;
+  vrsBridgePhotoProxyEnabled: boolean;
 }
 
 // Runtime feature flags sourced from GET /api/config. Defaults to disabled
@@ -16,4 +18,9 @@ export function useAppConfig() {
 export function usePortal1099Enabled(): boolean {
   const { data } = useAppConfig();
   return data?.portal1099Enabled ?? false;
+}
+
+export function useVrsBridgePhotoProxyEnabled(): boolean {
+  const { data } = useAppConfig();
+  return data?.vrsBridgePhotoProxyEnabled ?? false;
 }

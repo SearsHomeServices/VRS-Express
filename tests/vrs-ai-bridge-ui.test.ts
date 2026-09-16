@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import * as reviewComponents from "../client/src/components/vrs-ai-bridge-review";
 import {
@@ -93,9 +94,24 @@ const v9Bridge: VrsAiBridgeStatus = {
   },
 };
 
-function renderReview(bridge: VrsAiBridgeStatus): string {
+function renderReview(
+  bridge: VrsAiBridgeStatus,
+  bridgePhotoProxyEnabled = false,
+): string {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  queryClient.setQueryData(["/api/config"], {
+    portal1099Enabled: false,
+    techHubPhotosEnabled: false,
+    vrsBridgePhotoProxyEnabled: bridgePhotoProxyEnabled,
+  });
   return renderToStaticMarkup(
-    createElement(reviewComponents.VrsAiBridgeReview, { bridge }),
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(reviewComponents.VrsAiBridgeReview, { bridge }),
+    ),
   );
 }
 
@@ -224,7 +240,7 @@ describe("VRS AI bridge review rendering", () => {
     );
   });
 
-  it("renders the exact sender URL as a safe direct link and no-referrer preview", () => {
+  it("preserves the direct sender link behavior while the photo proxy is disabled", () => {
     const html = renderReview(v8Bridge);
 
     expect(html).toContain(
@@ -236,6 +252,86 @@ describe("VRS AI bridge review rendering", () => {
     expect(html).not.toMatch(
       /buildMediaUrl|buildMediaUrls|prefetchMediaTokens|PhotoLightbox/,
     );
+  });
+
+  it("does not render signed sender URLs when the server flag supplies proxy paths", () => {
+    const html = renderReview(
+      {
+        ...v8Bridge,
+        reviewContext: {
+          ...v8Bridge.reviewContext!,
+          appliance_photos: ["/api/submissions/44/vrs-ai-photos/0"],
+        },
+      },
+      true,
+    );
+
+    expect(html).toContain("Sender photos");
+    expect(html).not.toContain(signedPhotoUrl);
+    expect(html).not.toContain("tina.example.test");
+  });
+
+  it("renders sanitized sender photos in the completed Pilot read-only view only when DEV proxy mode is enabled", () => {
+    const candidate = reviewComponents as typeof reviewComponents & {
+      VrsAiPilotReadOnlySenderPhotos?: (props: {
+        bridge: VrsAiBridgeStatus | null | undefined;
+      }) => React.ReactNode;
+    };
+    expect(typeof candidate.VrsAiPilotReadOnlySenderPhotos).toBe("function");
+    if (!candidate.VrsAiPilotReadOnlySenderPhotos) return;
+
+    const pilotBridge: VrsAiBridgeStatus = {
+      ...v8Bridge,
+      reviewContext: {
+        ...v8Bridge.reviewContext!,
+        appliance_photos: ["/api/submissions/344/vrs-ai-photos/0"],
+      },
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(["/api/config"], {
+      portal1099Enabled: false,
+      techHubPhotosEnabled: false,
+      vrsBridgePhotoProxyEnabled: true,
+    });
+    const enabledHtml = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(candidate.VrsAiPilotReadOnlySenderPhotos, {
+          bridge: pilotBridge,
+        }),
+      ),
+    );
+    expect(enabledHtml).toContain(
+      'data-testid="vrs-ai-pilot-read-only-sender-photos"',
+    );
+    expect(enabledHtml).toContain("Sender photos");
+    // Proxy-mode sources are only passed to the effect loader, never emitted
+    // into the static markup or a browser-visible link.
+    expect(enabledHtml).not.toContain("/api/submissions/344/vrs-ai-photos/0");
+    expect(enabledHtml).not.toContain(signedPhotoUrl);
+
+    const disabledQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    disabledQueryClient.setQueryData(["/api/config"], {
+      portal1099Enabled: false,
+      techHubPhotosEnabled: false,
+      vrsBridgePhotoProxyEnabled: false,
+    });
+    expect(
+      renderToStaticMarkup(
+        createElement(
+          QueryClientProvider,
+          { client: disabledQueryClient },
+          createElement(candidate.VrsAiPilotReadOnlySenderPhotos, {
+            bridge: pilotBridge,
+          }),
+        ),
+      ),
+    ).toBe("");
   });
 
   it("preserves exact empty fields, placeholders, and numeric zeroes", () => {
@@ -304,10 +400,23 @@ describe("VRS AI bridge review rendering", () => {
     expect(typeof candidate.VrsAiBridgePanel).toBe("function");
     if (!candidate.VrsAiBridgePanel) return;
 
-    const renderPanel = (bridge: VrsAiBridgeStatus | null | undefined) =>
-      renderToStaticMarkup(
-        createElement(candidate.VrsAiBridgePanel!, { bridge }),
+    const renderPanel = (bridge: VrsAiBridgeStatus | null | undefined) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      queryClient.setQueryData(["/api/config"], {
+        portal1099Enabled: false,
+        techHubPhotosEnabled: false,
+        vrsBridgePhotoProxyEnabled: false,
+      });
+      return renderToStaticMarkup(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(candidate.VrsAiBridgePanel!, { bridge }),
+        ),
       );
+    };
 
     expect(renderPanel(null)).toBe("");
     expect(renderPanel(undefined)).toBe("");
@@ -356,8 +465,14 @@ describe("VRS AI bridge review rendering", () => {
       ),
       "utf8",
     );
+    expect(componentSource).toContain("VrsAiBridgePhotos");
+    expect(componentSource).toContain("VrsAiPilotReadOnlySenderPhotos");
     expect(componentSource).not.toMatch(
-      /buildMediaUrl|buildMediaUrls|prefetchMediaTokens|PhotoLightbox/,
+      /buildMediaUrl|buildMediaUrls|prefetchMediaTokens/,
+    );
+
+    expect(dashboardSource).toMatch(
+      /isVrsAiPilotView[\s\S]*?selectedSubmission\.ticketStatus === "completed"[\s\S]*?<VrsAiPilotReadOnlySenderPhotos/,
     );
   });
 });
