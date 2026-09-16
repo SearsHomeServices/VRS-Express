@@ -129,6 +129,8 @@ import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
+import { VrsAiPilotClosedReview } from "@/components/vrs-ai-pilot-closed-review";
+import { isDevelopmentRuntime } from "@/lib/runtime-environment";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
@@ -222,6 +224,10 @@ export default function AgentDashboard() {
   const [pilotWorkflowId, setPilotWorkflowId] = useState<number | null>(null);
   const isAdminViewing = user?.role === "admin" || user?.role === "super_admin";
   const canUsePilot = canUseVrsAiPilot(user?.role);
+  // Closed Pilot review is deliberately DEV-only. This marker comes from
+  // server runtime NODE_ENV in the served HTML, not Vite's build mode, so a
+  // production deployment cannot expose the historical Pilot affordances.
+  const isDevRuntime = isDevelopmentRuntime();
   const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   const isMyTicketsView = activeView === "mytickets" || activeView === "nla_mytickets";
   const isQueueView = activeView === "queue" || activeView === "nla_queue";
@@ -4834,6 +4840,13 @@ export default function AgentDashboard() {
                           )}
                         </CardContent>
                       </Card>
+                    )}
+
+                    {isDevRuntime && isVrsAiPilotView && selectedSubmission && (
+                      <VrsAiPilotClosedReview
+                        submission={selectedSubmission}
+                        bridge={selectedSubmission.vrsAi}
+                      />
                     )}
 
                     {activeView === "completed" && (

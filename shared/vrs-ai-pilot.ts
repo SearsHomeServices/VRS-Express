@@ -12,6 +12,27 @@ export type VrsAiPilotLink = {
 export const VRS_AI_PILOT_ROLES = ["vrs_agent", "admin", "super_admin"] as const;
 export const VRS_AI_PILOT_DIVISION_COUNT = 8;
 
+/**
+ * Ticket outcomes that are closed in the Pilot projection.  These mirror the
+ * terminal outcomes already written by the existing agent process flow; the
+ * Pilot closed-review surface must never treat a closed row as pending work.
+ */
+export const VRS_AI_PILOT_CLOSED_STATUSES = [
+  "completed",
+  "rejected",
+  "rejected_closed",
+  "invalid",
+] as const;
+
+export type VrsAiPilotClosedStatus = (typeof VRS_AI_PILOT_CLOSED_STATUSES)[number];
+
+export function isVrsAiPilotClosedStatus(
+  status: string | null | undefined,
+): status is VrsAiPilotClosedStatus {
+  return typeof status === "string" &&
+    (VRS_AI_PILOT_CLOSED_STATUSES as readonly string[]).includes(status);
+}
+
 export function canUseVrsAiPilot(role: string | null | undefined): boolean {
   return typeof role === "string" &&
     (VRS_AI_PILOT_ROLES as readonly string[]).includes(role);
