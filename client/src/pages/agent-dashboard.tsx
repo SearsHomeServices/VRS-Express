@@ -125,10 +125,9 @@ import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
-import {
-  VrsAiBridgePanel,
-  VrsAiPilotReadOnlySenderPhotos,
-} from "@/components/vrs-ai-bridge-review";
+import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
+import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
+import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
 
@@ -223,6 +222,7 @@ export default function AgentDashboard() {
   const [pilotWorkflowId, setPilotWorkflowId] = useState<number | null>(null);
   const isAdminViewing = user?.role === "admin" || user?.role === "super_admin";
   const canUsePilot = canUseVrsAiPilot(user?.role);
+  const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   const isMyTicketsView = activeView === "mytickets" || activeView === "nla_mytickets";
   const isQueueView = activeView === "queue" || activeView === "nla_queue";
   const isCompletedView = activeView === "completed" || activeView === "nla_completed";
@@ -2789,13 +2789,6 @@ export default function AgentDashboard() {
                       </CardContent>
                     </Card>
 
-                    {isVrsAiPilotView &&
-                      selectedSubmission.ticketStatus === "completed" && (
-                        <VrsAiPilotReadOnlySenderPhotos
-                          bridge={selectedSubmission.vrsAi}
-                        />
-                      )}
-
                     <Card>
                       <CardHeader className="pb-3">
                         <CardTitle className="text-base flex items-center gap-2">
@@ -2963,6 +2956,9 @@ export default function AgentDashboard() {
                         {(() => {
                           let parsed: any = null;
                           try { parsed = selectedSubmission.photos ? JSON.parse(selectedSubmission.photos) : null; } catch { parsed = null; }
+                          const bridgePhotos = bridgePhotoProxyEnabled
+                            ? selectedSubmission.vrsAi?.reviewContext?.appliance_photos ?? []
+                            : [];
                           // Tyler 2026-07-08 — thumb map { fullPath: thumbPath }.
                           // Grid <img> src swaps to the thumb when one exists;
                           // FULL paths stay the identity for rejection toggles,
@@ -2985,7 +2981,7 @@ export default function AgentDashboard() {
                           // (see SubmissionListItem in shared/schema.ts)
                           // so we should land on `parsed` directly almost
                           // every time.
-                          if (!parsed && photosStillLoading) {
+                          if (!parsed && photosStillLoading && bridgePhotos.length === 0) {
                             return (
                               <div className="grid grid-cols-3 gap-2" data-testid="photos-loading">
                                 {[0, 1, 2].map((i) => (
@@ -2994,7 +2990,16 @@ export default function AgentDashboard() {
                               </div>
                             );
                           }
-                          if (!parsed) return <p className="text-sm text-muted-foreground" data-testid="text-no-photos">No photos attached</p>;
+                          if (!parsed) {
+                            return bridgePhotos.length > 0 ? (
+                              <VrsAiBridgePhotos
+                                photos={bridgePhotos}
+                                proxyEnabled={bridgePhotoProxyEnabled}
+                              />
+                            ) : (
+                              <p className="text-sm text-muted-foreground" data-testid="text-no-photos">No photos attached</p>
+                            );
+                          }
 
                           const isNewFormat = parsed && typeof parsed === "object" && !Array.isArray(parsed);
                           const estimatePhotos: string[] = isNewFormat ? (parsed.estimate || []) : [];
@@ -3106,7 +3111,13 @@ export default function AgentDashboard() {
                               {renderPhotoGrid(issuePhotos, "Issue Photos", ImageIcon, 0, "issue-photos")}
                               {renderPhotoGrid(estimatePhotos, "Model, Serial & Estimate Screenshots", ImageIcon, issuePhotos.length, "estimate-photos")}
                               {renderPhotoGrid(legacyPhotos, "Photos", ImageIcon, issuePhotos.length + estimatePhotos.length, "photos")}
-                              {estimatePhotos.length === 0 && issuePhotos.length === 0 && legacyPhotos.length === 0 && (
+                              {bridgePhotos.length > 0 && (
+                                <VrsAiBridgePhotos
+                                  photos={bridgePhotos}
+                                  proxyEnabled={bridgePhotoProxyEnabled}
+                                />
+                              )}
+                              {estimatePhotos.length === 0 && issuePhotos.length === 0 && legacyPhotos.length === 0 && bridgePhotos.length === 0 && (
                                 <p className="text-sm text-muted-foreground" data-testid="text-no-photos">No photos attached</p>
                               )}
                             </div>

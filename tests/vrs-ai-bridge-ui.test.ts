@@ -266,72 +266,11 @@ describe("VRS AI bridge review rendering", () => {
       true,
     );
 
-    expect(html).toContain("Sender photos");
+    // DEV proxy mode moves the bridge gallery into the dashboard's existing
+    // Photos & Media card instead of duplicating it in the payload review.
+    expect(html).not.toContain("Sender photos");
     expect(html).not.toContain(signedPhotoUrl);
     expect(html).not.toContain("tina.example.test");
-  });
-
-  it("renders sanitized sender photos in the completed Pilot read-only view only when DEV proxy mode is enabled", () => {
-    const candidate = reviewComponents as typeof reviewComponents & {
-      VrsAiPilotReadOnlySenderPhotos?: (props: {
-        bridge: VrsAiBridgeStatus | null | undefined;
-      }) => React.ReactNode;
-    };
-    expect(typeof candidate.VrsAiPilotReadOnlySenderPhotos).toBe("function");
-    if (!candidate.VrsAiPilotReadOnlySenderPhotos) return;
-
-    const pilotBridge: VrsAiBridgeStatus = {
-      ...v8Bridge,
-      reviewContext: {
-        ...v8Bridge.reviewContext!,
-        appliance_photos: ["/api/submissions/344/vrs-ai-photos/0"],
-      },
-    };
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    queryClient.setQueryData(["/api/config"], {
-      portal1099Enabled: false,
-      techHubPhotosEnabled: false,
-      vrsBridgePhotoProxyEnabled: true,
-    });
-    const enabledHtml = renderToStaticMarkup(
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(candidate.VrsAiPilotReadOnlySenderPhotos, {
-          bridge: pilotBridge,
-        }),
-      ),
-    );
-    expect(enabledHtml).toContain(
-      'data-testid="vrs-ai-pilot-read-only-sender-photos"',
-    );
-    expect(enabledHtml).toContain("Sender photos");
-    // Proxy-mode sources are only passed to the effect loader, never emitted
-    // into the static markup or a browser-visible link.
-    expect(enabledHtml).not.toContain("/api/submissions/344/vrs-ai-photos/0");
-    expect(enabledHtml).not.toContain(signedPhotoUrl);
-
-    const disabledQueryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    disabledQueryClient.setQueryData(["/api/config"], {
-      portal1099Enabled: false,
-      techHubPhotosEnabled: false,
-      vrsBridgePhotoProxyEnabled: false,
-    });
-    expect(
-      renderToStaticMarkup(
-        createElement(
-          QueryClientProvider,
-          { client: disabledQueryClient },
-          createElement(candidate.VrsAiPilotReadOnlySenderPhotos, {
-            bridge: pilotBridge,
-          }),
-        ),
-      ),
-    ).toBe("");
   });
 
   it("preserves exact empty fields, placeholders, and numeric zeroes", () => {
@@ -466,13 +405,21 @@ describe("VRS AI bridge review rendering", () => {
       "utf8",
     );
     expect(componentSource).toContain("VrsAiBridgePhotos");
-    expect(componentSource).toContain("VrsAiPilotReadOnlySenderPhotos");
     expect(componentSource).not.toMatch(
       /buildMediaUrl|buildMediaUrls|prefetchMediaTokens/,
     );
 
-    expect(dashboardSource).toMatch(
-      /isVrsAiPilotView[\s\S]*?selectedSubmission\.ticketStatus === "completed"[\s\S]*?<VrsAiPilotReadOnlySenderPhotos/,
+    expect(dashboardSource).toContain(
+      'import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";',
     );
+    expect(dashboardSource).toContain("bridgePhotoProxyEnabled");
+    const mediaCard = dashboardSource.indexOf("Photos & Media");
+    const bridgeGallery = dashboardSource.indexOf("<VrsAiBridgePhotos", mediaCard);
+    expect(mediaCard).toBeGreaterThan(-1);
+    expect(bridgeGallery).toBeGreaterThan(mediaCard);
+    expect(dashboardSource).toContain(
+      "legacyPhotos.length === 0 && bridgePhotos.length === 0",
+    );
+    expect(dashboardSource).not.toContain("VrsAiPilotReadOnlySenderPhotos");
   });
 });
