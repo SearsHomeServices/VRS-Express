@@ -1,5 +1,9 @@
 import type { Express } from "express";
-import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+  isReservedBridgeObjectPath,
+} from "./objectStorage";
 import { authenticateToken, authenticateTokenForMedia, requireRole } from "../../middleware/auth";
 import { issueUploadToken } from "../../lib/uploadTokens";
 
@@ -86,6 +90,12 @@ export function registerObjectStorageRoutes(app: Express): void {
   // to the standard Authorization header.
   const serveObject = async (req: any, res: any) => {
     try {
+      // Sasha bridge copies are intentionally inaccessible through the
+      // generic authenticated object route. Their ticket authorization lives
+      // in the DEV bridge proxy, which must run before any byte is read.
+      if (isReservedBridgeObjectPath(req.path)) {
+        return res.status(404).json({ error: "Object not found" });
+      }
       const objectFile = await objectStorageService.getObjectEntityFile(req.path);
       const rangeHeader = req.headers["range"] as string | undefined;
       await objectStorageService.downloadObject(objectFile, res, 3600, rangeHeader);

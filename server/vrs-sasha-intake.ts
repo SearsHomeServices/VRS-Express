@@ -67,6 +67,11 @@ export interface VrsSashaIntakeDependencies {
     input: VrsIntakeTicketInput,
     internalOptions?: VrsSashaInternalTicketOptions,
   ): Promise<VrsFreshSubmissionResult>;
+  capturePhotos?: (
+    submissionId: number,
+    photoUrls: readonly string[],
+    retentionExpiresAt?: number,
+  ) => void | Promise<{ captured: number; failures: number }>;
 }
 
 function usablePhone(value: string | null | undefined): string {
@@ -204,6 +209,37 @@ export function createVrsSashaIntake(
           existingCallId: stored.record.callId,
           state: stored.record.state,
         };
+      }
+      if (deps.capturePhotos) {
+        try {
+          const photoUrls = Array.isArray(projection.requestPayload.appliance_photos)
+            ? projection.requestPayload.appliance_photos
+            : [];
+          const capturePromise = deps.capturePhotos(
+            stored.record.submissionId,
+            photoUrls,
+            stored.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+          );
+          void Promise.resolve(capturePromise).then((capture) => {
+            if (capture && capture.failures > 0) {
+              console.error(
+                `[vrs-sasha] bridge photo capture incomplete: ` +
+                `submission=${stored.record.submissionId} ` +
+                `captured=${capture.captured} failures=${capture.failures}`,
+              );
+            }
+          }).catch(() => {
+            console.error(
+              `[vrs-sasha] bridge photo capture failed: ` +
+              `submission=${stored.record.submissionId}`,
+            );
+          });
+        } catch {
+          console.error(
+            `[vrs-sasha] bridge photo capture failed: ` +
+            `submission=${stored.record.submissionId}`,
+          );
+        }
       }
       return {
         kind: "accepted",

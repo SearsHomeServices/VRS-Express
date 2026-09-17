@@ -262,7 +262,12 @@ export interface IStorage {
     automatedSnapshot?: Pick<Submission, "updatedAt" | "serviceOrder" | "technicianId" | "warrantyProvider" | "warrantyType" | "partNumbers">
   ): Promise<Submission | undefined>;
   deleteSubmission(id: number): Promise<boolean>;
-  getAllSubmissions(startDate?: Date | null, endDate?: Date | null, techLdap?: string | null): Promise<Submission[]>;
+  getAllSubmissions(
+    startDate?: Date | null,
+    endDate?: Date | null,
+    techLdap?: string | null,
+    options?: { vrsAiOnly?: boolean },
+  ): Promise<Submission[]>;
   getAgentQueueCount(agentId?: number): Promise<number>;
   getDivisionQueueCount(divisions: string[]): Promise<number>;
   getCompletedTodayCount(agentId?: number): Promise<number>;
@@ -1002,11 +1007,29 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getAllSubmissions(startDate?: Date | null, endDate?: Date | null, techLdap?: string | null): Promise<Submission[]> {
+  async getAllSubmissions(
+    startDate?: Date | null,
+    endDate?: Date | null,
+    techLdap?: string | null,
+    options?: { vrsAiOnly?: boolean },
+  ): Promise<Submission[]> {
     const conditions = [];
     if (startDate) conditions.push(gte(submissions.createdAt, startDate));
     if (endDate) conditions.push(lte(submissions.createdAt, endDate));
     if (techLdap) conditions.push(sql`lower(${submissions.technicianLdapId}) = ${techLdap.toLowerCase()}`);
+
+    // A durable vrs_ai_calls link is the sole Pilot membership predicate.
+    // Keep the legacy query untouched unless the caller explicitly opts in.
+    if (options?.vrsAiOnly) {
+      conditions.push(sql`${vrsAiCalls.callId} IS NOT NULL`);
+      return db
+        .select({ submission: submissions })
+        .from(submissions)
+        .innerJoin(vrsAiCalls, eq(vrsAiCalls.submissionId, submissions.id))
+        .where(and(...conditions))
+        .orderBy(desc(submissions.createdAt))
+        .then((rows) => rows.map((row) => row.submission));
+    }
 
     if (conditions.length > 0) {
       return db.select().from(submissions).where(and(...conditions)).orderBy(desc(submissions.createdAt));

@@ -9,6 +9,12 @@ import {
 } from "./objectAcl";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
+export const RESERVED_BRIDGE_OBJECT_PREFIX = "/objects/vrs-bridge-photos/";
+
+export function isReservedBridgeObjectPath(objectPath: string): boolean {
+  return objectPath === RESERVED_BRIDGE_OBJECT_PREFIX.slice(0, -1) ||
+    objectPath.startsWith(RESERVED_BRIDGE_OBJECT_PREFIX);
+}
 
 // The object storage client is used to interact with the object storage service.
 export const objectStorageClient = new Storage({
@@ -157,6 +163,7 @@ export class ObjectStorageService {
     res: Response,
     cacheTtlSec: number = 3600,
     rangeHeader?: string,
+    cacheControlOverride?: string,
   ) {
     try {
       // Tyler 2026-05-09 — perf: previously this method made THREE separate
@@ -203,7 +210,7 @@ export class ObjectStorageService {
         etag = metadata.etag ? String(metadata.etag) : undefined;
         setCachedMetadata(cacheKey, { size: totalSize, contentType, etag });
       }
-      const cacheControl = `private, max-age=${cacheTtlSec}`;
+      const cacheControl = cacheControlOverride ?? `private, max-age=${cacheTtlSec}`;
 
       // Conditional GET: if the browser already has the bytes, return 304
       // and skip the entire stream. Object store contents are immutable
@@ -367,6 +374,23 @@ export class ObjectStorageService {
 
   // Gets the object entity file from the object path.
   async getObjectEntityFile(objectPath: string): Promise<File> {
+    if (isReservedBridgeObjectPath(objectPath)) {
+      throw new ObjectNotFoundError();
+    }
+    return this.getObjectEntityFileInternal(objectPath);
+  }
+
+  // Internal bridge handle. Reserved objects intentionally have no generic
+  // read/sign route, so only the ticket-authorized bridge service can obtain
+  // their File handle.
+  async getServerOwnedObjectEntityFile(objectPath: string): Promise<File> {
+    if (!isReservedBridgeObjectPath(objectPath)) {
+      throw new ObjectNotFoundError();
+    }
+    return this.getObjectEntityFileInternal(objectPath);
+  }
+
+  private async getObjectEntityFileInternal(objectPath: string): Promise<File> {
     if (!objectPath.startsWith("/objects/")) {
       throw new ObjectNotFoundError();
     }
@@ -396,6 +420,66 @@ export class ObjectStorageService {
     // preflight collapses /objects/* to a single GCS RPC per request and
     // is the difference between 36 RPCs and 12 RPCs for a 12-photo dialog.
     return objectFile;
+  }
+
+  // Server-owned media can be written directly to the private bucket without
+  // issuing a browser upload URL. Callers must use an /objects/ path so this
+  // cannot accidentally write to a public bucket.
+  async saveObjectEntity(
+    objectPath: string,
+    body: Buffer,
+    contentType: string,
+    metadata?: Record<string, string>,
+  ): Promise<void> {
+    const objectFile = await this.getObjectEntityFileInternal(objectPath);
+    await objectFile.save(body, {
+      resumable: false,
+      metadata: {
+        contentType,
+        metadata,
+      },
+    });
+    metadataCache.delete(`${objectFile.bucket.name}/${objectFile.name}`);
+  }
+
+  async deleteObjectEntity(objectPath: string): Promise<void> {
+    const objectFile = await this.getObjectEntityFileInternal(objectPath);
+    try {
+      await objectFile.delete({ ignoreNotFound: true });
+    } catch (error: any) {
+      if (error?.code === 404 || error?.status === 404) return;
+      throw error;
+    }
+  }
+
+  async listObjectEntityFiles(prefix: string): Promise<File[]> {
+    const privateDir = this.getPrivateObjectDir().replace(/\/+$/, "");
+    const objectPrefix = `${privateDir}/${prefix.replace(/^\/+/, "")}`;
+    const { bucketName, objectName } = parseObjectPath(objectPrefix);
+    const [files] = await objectStorageClient.bucket(bucketName).getFiles({
+      prefix: objectName,
+    });
+    return files;
+  }
+
+  async listObjectEntityFilesPage(
+    prefix: string,
+    pageToken?: string,
+    maxResults = 100,
+  ): Promise<{ files: File[]; nextPageToken?: string }> {
+    const privateDir = this.getPrivateObjectDir().replace(/\/+$/, "");
+    const objectPrefix = `${privateDir}/${prefix.replace(/^\/+/, "")}`;
+    const { bucketName, objectName } = parseObjectPath(objectPrefix);
+    const [files, nextQuery] = await objectStorageClient.bucket(bucketName).getFiles({
+      prefix: objectName,
+      maxResults,
+      ...(pageToken ? { pageToken } : {}),
+      autoPaginate: false,
+    });
+    return {
+      files,
+      nextPageToken: (nextQuery as any)?.pageToken,
+    };
   }
 
   // Creates a temporary, direct-download URL for a private object entity.

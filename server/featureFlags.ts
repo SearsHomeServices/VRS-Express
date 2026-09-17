@@ -29,5 +29,8 @@ export function isTechHubPhotosEnabled(): boolean {
 // DEV-only SHSAI Bridge photo proxy. This intentionally has no environment
 // fallback: missing, whitespace, malformed, or false values all remain off.
 export function isVrsBridgePhotoProxyEnabled(): boolean {
-  return process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED === "true";
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED === "true"
+  );
 }

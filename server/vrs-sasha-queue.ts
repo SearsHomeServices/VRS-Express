@@ -271,6 +271,7 @@ export function enrichVrsAuthorizeForDispatch(
 export interface VrsBridgeRecord {
   id: number;
   submissionId: number;
+  createdAt?: Date;
   callId: string;
   providerCallId?: string | null;
   state: string;

@@ -2,6 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { AuthenticatedRequest } from "./middleware/auth";
 import type { VrsAiBridgeStatus } from "./vrs-sasha-store";
 import type { VrsBridgeRecord } from "./vrs-sasha-queue";
+import type { StoredBridgePhoto, BridgePhotoImage } from "./vrs-bridge-photo-storage";
 
 export const SHSAI_DEV_PHOTO_HOST = "sasha-dev.stage.nextgen.shs.com";
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
@@ -34,6 +35,23 @@ type ProxyDependencies = {
   isEnabled: () => boolean;
   fetchImpl?: typeof fetch;
   fetchTimeoutMs?: number;
+  getStoredPhoto?: (
+    submissionId: number,
+    photoIndex: number,
+    sourceUrl?: string,
+  ) => Promise<StoredBridgePhoto | null>;
+  downloadStoredPhoto?: (
+    photo: StoredBridgePhoto,
+    req: any,
+    res: any,
+  ) => Promise<unknown>;
+  savePhoto?: (
+    submissionId: number,
+    photoIndex: number,
+    image: BridgePhotoImage,
+    sourceUrl?: string,
+  ) => Promise<void>;
+  reportStorageError?: (operation: "read" | "write") => void;
 };
 
 export function bridgePhotoProxyPath(submissionId: number, photoIndex: number): string {
@@ -68,7 +86,7 @@ export function browserBridgeStatus(
   return sanitizeBridgeReviewPhotoUrls(status, submissionId);
 }
 
-function isAllowedPhotoUrl(value: unknown): value is string {
+export function isAllowedPhotoUrl(value: unknown): value is string {
   if (typeof value !== "string" || value !== value.trim()) return false;
   try {
     // URL normalizes an explicit default port away, so reject a colon in the
@@ -171,7 +189,7 @@ class ProxyPhotoError extends Error {
   }
 }
 
-async function fetchAllowedImage(
+export async function fetchAllowedImage(
   originalUrl: string,
   fetchImpl: typeof fetch,
   timeoutMs = FETCH_TIMEOUT_MS,
@@ -332,12 +350,37 @@ export function registerVrsBridgePhotoProxy(
         if (!isAllowedPhotoUrl(originalUrl)) {
           return safeProxyError(res, 422, "PHOTO_SOURCE_NOT_ALLOWED");
         }
-
+        res.setHeader("Cache-Control", "private, no-store");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        // A private copy is authoritative once captured. In particular, do
+        // not contact Sasha again after its signed URL expires.
+        if (deps.getStoredPhoto && deps.downloadStoredPhoto) {
+          let stored: StoredBridgePhoto | null = null;
+          try {
+            stored = await deps.getStoredPhoto(submissionId, photoIndex, originalUrl);
+          } catch {
+            deps.reportStorageError?.("read");
+          }
+          if (stored) {
+            await deps.downloadStoredPhoto(stored, req, res);
+            return;
+          }
+        }
         const image = await fetchAllowedImage(
           originalUrl,
           deps.fetchImpl ?? fetch,
           deps.fetchTimeoutMs,
         );
+        if (deps.savePhoto) {
+          try {
+            await deps.savePhoto(submissionId, photoIndex, image, originalUrl);
+          } catch {
+            deps.reportStorageError?.("write");
+            // Serving the usable upstream image remains more important than
+            // making intake/review fail because storage is temporarily down.
+            // The next recovery pass can retry the private copy.
+          }
+        }
         res.setHeader("Content-Type", image.contentType);
         res.setHeader("Cache-Control", "private, no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");

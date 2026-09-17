@@ -141,7 +141,7 @@ describe("VRS AI Pilot route boundaries", () => {
     expect(methodSource).toMatch(/leftJoin\(vrsAiCalls[\s\S]*?vrsAiCalls\.callId\} IS NULL/);
   });
 
-  it("gates Pilot navigation and keeps admin tracking separate from Agent Queue View workflow", () => {
+  it("gates Pilot navigation and reuses the scoped admin overview without workflow controls", () => {
     expect(agentDashboardSource).toContain("const canUsePilot = canUseVrsAiPilot(user?.role);");
     expect(agentDashboardSource).toMatch(/\{canUsePilot && \([\s\S]*?data-testid="nav-vrs-ai-pilot"/);
     expect(agentDashboardSource).toContain("const handlePilotOpen =");
@@ -150,9 +150,19 @@ describe("VRS AI Pilot route boundaries", () => {
     const pilotSectionStart = adminDashboardSource.indexOf("function VrsAiPilotSection()");
     const pilotSectionEnd = adminDashboardSource.indexOf("function TicketOverviewSection()", pilotSectionStart);
     const pilotSection = adminDashboardSource.slice(pilotSectionStart, pilotSectionEnd);
-    expect(pilotSection).toContain("onOpenSubmission={setSelectedTicketId}");
-    expect(pilotSection).toContain("<TicketDetailDialog");
-    expect(pilotSection).not.toContain("claimMutation");
+    expect(pilotSection).toContain('<TicketOverviewSection scope="vrs-ai-pilot" />');
+    expect(adminDashboardSource).toContain('if (vrsAiOnly) adminSubmissionsParams.set("vrsAiOnly", "true")');
+    expect(adminDashboardSource).toContain('if (vrsAiOnly) searchSubmissionsParams.set("vrsAiOnly", "true")');
+    expect(adminDashboardSource).toContain('filterVrsAiPilotRows(rawTicketsUnbounded)');
+    expect(adminDashboardSource).toContain('data-testid="request-type-filter"');
+    expect(adminDashboardSource).toContain('data-testid="select-pdc-filter"');
+    expect(adminDashboardSource).toContain('data-testid={`count-tickets-${tab.key}`}');
+    expect(adminDashboardSource).toContain('!vrsAiOnly && (statusFilter === "queued"');
+    expect(adminDashboardSource).toContain('if (vrsAiOnly) params.set("vrsAiOnly", "true")');
+    expect(adminDashboardSource).toContain('activeView === "vrs-ai-pilot") params.set("vrsAiOnly", "true")');
+    expect(adminDashboardSource).toContain('Tech Sign-In Report (Global)');
+    expect(adminDashboardSource).toContain('Send Weekly Summary (Global)');
+    expect(adminDashboardSource).toContain("This is a global report for all tickets, not only VRS AI Pilot tickets.");
   });
 
   it("keeps terminal Pilot rows read-only even when the bridge state is still active", () => {

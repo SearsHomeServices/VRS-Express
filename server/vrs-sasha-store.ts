@@ -180,6 +180,7 @@ function toBridgeRecord(row: typeof vrsAiCalls.$inferSelect): VrsBridgeRecord {
   return {
     id: row.id,
     submissionId: row.submissionId!,
+    createdAt: row.createdAt,
     callId: row.callId,
     providerCallId: row.providerCallId,
     state: row.state,
@@ -363,6 +364,42 @@ export class DrizzleVrsBridgeStore
       .where(eq(vrsAiCalls.submissionId, submissionId))
       .limit(1);
     return row ? toBridgeRecord(row) : undefined;
+  }
+
+  async listRecentPhotoIntakes(
+    since: Date,
+  ): Promise<Array<{
+    submissionId: number;
+    appliancePhotos: string[];
+    retentionExpiresAt: number;
+  }>> {
+    const rows = await db
+      .select({
+        submissionId: vrsAiCalls.submissionId,
+        requestPayload: vrsAiCalls.requestPayload,
+        createdAt: vrsAiCalls.createdAt,
+      })
+      .from(vrsAiCalls)
+      .where(gt(vrsAiCalls.createdAt, since))
+      .orderBy(desc(vrsAiCalls.createdAt))
+      .limit(500);
+    return rows
+      .filter((row): row is typeof row & { submissionId: number } =>
+        Number.isSafeInteger(row.submissionId),
+      )
+      .map((row) => {
+        const payload = row.requestPayload as Partial<VrsStoredAuthorizeRequest>;
+        return {
+          submissionId: row.submissionId,
+          retentionExpiresAt: row.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+          appliancePhotos: Array.isArray(payload.appliance_photos)
+            ? payload.appliance_photos.filter(
+              (photo): photo is string => typeof photo === "string",
+            )
+            : [],
+        };
+      })
+      .filter((row) => row.appliancePhotos.length > 0);
   }
 
   async getStatusBySubmissionId(

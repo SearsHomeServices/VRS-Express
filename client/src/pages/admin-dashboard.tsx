@@ -5,7 +5,6 @@ import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
-import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
@@ -162,6 +161,7 @@ import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
 import { parseVideoUrls } from "@/lib/videoUrls";
 import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc-filter";
+import { filterVrsAiPilotRows } from "@shared/vrs-ai-pilot";
 
 interface AnalyticsData {
   submissionsToday: number;
@@ -1235,42 +1235,11 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
 }
 
 function VrsAiPilotSection() {
-  const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
-  const { data, isLoading, error } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
-    queryKey: ["/api/submissions?vrsAiOnly=true"],
-    queryFn: async () => {
-      const response = await fetch("/api/submissions?vrsAiOnly=true", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!response.ok) {
-        throw new Error("Failed to load VRS AI Pilot tickets");
-      }
-      return response.json();
-    },
-    refetchInterval: JITTERED_POLL_INTERVAL_MS,
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-  });
-
-  return (
-    <>
-      <VrsAiPilotTable
-        rows={data?.submissions || []}
-        isLoading={isLoading}
-        errorMessage={error instanceof Error ? error.message : undefined}
-        onOpenSubmission={setSelectedTicketId}
-        testIdPrefix="admin-vrs-ai-pilot"
-      />
-      <TicketDetailDialog
-        ticketId={selectedTicketId}
-        open={selectedTicketId !== null}
-        onClose={() => setSelectedTicketId(null)}
-      />
-    </>
-  );
+  return <TicketOverviewSection scope="vrs-ai-pilot" />;
 }
 
-function TicketOverviewSection() {
+function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilot" }) {
+  const vrsAiOnly = scope === "vrs-ai-pilot";
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
@@ -1368,13 +1337,14 @@ function TicketOverviewSection() {
   // includes the param so widening the window cleanly triggers a refetch
   // and the WS-driven invalidation predicate (matches anything starting
   // with "/api/submissions") still hits this entry.
-  const adminSubmissionsUrl = createdAfterIso
-    ? `/api/submissions?createdAfter=${encodeURIComponent(createdAfterIso)}`
-    : "/api/submissions";
+  const adminSubmissionsParams = new URLSearchParams();
+  if (createdAfterIso) adminSubmissionsParams.set("createdAfter", createdAfterIso);
+  if (vrsAiOnly) adminSubmissionsParams.set("vrsAiOnly", "true");
+  const adminSubmissionsUrl = `/api/submissions${adminSubmissionsParams.size ? `?${adminSubmissionsParams.toString()}` : ""}`;
   // Tyler 2026-05-06 (Task #4): typed against the slim list shape from
   // shared/schema.ts. The list table only reads slim columns; the detail
   // dialog drills into /api/submissions/:id for heavy fields.
-  const { data: allData, isLoading: allLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+  const { data: allData, isLoading: allLoading, error: allError } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
     queryKey: [adminSubmissionsUrl],
     // Tyler 2026-07-08 (perf) — jittered so polling clients drift apart
     // instead of all hitting the server in the same second.
@@ -1386,8 +1356,12 @@ function TicketOverviewSection() {
   // Tyler 2026-07-08 — all-time search (no createdAfter param, so the server
   // applies its own generous floor + row cap). Only fetches while a search
   // term is present; results replace the windowed rows as the table source.
-  const { data: searchData, isLoading: searchLoading } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
-    queryKey: [`/api/submissions?search=${encodeURIComponent(debouncedSearch)}`],
+  const searchSubmissionsParams = new URLSearchParams();
+  if (debouncedSearch) searchSubmissionsParams.set("search", debouncedSearch);
+  if (vrsAiOnly) searchSubmissionsParams.set("vrsAiOnly", "true");
+  const searchSubmissionsUrl = `/api/submissions?${searchSubmissionsParams.toString()}`;
+  const { data: searchData, isLoading: searchLoading, error: searchError } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+    queryKey: [searchSubmissionsUrl],
     enabled: searchActive,
     staleTime: 30000,
     refetchOnWindowFocus: false,
@@ -1434,7 +1408,7 @@ function TicketOverviewSection() {
       const res = await apiRequest("PATCH", `/api/submissions/${id}/reassign`, { agentId, notes });
       return await res.json();
     },
-    onSuccess: (_data: any, variables: { id: number; agentId?: number }) => {
+    onSuccess: (_data: any, variables: { id: number; agentId?: number; notes?: string }) => {
       toast({
         title: variables.agentId ? "Ticket Reassigned" : "Ticket Reassigned to Queue",
         description: variables.agentId
@@ -1476,12 +1450,13 @@ function TicketOverviewSection() {
   // status counts so the cards reflect the selected range too. Skipped
   // while searching (search is explicitly all-time).
   const rawTickets = useMemo(() => {
-    if (searchActive || createdBeforeMs == null) return rawTicketsUnbounded;
-    return rawTicketsUnbounded.filter((t: any) => {
+    const scopeRows = vrsAiOnly ? filterVrsAiPilotRows(rawTicketsUnbounded) : rawTicketsUnbounded;
+    if (searchActive || createdBeforeMs == null) return scopeRows;
+    return scopeRows.filter((t: any) => {
       const created = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
       return !isNaN(created) && created <= createdBeforeMs;
     });
-  }, [rawTicketsUnbounded, searchActive, createdBeforeMs]);
+  }, [rawTicketsUnbounded, searchActive, createdBeforeMs, vrsAiOnly]);
 
   // Task #43 — Tech PDC filter applied BEFORE statusCounts so the count
   // cards and status dropdown reflect the narrowed set. Any non-"all" value
@@ -1631,6 +1606,7 @@ function TicketOverviewSection() {
     if (requestTypeFilter !== "all") params.set("requestType", requestTypeFilter);
     if (pdcFilter !== "all") params.set("pdc", pdcFilter);
     if (debouncedSearch) params.set("search", debouncedSearch);
+    if (vrsAiOnly) params.set("vrsAiOnly", "true");
     return params;
   };
   const handleCoachingExport = async (format: "csv" | "xlsx") => {
@@ -1783,7 +1759,7 @@ function TicketOverviewSection() {
       setPdcPushing(true);
       const body: Record<string, string> = {};
       coachingFilterParams().forEach((v, k) => { body[k] = v; });
-      const res = await apiRequest("POST", "/api/tech-pdc/export", body);
+      const res = await apiRequest("POST", `/api/tech-pdc/export${vrsAiOnly ? "?vrsAiOnly=true" : ""}`, body);
       const json = await res.json();
       toast({
         title: "Tech PDC Push Complete",
@@ -1809,6 +1785,7 @@ function TicketOverviewSection() {
   const defaultProfile = bhConfig.default;
   const businessHoursActive = isWithinBusinessHours(new Date(), defaultProfile);
   const defaultHoursLabel = formatHoursLabel(defaultProfile);
+  const activeTicketError = searchActive ? searchError : allError;
 
   return (
     <div className="space-y-4 p-4">
@@ -1958,7 +1935,7 @@ function TicketOverviewSection() {
             data-testid="button-tech-no-login-report"
           >
             {techReportDownloading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-            Tech Sign-In Report
+            {vrsAiOnly ? "Tech Sign-In Report (Global)" : "Tech Sign-In Report"}
           </Button>
           <Button
             variant="outline"
@@ -1970,7 +1947,7 @@ function TicketOverviewSection() {
             data-testid="button-send-weekly-summary"
           >
             {summarySending ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Send className="w-3 h-3 mr-1.5" />}
-            Send Weekly Summary
+              {vrsAiOnly ? "Send Weekly Summary (Global)" : "Send Weekly Summary"}
           </Button>
         </div>
         {!businessHoursActive && (
@@ -2031,9 +2008,15 @@ function TicketOverviewSection() {
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
+          ) : activeTicketError ? (
+            <div className="p-6 text-center text-destructive" data-testid="ticket-overview-error">
+              {activeTicketError instanceof Error
+                ? activeTicketError.message
+                : "Could not load tickets. Please try again."}
+            </div>
           ) : filteredTickets.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">
-              No {statusFilter === "all" ? "" : tabs.find(t => t.key === statusFilter)?.label.toLowerCase() || ""} tickets found.
+              No {vrsAiOnly ? "VRS AI pilot " : ""}{statusFilter === "all" ? "" : tabs.find(t => t.key === statusFilter)?.label.toLowerCase() || ""} tickets found.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -2100,7 +2083,7 @@ function TicketOverviewSection() {
                         Total <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </TableHead>
-                    {(statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
+                    {!vrsAiOnly && (statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
                       <TableHead className="w-[80px]"></TableHead>
                     )}
                   </TableRow>
@@ -2349,7 +2332,7 @@ function TicketOverviewSection() {
                             : <span className="text-muted-foreground">{getTimeInStatus(ticket.createdAt, undefined, rowProfile)}</span>
                           }
                         </TableCell>
-                        {(statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
+                        {!vrsAiOnly && (statusFilter === "queued" || statusFilter === "pending" || statusFilter === "all") && (
                           <TableCell className="text-right">
                             {(ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending") && (
                               <Button
@@ -2407,7 +2390,7 @@ function TicketOverviewSection() {
         onClose={() => setSelectedTicketId(null)}
       />
 
-      <Dialog open={reassignTicket !== null} onOpenChange={(open) => { if (!open) { setReassignTicket(null); setReassignTarget(""); setReassignNotes(""); } }}>
+      {!vrsAiOnly && <Dialog open={reassignTicket !== null} onOpenChange={(open) => { if (!open) { setReassignTicket(null); setReassignTarget(""); setReassignNotes(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle data-testid="text-reassign-title">Reassign Ticket</DialogTitle>
@@ -2479,15 +2462,18 @@ function TicketOverviewSection() {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
       <AlertDialog open={summaryConfirmOpen} onOpenChange={setSummaryConfirmOpen}>
         <AlertDialogContent data-testid="dialog-send-weekly-summary">
           <AlertDialogHeader>
-            <AlertDialogTitle>Send the weekly executive summary?</AlertDialogTitle>
+            <AlertDialogTitle>{vrsAiOnly ? "Send the global weekly executive summary?" : "Send the weekly executive summary?"}</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
+                  {vrsAiOnly
+                    ? "This is a global report for all tickets, not only VRS AI Pilot tickets. "
+                    : ""}
                   This sends the already-generated current summary immediately. It does not
                   generate a new report, and the automatic Wednesday 4:00 PM ET send is not affected.
                 </p>
@@ -3831,6 +3817,7 @@ export default function AdminDashboard() {
       if (exportEndDate) params.set("endDate", exportEndDate);
       if (exportTechLdap.trim()) params.set("techLdap", exportTechLdap.trim());
       if (!exportStartDate && !exportEndDate) params.set("range", "all");
+      if (activeView === "vrs-ai-pilot") params.set("vrsAiOnly", "true");
       const res = await fetch(`/api/admin/export-csv?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -3861,6 +3848,7 @@ export default function AdminDashboard() {
       if (exportEndDate) params.set("endDate", exportEndDate);
       if (exportTechLdap.trim()) params.set("techLdap", exportTechLdap.trim());
       if (!exportStartDate && !exportEndDate) params.set("range", "all");
+      if (activeView === "vrs-ai-pilot") params.set("vrsAiOnly", "true");
       const res = await fetch(`/api/admin/export-xlsx?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -3884,7 +3872,11 @@ export default function AdminDashboard() {
 
   const exportControls = (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review.</p>
+      <p className="text-sm text-muted-foreground">
+        {activeView === "vrs-ai-pilot"
+          ? "Download only canonically bridge-linked VRS AI Pilot tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets."
+          : "Download tickets as CSV or XLSX. XLSX includes separate sheets for Authorization and NLA Parts tickets. Use presets or pick custom dates. Optionally filter by technician LDAP ID for coaching review."}
+      </p>
       <div className="flex flex-wrap gap-2">
         {[
           { preset: "today", label: "Today" },
@@ -4188,7 +4180,7 @@ export default function AdminDashboard() {
   const openEditDialog = async (u: SafeUser) => {
     setEditingUser(u);
     setFormName(u.name);
-    setFormEmail(u.email);
+    setFormEmail(u.email || "");
     setFormPassword("");
     setFormRole(u.role);
     setFormPhone(u.phone || "");

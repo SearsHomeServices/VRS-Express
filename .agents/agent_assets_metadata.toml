@@ -22,16 +22,3 @@ type = "pdf"
 title = "VRS QA Testing Guide (1099 Portal & New Admin Features)"
 logical_id = "c30ad067-f5d4-40ff-bef4-28f20b87e397"
 
-[[outputs]]
-id = "CYdFByclFMMmW28cVs4SZ"
-uri = "file://exports/active-in-home-technicians-not-signed-in.csv"
-type = "table"
-title = "Active In-Home Technicians — Not Signed In"
-description = "Production roster export: 301 active technicians with no matching VRS user account. Includes name, LDAP ID, district, manager, and phone; sorted by district, manager, and name."
-logical_id = "486e22a2-341b-4472-9b45-c5e8b8c27a3f"
-content_hash = "sha256:b1e679d1bd2b1a389efa0200b970453b8ff45512c0fb21c43261e480559ed704"
-size = 17974
-mtime_ms = 1789648286361
-storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:a11bb216-7de2-40f6-ada7-2f3b2631048f/486e22a2-341b-4472-9b45-c5e8b8c27a3f/26d53c4a-0e99-4597-b466-83deb4eb54d7"
-storage_version_token = "1789648298563354"
-content_type = "text/csv"

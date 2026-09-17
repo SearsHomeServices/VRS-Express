@@ -1,9 +1,9 @@
 ---
 name: Bridge photo delivery scope
-description: DEV-only photo proxy boundary and source expiration limitation
+description: DEV-only durable photo approval, retention boundary, and source expiration limitation
 ---
-Bridge photo delivery is approved for DEV only. Keep production opt-in separate; do not add a production Sasha hostname or permanent image storage without explicit approval.
+Bridge photo delivery and private durable copies are approved for DEV only. The user explicitly approved private storage on 2026-09-17 without specifying retention; use a limited 30-day DEV retention policy, not indefinite storage. Production enablement requires separate approval.
 
 **Why:** The user requested isolated DEV verification while preserving production and legacy media behavior. Sasha signed media links can expire and return 410; its same-origin resource policy can also block direct embedding.
 
-**How to apply:** Do not treat proxying as a solution to expiration. No documented refresh mechanism was found during investigation on 2026-09-16; request a supported upstream contract or approval for storage before promising lasting access. Authenticated browser photo fetches must validate local proxy paths even when a feature flag is enabled, because stale payloads can still contain external URLs.
+**How to apply:** Capture private copies before source expiration, retain ticket-level authorization, and clean up expired/deleted-ticket copies. Do not invent refresh endpoints or promise recovery of already-expired sources. No supported refresh contract was found on 2026-09-16. Real Sasha expiration verification and physical-device zoom must not be represented as passing based only on mocked images or emulated touch. Authenticated browser photo fetches must validate local proxy paths even when a feature flag is enabled, because stale payloads can still contain external URLs.

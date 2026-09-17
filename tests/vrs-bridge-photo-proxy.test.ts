@@ -76,6 +76,15 @@ describe("DEV Bridge photo proxy", () => {
     expect(isVrsBridgePhotoProxyEnabled()).toBe(true);
   });
 
+  it("remains disabled in production even when explicitly enabled", () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true";
+    expect(isVrsBridgePhotoProxyEnabled()).toBe(false);
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+  });
+
   it("does not register usable media while disabled", async () => {
     const response = await request(makeApp({ enabled: false }))
       .get("/api/submissions/44/vrs-ai-photos/0");

@@ -74,8 +74,18 @@ import {
 import {
   registerVrsBridgePhotoProxy,
   browserBridgeStatus,
+  fetchAllowedImage,
+  isAllowedPhotoUrl,
 } from "./vrs-bridge-photo-proxy";
+import {
+  VrsBridgePhotoStorage,
+  VRS_BRIDGE_PHOTO_RETENTION_MS,
+} from "./vrs-bridge-photo-storage";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
+import {
+  GLOBAL_REPORT_PILOT_SCOPE_ERROR,
+  requestsVrsAiPilotScope,
+} from "./vrs-ai-pilot-scope";
 import {
   STAFF_NOTE_ROLES,
   canAccessTicketNotes,
@@ -537,6 +547,7 @@ export async function registerRoutes(
 
   registerObjectStorageRoutes(app);
   const vrsObjectStorageService = new ObjectStorageService();
+  const vrsBridgePhotoStorage = new VrsBridgePhotoStorage(vrsObjectStorageService);
 
   // Tyler 2026-05-12 — lightweight liveness + readiness probe. Returns 200 only
   // if the DB ping completes inside 2s. Used by external uptime monitoring
@@ -1702,6 +1713,16 @@ export async function registerRoutes(
         message,
       };
     },
+    capturePhotos: isVrsBridgePhotoProxyEnabled()
+      ? (submissionId, photoUrls, retentionExpiresAt) =>
+        vrsBridgePhotoStorage.capture(
+          submissionId,
+          photoUrls,
+          (url) => fetchAllowedImage(url, fetch),
+          isAllowedPhotoUrl,
+          retentionExpiresAt,
+        )
+      : undefined,
   });
 
   registerVrsSashaApi(app, {
@@ -4807,6 +4828,15 @@ export async function registerRoutes(
 
       const deleted = await storage.deleteSubmission(id);
       if (!deleted) return res.status(500).json({ message: "Failed to delete submission" });
+      if (isVrsBridgePhotoProxyEnabled()) {
+        try {
+          await vrsBridgePhotoStorage.deleteSubmission(id);
+        } catch {
+          // The ticket delete is already committed; the bounded sweep retries
+          // orphan cleanup without logging storage/provider error details.
+          console.error("[retention] bridge photo delete failed");
+        }
+      }
 
       // Tyler 2026-05-29 ("Zorn stuck Working" fix): deleting a ticket that
       // an agent had CLAIMED used to leave that agent's agentStatus pinned
@@ -6438,6 +6468,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/export-csv", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
+      const vrsAiOnly = requestsVrsAiPilotScope(req.query as Record<string, unknown>);
       const range = (req.query.range as string) || "all";
       const customStart = req.query.startDate as string | undefined;
       const customEnd = req.query.endDate as string | undefined;
@@ -6462,7 +6493,12 @@ export async function registerRoutes(
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
       }
 
-      const allSubmissions = await storage.getAllSubmissions(startDate, endDate, techLdap || null);
+      const allSubmissions = await storage.getAllSubmissions(
+        startDate,
+        endDate,
+        techLdap || null,
+        { vrsAiOnly },
+      );
 
       // Tyler perf: build the id->name map in ONE query instead of a per-row
       // getUser N+1 (the row loop used to await storage.getUser for every
@@ -6539,6 +6575,7 @@ export async function registerRoutes(
       const csv = rows.join("\n");
       let rangeLabel = customStart ? `${customStart}${customEnd ? '_to_' + customEnd : ''}` : range === "today" ? "today" : range === "week" ? "this-week" : range === "month" ? "this-month" : "all-time";
       if (techLdap) rangeLabel += `-tech-${techLdap}`;
+      if (vrsAiOnly) rangeLabel += "-vrs-ai-pilot";
       const filename = `vrs-tickets-${rangeLabel}-${getEtDateString(now)}.csv`;
 
       res.setHeader("Content-Type", "text/csv");
@@ -6582,6 +6619,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/export-xlsx", authenticateToken, requireRole("admin"), async (req, res) => {
     try {
+      const vrsAiOnly = requestsVrsAiPilotScope(req.query as Record<string, unknown>);
       const ExcelJS = (await import("exceljs")).default;
       const FINAL_STATUSES = new Set(["completed", "approved", "rejected", "rejected_closed", "invalid"]);
       const formatDuration = (startVal: Date | string | null | undefined, endVal: Date | string | null | undefined): string => {
@@ -6640,7 +6678,12 @@ export async function registerRoutes(
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
       }
 
-      const allSubmissions = await storage.getAllSubmissions(startDate, endDate, techLdap || null);
+      const allSubmissions = await storage.getAllSubmissions(
+        startDate,
+        endDate,
+        techLdap || null,
+        { vrsAiOnly },
+      );
 
       // Tyler perf: same N+1 removal as the CSV export — one getUsers() query
       // backs the name map for both the auth and NLA sheets below.
@@ -6777,6 +6820,7 @@ export async function registerRoutes(
 
       let rangeLabel = customStart ? `${customStart}${customEnd ? '_to_' + customEnd : ''}` : range === "today" ? "today" : range === "week" ? "this-week" : range === "month" ? "this-month" : "all-time";
       if (techLdap) rangeLabel += `-tech-${techLdap}`;
+      if (vrsAiOnly) rangeLabel += "-vrs-ai-pilot";
       const filename = `vrs-tickets-${rangeLabel}-${getEtDateString(now)}.xlsx`;
 
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -6799,6 +6843,7 @@ export async function registerRoutes(
   // the admin Ticket Overview's active filters (createdAfter window, status
   // tab, request-type toggle, search text) so the export matches the table.
   const getCoachingRecords = async (query: any) => {
+    const vrsAiOnly = requestsVrsAiPilotScope(query);
     const createdAfter = query.createdAfter ? new Date(query.createdAfter as string) : null;
     // Optional inclusive upper bound — mirrors the Ticket Overview's custom
     // date range so exports match the visible table.
@@ -6815,6 +6860,7 @@ export async function registerRoutes(
       createdAfter && !isNaN(createdAfter.getTime()) ? createdAfter : null,
       null,
       null,
+      { vrsAiOnly },
     );
     const allUsers = await storage.getUsers();
     const userName: Record<number, string> = {};
@@ -6931,7 +6977,7 @@ export async function registerRoutes(
         ].map(deFormula);
       };
 
-      const filename = `coaching-rejection-report-${getEtDateString(new Date())}`;
+      const filename = `coaching-rejection-report${requestsVrsAiPilotScope(req.query as Record<string, unknown>) ? "-vrs-ai-pilot" : ""}-${getEtDateString(new Date())}`;
       if (format === "xlsx") {
         const ExcelJS = (await import("exceljs")).default;
         const workbook = new ExcelJS.Workbook();
@@ -7013,6 +7059,9 @@ export async function registerRoutes(
   // ========================================================================
   app.get("/api/admin/reports/exec-summary", authenticateToken, requireRole("admin", "super_admin"), async (_req, res) => {
     try {
+      if (requestsVrsAiPilotScope(_req.query as Record<string, unknown>)) {
+        return res.status(400).json({ error: GLOBAL_REPORT_PILOT_SCOPE_ERROR });
+      }
       const { getLatestExecSummaries, getExecSummaryRecipients } =
         await import("./services/weekly-exec-summary");
       const {
@@ -7091,6 +7140,9 @@ export async function registerRoutes(
   // explicit operator acknowledgement needed for accepted or unknown state.
   app.post("/api/admin/reports/exec-summary/send", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
+      if (requestsVrsAiPilotScope(req.body as Record<string, unknown>)) {
+        return res.status(400).json({ error: GLOBAL_REPORT_PILOT_SCOPE_ERROR });
+      }
       const { getLatestExecSummaries, retryExecSummaryDelivery } =
         await import("./services/weekly-exec-summary");
       return createExecSummarySendHandler({
@@ -7182,7 +7234,16 @@ export async function registerRoutes(
       if (!isTechPdcConfigured()) {
         return res.status(503).json({ error: TECH_PDC_NOT_CONFIGURED_MESSAGE, code: "TECH_PDC_NOT_CONFIGURED" });
       }
-      const { rows, userName } = await getCoachingRecords(req.body || {});
+      // Accept the scope in either the filter body or query string. Query
+      // scope wins so a caller cannot accidentally drop the Pilot boundary
+      // while constructing the existing filter body.
+      const coachingQuery = {
+        ...(req.body || {}),
+        ...(requestsVrsAiPilotScope(req.query as Record<string, unknown>)
+          ? { vrsAiOnly: true }
+          : {}),
+      };
+      const { rows, userName } = await getCoachingRecords(coachingQuery);
       // Skip records already delivered unless the caller asks to resend.
       const resend = Boolean((req.body || {}).resendDelivered);
       const notSent = resend ? rows : rows.filter(s => s.techPdcStatus !== "sent");
@@ -7718,7 +7779,87 @@ export async function registerRoutes(
     getSpecializations: (userId) => storage.getSpecializations(userId),
     allDivisionCount: ALL_DIVISIONS.length,
     isEnabled: isVrsBridgePhotoProxyEnabled,
+    getStoredPhoto: (submissionId, photoIndex, sourceUrl) =>
+      vrsBridgePhotoStorage.get(submissionId, photoIndex, Date.now(), sourceUrl),
+    downloadStoredPhoto: (photo, req, res) =>
+      vrsObjectStorageService.downloadObject(
+        photo.file,
+        res,
+        3600,
+        req.headers.range as string | undefined,
+        "private, no-store",
+      ),
+    savePhoto: async (submissionId, photoIndex, image, sourceUrl) => {
+      const bridge = await vrsBridgeStore.getBySubmissionId(submissionId);
+      if (!bridge?.createdAt) throw new Error("BRIDGE_PHOTO_RETENTION_UNKNOWN");
+      const retentionExpiresAt =
+        bridge.createdAt.getTime() + VRS_BRIDGE_PHOTO_RETENTION_MS;
+      await vrsBridgePhotoStorage.save(
+        submissionId,
+        photoIndex,
+        image,
+        Date.now(),
+        retentionExpiresAt,
+        sourceUrl,
+      );
+    },
+    reportStorageError: (operation) => {
+      console.error(`[retention] bridge photo storage ${operation} failed`);
+    },
   });
+
+  // Durable Sasha copies are explicitly DEV-only. On a restart, retry only
+  // rows created within the two-hour upstream-link window; an expired source
+  // is reported as an aggregate failure and is never logged or returned.
+  if (
+    isVrsBridgePhotoProxyEnabled() &&
+    process.env.NODE_ENV !== "test"
+  ) {
+    let recoveryRunning = false;
+    const recoverBridgePhotos = async () => {
+      if (recoveryRunning) return;
+      recoveryRunning = true;
+      try {
+        const recent = await vrsBridgeStore.listRecentPhotoIntakes(
+          new Date(Date.now() - 2 * 60 * 60 * 1000),
+        );
+        const result = await vrsBridgePhotoStorage.recover(
+          recent,
+          (url) => fetchAllowedImage(url, fetch),
+          isAllowedPhotoUrl,
+        );
+        if (result.attempted > 0 || result.failures > 0) {
+          console.log(
+            `[retention] bridge photo recovery attempted=${result.attempted} ` +
+            `failures=${result.failures}`,
+          );
+        }
+      } catch {
+        console.error("[retention] bridge photo recovery failed");
+      } finally {
+        recoveryRunning = false;
+      }
+    };
+    const cleanupExpiredBridgePhotos = async () => {
+      try {
+        const deleted = await vrsBridgePhotoStorage.sweep(
+          Date.now(),
+          async (submissionId) => Boolean(await storage.getSubmission(submissionId)),
+        );
+        if (deleted > 0) {
+          console.log(`[retention] bridge photos: deleted ${deleted} expired object(s)`);
+        }
+      } catch {
+        console.error("[retention] bridge photo cleanup failed");
+      }
+    };
+    void recoverBridgePhotos();
+    void cleanupExpiredBridgePhotos();
+    const BRIDGE_PHOTO_RECOVERY_MS = 60 * 1000;
+    const BRIDGE_PHOTO_SWEEP_MS = 60 * 60 * 1000;
+    setInterval(() => void recoverBridgePhotos(), BRIDGE_PHOTO_RECOVERY_MS).unref();
+    setInterval(() => void cleanupExpiredBridgePhotos(), BRIDGE_PHOTO_SWEEP_MS).unref();
+  }
 
   // ========================================================================
   // TECHHUB PARTS PHOTOS (read-only Snowflake lookup + CDN proxy)

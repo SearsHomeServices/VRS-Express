@@ -61,6 +61,7 @@ function makeHarness(options: {
   nextSubmissionId?: number;
   nextCreateIsDuplicate?: boolean;
   callIds?: string[];
+  capturePhotos?: VrsSashaIntakeDependencies["capturePhotos"];
 } = {}) {
   const originalSubmissionId = options.initialState ? 42 : undefined;
   const createdBridges: NewVrsBridgeIntake[] = [];
@@ -195,6 +196,7 @@ function makeHarness(options: {
       receiptSmsCount++;
       return { kind: "created" as const, submissionId: nextSubmissionId++ };
     }),
+    capturePhotos: options.capturePhotos,
   };
 
   return {
@@ -214,6 +216,25 @@ function makeHarness(options: {
 }
 
 describe("VRS SASHA intake active-only duplicate behavior", () => {
+  it("returns immediately while DEV photo capture continues in the background", async () => {
+    let releaseCapture!: () => void;
+    const capturePhotos = vi.fn(() => new Promise<{ captured: number; failures: number }>(
+      (resolve) => {
+        releaseCapture = () => resolve({ captured: 1, failures: 0 });
+      },
+    ));
+    const harness = makeHarness({ capturePhotos });
+    const result = await harness.intake.receive(validV5AuthorizePayload);
+    expect(result.kind).toBe("accepted");
+    expect(capturePhotos).toHaveBeenCalledWith(
+      42,
+      expect.any(Array),
+      createdAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+    releaseCapture();
+    await Promise.resolve();
+  });
+
   it("selects only locally applied retryable V8 failures and requires the newest attempt to qualify", () => {
     const select =
       candidateBridgeStoreModule.selectLocallyAppliedRetryableFailedV8SubmissionIds;
