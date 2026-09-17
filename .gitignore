@@ -9,3 +9,6 @@ vite.config.ts.*
 # Generated reports may contain sensitive operational data.
 /output/reports/
 /.agents/outputs/ih-techs-not-signed-in-*.csv
+/exports/*.csv
+/exports/*.xlsx
+/exports/*.xls
