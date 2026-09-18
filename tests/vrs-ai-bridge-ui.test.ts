@@ -382,26 +382,6 @@ describe("VRS AI bridge review rendering", () => {
     expectField(v5Panel, "contract-version", "v5");
   });
 
-  it("includes DEV-only bridge photos in the admin audit gallery without replacing legacy media", () => {
-    const admin = readFileSync(new URL("../client/src/pages/admin-dashboard.tsx", import.meta.url), "utf8");
-    const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
-    const audit = routes.slice(
-      routes.indexOf('app.get("/api/admin/submissions/:id/audit"'),
-      routes.indexOf("// TICKET CLAIM ROUTE"),
-    );
-    expect(audit).toContain('requireRole("admin", "super_admin")');
-    expect(audit).toContain("const bridgePhotoProxyEnabled = isVrsBridgePhotoProxyEnabled()");
-    expect(audit).toContain("bridgePhotoProxyEnabled ? vrsBridgeStore.getStatusBySubmissionId(id) : Promise.resolve(null)");
-    expect(audit).toContain("bridgePhotoProxyEnabled ? { vrsAi: browserBridgeStatus(vrsAi, id, true) } : {}");
-    expect(admin).toContain("data?.vrsAi?.reviewContext?.appliance_photos ?? []");
-    expect(admin).toContain("if (!parsed) return bridgePhotos.length === 0");
-    expect(admin).toContain("legacyPhotos.length === 0 && bridgePhotos.length === 0");
-    expect(admin).toContain("<VrsAiBridgePhotos");
-    expect(admin).toContain("proxyEnabled={bridgePhotoProxyEnabled}");
-    expect(admin).toContain('renderPhotoGrid(legacyPhotos, "Photos"');
-    expect(admin).toContain("src={thumbs[url] ?? url}");
-  });
-
   it("passes dashboard bridge state to the runtime-tested panel and keeps manual wording", () => {
     const dashboardSource = readFileSync(
       new URL("../client/src/pages/agent-dashboard.tsx", import.meta.url),

@@ -8,6 +8,7 @@ import path from "path";
 // Express stack, the same DB connection, and the same seeded test
 // fixtures (SO 99999000006 / 99999000007) as the live UI.
 export default defineConfig({
+  esbuild: { jsx: "automatic" },
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 30000,
@@ -19,6 +20,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "client/src"),
       "@shared": path.resolve(__dirname, "shared"),
+      "@assets": path.resolve(__dirname, "attached_assets"),
     },
   },
 });

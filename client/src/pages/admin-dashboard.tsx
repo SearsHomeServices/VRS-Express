@@ -481,7 +481,7 @@ interface AuditTimelineEntry {
   detail?: string;
 }
 
-function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | null; open: boolean; onClose: () => void }) {
+export function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | null; open: boolean; onClose: () => void }) {
   const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   const [activeTab, setActiveTab] = useState<"details" | "media" | "timeline">("details");
   const [lightboxOpen, setLightboxOpen] = useState(false);

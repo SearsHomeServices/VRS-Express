@@ -16,3 +16,14 @@ successful viewing afterward does not prove they were saved when intake arrived.
 
 **How to apply:** Inspect private-object creation metadata before the first
 authorized photo request, and report which capture path the evidence establishes.
+
+Photo-gallery regression evidence must exercise response wiring and mounted
+component behavior, not just source-string assertions or a mocked gallery.
+
+**Why:** A successful desktop photo check did not prevent the Admin audit
+response from omitting bridge context. A photo component can work in isolation
+while its parent receives no photos.
+
+**How to apply:** Cover the real endpoint's enabled/disabled payload and the
+parent viewer's rendered empty/mixed attachment states. Keep these automated
+checks separate from real-expiration and physical-device acceptance evidence.
