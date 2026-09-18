@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "tsx script/build.ts",
+    "build": "npm run check && tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test:vrs-sasha": "vitest run tests/vrs-sasha-api-v5.test.ts tests/vrs-sasha-queue.test.ts tests/vrs-ai-bridge-ui.test.ts tests/vrs-admin-audit.test.ts tests/vrs-admin-media.test.ts tests/vrs-agent-media.test.ts",
