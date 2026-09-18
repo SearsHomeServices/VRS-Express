@@ -4,10 +4,11 @@ import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
+import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { usePortal1099Enabled } from "@/hooks/use-feature-flags";
+import { usePortal1099Enabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
   getBusinessElapsedMs,
@@ -481,6 +482,7 @@ interface AuditTimelineEntry {
 }
 
 function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | null; open: boolean; onClose: () => void }) {
+  const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   const [activeTab, setActiveTab] = useState<"details" | "media" | "timeline">("details");
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxPhotos, setLightboxPhotos] = useState<string[]>([]);
@@ -515,6 +517,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
     userNames: Record<number, string>;
     smsLogs: any[];
     priorSubmissions?: any[];
+    vrsAi?: { reviewContext: { appliance_photos?: string[] } } | null;
   }>({
     queryKey: ["/api/admin/submissions", ticketId, "audit"],
     queryFn: async () => {
@@ -539,6 +542,7 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
   const timeline = data?.timeline || [];
   const userNames = data?.userNames || {};
   const priorSubmissions = data?.priorSubmissions || [];
+  const bridgePhotos = data?.vrsAi?.reviewContext?.appliance_photos ?? [];
 
   const getEventIcon = (event: string) => {
     if (event === "Submitted") return <CircleDot className="w-4 h-4 text-blue-500" />;
@@ -989,7 +993,9 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                   {(() => {
                     let parsed: any = null;
                     try { parsed = sub.photos ? JSON.parse(sub.photos) : null; } catch { parsed = null; }
-                    if (!parsed) return <p className="text-sm text-muted-foreground" data-testid="text-admin-no-photos">No photos attached</p>;
+                    if (!parsed) return bridgePhotos.length === 0
+                      ? <p className="text-sm text-muted-foreground" data-testid="text-admin-no-photos">No photos attached</p>
+                      : null;
                     // Tyler 2026-07-08 — thumb map; grid src only. Full paths
                     // remain the identity for lightbox + open-in-new-tab.
                     let thumbs: Record<string, string> = {};
@@ -1052,12 +1058,19 @@ function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: number | nu
                         {renderPhotoGrid(issuePhotos, "Issue Photos", 0, "issue-photos")}
                         {renderPhotoGrid(estimatePhotos, "Model, Serial & Estimate Screenshots", issuePhotos.length, "estimate-photos")}
                         {renderPhotoGrid(legacyPhotos, "Photos", issuePhotos.length + estimatePhotos.length, "legacy-photos")}
-                        {estimatePhotos.length === 0 && issuePhotos.length === 0 && legacyPhotos.length === 0 && (
+                        {estimatePhotos.length === 0 && issuePhotos.length === 0 && legacyPhotos.length === 0 && bridgePhotos.length === 0 && (
                           <p className="text-sm text-muted-foreground" data-testid="text-admin-no-photos">No photos attached</p>
                         )}
                       </div>
                     );
                   })()}
+                  {bridgePhotos.length > 0 && (
+                    <VrsAiBridgePhotos
+                      key={ticketId}
+                      photos={bridgePhotos}
+                      proxyEnabled={bridgePhotoProxyEnabled}
+                    />
+                  )}
                 </div>
 
                 <Separator />

@@ -71,9 +71,72 @@ instead of manipulating the image. Record the device/browser and results.
 Desktop synthetic touch or mobile browser emulation is useful regression
 coverage, but must not be described as physical-device validation.
 
-### Current real-source limitation
+### Real-source evidence — 2026-09-17
 
-On 2026-09-17 there were no DEV photo-bearing bridge records created within the
-previous two hours. Three sampled recent Sasha source links returned `410`.
-Those records cannot establish a successful fresh-capture/real-expiration
-check. A fresh upstream request is required.
+The earlier fresh-request blocker is resolved. DEV tickets 842 and 843 contain
+two real allowlisted Sasha images each. No synthetic intake or mocked upstream
+was used for this check. All times below are UTC.
+
+| Ticket | Intake created | Photo index | Private object created | Decoded image | Bytes |
+| --- | --- | --- | --- | --- | --- |
+| 842 | 20:11:00.754 | 0 | 21:10:00.389 | JPEG 515×471 | 40,889 |
+| 842 | 20:11:00.754 | 1 | 21:10:00.688 | JPEG 307×629 | 33,505 |
+| 843 | 20:52:42.100 | 0 | 21:09:58.559 | JPEG 307×629 | 33,505 |
+| 843 | 20:52:42.100 | 1 | 21:09:59.939 | JPEG 515×471 | 40,889 |
+
+The DEV workflow was initially stopped. Starting it recovered all four images
+before expiry (`attempted=4 failures=0`). This establishes startup recovery,
+not capture at the original intake time. Independent private-object reads
+confirmed capture before testing the authorized HTTP photo route.
+
+At 21:12:42–21:12:44, every original source returned HTTP 200. Saved bytes,
+live-source bytes, and authorized photo-route bytes had identical SHA-256
+hashes. ImageMagick decoded both JPEGs successfully:
+
+- 40,889-byte image: `dcf789af6d82c1d3466265070f0a68ac33a04b355ffe77056226849d81c5266a`
+- 33,505-byte image: `72965fccc32447df09bf2e46d4a84d34ca028949c796a3d5e31b38ea7d467d57`
+
+For all four photo routes, the DEV test administrator received HTTP 200 with
+matching bytes; an unrelated test technician received 403; unauthenticated
+requests received 401. The generic object route returned 404 even with a valid
+path-bound media token issued to the test administrator.
+
+Ticket 841 was also inspected: all four sources returned 410 and no private
+copies existed. It cannot provide successful retention evidence.
+
+### Post-expiry and restart evidence — 2026-09-17
+
+At 22:12:01 UTC, both actual Sasha sources for ticket 842 returned HTTP 410,
+more than two hours after intake. Independent private-object reads still
+matched the pre-expiry hashes. The background probe then stopped successfully.
+
+The DEV application was restarted after that observation. At 22:12:33 UTC,
+both original sources still returned 410, while both authenticated photo routes
+returned HTTP 200 with the exact pre-expiry bytes and original object creation
+times. Both images decoded successfully. The unrelated technician received 403,
+anonymous requests received 401, and generic object downloads with valid
+path-bound media tokens received 404.
+
+Ticket 843 also retained matching saved bytes across this restart, but its
+sources still returned 200 at 22:12:34 UTC. It is not counted as post-expiry proof.
+
+The first desktop browser check uncovered a separate Admin-view gap: the
+read-only Media tab loaded only legacy submission attachments, not bridge
+context. Its audit response now includes sanitized bridge context only when the
+DEV photo feature is enabled, and the Media tab uses the existing shared
+bridge gallery alongside the unchanged legacy galleries.
+
+After the fix and another DEV restart, a targeted desktop browser check on
+ticket 842 confirmed two decoded thumbnails, lightbox opening, next/previous
+navigation, closing without dismissing the parent Media dialog, and reopening.
+No ticket mutations or mocked sources were used.
+
+Validation: 51 focused bridge UI, photo proxy, and Pilot tests passed.
+The repository-wide TypeScript check still reports errors outside the edited
+logic (including existing ES5 iteration/block-function and Snowflake typings);
+it is not a passing validation result.
+
+**Deferred at the user's request when closing this verification:** physical phone/tablet pinch, pan, reset, navigation,
+close/reopen and page-scroll behavior. No device results were supplied.
+Neither physical touch hardware nor mobile gesture emulation was used.
+Production enablement/settings and legacy/TechHub media remain unchanged.

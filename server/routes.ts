@@ -2505,9 +2505,11 @@ export async function registerRoutes(
 
       // Perf 2026-08-16 — independent reads fetched in parallel; this
       // endpoint gates the admin ticket-detail dialog open time.
-      const [smsLogs, allRelated] = await Promise.all([
+      const bridgePhotoProxyEnabled = isVrsBridgePhotoProxyEnabled();
+      const [smsLogs, allRelated, vrsAi] = await Promise.all([
         storage.getSmsNotifications(id),
         storage.getSubmissionHistory(submission.serviceOrder),
+        bridgePhotoProxyEnabled ? vrsBridgeStore.getStatusBySubmissionId(id) : Promise.resolve(null),
       ]);
 
       // Tyler 2026-05-09 (VRS request): admin ticket detail must show the
@@ -2669,6 +2671,8 @@ export async function registerRoutes(
         userNames,
         smsLogs,
         priorSubmissions,
+        // DEV-only gallery context; never expose signed source URLs through audit.
+        ...(bridgePhotoProxyEnabled ? { vrsAi: browserBridgeStatus(vrsAi, id, true) } : {}),
       });
     } catch (error) {
       console.error("Admin audit trail error:", error);
