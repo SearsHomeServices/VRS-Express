@@ -1,5 +1,13 @@
 import { createPrivateKey } from "node:crypto";
+import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
+
+// tsx runs this file as ESM; the production bundle runs as CJS. Resolve from
+// the current module in either runtime, not the process working directory.
+// Creating the loader does not load the SDK until the first probe/lookup.
+const requireSnowflake = createRequire(
+  typeof __filename !== "undefined" ? __filename : import.meta.url,
+);
 
 type SnowflakeSDK = typeof import("snowflake-sdk") & {
   VERSION?: string;
@@ -18,7 +26,7 @@ let snowflake: SnowflakeSDK | null = null;
 function getSnowflakeSDK(): SnowflakeSDK {
   if (!snowflake) {
     try {
-      const sdk: SnowflakeSDK = require("snowflake-sdk");
+      const sdk: SnowflakeSDK = requireSnowflake("snowflake-sdk");
       snowflake = sdk;
     } catch (e: any) {
       const wrapped = new Error(
@@ -50,7 +58,7 @@ export function probeSnowflakeSDK(): {
       version =
         sdk?.VERSION ||
         sdk?.Version ||
-        require("snowflake-sdk/package.json")?.version;
+        requireSnowflake("snowflake-sdk/package.json")?.version;
     } catch {
       version = undefined;
     }

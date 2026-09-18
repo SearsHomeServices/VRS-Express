@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Development Snowflake SDK loading (2026-09-18)
+- Load Snowflake lazily with a module-relative Node loader in both the tsx ESM
+  development server and the production CJS bundle, including version diagnostics.
+- Added isolated runtime regression tests for real SDK loading, caching, failure
+  diagnostics/retry, missing version metadata, and synthetic encrypted-key lookups.
+  No deployment, credentials, or bridge settings were changed.
+
 ### Fixed - Repository TypeScript baseline (2026-09-18)
 - Resolved the 53 existing TypeScript diagnostics while retaining strict checks
   and the existing check scope. Set the language target to ES2022 for the

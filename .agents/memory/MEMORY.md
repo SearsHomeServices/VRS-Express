@@ -4,8 +4,8 @@
 - [Seed column-migration ordering](seed-migration-ordering.md) — a new Drizzle column must be ensured before the first query on that table, or boot crashes (Drizzle selects all columns).
 - [Dead-code scan false positives](dead-code-scan-false-positives.md) — automated "unused" lists are unreliable (miss dynamic import()/types); grep-verify zero refs before deleting; dead code ≠ slow.
 - [Business-hours elapsed math JS↔SQL](business-hours-sql-port.md) — port getBusinessElapsedMs to SQL bit-equivalently (ms-trunc + generate_series over ET days + AT TIME ZONE); Node & PG both UTC.
-- [Prod Snowflake access from here](snowflake-prod-access.md) — SNOWFLAKE_* creds only in prod bash env; bridge via /tmp to code_execution sandbox (delete after); bash flaky for long node; no ACCOUNT_USAGE.
-- [Snowflake encrypted key + passphrase](snowflake-encrypted-key.md) — app supports ENCRYPTED PKCS#8 key via SNOWFLAKE_PRIVATE_KEY_PASSPHRASE; DECODER=unparseable, bad-decrypt=wrong passphrase; wrong key → literal "Not Found"; dev can't load SDK, only prod.
+- [Snowflake runtime verification](snowflake-prod-access.md) — tsx eval can mask ESM loader failures; verify the real entrypoint, not an eval probe. Never copy credentials between runtimes.
+- [Snowflake encrypted keys](snowflake-encrypted-key.md) — DECODER means unparseable key; bad-decrypt means passphrase mismatch; do not assume a missing-record result proves authentication worked.
 - [Secrets & code edits need a workflow restart](secret-propagation-restart.md) — added secrets AND fresh server edits don't reach the running process until an explicit restart; auto-restart-after-edit is unreliable — restart before judging a fix "didn't work".
 - [Deploy URL redirects & slow boot](deploy-url-and-boot.md) — old renamed .replit.app subdomain detaches & is unredirectable from app code; app returns 500 on / for ~40s every (re)deploy (seed/index work before listen), VM tolerates it.
 - [WS presence-stale false offlines](ws-presence-false-offline.md) — 60-min presence fallback must gate on a last-seen timestamp, not an empty clients map; reconnect churn makes the map transiently empty for present agents.
