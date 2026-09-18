@@ -2999,6 +2999,7 @@ export default function AgentDashboard() {
                           if (!parsed) {
                             return bridgePhotos.length > 0 ? (
                               <VrsAiBridgePhotos
+                                key={selectedSubmission.id}
                                 photos={bridgePhotos}
                                 proxyEnabled={bridgePhotoProxyEnabled}
                               />
@@ -3119,6 +3120,7 @@ export default function AgentDashboard() {
                               {renderPhotoGrid(legacyPhotos, "Photos", ImageIcon, issuePhotos.length + estimatePhotos.length, "photos")}
                               {bridgePhotos.length > 0 && (
                                 <VrsAiBridgePhotos
+                                  key={selectedSubmission.id}
                                   photos={bridgePhotos}
                                   proxyEnabled={bridgePhotoProxyEnabled}
                                 />

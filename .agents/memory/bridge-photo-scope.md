@@ -27,3 +27,15 @@ while its parent receives no photos.
 **How to apply:** Cover the real endpoint's enabled/disabled payload and the
 parent viewer's rendered empty/mixed attachment states. Keep these automated
 checks separate from real-expiration and physical-device acceptance evidence.
+
+Ticket-switch regressions must inspect every committed DOM, not only the
+settled result after effects. Gallery state, including the open lightbox,
+must be isolated by ticket.
+
+**Why:** Clearing loaded photos in a passive effect can still commit the old
+ticket's images once before that effect runs, and leave a lightbox open for
+the next ticket. A final-DOM assertion misses the initial stale-image commit.
+
+**How to apply:** Capture committed image sources while switching between
+loaded tickets and while detail/photo requests are deferred. Resolve old
+requests after the switch and confirm they cannot replace current images.

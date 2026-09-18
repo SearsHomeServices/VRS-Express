@@ -397,29 +397,7 @@ describe("VRS AI bridge review rendering", () => {
     );
     expect(dashboardSource).not.toContain("sends its V5 payload");
 
-    const componentSource = readFileSync(
-      new URL(
-        "../client/src/components/vrs-ai-bridge-review.tsx",
-        import.meta.url,
-      ),
-      "utf8",
-    );
-    expect(componentSource).toContain("VrsAiBridgePhotos");
-    expect(componentSource).not.toMatch(
-      /buildMediaUrl|buildMediaUrls|prefetchMediaTokens/,
-    );
-
-    expect(dashboardSource).toContain(
-      'import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";',
-    );
-    expect(dashboardSource).toContain("bridgePhotoProxyEnabled");
-    const mediaCard = dashboardSource.indexOf("Photos & Media");
-    const bridgeGallery = dashboardSource.indexOf("<VrsAiBridgePhotos", mediaCard);
-    expect(mediaCard).toBeGreaterThan(-1);
-    expect(bridgeGallery).toBeGreaterThan(mediaCard);
-    expect(dashboardSource).toContain(
-      "legacyPhotos.length === 0 && bridgePhotos.length === 0",
-    );
-    expect(dashboardSource).not.toContain("VrsAiPilotReadOnlySenderPhotos");
+    // Photos & Media integration is exercised by the mounted dashboard in
+    // vrs-agent-media.test.ts, not by assertions about its source text.
   });
 });
