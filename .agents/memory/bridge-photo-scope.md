@@ -2,7 +2,7 @@
 name: Bridge photo delivery scope
 description: DEV-only durable photo approval, retention boundary, and source expiration limitation
 ---
-Bridge photo delivery and private durable copies are approved for DEV only. The user explicitly approved private storage on 2026-09-17 without specifying retention; use a limited 30-day DEV retention policy, not indefinite storage. Production enablement requires separate approval.
+Bridge photo delivery and private durable copies are approved for DEV only. The user explicitly confirmed 30-day retention on 2026-09-18, measured from ticket intake and continuing after closure, not indefinite storage. Production enablement requires separate approval.
 
 **Why:** The user requested isolated DEV verification while preserving production and legacy media behavior. Sasha signed media links can expire and return 410; its same-origin resource policy can also block direct embedding.
 

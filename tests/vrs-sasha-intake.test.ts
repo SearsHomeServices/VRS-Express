@@ -228,11 +228,61 @@ describe("VRS SASHA intake active-only duplicate behavior", () => {
     expect(result.kind).toBe("accepted");
     expect(capturePhotos).toHaveBeenCalledWith(
       42,
-      expect.any(Array),
+      validV5AuthorizePayload.appliance_photos,
       createdAt.getTime() + 30 * 24 * 60 * 60 * 1000,
     );
     releaseCapture();
     await Promise.resolve();
+  });
+
+  it("captures V9 sender photos at intake without requiring a viewer to open them", async () => {
+    const capturePhotos = vi.fn(async () => ({ captured: 1, failures: 0 }));
+    const harness = makeHarness({ capturePhotos });
+    const result = await harness.intake.receive(validV9AuthorizePayload);
+    expect(result.kind).toBe("accepted");
+    expect(capturePhotos).toHaveBeenCalledTimes(1);
+    expect(capturePhotos).toHaveBeenCalledWith(
+      42,
+      validV9AuthorizePayload.appliance_photos,
+      createdAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+    expect(harness.deps.store.createIntake).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["throw", "reject", "partial"] as const)(
+    "keeps an accepted ticket and reports capture failure safely (%s)",
+    async (failureMode) => {
+      const upstreamError = new Error("https://example.test/private?token=DO_NOT_LOG");
+      const capturePhotos = vi.fn(() => {
+        if (failureMode === "throw") throw upstreamError;
+        if (failureMode === "reject") return Promise.reject(upstreamError);
+        return Promise.resolve({ captured: 0, failures: 1 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const harness = makeHarness({ capturePhotos });
+        const result = await harness.intake.receive(validV9AuthorizePayload);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(result.kind).toBe("accepted");
+        expect(capturePhotos).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalled();
+        const messages = JSON.stringify(log.mock.calls);
+        expect(messages).toContain("submission=42");
+        expect(messages).not.toContain("DO_NOT_LOG");
+        expect(messages).not.toContain("https://");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
+  it("does not recapture or renew retention on a duplicate intake", async () => {
+    const capturePhotos = vi.fn(async () => ({ captured: 1, failures: 0 }));
+    const harness = makeHarness({ capturePhotos, initialState: "pending_review" });
+    const result = await harness.intake.receive(validV9AuthorizePayload);
+    expect(result.kind).toBe("duplicate");
+    expect(capturePhotos).not.toHaveBeenCalled();
   });
 
   it("selects only locally applied retryable V8 failures and requires the newest attempt to qualify", () => {
