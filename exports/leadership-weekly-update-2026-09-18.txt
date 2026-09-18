@@ -1,0 +1,50 @@
+VRS Express week-to-date update: September 14–20, 2026
+
+VRS EXPRESS WEEKLY UPDATE
+September 14–20, 2026
+Week-to-date: submissions created before Friday, September 18 at 2:10 PM ET; latest submission at approximately 2:08 PM ET. Outcomes queried Friday, September 18 at 2:10 PM ET. Comparison uses current outcomes (not historical snapshot).
+
+VRS Express has received 885 submissions from 535 unique technicians so far this week.
+
+OUTCOMES
+  574 Completed (approved)
+  227 rejected
+  79 invalid
+  5 pending
+  0 other
+  71.7% approval rate among approved/rejected decisions
+  8.9% invalid rate
+  99.4% of submissions resolved
+
+TURNAROUND TIME
+  22.4 minutes average review time
+  14.4 minutes median review time
+
+DAILY VOLUME
+  Day                         Submissions  Completed (approved)  Rejected   Invalid   Pending   Other
+  Monday, Sep 14                      178                   120        43        15         0       0
+  Tuesday, Sep 15                     206                   142        48        16         0       0
+  Wednesday, Sep 16                   195                   119        58        18         0       0
+  Thursday, Sep 17                    198                   129        50        19         0       0
+  Friday, Sep 18*                     108                    64        28        11         5       0
+  Saturday, Sep 19       Not yet included                     -         -         -         -       -
+  Sunday, Sep 20         Not yet included                     -         -         -         -       -
+  * partial day at the time of the snapshot.
+
+TOP REJECTION REASONS THIS WEEK
+  76  Missing required photos
+  68  Photos do not meet submission criteria
+  55  Photo does not show voltage/reading
+  36  Estimate screenshot missing or incomplete
+  27  Incomplete submission
+
+EXECUTIVE TAKEAWAYS
+  - Tuesday was the busiest day, with 206 submissions.
+  - Approval rate is 71.7%, down 3.7 percentage points from the prior comparison cohort.
+  - Average review time is 22.4 minutes (improved from 26.3 minutes); median is 14.4 minutes.
+  - Invalid rate is 8.9%, up 0.6 percentage points from the prior comparison cohort.
+  - 5 submissions from this week's cohort remain pending at the snapshot.
+  - This is a week-to-date update, not a final seven-day report.
+
+Generated automatically by VRS Express every Wednesday at 4:00 PM ET.
+Completed (approved) means ticket status completed; rejected includes rejected_closed; pending includes queued. Other statuses are shown separately, not treated as resolved. Approval rate = completed / (completed + rejected). Review time is wall-clock created_at to reviewed_at, excluding missing or negative durations. Technicians are counted by trimmed, case-insensitive LDAP, with the linked user identity as fallback.

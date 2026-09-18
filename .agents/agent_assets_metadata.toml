@@ -22,3 +22,16 @@ type = "pdf"
 title = "VRS QA Testing Guide (1099 Portal & New Admin Features)"
 logical_id = "c30ad067-f5d4-40ff-bef4-28f20b87e397"
 
+[[outputs]]
+id = "SezIlJ6T2g3SkTfHVXvI-"
+uri = "file://exports/leadership-weekly-update-2026-09-18.html"
+type = "html"
+title = "Leadership Weekly Update — September 14–20, 2026"
+description = "Same executive-report template as last week, refreshed from production through September 18 at 2:10 p.m. Eastern. Week-to-date figures and aligned prior-week comparison. Prepared for sharing; not emailed."
+logical_id = "8177fdad-5b89-4e22-a7c6-c77f87f0b005"
+content_hash = "sha256:e63e72e528b59915b45bce589da79a07df4ce15fbbbfdacaf917e121b9e0f999"
+size = 17056
+mtime_ms = 1789755051906
+storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:a11bb216-7de2-40f6-ada7-2f3b2631048f/8177fdad-5b89-4e22-a7c6-c77f87f0b005/1d0864c1-a521-463f-ad6d-82b7d182bebd"
+storage_version_token = "1789755057164242"
+content_type = "text/html"
