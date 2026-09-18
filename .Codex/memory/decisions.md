@@ -1,8 +1,15 @@
 # Codex Decisions - VRS-Agent-Core
 
-Updated: 2026-08-14 16:28
+Updated: 2026-09-18
 
 ## Decisions
+
+- 2026-09-18 - Keep `npm run check` strict and scoped to all existing application
+  sources; target ES2022 rather than introducing iteration workarounds or
+  compiler suppressions. This matches Node 20 and the modern browser toolchain.
+  Use the installed Snowflake SDK's type-only declarations while retaining its
+  lazy runtime load, so type safety does not introduce a startup dependency on
+  successfully loading that optional integration.
 
 - [CX] 2026-08-14 - Activate V9 by fast-forwarding the existing Replit DEV
   `main` history after merging its two newer dashboard/publish commits; do not

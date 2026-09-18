@@ -351,7 +351,7 @@ export interface IStorage {
   // (technicianId, hash(serviceOrder)), re-checks for a recent duplicate
   // inside the lock, and inserts only if no sibling request beat us to it.
   // See implementation comment for the rationale.
-  createSubmissionWithIdempotency(submission: InsertSubmission, withinSeconds: number, options?: { additionalRequest?: boolean; excludeSubmissionIds?: readonly number[] }): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
+  createSubmissionWithIdempotency(submission: InsertSubmission & Pick<typeof submissions.$inferInsert, "statusChangedAt">, withinSeconds: number, options?: { additionalRequest?: boolean; excludeSubmissionIds?: readonly number[] }): Promise<{ submission?: Submission; wasDuplicate: boolean; blockedByOther?: boolean; blockingTechnicianId?: number; blockingStatus?: string }>;
 
   // SMS methods
   createSmsNotification(
@@ -685,7 +685,7 @@ export class DatabaseStorage implements IStorage {
   // a connection across the external procId fetch — that runs before this
   // call. Auto-releases the lock at COMMIT/ROLLBACK.
   async createSubmissionWithIdempotency(
-    submission: InsertSubmission,
+    submission: InsertSubmission & Pick<typeof submissions.$inferInsert, "statusChangedAt">,
     withinSeconds: number,
     options?: {
       additionalRequest?: boolean;
@@ -2724,7 +2724,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTechnicianUsers(): Promise<TechnicianUserView[]> {
-    const result = await db.execute(sql`
+    const result = await db.execute<{ [K in keyof TechnicianUserView]: TechnicianUserView[K] }>(sql`
       SELECT
         u.id,
         u.name,
@@ -2745,7 +2745,7 @@ export class DatabaseStorage implements IStorage {
       GROUP BY u.id, u.name, u.rac_id, u.phone, t.district, t.tech_un_no, t.manager_name, u.role
       ORDER BY u.name ASC
     `);
-    return result.rows as TechnicianUserView[];
+    return result.rows;
   }
 
   async getNlaQueuedCount(divisions?: string[]): Promise<number> {
@@ -2946,15 +2946,14 @@ export class DatabaseStorage implements IStorage {
       // rejected | rejected_closed | invalid; AUTH accepts approved |
       // completed). Without this, NLA reject/invalid confirms would
       // pre-flight-pass at the route then 409 inside the transaction.
-      const lockedRows = await tx.execute(
+      const lockedRows = await tx.execute<{ id: number; ticket_status: string; request_type: string }>(
         sql`SELECT id, ticket_status, request_type FROM submissions WHERE id = ${data.submissionId} FOR UPDATE`
       );
-      const locked = (lockedRows as any).rows?.[0] ?? (lockedRows as any[])[0];
+      const locked = lockedRows.rows[0];
       if (!locked) {
         return { ok: false as const, reason: "not_found" as const };
       }
-      const lockedRow = locked as { ticket_status: string; request_type: string };
-      const lockedStatus = lockedRow.ticket_status;
+      const lockedStatus = locked.ticket_status;
       // Tyler 2026-05-01 (P1 fix — sub 566): collapsed the AUTH/NLA branch
       // here onto the shared isTerminalTicketStatusForIntake predicate so
       // the in-transaction re-check matches the route pre-flight gate

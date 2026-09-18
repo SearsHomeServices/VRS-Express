@@ -1,8 +1,17 @@
 # Codex Context - VRS-Agent-Core
 
-Updated: 2026-08-14 16:28
+Updated: 2026-09-18
 
 ## Current Session
+
+- Restored the repository-wide TypeScript baseline: all 53 reproduced
+  diagnostics are resolved and `npm run check` exits successfully. Strict
+  options and check scope remain unchanged. No production enablement,
+  deployment, database migration, or physical-device acceptance was performed.
+- Verification: 109 focused tests passed, including new password-input and
+  storage-result tests. DEV restarted and the landing page rendered. Existing
+  DEV-only Snowflake `require is not defined` and screenshot-local Vite HMR
+  warnings remain outside this type-check repair.
 
 - Implemented V9 as a strict extension on the existing authorize route. The
   two V9 intent/required fields are `cta_no` and `district_number`; `cta_no`

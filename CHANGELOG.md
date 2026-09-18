@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Repository TypeScript baseline (2026-09-18)
+- Resolved the 53 existing TypeScript diagnostics while retaining strict checks
+  and the existing check scope. Set the language target to ES2022 for the
+  supported modern runtime, fixing Map/Set iteration without runtime rewrites.
+- Corrected password-input props, agent dashboard mutation signatures, route
+  parameter/authentication narrowing, nullable report handling, Snowflake SDK
+  connection types, and PostgreSQL result types without suppressing errors.
+- Preserved the server-owned submission status timestamp and added focused
+  password-input and storage-result regression coverage.
+
 ### Added - Agent notes after an AI close (2026-09-11)
 - VRS agents can now read and add notes on a ticket after it has been closed,
   including tickets closed automatically by VRS AI. Two separate gaps were

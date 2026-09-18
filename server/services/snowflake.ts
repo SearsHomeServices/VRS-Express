@@ -1,6 +1,12 @@
 import { createPrivateKey } from "node:crypto";
+import type { Connection } from "snowflake-sdk";
 
-let snowflake: any = null;
+type SnowflakeSDK = typeof import("snowflake-sdk") & {
+  VERSION?: string;
+  Version?: string;
+};
+
+let snowflake: SnowflakeSDK | null = null;
 
 // Tyler 2026-05-01 — production-environment Snowflake load failures were
 // surfacing as the generic literal "snowflake-sdk is not available in this
@@ -9,10 +15,11 @@ let snowflake: any = null;
 // libc, or some other lower-level failure. Preserve the underlying require()
 // error verbatim (message + stack via `cause`) so the swallowing catch in
 // fetchProcIdForServiceOrder logs the real diagnostic.
-function getSnowflakeSDK() {
+function getSnowflakeSDK(): SnowflakeSDK {
   if (!snowflake) {
     try {
-      snowflake = require("snowflake-sdk");
+      const sdk: SnowflakeSDK = require("snowflake-sdk");
+      snowflake = sdk;
     } catch (e: any) {
       const wrapped = new Error(
         `snowflake-sdk is not available in this environment: ${e?.code || ""} ${e?.message || String(e)}`.trim(),
@@ -151,7 +158,7 @@ function normalizePrivateKey(key: string): string {
   );
 }
 
-function getConnection(): Promise<any> {
+function getConnection(): Promise<Connection> {
   return new Promise((resolve, reject) => {
     const rawKey = process.env.SNOWFLAKE_PRIVATE_KEY;
     if (!rawKey) {
@@ -208,7 +215,7 @@ function getConnection(): Promise<any> {
   });
 }
 
-function executeQuery(connection: any, query: string): Promise<SnowflakeTechRow[]> {
+function executeQuery(connection: Connection, query: string): Promise<SnowflakeTechRow[]> {
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: query,
@@ -247,13 +254,13 @@ function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T>
 // Destroys a connection that may resolve LATER than our deadline. Passing the
 // (possibly still-pending) connection promise guarantees we release the socket
 // even when withTimeout already rejected and we stopped awaiting it.
-function releaseConnection(connPromise: Promise<any> | null) {
+function releaseConnection(connPromise: Promise<Connection> | null) {
   if (!connPromise) return;
   Promise.resolve(connPromise)
     .then((conn) => {
       if (!conn) return;
       try {
-        conn.destroy((err: any) => {
+        conn.destroy((err) => {
           if (err) console.error("Snowflake disconnect error:", err.message);
         });
       } catch {}
@@ -305,7 +312,7 @@ export async function fetchProcIdForServiceOrder(rawServiceOrder: string): Promi
   const cached = procIdCache.get(soNumber);
   if (cached) return cached;
 
-  let connPromise: Promise<any> | null = null;
+  let connPromise: Promise<Connection> | null = null;
   try {
     const result = await withTimeout(
       (async () => {
@@ -431,7 +438,7 @@ export async function fetchTechHubPartsPhotosForServiceOrder(
   const cached = techHubPhotosCache.get(key);
   if (cached) return cached;
 
-  let connPromise: Promise<any> | null = null;
+  let connPromise: Promise<Connection> | null = null;
   try {
     const photos = await withTimeout(
       (async () => {
@@ -493,7 +500,7 @@ export async function fetchTechHubPartsPhotosForServiceOrder(
 }
 
 export async function fetchTechniciansFromSnowflake(): Promise<SyncedTechnician[]> {
-  let connPromise: Promise<any> | null = null;
+  let connPromise: Promise<Connection> | null = null;
   try {
     return await withTimeout(
       (async () => {

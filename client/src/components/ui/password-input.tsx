@@ -3,10 +3,14 @@ import { Eye, EyeOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
+type PasswordInputProps = Omit<React.ComponentProps<"input">, "type"> & {
+  "data-testid"?: string
+}
+
 const PasswordInput = React.forwardRef<
   HTMLInputElement,
-  Omit<React.ComponentProps<"input">, "type">
->(({ className, ...props }, ref) => {
+  PasswordInputProps
+>(({ className, "data-testid": testId, ...props }, ref) => {
   const [visible, setVisible] = React.useState(false)
 
   return (
@@ -18,6 +22,7 @@ const PasswordInput = React.forwardRef<
           className
         )}
         ref={ref}
+        data-testid={testId}
         {...props}
       />
       <Button
@@ -27,7 +32,7 @@ const PasswordInput = React.forwardRef<
         className="absolute right-0 top-0 h-9 w-9 px-2 hover:bg-transparent"
         onClick={() => setVisible((v) => !v)}
         tabIndex={-1}
-        data-testid={props["data-testid"] ? `${props["data-testid"]}-toggle` : "button-toggle-password"}
+        data-testid={testId ? `${testId}-toggle` : "button-toggle-password"}
       >
         {visible ? (
           <EyeOff className="h-4 w-4 text-muted-foreground" />

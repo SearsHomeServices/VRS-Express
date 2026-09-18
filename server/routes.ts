@@ -599,12 +599,13 @@ export async function registerRoutes(
   };
 
   app.get("/api/external/service-order/:so/nla", requireExternalApiKey, async (req, res) => {
-    const so = req.params.so;
-    if (!/^\d{4}-\d{8}$/.test(so)) {
+    const soParam = req.params.so;
+    if (typeof soParam !== "string" || !/^\d{4}-\d{8}$/.test(soParam)) {
       return res.status(400).json({
         error: "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)",
       });
     }
+    const so = soParam;
     try {
       const rows = await storage.getNlaSubmissionsByServiceOrder(so);
       return res.json({
@@ -5061,7 +5062,12 @@ export async function registerRoutes(
   app.post("/api/submissions/:id/send-to-nla", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const id = parseInt(req.params.id as string);
+      const actor = authReq.user;
+      if (!actor) {
+        return res.status(401).json({ error: "No user found" });
+      }
+      const idParam = req.params.id;
+      const id = typeof idParam === "string" ? parseInt(idParam, 10) : NaN;
       if (isNaN(id)) {
         return res.status(400).json({ error: "Invalid submission ID" });
       }
@@ -5094,8 +5100,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Can only send claimed (pending) tickets to NLA" });
       }
 
-      const isAdmin = authReq.user.role === "admin" || authReq.user.role === "super_admin";
-      if (!isAdmin && submission.assignedTo !== authReq.user.id) {
+      const isAdmin = actor.role === "admin" || actor.role === "super_admin";
+      if (!isAdmin && submission.assignedTo !== actor.id) {
         return res.status(403).json({ error: "You can only send your own claimed tickets to NLA" });
       }
 
@@ -5109,17 +5115,18 @@ export async function registerRoutes(
       // a stale send-to-nla return 409. For non-admin actors we also
       // pin the assignee so an admin reassignment between read/write
       // can't be silently overwritten either.
-      const isAdminActor = authReq.user.role === "admin" || authReq.user.role === "super_admin";
-      const expectAssignee = isAdminActor ? undefined : authReq.user.id;
-      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
+      const isAdminActor = actor.role === "admin" || actor.role === "super_admin";
+      const expectAssignee = isAdminActor ? undefined : actor.id;
+      const nlaUpdate: Partial<typeof submissions.$inferInsert> = {
         requestType: "parts_nla",
         applianceType: targetDivision,
         ticketStatus: "queued",
         assignedTo: null,
-        reassignmentNotes: parsed.data.notes || `Sent to NLA queue by ${authReq.user.name}`,
+        reassignmentNotes: parsed.data.notes || `Sent to NLA queue by ${actor.name}`,
         statusChangedAt: new Date(),
         updatedAt: new Date(),
-      } as any, expectAssignee);
+      };
+      const updated = await storage.updateSubmissionIfStatus(id, ["pending"], nlaUpdate, expectAssignee);
       if (!updated) {
         return res.status(409).json({
           error: "This ticket was already moved or reassigned. Please refresh and try again.",
@@ -5147,18 +5154,18 @@ export async function registerRoutes(
       // blocked from going unavailable even though they had no open
       // VRS tickets. Mirrors the exact pattern in /process and
       // /process-nla; admins keep their independent status flow.
-      if (authReq.user.role === "vrs_agent") {
+      if (actor.role === "vrs_agent") {
         try {
-          await storage.updateUser(authReq.user.id, { agentStatus: "online", updatedAt: new Date() } as any);
-          await safeLogActivity(authReq.user.id, "status_change_ticket_flow", {
+          await storage.updateUser(actor.id, { agentStatus: "online", updatedAt: new Date() } as any);
+          await safeLogActivity(actor.id, "status_change_ticket_flow", {
             from: "working", to: "online", trigger: "send_to_nla", submissionId: id,
           });
-          updateClientStatus(authReq.user.id, "online");
+          updateClientStatus(actor.id, "online");
           broadcastToAdmins({
             type: "agent_status_changed",
-            payload: { userId: authReq.user.id, name: authReq.user.name, status: "online" },
+            payload: { userId: actor.id, name: actor.name, status: "online" },
           });
-          broadcastToAgent(authReq.user.id, {
+          broadcastToAgent(actor.id, {
             type: "own_status_changed",
             payload: { status: "online" },
           });
@@ -6309,7 +6316,8 @@ export async function registerRoutes(
 
   app.get("/api/admin/communication-templates/:id/versions", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
-      const id = parseInt(req.params.id, 10);
+      const idParam = req.params.id;
+      const id = typeof idParam === "string" ? parseInt(idParam, 10) : NaN;
       if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
       const versions = await storage.getCommunicationTemplateVersions(id);
       return res.status(200).json(versions);
@@ -6321,7 +6329,8 @@ export async function registerRoutes(
 
   app.patch("/api/admin/communication-templates/:id", authenticateToken, requireRole("admin", "super_admin"), async (req: AuthenticatedRequest, res) => {
     try {
-      const id = parseInt(req.params.id, 10);
+      const idParam = req.params.id;
+      const id = typeof idParam === "string" ? parseInt(idParam, 10) : NaN;
       if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
 
       const { body, editReason } = req.body ?? {};
@@ -7027,7 +7036,8 @@ export async function registerRoutes(
 
   app.get("/api/admin/reports/tech-no-login/:id/csv", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
-      const id = parseInt(req.params.id, 10);
+      const idParam = req.params.id;
+      const id = typeof idParam === "string" ? parseInt(idParam, 10) : NaN;
       if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid report id" });
       const { getWeeklyReportById, TECH_NO_LOGIN_REPORT_TYPE } = await import("./services/weekly-tech-report");
       const report = await getWeeklyReportById(id);
@@ -7048,6 +7058,9 @@ export async function registerRoutes(
     try {
       const { generateTechNoLoginReport } = await import("./services/weekly-tech-report");
       const report = await generateTechNoLoginReport();
+      if (!report) {
+        throw new Error("Weekly report generation returned no report");
+      }
       return res.json({ report: { id: report.id, generatedAt: report.generatedAt, summary: report.summary } });
     } catch (error) {
       console.error("Weekly report generation error:", error);
@@ -7355,8 +7368,12 @@ export async function registerRoutes(
     // is returned. That is all the submission form requires.
     try {
       const authReq = req as AuthenticatedRequest;
-      const callerUserId = authReq.user!.id;
-      const callerRacId = authReq.user!.racId;
+      const caller = authReq.user;
+      if (!caller) {
+        return res.status(401).json({ error: "No user found" });
+      }
+      const callerUserId = caller.id;
+      const callerIdentity = caller.ldapId ?? caller.email;
 
       const so = String(req.query.serviceOrder || "").trim();
       if (!/^\d{4}-\d{8}$/.test(so)) {
@@ -7377,7 +7394,7 @@ export async function registerRoutes(
         .limit(1);
 
       if (ownedRows.length === 0) {
-        console.warn(`[lookup-warranty] denied (no submission): user=${callerRacId} (${callerUserId}) so=${so}`);
+        console.warn(`[lookup-warranty] denied (no submission): user=${callerIdentity} (${callerUserId}) so=${so}`);
         return res.status(403).json({ error: "Access denied: service order not associated with your submissions" });
       }
 
@@ -7386,13 +7403,13 @@ export async function registerRoutes(
       const cutoff = now - WARRANTY_LOOKUP_WINDOW_MS;
       const recentTimestamps = (warrantyLookupLog.get(callerUserId) ?? []).filter(ts => ts > cutoff);
       if (recentTimestamps.length >= WARRANTY_LOOKUP_MAX_PER_WINDOW) {
-        console.warn(`[lookup-warranty] rate-limit exceeded: user=${callerRacId} (${callerUserId}) so=${so} count=${recentTimestamps.length}`);
+        console.warn(`[lookup-warranty] rate-limit exceeded: user=${callerIdentity} (${callerUserId}) so=${so} count=${recentTimestamps.length}`);
         return res.status(429).json({ error: "Too many warranty lookups. Please try again later." });
       }
       recentTimestamps.push(now);
       warrantyLookupLog.set(callerUserId, recentTimestamps);
 
-      console.info(`[lookup-warranty] allowed: user=${callerRacId} (${callerUserId}) so=${so}`);
+      console.info(`[lookup-warranty] allowed: user=${callerIdentity} (${callerUserId}) so=${so}`);
 
       const result = await fetchProcIdForServiceOrder(so);
       const derived = deriveWarrantyFromProcId(result.procId, result.clientNm);
@@ -7614,7 +7631,8 @@ export async function registerRoutes(
   app.patch("/api/feedback/:id", authenticateToken, requireRole("admin", "super_admin"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const id = parseInt(req.params.id);
+      const idParam = req.params.id;
+      const id = typeof idParam === "string" ? parseInt(idParam, 10) : NaN;
       if (isNaN(id)) return res.status(400).json({ error: "Invalid feedback ID" });
 
       const updateSchema = z.object({

@@ -1,8 +1,11 @@
 # Codex Todos - VRS-Agent-Core
 
-Updated: 2026-08-14 16:28
+Updated: 2026-09-18
 
 ## Done
+
+- [x] Restore a passing strict repository-wide `npm run check` baseline with
+  behavior-preserving type fixes and focused regression coverage.
 
 - [x] Implement strict V9 intake and same-version forwarding on the existing
   bridge endpoint with required `cta_no` and `district_number`, exact

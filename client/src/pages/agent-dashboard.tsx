@@ -807,7 +807,7 @@ export default function AgentDashboard() {
         // different tabs of the same user.
         let tabId = sessionStorage.getItem("vrs-tab-id");
         if (!tabId) {
-          tabId = (crypto as any)?.randomUUID?.() || `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          tabId = crypto.randomUUID?.() || `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
           sessionStorage.setItem("vrs-tab-id", tabId);
         }
         const res = await apiRequest("POST", "/api/agent/auto-offline", { idleMs, tabId });
@@ -1684,7 +1684,7 @@ export default function AgentDashboard() {
       const res = await apiRequest("PATCH", `/api/submissions/${submissionId}/reassign`, { agentId, notes });
       return res.json();
     },
-    onSuccess: (_data: any, variables: { submissionId: number; agentId?: number }) => {
+    onSuccess: (_data, variables) => {
       toast({
         title: variables.agentId ? "Ticket Reassigned" : "Reassigned to Queue",
         description: variables.agentId
@@ -2336,7 +2336,7 @@ export default function AgentDashboard() {
               </form>
               {soLookupSo && soLookupQuery.isError && (
                 <p className="text-sm text-destructive" data-testid="text-so-lookup-error">
-                  {friendlyApiErrorMessage(soLookupQuery.error, "Lookup failed. Check the service order format (DDDD-SSSSSSSS).")}
+                  {friendlyApiErrorMessage(soLookupQuery.error)}
                 </p>
               )}
               {soLookupSo && soLookupQuery.data && soLookupQuery.data.submissions.length === 0 && (
