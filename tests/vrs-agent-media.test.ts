@@ -127,6 +127,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+async function waitForCondition(condition: () => boolean, failureMessage: string) {
+  const maxAttempts = 50;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (condition()) return;
+    await act(async () => {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    });
+  }
+  if (!condition()) throw new Error(failureMessage);
+}
+
 type TicketOptions = {
   id?: number;
   photos?: string | null;
@@ -390,10 +401,12 @@ describe("Agent Photos & Media mounted runtime", () => {
     expect(noPhotos()).toBeNull();
     expect(commits.flat()).not.toContain("blob:agent-photo-1");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      detailResponse.resolve(nextDetail);
-      await new Promise(resolve => setTimeout(resolve, 0));
-    });
+    await act(async () => detailResponse.resolve(nextDetail));
+    await waitForCondition(
+      () => mediaCard().querySelector('[data-testid="photos-loading"]') === null
+        && senderImage()?.getAttribute("src") === "blob:agent-photo-2",
+      "next ticket photo did not finish loading after its detail resolved",
+    );
     expect(mediaCard().querySelector('[data-testid="photos-loading"]')).toBeNull();
     expect(senderImage()?.getAttribute("src")).toBe("blob:agent-photo-2");
     expect(noPhotos()).toBeNull();

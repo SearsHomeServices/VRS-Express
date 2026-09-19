@@ -1,6 +1,8 @@
 import { createPrivateKey } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
+import { createProcLookup } from "./snowflake-lookup";
+export type { ProcIdResult } from "./snowflake-lookup";
 
 // tsx runs this file as ESM; the production bundle runs as CJS. Resolve from
 // the current module in either runtime, not the process working directory.
@@ -166,7 +168,7 @@ function normalizePrivateKey(key: string): string {
   );
 }
 
-function getConnection(): Promise<Connection> {
+function getConnection(signal?: AbortSignal): Promise<Connection> {
   return new Promise((resolve, reject) => {
     const rawKey = process.env.SNOWFLAKE_PRIVATE_KEY;
     if (!rawKey) {
@@ -212,8 +214,23 @@ function getConnection(): Promise<Connection> {
       schema: "HSTECH",
     });
 
+    const destroy = () => {
+      try { connection.destroy(() => {}); } catch {}
+    };
+    signal?.addEventListener("abort", destroy, { once: true });
+    if (signal?.aborted) {
+      destroy();
+      reject(new Error("Snowflake lookup deadline exceeded"));
+      return;
+    }
     connection.connect((err, conn) => {
+      if (signal?.aborted) {
+        destroy(); // connect may complete after the original destroy
+        reject(new Error("Snowflake lookup deadline exceeded"));
+        return;
+      }
       if (err) {
+        destroy();
         console.error("Snowflake connection error:", err.message);
         reject(err);
       } else {
@@ -301,67 +318,20 @@ class TtlCache<T> {
   }
 }
 
-export interface ProcIdResult {
-  procId: string;
-  clientNm: string;
-}
-
-// 6h for a resolved lookup; 2min for "Not Found" / a transient failure (so a
-// Snowflake stall can't make every concurrent submit wait out the full timeout).
-const PROC_ID_POS_TTL_MS = 6 * 60 * 60 * 1000;
-const PROC_ID_NEG_TTL_MS = 2 * 60 * 1000;
-const procIdCache = new TtlCache<ProcIdResult>(5000);
-
-export async function fetchProcIdForServiceOrder(rawServiceOrder: string): Promise<ProcIdResult> {
-  const soNumber = rawServiceOrder.includes("-")
-    ? rawServiceOrder.split("-")[1]
-    : rawServiceOrder;
-
-  const cached = procIdCache.get(soNumber);
-  if (cached) return cached;
-
-  let connPromise: Promise<Connection> | null = null;
-  try {
-    const result = await withTimeout(
-      (async () => {
-        connPromise = getConnection();
-        const connection = await connPromise;
-        const rows: any[] = await new Promise((resolve, reject) => {
-          connection.execute({
-            sqlText: `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SO_NO = ? LIMIT 1`,
-            binds: [soNumber],
-            complete: (err: any, _stmt: any, rows: any) => {
-              if (err) reject(err);
-              else resolve(rows || []);
-            },
-          });
-        });
-        if (rows.length > 0) {
-          return {
-            procId: String(rows[0].CMB_THD_PTY_ID ?? "").trim() || "Not Found",
-            clientNm: String(rows[0].CLIENT_NM ?? "").trim() || "Not Found",
-          };
-        }
-        return { procId: "Not Found", clientNm: "Not Found" };
-      })(),
-      SNOWFLAKE_OP_TIMEOUT_MS,
-      "fetchProcIdForServiceOrder",
-    );
-
-    const isFound = result.procId !== "Not Found" || result.clientNm !== "Not Found";
-    procIdCache.set(soNumber, result, isFound ? PROC_ID_POS_TTL_MS : PROC_ID_NEG_TTL_MS);
-    return result;
-  } catch (err) {
-    console.error("fetchProcIdForServiceOrder error:", err);
-    const fallback = { procId: "Not Found", clientNm: "Not Found" };
-    // Cache the failure briefly so a Snowflake stall doesn't make every
-    // concurrent submit wait out the full timeout (pile-up protection).
-    procIdCache.set(soNumber, fallback, PROC_ID_NEG_TTL_MS);
-    return fallback;
-  } finally {
-    releaseConnection(connPromise);
-  }
-}
+export const fetchProcIdForServiceOrder = createProcLookup(async (key, signal) => {
+  const connection = await getConnection(signal);
+  if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
+  return new Promise<any[]>((resolve, reject) => {
+    const statement = connection.execute({
+      sqlText: `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SO_NO = ? LIMIT 1`,
+      binds: [key],
+      complete: (err, _stmt, rows) => err ? reject(err) : resolve(rows || []),
+    });
+    signal.addEventListener("abort", () => {
+      try { statement.cancel(() => {}); } catch {}
+    }, { once: true });
+  });
+}, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 60000)) });
 
 // ===========================================================================
 // TechHub parts photos (read-only)

@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   registerVrsBridgePhotoProxy,
   SHSAI_DEV_PHOTO_HOST,
@@ -46,6 +47,10 @@ class FakeObjectStorage {
         }];
       },
       body: entry?.body,
+      download: async () => {
+        if (!entry) throw Object.assign(new Error("missing"), { code: 404 });
+        return [entry.body];
+      },
     };
     return file;
   }
@@ -288,6 +293,82 @@ describe("DEV Sasha bridge private photo copies", () => {
     });
     expect(await storage.sweep(Date.now(), async () => false)).toBe(1);
     expect(objectStorage.entries.size).toBe(0);
+  });
+
+  it("requires matching payload provenance for guarded ticket deletion across environments", async () => {
+    const objects = new FakeObjectStorage();
+    const storage = new VrsBridgePhotoStorage(objects as any);
+    const deadline = Date.now() + VRS_BRIDGE_PHOTO_RETENTION_MS;
+    await storage.save(44, 0, { body: ONE_PIXEL_PNG, contentType: "image/png" },
+      Date.now(), deadline, "dev-source");
+    await storage.deleteSubmission(44, ["prod-source"]);
+    expect(await storage.get(44, 0)).not.toBeNull();
+    // A ticket with no Bridge record may reuse the same numeric identifier.
+    await storage.deleteSubmission(44, []);
+    expect(await storage.get(44, 0)).not.toBeNull();
+    await storage.deleteSubmission(44, ["dev-source"]);
+    expect(await storage.get(44, 0)).toBeNull();
+  });
+
+  it("preserves provenance-free copies until TTL rather than inferring a DB orphan", async () => {
+    const objects = new FakeObjectStorage();
+    const storage = new VrsBridgePhotoStorage(objects as any);
+    await storage.save(44, 0, { body: ONE_PIXEL_PNG, contentType: "image/png" });
+    await storage.deleteSubmission(44, ["source"]);
+    expect(await storage.sweep()).toBe(0);
+    expect(await storage.get(44, 0)).not.toBeNull();
+    expect(await storage.sweep(Date.now() + VRS_BRIDGE_PHOTO_RETENTION_MS + 1)).toBe(1);
+  });
+
+  it("keeps scheduled cleanup TTL-only and snapshots deletion provenance before DB deletion", () => {
+    const routes = readFileSync("server/routes.ts", "utf8");
+    const scheduler = routes.slice(routes.indexOf("const cleanupExpiredBridgePhotos = async"));
+    const cleanup = scheduler.slice(0, scheduler.indexOf("void recoverBridgePhotos()"));
+    expect(cleanup).toMatch(/vrsBridgePhotoStorage\.sweep\(\s*Date\.now\(\),?\s*\)/);
+    expect(cleanup).not.toContain("storage.getSubmission");
+    const deletion = routes.slice(routes.indexOf('app.delete("/api/submissions/:id"'));
+    expect(deletion.indexOf("vrsBridgeStore.getBySubmissionId(id)"))
+      .toBeLessThan(deletion.indexOf("storage.deleteSubmission(id)"));
+    expect(deletion).toContain("vrsBridgePhotoStorage.deleteSubmission(id, bridgePhotoSources)");
+  });
+
+  it("reports unreadable saved bytes as failure and recovers on a later attempt", async () => {
+    const objects = new FakeObjectStorage();
+    const storage = new VrsBridgePhotoStorage(objects as any);
+    const original = objects.getServerOwnedObjectEntityFile.bind(objects);
+    const read = vi.spyOn(objects, "getServerOwnedObjectEntityFile").mockImplementation(async (path) => {
+      const file = await original(path);
+      file.download = async () => { throw new Error("read unavailable"); };
+      return file;
+    });
+    const upstream = vi.fn(async () => ({ body: ONE_PIXEL_PNG, contentType: "image/png" }));
+    expect(await storage.capture(44, ["source"], upstream, () => true))
+      .toEqual({ captured: 0, failures: 1 });
+    // Metadata now exists, but unreadable bytes still cannot count as captured.
+    expect(await storage.capture(44, ["source"], upstream, () => true))
+      .toEqual({ captured: 0, failures: 1 });
+    read.mockRestore();
+    expect(await storage.capture(44, ["source"], upstream, () => true))
+      .toEqual({ captured: 1, failures: 0 });
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans expired and deleted-ticket photos with flags off without touching unrelated media", async () => {
+    vi.stubEnv("VRS_AI_BRIDGE_ENABLED", "false");
+    vi.stubEnv("VRS_BRIDGE_PHOTO_PROXY_ENABLED", "false");
+    try {
+      const objects = new FakeObjectStorage();
+      const storage = new VrsBridgePhotoStorage(objects as any);
+      await storage.save(44, 0, { body: ONE_PIXEL_PNG, contentType: "image/png" });
+      await storage.save(45, 0, { body: ONE_PIXEL_PNG, contentType: "image/png" });
+      objects.entries.set("/objects/unrelated/keep", {
+        body: ONE_PIXEL_PNG, contentType: "image/png", metadata: { expiresAt: "1" },
+      });
+      await storage.deleteSubmission(44);
+      expect(await storage.get(44, 0)).toBeNull();
+      expect(await storage.sweep(Date.now() + VRS_BRIDGE_PHOTO_RETENTION_MS + 1)).toBe(1);
+      expect([...objects.entries.keys()]).toEqual(["/objects/unrelated/keep"]);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("continues a bounded sweep from its next page instead of starving later objects", async () => {

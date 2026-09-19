@@ -107,6 +107,7 @@ import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { fetchProcIdForServiceOrder } from "./services/snowflake";
+import { applyProcIdRepair } from "./services/snowflake-lookup";
 import { runTechnicianSync } from "./services/tech-sync";
 import { isTechPdcConfigured, pushSubmissionToTechPdc, rejectionTimestampOf, TECH_PDC_NOT_CONFIGURED_MESSAGE } from "./services/tech-pdc";
 import { seedDatabase } from "./seed";
@@ -1458,6 +1459,12 @@ export async function registerRoutes(
 
 
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
+      if (procIdResult.status === "LOOKUP_UNAVAILABLE") {
+        return res.status(503).set("Retry-After", "5").json({
+          error: "Service order lookup temporarily unavailable. Please try again.",
+          code: "LOOKUP_UNAVAILABLE", retryable: true,
+        });
+      }
 
       const derivedWarranty = deriveWarrantyFromProcId(procIdResult.procId, procIdResult.clientNm);
 
@@ -1716,12 +1723,10 @@ export async function registerRoutes(
     },
     capturePhotos: isVrsBridgePhotoProxyEnabled()
       ? (submissionId, photoUrls, retentionExpiresAt) =>
-        vrsBridgePhotoStorage.capture(
+        bridgePhotoReliability.capture(
           submissionId,
           photoUrls,
-          (url) => fetchAllowedImage(url, fetch),
-          isAllowedPhotoUrl,
-          retentionExpiresAt,
+          retentionExpiresAt!,
         )
       : undefined,
   });
@@ -4831,16 +4836,26 @@ export async function registerRoutes(
       const submission = await storage.getSubmission(id);
       if (!submission) return res.status(404).json({ message: "Submission not found" });
 
+      // Snapshot provenance before cascading DB deletion removes the Bridge
+      // payload. Shared object prefixes cannot safely use numeric IDs alone.
+      let bridgePhotoSources: string[] = [];
+      try {
+        const bridge = await vrsBridgeStore.getBySubmissionId(id);
+        if (Array.isArray(bridge?.requestPayload.appliance_photos)) {
+          bridgePhotoSources = bridge.requestPayload.appliance_photos;
+        }
+      } catch {
+        // Missing provenance defers private-byte cleanup to the TTL sweep.
+        console.error("[retention] bridge photo deletion provenance unavailable");
+      }
       const deleted = await storage.deleteSubmission(id);
       if (!deleted) return res.status(500).json({ message: "Failed to delete submission" });
-      if (isVrsBridgePhotoProxyEnabled()) {
-        try {
-          await vrsBridgePhotoStorage.deleteSubmission(id);
-        } catch {
-          // The ticket delete is already committed; the bounded sweep retries
-          // orphan cleanup without logging storage/provider error details.
-          console.error("[retention] bridge photo delete failed");
-        }
+      try {
+        await vrsBridgePhotoStorage.deleteSubmission(id, bridgePhotoSources);
+      } catch {
+        // Cleanup must continue even after the Pilot is disabled.
+        // The committed ticket deletion is not rolled back on storage failure.
+        console.error("[retention] bridge photo delete failed");
       }
 
       // Tyler 2026-05-29 ("Zorn stuck Working" fix): deleting a ticket that
@@ -7412,6 +7427,12 @@ export async function registerRoutes(
       console.info(`[lookup-warranty] allowed: user=${callerIdentity} (${callerUserId}) so=${so}`);
 
       const result = await fetchProcIdForServiceOrder(so);
+      if (result.status === "LOOKUP_UNAVAILABLE") {
+        return res.status(503).set("Retry-After", "5").json({
+          error: "Warranty lookup temporarily unavailable. Please try again.",
+          code: "LOOKUP_UNAVAILABLE", retryable: true,
+        });
+      }
       const derived = deriveWarrantyFromProcId(result.procId, result.clientNm);
 
       // Return only the derived warranty classification — not procId or clientNm.
@@ -7432,26 +7453,26 @@ export async function registerRoutes(
 
       let updated = 0;
       let failed = 0;
+      let unavailable = 0;
+      let failedUpdates = 0;
 
       for (const sub of missing) {
         try {
           const result = await fetchProcIdForServiceOrder(sub.serviceOrder);
-          if (result.procId !== "Not Found" || result.clientNm !== "Not Found") {
-            await storage.updateSubmission(sub.id, {
-              procId: result.procId,
-              clientNm: result.clientNm,
-            } as any);
+          const outcome = await applyProcIdRepair(result, fields =>
+            storage.updateSubmission(sub.id, fields as any));
+          if (outcome === "LOOKUP_UNAVAILABLE") {
+            unavailable++;
+            continue; // Preserve every existing classification; retry on a later run.
+          }
+          if (outcome === "FOUND") {
             updated++;
           } else {
-            await storage.updateSubmission(sub.id, {
-              procId: result.procId,
-              clientNm: result.clientNm,
-            } as any);
             failed++;
           }
         } catch (err) {
           console.error(`Backfill failed for submission ${sub.id}:`, err);
-          failed++;
+          failedUpdates++;
         }
       }
 
@@ -7460,6 +7481,9 @@ export async function registerRoutes(
         needingBackfill: missing.length,
         updated,
         notFound: failed,
+        unavailable,
+        failedUpdates,
+        retryable: unavailable > 0 || failedUpdates > 0,
       });
     } catch (error: any) {
       console.error("ProcID backfill error:", error);
@@ -7794,6 +7818,22 @@ export async function registerRoutes(
 
   // DEV-only Bridge sender-photo endpoint. It reads the stored Bridge payload
   // server-side and never accepts an upstream URL from the browser.
+  const { BridgePhotoReliability } = await import("./vrs-bridge-photo-reliability");
+  const bridgePhotoReliability = new BridgePhotoReliability(
+    pool, vrsBridgePhotoStorage, async (checkName, entityId, finding) => {
+      if (checkName === "bridge_photo_capture_recovered") {
+        for (const check of ["bridge_photo_capture_at_risk", "bridge_photo_capture_failed"]) {
+          const incident = await storage.findOpenHealthIncident(check, "submission", entityId);
+          if (incident) await storage.clearHealthIncident(incident.id);
+        }
+        return;
+      }
+      await storage.openHealthIncident({
+        checkName, entityType: "submission", entityId,
+        severity: checkName.endsWith("failed") ? "error" : "warning", finding,
+      });
+    },
+  );
   registerVrsBridgePhotoProxy(app, {
     authenticate: authenticateToken,
     getSubmission: (id) => storage.getSubmission(id),
@@ -7833,40 +7873,32 @@ export async function registerRoutes(
   // Durable Sasha copies are explicitly DEV-only. On a restart, retry only
   // rows created within the two-hour upstream-link window; an expired source
   // is reported as an aggregate failure and is never logged or returned.
-  if (
-    isVrsBridgePhotoProxyEnabled() &&
-    process.env.NODE_ENV !== "test"
-  ) {
+  if (process.env.NODE_ENV !== "test") {
     let recoveryRunning = false;
     const recoverBridgePhotos = async () => {
+      if (!isVrsBridgePhotoProxyEnabled()) return;
       if (recoveryRunning) return;
       recoveryRunning = true;
       try {
-        const recent = await vrsBridgeStore.listRecentPhotoIntakes(
-          new Date(Date.now() - 2 * 60 * 60 * 1000),
-        );
-        const result = await vrsBridgePhotoStorage.recover(
-          recent,
-          (url) => fetchAllowedImage(url, fetch),
-          isAllowedPhotoUrl,
-        );
-        if (result.attempted > 0 || result.failures > 0) {
-          console.log(
-            `[retention] bridge photo recovery attempted=${result.attempted} ` +
-            `failures=${result.failures}`,
-          );
-        }
+        await bridgePhotoReliability.recover();
       } catch {
         console.error("[retention] bridge photo recovery failed");
+        await storage.openHealthIncident({
+          checkName: "bridge_photo_recovery_unavailable", entityType: "system", entityId: 0,
+          severity: "error", finding: {
+            message: "Bridge photo recovery is unavailable. Check DEV status-table migration and database/private-storage access immediately; source photos expire after two hours.",
+          },
+        }).catch(() => console.error("[retention] bridge photo alert failed"));
       } finally {
         recoveryRunning = false;
       }
     };
     const cleanupExpiredBridgePhotos = async () => {
       try {
+        // Shared buckets have no environment namespace. Never infer orphan
+        // status from this environment's DB; only stored TTL is authoritative.
         const deleted = await vrsBridgePhotoStorage.sweep(
           Date.now(),
-          async (submissionId) => Boolean(await storage.getSubmission(submissionId)),
         );
         if (deleted > 0) {
           console.log(`[retention] bridge photos: deleted ${deleted} expired object(s)`);

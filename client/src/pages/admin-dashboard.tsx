@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { useAuth, getToken, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
+import { SnowflakeBackfillStatus, type SnowflakeBackfillResult } from "@/components/snowflake-backfill-status";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -2565,12 +2566,7 @@ function TechnicianSyncSection() {
     },
   });
 
-  const [backfillResult, setBackfillResult] = useState<{
-    total: number;
-    needingBackfill: number;
-    updated: number;
-    notFound: number;
-  } | null>(null);
+  const [backfillResult, setBackfillResult] = useState<SnowflakeBackfillResult | null>(null);
 
   const backfillMutation = useMutation({
     mutationFn: async () => {
@@ -2704,6 +2700,7 @@ function TechnicianSyncSection() {
                     <span className="text-muted-foreground">Not Found:</span>{" "}
                     <span className="font-medium text-muted-foreground" data-testid="text-backfill-notfound">{backfillResult.notFound}</span>
                   </div>
+                  <SnowflakeBackfillStatus result={backfillResult} />
                 </div>
               </CardContent>
             </Card>
@@ -3400,6 +3397,20 @@ function HealthSection() {
                         <TableCell className="text-xs">
                           <div className="font-medium">{meta?.title || inc.checkName}</div>
                           <div className="text-muted-foreground font-mono text-[10px]">{inc.checkName}</div>
+                          {inc.checkName.startsWith("bridge_photo_") && typeof inc.finding?.message === "string" && (
+                            <div className="mt-2 max-w-md space-y-1" data-testid={`photo-incident-details-${inc.id}`}>
+                              <p>{inc.finding.message}</p>
+                              {typeof inc.finding.expected === "number" && (
+                                <p>Verified copies: {inc.finding.captured} / {inc.finding.expected}</p>
+                              )}
+                              {typeof inc.finding.sourceDeadline === "string" && (
+                                <p>Source deadline: {new Date(inc.finding.sourceDeadline).toLocaleString()}</p>
+                              )}
+                              {typeof inc.finding.retentionDeadline === "string" && (
+                                <p>Retention deadline: {new Date(inc.finding.retentionDeadline).toLocaleString()}</p>
+                              )}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-xs font-mono">
                           {inc.entityType} #{inc.entityId}

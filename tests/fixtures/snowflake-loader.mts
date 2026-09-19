@@ -19,6 +19,8 @@ const originalLoad = nodeModule._load;
 let sdkLoads = 0;
 let metadataLoads = 0;
 let destroys = 0;
+let cancels = 0;
+let executes = 0;
 let expectedPrivateKey: string;
 const sdk = {
   createConnection(options: Record<string, unknown>) {
@@ -28,11 +30,20 @@ const sdk = {
     assert.equal(options.schema, "HSTECH");
     return {
       connect(callback: (error: null, connection: unknown) => void) {
+        if (mode === "late-connect") {
+          setTimeout(() => callback(null, this), 80);
+          return;
+        }
         callback(null, this);
       },
       execute(options: { binds: string[]; complete: Function }) {
+        executes++;
         assert.deepEqual(options.binds, ["123456"]);
+        if (mode === "query-timeout") {
+          return { cancel(callback: Function) { cancels++; callback(null); } };
+        }
         options.complete(null, null, [{ CMB_THD_PTY_ID: " test-proc ", CLIENT_NM: " test-client " }]);
+        return { cancel(callback: Function) { cancels++; callback(null); } };
       },
       destroy(callback: Function) {
         destroys++;
@@ -80,7 +91,7 @@ try {
   probeSnowflakeSDK();
   assert.equal(sdkLoads, mode === "failure" ? 2 : 1, "successful SDK loads are cached");
 
-  if (mode === "encrypted-key") {
+  if (["encrypted-key", "late-connect", "query-timeout"].includes(mode)) {
     // Synthetic ephemeral key, not a real credential; no SDK/network connection.
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     expectedPrivateKey = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -88,10 +99,21 @@ try {
       type: "pkcs8", format: "pem", cipher: "aes-256-cbc", passphrase: "test-only",
     }).toString().replace(/\n/g, " ");
     process.env.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE = "test-only";
-    assert.deepEqual(await fetchProcIdForServiceOrder("000000-123456"), {
-      procId: "test-proc", clientNm: "test-client",
-    });
-    assert.equal(destroys, 1, "lookup still releases its connection");
+    if (mode !== "encrypted-key") {
+      assert.deepEqual(await fetchProcIdForServiceOrder("000000-123456"), {
+        status: "LOOKUP_UNAVAILABLE", retryable: true,
+      });
+      assert.ok(destroys >= 1, "deadline destroys even before connect callback");
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(executes, mode === "late-connect" ? 0 : 1);
+      assert.equal(cancels, mode === "query-timeout" ? 1 : 0);
+      if (mode === "late-connect") assert.ok(destroys >= 2, "late connect destroyed again");
+    } else {
+      assert.deepEqual(await fetchProcIdForServiceOrder("000000-123456"), {
+      status: "FOUND", procId: "test-proc", clientNm: "test-client",
+      });
+      assert.equal(destroys, 1, "lookup still releases its connection");
+    }
     assert.equal(sdkLoads, 1, "lookups reuse the probed SDK");
   }
   console.log("snowflake-loader: passed");

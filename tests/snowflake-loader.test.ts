@@ -47,14 +47,14 @@ afterAll(async () => {
 });
 
 describe.each(["tsx ESM", "production CJS"])("Snowflake lazy loader in %s", (runtime) => {
-  it.each(["real", "cached", "failure", "metadata-missing", "encrypted-key"])("%s", async (mode) => {
+  it.each(["real", "cached", "failure", "metadata-missing", "encrypted-key", "late-connect", "query-timeout"])("%s", async (mode) => {
     const args = runtime === "tsx ESM"
       ? ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), fixture, mode]
       : [path.join(buildDir, "index.cjs"), mode];
     const { stdout } = await exec(process.execPath, args, {
       cwd: otherCwd,
       // Explicit allowlist: no Snowflake credentials or other app secrets.
-      env: { PATH: process.env.PATH, NODE_ENV: runtime === "tsx ESM" ? "development" : "production" },
+      env: { PATH: process.env.PATH, NODE_ENV: runtime === "tsx ESM" ? "development" : "production", SNOWFLAKE_OP_TIMEOUT_MS: "25" },
       timeout: 20000,
       maxBuffer: 1024 * 1024,
     });

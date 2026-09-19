@@ -113,7 +113,10 @@ export class VrsBridgePhotoStorage {
       const custom = (metadata.metadata ?? {}) as Record<string, string>;
       const existingExpiry = Number(custom.expiresAt);
       if (Number.isFinite(existingExpiry) && existingExpiry > now) {
-        if (!sourceUrl || custom.sourceHash === sourceHash(sourceUrl)) return;
+        if (!sourceUrl || custom.sourceHash === sourceHash(sourceUrl)) {
+          await this.verify(submissionId, photoIndex, sourceUrl, undefined, now);
+          return;
+        }
       } else if (Number.isFinite(existingExpiry)) {
         // Expired objects are tombstones until the sweep removes them. This
         // prevents a stale proxy fallback from renewing the 30-day window.
@@ -134,9 +137,24 @@ export class VrsBridgePhotoStorage {
         ...(sourceUrl ? { sourceHash: sourceHash(sourceUrl) } : {}),
       },
     );
+    await this.verify(submissionId, photoIndex, sourceUrl, image.body, now);
   }
 
-  async deleteSubmission(submissionId: number): Promise<void> {
+  private async verify(
+    submissionId: number, photoIndex: number, sourceUrl?: string, expected?: Buffer, now = Date.now(),
+  ): Promise<void> {
+    const stored = await this.get(submissionId, photoIndex, now, sourceUrl);
+    if (!stored) throw new Error("BRIDGE_PHOTO_VERIFY_FAILED");
+    const [bytes] = await stored.file.download();
+    if (!bytes.length || (expected && !bytes.equals(expected))) {
+      throw new Error("BRIDGE_PHOTO_VERIFY_FAILED");
+    }
+  }
+
+  async deleteSubmission(submissionId: number, sourceUrls?: readonly string[]): Promise<void> {
+    // Keys are not environment-namespaced. Route-driven deletion must prove
+    // provenance from the pre-deletion Bridge payload, not just a numeric ID.
+    if (sourceUrls && sourceUrls.length === 0) return;
     let pageToken: string | undefined;
     do {
       const result = await this.objectStorage.listObjectEntityFilesPage(
@@ -144,7 +162,30 @@ export class VrsBridgePhotoStorage {
         pageToken,
         PAGE_SIZE,
       );
-      await Promise.all(result.files.map((file) => file.delete({ ignoreNotFound: true })));
+      await Promise.all(result.files.map(async (file) => {
+        if (sourceUrls !== undefined) {
+          try {
+            const [metadata] = await file.getMetadata();
+            const custom = (metadata.metadata ?? {}) as Record<string, string>;
+            const index = Number(custom.photoIndex);
+            const sourceUrl = sourceUrls[index];
+            if (custom.submissionId !== String(submissionId) ||
+                !Number.isSafeInteger(index) || index < 0 ||
+                !file.name.endsWith(`/${submissionId}/${index}`) ||
+                typeof sourceUrl !== "string" ||
+                custom.sourceHash !== sourceHash(sourceUrl)) return;
+            // Do not remove a different generation replaced after this check.
+            const matchedFile = metadata.generation
+              ? file.bucket.file(file.name, { generation: metadata.generation })
+              : file;
+            await matchedFile.delete({ ignoreNotFound: true });
+          } catch (error) {
+            if (!isNotFound(error)) throw error;
+          }
+          return;
+        }
+        await file.delete({ ignoreNotFound: true });
+      }));
       pageToken = result.nextPageToken;
     } while (pageToken);
   }
@@ -221,6 +262,7 @@ export class VrsBridgePhotoStorage {
         }
         const existing = await this.get(submissionId, photoIndex, Date.now(), sourceUrl);
         if (existing) {
+          await this.verify(submissionId, photoIndex, sourceUrl);
           captured++;
           continue;
         }

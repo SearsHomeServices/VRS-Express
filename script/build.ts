@@ -1,12 +1,15 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import { runReleaseChecks } from "./release-checks";
 
 const denylist = [
   "snowflake-sdk",
 ];
 
 async function buildAll() {
+  // Run before deleting existing artifacts, including when called directly.
+  runReleaseChecks();
   await rm("dist", { recursive: true, force: true });
 
   console.log("building client...");

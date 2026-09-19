@@ -5,6 +5,7 @@ import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient } from "@/lib/queryClient";
+import { createSubmissionErrorHandler } from "@/lib/submission-error-handler";
 import { useAuth, getToken } from "@/lib/auth";
 import { TechPhotoPreview, MediaVideo, MediaAudio } from "@/components/media";
 import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
@@ -883,24 +884,11 @@ export default function TechSubmitPage() {
       toast({ title: "Submission Created", description: `Service Order #${data.submission.serviceOrder} submitted successfully.` });
       setLocation(`/tech/submissions/${data.submission.id}`);
     },
-    onError: (error: Error) => {
-      // Task — when the server blocks a normal submit because this SO already
-      // has a RESOLVED ticket today (a same-day completed one), it returns a
-      // 409 with `canRequestAdditional: true`. Surface the Additional Request
-      // confirmation dialog instead of the plain duplicate toast so the tech
-      // can deliberately create a separate authorization for a return visit.
-      const status = (error as any)?.status;
-      const body = (error as any)?.body;
-      if (status === 409 && body && body.canRequestAdditional) {
-        setAdditionalPromptOpen(true);
-        return;
-      }
-      // Tyler 2026-05-14 — friendlyApiErrorMessage converts the raw Replit
-      // edge-proxy HTML 403 / "Failed to fetch" / 5xx HTML blob into a short,
-      // tech-readable "Connection issue — please tap Submit again." Real
-      // server validation errors (JSON) pass through unchanged.
-      toast({ title: "Submission Failed", description: friendlyApiErrorMessage(error), variant: "destructive" });
-    },
+    onError: createSubmissionErrorHandler({
+      openAdditionalPrompt: () => setAdditionalPromptOpen(true),
+      friendlyMessage: friendlyApiErrorMessage,
+      toast,
+    }),
   });
 
   const aiEnhanceMutation = useMutation({
@@ -1613,6 +1601,13 @@ export default function TechSubmitPage() {
                   ) : warrantyLookup.isFetching ? (
                     <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-lookup-loading">
                       Looking up warranty provider from service order…
+                    </p>
+                  ) : warrantyLookup.isError ? (
+                    <p className="mt-1 text-xs text-destructive" role="status" data-testid="text-warranty-lookup-unavailable">
+                      Warranty lookup is unavailable. Please try again before submitting.{" "}
+                      <button type="button" className="underline" onClick={() => warrantyLookup.refetch()}>
+                        Retry lookup
+                      </button>
                     </p>
                   ) : isValidSo ? (
                     <p className="mt-1 text-xs text-muted-foreground" data-testid="text-warranty-autodetect-note">

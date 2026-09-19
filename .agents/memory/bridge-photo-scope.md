@@ -39,3 +39,15 @@ the next ticket. A final-DOM assertion misses the initial stale-image commit.
 **How to apply:** Capture committed image sources while switching between
 loaded tickets and while detail/photo requests are deferred. Resolve old
 requests after the switch and confirm they cannot replace current images.
+
+Object-level storage access does not imply permission to configure bucket lifecycle rules.
+
+**Why:** The 2026-09-19 lifecycle assessment received 403 for bucket metadata, despite working private-object access. Existing lifecycle rules could not be inspected or safely preserved.
+
+**How to apply:** Do not claim platform-enforced deletion while this permission boundary remains. Require scoped lifecycle access and preserve unrelated bucket rules before changing lifecycle settings; application cleanup still depends on a running process.
+
+Do not infer object ownership from absence of a ticket in the current environment's database.
+
+**Why:** DEV and production can share the private object prefix while having different ticket rows; a flag-independent cleanup process can otherwise mistake another environment's photos for orphans.
+
+**How to apply:** Scheduled cleanup uses the stored retention deadline. Immediate ticket-deletion cleanup must prove source identity; without that provenance, leave the object for expiration rather than deleting by numeric ticket ID alone.

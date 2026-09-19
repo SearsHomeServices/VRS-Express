@@ -847,6 +847,22 @@ export type AgentExternalCredential =
 // outbound VRS AI dispatch, AI result application, and the callback forwarded
 // back to SASHA. callback_secret is never stored in request_payload or in
 // cleartext; the callbackSecret* columns contain AES-256-GCM material.
+// Explicit DEV migration: scripts/bridge-photo-reliability-dev.sql (no startup DDL).
+export const vrsBridgePhotoCaptures = pgTable("vrs_bridge_photo_captures", {
+  submissionId: integer("submission_id").primaryKey().references(() => submissions.id, { onDelete: "cascade" }),
+  intakeAt: timestamp("intake_at", { withTimezone: true }).notNull(),
+  retentionExpiresAt: timestamp("retention_expires_at", { withTimezone: true }).notNull(),
+  state: text("state").notNull().default("pending"),
+  expectedCount: integer("expected_count").notNull(),
+  capturedCount: integer("captured_count").notNull().default(0),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  due: index("vrs_bridge_photo_captures_due_idx").on(table.nextAttemptAt)
+    .where(sql`${table.state} IN ('pending','retry')`),
+}));
+
 export const vrsAiCalls = pgTable(
   "vrs_ai_calls",
   {

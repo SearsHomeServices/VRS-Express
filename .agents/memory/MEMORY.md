@@ -28,3 +28,4 @@
 - [Email delivery ambiguity](email-delivery-ambiguity.md) — timeouts may already be accepted; require intentional resend, and never equate provider acceptance with mailbox delivery.
 - [Bridge photo scope](bridge-photo-scope.md) — private durable copies approved for DEV only; limited retention, ticket authorization, and no recovery promises for expired sources.
 - [Managed history cleanup](managed-history-cleanup.md) — active-branch cleanup does not purge auto-restored upstream refs or managed cloud assets; verify each boundary separately.
+- [Release validation isolation](release-validation-scope.md) — build tests must not depend on live services; merged include arrays can silently select server-dependent suites.
