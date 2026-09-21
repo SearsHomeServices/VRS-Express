@@ -1227,4 +1227,48 @@ describe("VRS Express bridge orchestration", () => {
       }),
     ).toEqual({ kind: "status_only" });
   });
+
+  it("builds truthful signed-callback notes from only supplied metadata", () => {
+    const approved = bridgeModule.mapVrsAiWebhookToSubmissionDecision({
+      version: 1,
+      eventId: "evt_notes",
+      callId: "call_notes",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "approved",
+      authNumber: "AUTH-NOTES",
+      authorizedAmount: 365.6,
+      partId: "PART-1",
+      partDescription: "Control board",
+      techId: "TECH-1",
+      durationSec: 75,
+      recordingUrl: "https://recordings.example.test/call.wav",
+    });
+    expect(approved).toMatchObject({ kind: "process" });
+    if (approved.kind !== "process") return;
+    expect(approved.body.agentNotes).toBe(
+      "VRS AI approved $365.60 (auth AUTH-NOTES, event evt_notes, call call_notes). Part PART-1: Control board. Tech TECH-1. Call duration 75s. Recording: https://recordings.example.test/call.wav",
+    );
+
+    const denied = bridgeModule.mapVrsAiWebhookToSubmissionDecision({
+      version: 1,
+      eventId: "evt_denied_notes",
+      callId: "call_denied_notes",
+      soNo: "13538277",
+      occurredAt: "2026-07-24T17:24:00Z",
+      state: "denied",
+      denyReason: "Coverage limit exceeded",
+    });
+    expect(denied).toMatchObject({
+      kind: "process",
+      body: {
+        agentNotes:
+          "VRS AI denied authorization (event evt_denied_notes, call call_denied_notes). Reason: Coverage limit exceeded",
+      },
+    });
+    if (denied.kind === "process") {
+      expect(denied.body.agentNotes).not.toContain("Recording");
+      expect(denied.body.agentNotes).not.toContain("duration");
+    }
+  });
 });

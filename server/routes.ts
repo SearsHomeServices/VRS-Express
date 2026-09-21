@@ -44,6 +44,7 @@ import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
   mapVrsAiWebhookToSubmissionDecision,
+  buildVrsAiWebhookAgentNotes,
   processVrsAiWebhookEvent,
 } from "./vrs-sasha-queue";
 import {
@@ -3464,13 +3465,19 @@ export async function registerRoutes(
               (callbackEvent.state === "approved" ||
                 callbackEvent.state === "partial") &&
               submission.ticketStatus === "completed" &&
-              submission.authCode === callbackEvent.authNumber
+              submission.authCode === callbackEvent.authNumber &&
+              submission.agentNotes?.includes(
+                buildVrsAiWebhookAgentNotes(callbackEvent),
+              )
             ) {
               return;
             }
             if (
               callbackEvent.state === "denied" &&
-              submission.ticketStatus === "rejected"
+              submission.ticketStatus === "rejected" &&
+              submission.agentNotes?.includes(
+                buildVrsAiWebhookAgentNotes(callbackEvent),
+              )
             ) {
               try {
                 const reasons = submission.rejectionReasons

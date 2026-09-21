@@ -468,6 +468,60 @@ export type VrsAiSubmissionDecision =
     }
   | { kind: "status_only" };
 
+/**
+ * Human-readable audit summary persisted on the ticket by the signed Bridge
+ * callback. Optional call metadata is included only when it was actually
+ * supplied by VRS AI.
+ */
+export function buildVrsAiWebhookAgentNotes(event: VrsWebhookEvent): string {
+  if (event.state === "approved") {
+    const parts = [
+      `VRS AI approved $${event.authorizedAmount.toFixed(2)} (auth ${event.authNumber}, event ${event.eventId}, call ${event.callId}).`,
+    ];
+    if (event.partId) {
+      parts.push(
+        event.partDescription
+          ? `Part ${event.partId}: ${event.partDescription}.`
+          : `Part ${event.partId}.`,
+      );
+    } else if (event.partDescription) {
+      parts.push(`Part: ${event.partDescription}.`);
+    }
+    if (event.techId) parts.push(`Tech ${event.techId}.`);
+    if (typeof event.durationSec === "number") {
+      parts.push(`Call duration ${event.durationSec}s.`);
+    }
+    if (event.recordingUrl) parts.push(`Recording: ${event.recordingUrl}`);
+    return parts.join(" ");
+  }
+
+  if (event.state === "partial") {
+    const parts = [
+      `VRS AI partially approved $${event.authorizedAmount.toFixed(2)} of $${event.requestedAmount.toFixed(2)} (auth ${event.authNumber}, event ${event.eventId}, call ${event.callId}).`,
+    ];
+    if (event.denyReason) parts.push(`Outcome detail: ${event.denyReason}`);
+    if (typeof event.durationSec === "number") {
+      parts.push(`Call duration ${event.durationSec}s.`);
+    }
+    if (event.recordingUrl) parts.push(`Recording: ${event.recordingUrl}`);
+    return parts.join(" ");
+  }
+
+  if (event.state === "denied") {
+    const parts = [
+      `VRS AI denied authorization (event ${event.eventId}, call ${event.callId}).`,
+      `Reason: ${event.denyReason}`,
+    ];
+    if (typeof event.durationSec === "number") {
+      parts.push(`Call duration ${event.durationSec}s.`);
+    }
+    if (event.recordingUrl) parts.push(`Recording: ${event.recordingUrl}`);
+    return parts.join(" ");
+  }
+
+  return "";
+}
+
 export function mapVrsAiWebhookToSubmissionDecision(
   event: VrsWebhookEvent,
 ): VrsAiSubmissionDecision {
@@ -477,7 +531,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
       body: {
         action: "approve",
         authCode: event.authNumber,
-        agentNotes: `VRS AI approved $${event.authorizedAmount.toFixed(2)} (event ${event.eventId}).`,
+        agentNotes: buildVrsAiWebhookAgentNotes(event),
       },
     };
   }
@@ -489,7 +543,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
       body: {
         action: "approve",
         authCode: event.authNumber,
-        agentNotes: `VRS AI partial approval (event ${event.eventId}): ${detail}`,
+        agentNotes: buildVrsAiWebhookAgentNotes(event),
         technicianMessage: detail,
       },
     };
@@ -501,7 +555,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
       body: {
         action: "reject",
         rejectionReasons: [event.denyReason],
-        agentNotes: `VRS AI denial (event ${event.eventId}).`,
+        agentNotes: buildVrsAiWebhookAgentNotes(event),
       },
     };
   }
