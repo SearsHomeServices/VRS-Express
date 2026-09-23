@@ -29,6 +29,7 @@ import {
   SERVICE_ORDER_REGEX,
 } from "./external-api";
 import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
+import { getQueueWaitEnd } from "@shared/nla-ready-for-order";
 import {
   registerVrsAiWebhookApi,
   registerVrsSashaApi,
@@ -3849,6 +3850,16 @@ export async function registerRoutes(
           : (action === "nla_pcard_confirm" ? (submission.agentNotes ?? null) : null),
         updatedAt: new Date(),
       };
+      if (submission.nlaEscalatedBy && !submission.nlaReadyForOrderAt) {
+        // A production Publish adds the nullable column without backfilling
+        // existing rows. Materialize a stable legacy stop before this process
+        // action changes statusChangedAt; do not use request-time "now".
+        updateData.nlaReadyForOrderAt =
+          submission.claimedAt
+          ?? submission.statusChangedAt
+          ?? submission.updatedAt
+          ?? submission.createdAt;
+      }
 
       let smsMessage: string = "";
       let smsType: string = "";
@@ -3965,14 +3976,16 @@ export async function registerRoutes(
         if (!nlaResolution) {
           return res.status(400).json({ error: "Resolution type is required for escalation" });
         }
+        const readyForOrderAt = new Date();
         updateData.nlaResolution = nlaResolution;
         updateData.nlaFoundPartNumber = nlaFoundPartNumber?.trim().toUpperCase() || null;
         updateData.nlaEscalatedBy = authReq.user!.id;
+        updateData.nlaReadyForOrderAt = readyForOrderAt;
         updateData.technicianMessage = technicianMessage || null;
         updateData.reassignmentNotes = `Researched by ${currentUser?.name || "agent"}. Ready for P-card order.`;
         updateData.assignedTo = null;
         updateData.ticketStatus = "queued";
-        updateData.statusChangedAt = new Date();
+        updateData.statusChangedAt = readyForOrderAt;
 
         shouldSendSms = false;
 
@@ -4948,6 +4961,18 @@ export async function registerRoutes(
       // NOT set to "working" (Tyler 2026-06-27): "working" is driven by actively
       // claiming/opening a ticket, not by an admin pre-assigning one.
       const previousAssignee = submission.assignedTo;
+      // Preserve the legacy researched-handoff stop before reassignment
+      // changes statusChangedAt. New transitions already have the dedicated
+      // timestamp; ordinary claimed NLA tickets have no escalation marker.
+      const legacyNlaReadyForOrderAt =
+        submission.requestType === "parts_nla"
+        && submission.nlaEscalatedBy
+        && !submission.nlaReadyForOrderAt
+          ? submission.claimedAt
+            ?? submission.statusChangedAt
+            ?? submission.updatedAt
+            ?? submission.createdAt
+          : undefined;
       const freePreviousAssignee = async () => {
         if (!previousAssignee) return;
         try {
@@ -4998,6 +5023,9 @@ export async function registerRoutes(
           assignedTo: parsed.data.agentId,
           ticketStatus: "pending",
           statusChangedAt: new Date(),
+          ...(legacyNlaReadyForOrderAt
+            ? { nlaReadyForOrderAt: legacyNlaReadyForOrderAt }
+            : {}),
           reassignmentNotes: parsed.data.notes || null,
           updatedAt: new Date(),
         } as any);
@@ -5034,6 +5062,9 @@ export async function registerRoutes(
       const updated = await storage.updateSubmissionIfStatus(id, ["queued", "pending"], {
         ticketStatus: "queued",
         statusChangedAt: new Date(),
+        ...(legacyNlaReadyForOrderAt
+          ? { nlaReadyForOrderAt: legacyNlaReadyForOrderAt }
+          : {}),
         assignedTo: null,
         reassignmentNotes: parsed.data.notes || null,
         updatedAt: new Date(),
@@ -5265,6 +5296,7 @@ export async function registerRoutes(
         // nlaEscalatedBy, which gates claiming to P-card holders. Left in
         // place it would strand the ticket in the VRS queue for most agents.
         nlaEscalatedBy: null,
+        nlaReadyForOrderAt: null,
         nlaResolution: null,
         nlaFoundPartNumber: null,
         reassignmentNotes: parsed.data.notes || `Sent to VRS Authorization queue by ${authReq.user!.name}`,
@@ -6674,11 +6706,7 @@ export async function registerRoutes(
         return `${minutes}m`;
       };
       const computeTimings = (s: any) => {
-        const queueWait = s.claimedAt
-          ? formatDuration(s.createdAt, s.claimedAt)
-          : s.ticketStatus === "queued"
-            ? formatDuration(s.createdAt, null)
-            : formatDuration(s.createdAt, s.statusChangedAt);
+        const queueWait = formatDuration(s.createdAt, getQueueWaitEnd(s));
         const handleTime = s.claimedAt
           ? (s.ticketStatus === "pending"
               ? formatDuration(s.claimedAt, null)

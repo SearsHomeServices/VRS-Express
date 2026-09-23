@@ -132,6 +132,7 @@ import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { VrsAiPilotClosedReview } from "@/components/vrs-ai-pilot-closed-review";
 import { isDevelopmentRuntime } from "@/lib/runtime-environment";
 import { canUseVrsAiPilot } from "@shared/vrs-ai-pilot";
+import { getQueueWaitEnd, isNlaReadyForOrder } from "@shared/nla-ready-for-order";
 
 // Tyler 2026-05-06 (Task #4 perf): the LIST query now returns the slim
 // SubmissionListItemWithTech shape (heavy text/JSON columns omitted, see
@@ -181,11 +182,13 @@ const APPLIANCE_LABELS: Record<string, string> = {
 // helpers fall back to DEFAULT_PROFILE.
 function getTimeElapsed(
   createdAt: string | Date | null | undefined,
+  endAt: string | Date | null | undefined,
   profile?: BusinessHoursProfile,
 ): string {
   const created = safeDate(createdAt);
   if (!created) return "—";
-  const businessMs = getBusinessElapsedMs(created, new Date(), profile);
+  const end = safeDate(endAt) || new Date();
+  const businessMs = getBusinessElapsedMs(created, end, profile);
   const totalMinutes = Math.floor(businessMs / 60000);
   if (totalMinutes < 60) return `${totalMinutes}m`;
   const diffHours = Math.floor(totalMinutes / 60);
@@ -196,11 +199,13 @@ function getTimeElapsed(
 
 function getUrgencyLevel(
   createdAt: string | Date | null | undefined,
+  endAt: string | Date | null | undefined,
   profile?: BusinessHoursProfile,
 ): "normal" | "warning" | "urgent" {
   const created = safeDate(createdAt);
   if (!created) return "normal";
-  const diffHours = getBusinessElapsedMs(created, new Date(), profile) / 3600000;
+  const end = safeDate(endAt) || new Date();
+  const diffHours = getBusinessElapsedMs(created, end, profile) / 3600000;
   if (diffHours >= 4) return "urgent";
   if (diffHours >= 2) return "warning";
   return "normal";
@@ -2468,7 +2473,8 @@ export default function AgentDashboard() {
                 ) : (
                   <div className="p-2 space-y-1">
                     {submissions.map((sub) => {
-                      const urgency = getUrgencyLevel(sub.createdAt, profileForSub(sub));
+                      const queueWaitEnd = getQueueWaitEnd(sub);
+                      const urgency = getUrgencyLevel(sub.createdAt, queueWaitEnd, profileForSub(sub));
                       const isSelected = selectedId === sub.id;
                       return (
                         <div
@@ -2511,7 +2517,7 @@ export default function AgentDashboard() {
                               {activeView !== "completed" && activeView !== "nla_completed" && (
                                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                   <Clock className="w-3 h-3" />
-                                  <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt, profileForSub(sub))}</span>
+                                  <span data-testid={`text-elapsed-${sub.id}`}>{getTimeElapsed(sub.createdAt, queueWaitEnd, profileForSub(sub))}</span>
                                 </div>
                               )}
                             </div>
@@ -2542,7 +2548,7 @@ export default function AgentDashboard() {
                                   NLA Parts
                                 </Badge>
                               )}
-                              {sub.nlaEscalatedBy && (
+                              {isNlaReadyForOrder(sub) && (
                                 <Badge
                                   variant="secondary"
                                   className="text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
@@ -2666,10 +2672,10 @@ export default function AgentDashboard() {
                             ? "Parts — NLA"
                             : "Infestation / Non-Accessible"}
                         </Badge>
-                        {getUrgencyLevel(selectedSubmission.createdAt, profileForSub(selectedSubmission)) !== "normal" && (
+                        {getUrgencyLevel(selectedSubmission.createdAt, getQueueWaitEnd(selectedSubmission), profileForSub(selectedSubmission)) !== "normal" && (
                           <Badge variant="destructive" data-testid="badge-urgency">
                             <AlertTriangle className="w-3 h-3 mr-1" />
-                            {getUrgencyLevel(selectedSubmission.createdAt, profileForSub(selectedSubmission)) === "urgent" ? "Urgent" : "Aging"}
+                            {getUrgencyLevel(selectedSubmission.createdAt, getQueueWaitEnd(selectedSubmission), profileForSub(selectedSubmission)) === "urgent" ? "Urgent" : "Aging"}
                           </Badge>
                         )}
                         {/* Tyler 2026-04-30: button-show-shsai now also renders

@@ -28,6 +28,7 @@ import type { User, TechnicianUserView, SubmissionListItemWithTech } from "@shar
 import { TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { PROVIDER_1099_COMPANIES } from "@shared/provider1099";
 import { deriveIntakeFormStatus } from "@shared/intake-form-config";
+import { getQueueWaitEnd } from "@shared/nla-ready-for-order";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
   SidebarProvider,
@@ -1519,7 +1520,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
         switch (field) {
           case "lastUpdated": return ts(t.updatedAt || t.statusChangedAt || t.createdAt);
           case "intakeForm": return ts(t.intakeFormCompletedAt);
-          case "queueWait": return t.claimedAt ? ts(t.claimedAt) - ts(t.createdAt) : Infinity;
+          case "queueWait": return ts(getQueueWaitEnd(t)) - ts(t.createdAt);
           case "handleTime": return t.claimedAt && t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.claimedAt) : -1;
           case "totalTime": return t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.createdAt) : -1;
           default: return 0;
@@ -2325,8 +2326,10 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                           {formatDate(ticket.updatedAt || ticket.statusChangedAt || ticket.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}
                         </TableCell>
                         <TableCell className="text-sm font-medium text-right whitespace-nowrap">
-                          {ticket.claimedAt
-                            ? getTimeInStatus(ticket.createdAt, ticket.claimedAt, rowProfile)
+                          {getQueueWaitEnd(ticket)
+                            ? ticket.ticketStatus === "queued" && !ticket.claimedAt && !ticket.nlaReadyForOrderAt
+                              ? <span className="text-amber-600 dark:text-amber-400">{getTimeInStatus(ticket.createdAt, getQueueWaitEnd(ticket), rowProfile)} ⏳</span>
+                              : getTimeInStatus(ticket.createdAt, getQueueWaitEnd(ticket), rowProfile)
                             : ticket.ticketStatus === "queued"
                             ? <span className="text-amber-600 dark:text-amber-400">{getTimeInStatus(ticket.createdAt, undefined, rowProfile)} ⏳</span>
                             : getTimeInStatus(ticket.createdAt, ticket.statusChangedAt, rowProfile)

@@ -1335,7 +1335,9 @@ export class DatabaseStorage implements IStorage {
           phoneOverride: submissions.phoneOverride,
           technicianLdapId: submissions.technicianLdapId,
           resubmissionOf: submissions.resubmissionOf,
+          nlaResolution: submissions.nlaResolution,
           nlaEscalatedBy: submissions.nlaEscalatedBy,
+          nlaReadyForOrderAt: submissions.nlaReadyForOrderAt,
           procId: submissions.procId,
           clientNm: submissions.clientNm,
           invalidReason: submissions.invalidReason,
@@ -3008,6 +3010,21 @@ export class DatabaseStorage implements IStorage {
       .set({
         ticketStatus: "pending",
         statusChangedAt: now,
+        // Publish adds the column but does not backfill production rows. For a
+        // legacy P-card handoff, capture the last stable pre-claim timestamp in
+        // this same atomic UPDATE before claimedAt is replaced by this claim.
+        nlaReadyForOrderAt: sql`CASE
+          WHEN ${submissions.requestType} = 'parts_nla'
+            AND ${submissions.nlaEscalatedBy} IS NOT NULL
+            AND ${submissions.nlaReadyForOrderAt} IS NULL
+          THEN COALESCE(
+            ${submissions.claimedAt},
+            ${submissions.statusChangedAt},
+            ${submissions.updatedAt},
+            ${submissions.createdAt}
+          )
+          ELSE ${submissions.nlaReadyForOrderAt}
+        END`,
         claimedAt: now,
         assignedTo: agentId,
         updatedAt: now,

@@ -168,6 +168,9 @@ export const submissions = pgTable("submissions", {
   nlaResolution: text("nla_resolution"),
   nlaFoundPartNumber: varchar("nla_found_part_number", { length: 100 }),
   nlaEscalatedBy: integer("nla_escalated_by").references(() => users.id),
+  // Stable queue-wait stop for the researched-needs-order handoff. Written
+  // atomically by nla_escalate_to_pcard and preserved through P-card claims.
+  nlaReadyForOrderAt: timestamp("nla_ready_for_order_at"),
   reviewedBy: integer("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at"),
   agentNotes: text("agent_notes"),
@@ -255,7 +258,7 @@ export type Submission = typeof submissions.$inferSelect;
 //   issueDescription, originalDescription,
 //   rejectionReasons, rejectedMedia, reassignmentNotes, appealNotes,
 //   invalidInstructions, declineInstructions, stage1RejectionReason,
-//   nlaResolution, nlaFoundPartNumber,
+//   nlaFoundPartNumber,
 //   videoUrl, voiceNoteUrl.
 //
 // At ~500-1500 visible rows per agent in production this cuts the payload
@@ -272,7 +275,7 @@ export type SubmissionListItem = Pick<Submission,
   | "statusChangedAt" | "createdAt" | "updatedAt"
   | "authCode" | "rgcCode"
   | "phoneOverride" | "technicianLdapId"
-  | "resubmissionOf" | "nlaEscalatedBy"
+  | "resubmissionOf" | "nlaResolution" | "nlaEscalatedBy" | "nlaReadyForOrderAt"
   | "procId" | "clientNm"
   | "replacementReviewRecommended" | "b2bApprovedReplacement"
   | "invalidReason" | "declineReason"
