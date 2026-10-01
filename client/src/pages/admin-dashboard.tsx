@@ -28,7 +28,7 @@ import type { User, TechnicianUserView, SubmissionListItemWithTech } from "@shar
 import { TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { PROVIDER_1099_COMPANIES } from "@shared/provider1099";
 import { deriveIntakeFormStatus } from "@shared/intake-form-config";
-import { getQueueWaitEnd } from "@shared/nla-ready-for-order";
+import { getQueueWaitEnd, isNlaReadyForOrder } from "@shared/nla-ready-for-order";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
 import {
   SidebarProvider,
@@ -2228,6 +2228,15 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                             {ticket.requestType === "parts_nla" && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
                                 NLA
+                              </span>
+                            )}
+                            {isNlaReadyForOrder(ticket) && (
+                              <span
+                                className="inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700"
+                                data-testid={`badge-nla-ready-for-order-${ticket.id}`}
+                              >
+                                <CreditCard className="w-3 h-3" aria-hidden="true" />
+                                Ready for Order
                               </span>
                             )}
                             {(ticket as any).replacementReviewRecommended && (
