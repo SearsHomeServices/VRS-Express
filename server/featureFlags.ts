@@ -26,11 +26,10 @@ export function isTechHubPhotosEnabled(): boolean {
   return false;
 }
 
-// DEV-only SHSAI Bridge photo proxy. This intentionally has no environment
-// fallback: missing, whitespace, malformed, or false values all remain off.
+// SHSAI Bridge photo proxy (dev and production). This intentionally has no
+// environment fallback: missing, whitespace, malformed, or false values all
+// remain off. Source hosts are limited to the two Sasha hosts in
+// vrs-bridge-photo-proxy.ts, and ticket access checks still apply.
 export function isVrsBridgePhotoProxyEnabled(): boolean {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED === "true"
-  );
+  return process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED === "true";
 }

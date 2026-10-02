@@ -80,6 +80,7 @@ VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
 
 [userenv.production]
 ENABLE_TECHHUB_PHOTOS = "true"
+VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
 VRS_AI_PRODUCTION_ENABLED = "true"
 
 [objectStorage]

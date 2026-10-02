@@ -6,6 +6,7 @@ import {
   registerVrsBridgePhotoProxy,
   sanitizeBridgeReviewPhotoUrls,
   SHSAI_DEV_PHOTO_HOST,
+  SHSAI_PROD_PHOTO_HOST,
 } from "../server/vrs-bridge-photo-proxy";
 
 const safePhotoUrl = `https://${SHSAI_DEV_PHOTO_HOST}/photo.jpg`;
@@ -76,10 +77,12 @@ describe("DEV Bridge photo proxy", () => {
     expect(isVrsBridgePhotoProxyEnabled()).toBe(true);
   });
 
-  it("remains disabled in production even when explicitly enabled", () => {
+  it("is enabled in production when explicitly enabled", () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
     process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true";
+    expect(isVrsBridgePhotoProxyEnabled()).toBe(true);
+    process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED = "false";
     expect(isVrsBridgePhotoProxyEnabled()).toBe(false);
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;
@@ -128,7 +131,22 @@ describe("DEV Bridge photo proxy", () => {
     expect(response.body).toEqual({ error: "Photo not found" });
   });
 
-  it("rejects every source host except the exact DEV SHSAI host", async () => {
+  it("accepts the production Sasha photo host", async () => {
+    const response = await request(
+      makeApp({
+        photoUrl: `https://${SHSAI_PROD_PHOTO_HOST}/photo.jpg`,
+        fetchImpl: (async () =>
+          new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "image/jpeg" },
+          })) as typeof fetch,
+      }),
+    ).get("/api/submissions/44/vrs-ai-photos/0");
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/jpeg");
+  });
+
+  it("rejects every source host except the exact SHSAI hosts", async () => {
     const response = await request(
       makeApp({ photoUrl: "https://sasha.stage.nextgen.shs.com/photo.jpg" }),
     ).get("/api/submissions/44/vrs-ai-photos/0");
@@ -142,6 +160,8 @@ describe("DEV Bridge photo proxy", () => {
       `https://${SHSAI_DEV_PHOTO_HOST}:443/photo.jpg`,
       `https://user:password@${SHSAI_DEV_PHOTO_HOST}/photo.jpg`,
       "http://sasha-dev.stage.nextgen.shs.com/photo.jpg",
+      `http://${SHSAI_PROD_PHOTO_HOST}/photo.jpg`,
+      `https://${SHSAI_PROD_PHOTO_HOST}:443/photo.jpg`,
       "not a url",
     ]) {
       const unsafeResponse = await request(makeApp({ photoUrl: unsafeUrl }))

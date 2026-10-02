@@ -5,6 +5,8 @@ import type { VrsBridgeRecord } from "./vrs-sasha-queue";
 import type { StoredBridgePhoto, BridgePhotoImage } from "./vrs-bridge-photo-storage";
 
 export const SHSAI_DEV_PHOTO_HOST = "sasha-dev.stage.nextgen.shs.com";
+export const SHSAI_PROD_PHOTO_HOST = "sasha.prod.nextgen.shs.com";
+const ALLOWED_PHOTO_HOSTS = new Set([SHSAI_DEV_PHOTO_HOST, SHSAI_PROD_PHOTO_HOST]);
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 3;
@@ -98,7 +100,7 @@ export function isAllowedPhotoUrl(value: unknown): value is string {
     const url = new URL(value);
     return (
       url.protocol === "https:" &&
-      url.hostname === SHSAI_DEV_PHOTO_HOST &&
+      ALLOWED_PHOTO_HOSTS.has(url.hostname) &&
       url.port === "" &&
       url.username === "" &&
       url.password === ""

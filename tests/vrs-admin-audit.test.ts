@@ -192,19 +192,23 @@ describe("registered admin submission audit endpoint", () => {
     expect(mocks.getBridgeStatus).toHaveBeenCalledWith(41);
   });
 
-  it("omits VRS AI and never queries the bridge store when disabled or in production", async () => {
+  it("omits VRS AI and never queries the bridge store when disabled", async () => {
     process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED = "false";
     const disabled = await getAudit(app, "admin");
 
+    expect(disabled.status).toBe(200);
+    expect(disabled.body).not.toHaveProperty("vrsAi");
+    expect(mocks.getBridgeStatus).not.toHaveBeenCalled();
+  });
+
+  it("includes VRS AI in production when explicitly enabled", async () => {
     process.env.VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true";
     process.env.NODE_ENV = "production";
     const production = await getAudit(app, "super_admin");
 
-    expect(disabled.status).toBe(200);
     expect(production.status).toBe(200);
-    expect(disabled.body).not.toHaveProperty("vrsAi");
-    expect(production.body).not.toHaveProperty("vrsAi");
-    expect(mocks.getBridgeStatus).not.toHaveBeenCalled();
+    expect(production.body).toHaveProperty("vrsAi");
+    expect(mocks.getBridgeStatus).toHaveBeenCalledWith(41);
   });
 
   it("returns a manual/null-status ticket without inventing bridge status", async () => {
