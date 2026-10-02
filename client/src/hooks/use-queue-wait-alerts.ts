@@ -16,26 +16,49 @@ export function isQueueWaitOverdue(ticket: QueueAlertTicket, now: number, config
     >= QUEUE_ALERT_THRESHOLD_MS;
 }
 
-export function useQueueWaitAlerts(tickets: QueueAlertTicket[], config: BusinessHoursConfig) {
+export function useQueueWaitAlerts(
+  tickets: QueueAlertTicket[],
+  config: BusinessHoursConfig,
+  { enabled = true, sessionKey }: { enabled?: boolean; sessionKey?: string } = {},
+) {
   const [now, setNow] = useState(Date.now);
   const [settingsReady, setSettingsReady] = useState(false);
   const alerted = useRef(new Set<number>());
 
   useEffect(() => {
     let active = true;
-    void loadNotificationSettings().then(() => { if (active) setSettingsReady(true); });
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    setSettingsReady(false);
+    alerted.current = new Set<number>();
+    if (sessionKey) {
+      try {
+        const saved: unknown = JSON.parse(sessionStorage.getItem(sessionKey) ?? "[]");
+        if (Array.isArray(saved)) alerted.current = new Set(saved.filter((id) => typeof id === "number"));
+      } catch { /* Storage may be unavailable; retain in-memory deduplication. */ }
+    }
+    const load = async () => {
+      try {
+        await loadNotificationSettings({ requireSuccess: true });
+        if (active) setSettingsReady(true);
+      } catch {
+        // Do not sound a default-volume alarm when saved mute cannot be read.
+        if (active) retry = setTimeout(load, 30000);
+      }
+    };
+    void load();
     const tick = () => setNow(Date.now());
     const timer = window.setInterval(tick, 1000);
     document.addEventListener("visibilitychange", tick);
     return () => {
       active = false;
       window.clearInterval(timer);
+      if (retry) clearTimeout(retry);
       document.removeEventListener("visibilitychange", tick);
     };
-  }, []);
+  }, [sessionKey]);
 
   useEffect(() => {
-    if (!settingsReady) return;
+    if (!settingsReady || !enabled) return;
     let newlyOverdue = false;
     for (const ticket of tickets) {
       if (isQueueWaitOverdue(ticket, now, config) && !alerted.current.has(ticket.id)) {
@@ -43,10 +66,13 @@ export function useQueueWaitAlerts(tickets: QueueAlertTicket[], config: Business
         newlyOverdue = true;
       }
     }
+    if (newlyOverdue && sessionKey) {
+      try { sessionStorage.setItem(sessionKey, JSON.stringify([...alerted.current])); } catch { /* In-memory fallback. */ }
+    }
     // Batch simultaneous crossings into one chime. The existing player honors
     // the current tone and volume (including mute); no repeating alarm.
     if (newlyOverdue && getNotificationVolume() > 0) playNotificationDing();
-  }, [tickets, config, now, settingsReady]);
+  }, [tickets, config, now, settingsReady, enabled, sessionKey]);
 
   return now;
 }

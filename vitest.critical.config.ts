@@ -30,6 +30,7 @@ export default defineConfig({
       "tests/exec-summary-routes.test.ts",
       "tests/weekly-exec-summary-metrics.test.ts",
       "tests/nla-ready-for-order.test.ts",
+      "tests/queue-wait-alerts.test.ts",
     ],
     maxWorkers: 2,
   },

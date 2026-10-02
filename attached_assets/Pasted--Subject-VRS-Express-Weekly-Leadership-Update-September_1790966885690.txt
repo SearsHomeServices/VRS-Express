@@ -1,0 +1,91 @@
+**Subject: VRS Express Weekly Leadership Update | September 28–October 4, 2026**
+
+Hi Team,
+
+Below is the current week-to-date update for VRS Express, including operational performance, feature improvements, and expected business impact.
+
+**Reporting period:** September 28–October 4, 2026  
+**Data cutoff:** Friday, October 2, at 2:37 PM ET. Friday is a partial day; this is not a final seven-day report.
+
+### Performance Summary
+
+VRS Express received **898 submissions from 519 unique technicians**, with **99.7% resolved** at the snapshot.
+
+| Metric | Current week-to-date | Prior comparable period |
+|---|---:|---:|
+| Submissions | **898** | 881 |
+| Completed (approved) | **595** | 605 |
+| Rejected | **239** | 216 |
+| Invalid | **61** | 60 |
+| Pending, including queued | **3** | 0 |
+| Approval rate | **71.3%** | 73.7% |
+| Invalid rate | **6.8%** | 6.8% |
+| Average review time | **30.9 minutes** | 25.5 minutes |
+| Median review time | **13.8 minutes** | 14.7 minutes |
+
+**Key takeaways**
+- Submission volume increased **1.9%**, with 17 additional submissions.
+- Approval rate decreased **2.4 percentage points**, while rejections increased from 216 to 239.
+- Invalid rate remained stable at **6.8%**.
+- Median review time improved by **0.9 minutes**, but average review time increased by **5.4 minutes**. Longer-duration cases warrant review despite the improvement in the typical ticket’s turnaround.
+- Only **3 submissions from this week’s cohort** remained pending at the snapshot.
+
+### Daily Volume
+
+| Day | Submissions | Completed (approved) | Rejected | Invalid | Pending |
+|---|---:|---:|---:|---:|---:|
+| Monday, September 28 | 177 | 121 | 41 | 15 | 0 |
+| Tuesday, September 29 | 207 | 144 | 52 | 11 | 0 |
+| Wednesday, September 30 | 219 | 139 | 55 | 25 | 0 |
+| Thursday, October 1 | 182 | 123 | 55 | 4 | 0 |
+| Friday, October 2 — partial | 113 | 68 | 36 | 6 | 3 |
+| **Total** | **898** | **595** | **239** | **61** | **3** |
+
+Wednesday had the highest volume, with **219 submissions**, and the highest invalid count, with **25**.
+
+### Feature Improvements and Impact
+
+**1. Admin visibility for NLA tickets ready for ordering — published**
+- Added a green **“Ready for Order”** badge with a credit-card icon beside the existing NLA label in the admin ticket table.
+- Uses the same readiness rules as the agent queue to identify researched tickets awaiting ordering.
+
+**Expected impact:** Helps admins distinguish actionable P-card ordering work from tickets still requiring research, without changing assignment permissions or the ordering workflow.
+
+**2. Sasha photo support in production — published**
+- Removed the development-only restriction on bridge-photo support and added the production Sasha photo host to the approved source list.
+- Preserved ticket-access checks for retrieving photos.
+
+**Expected impact:** Enables reviewers to access supporting photos supplied through Sasha, addressing the gap where image references were stored but not displayed in production. This reduces the need to seek evidence outside the ticket; the reduction in review effort has not yet been measured.
+
+**3. Production VRS AI connection configuration — published**
+- Added the production AI service address and Express callback origin to the production configuration.
+
+**Expected impact:** Addresses the missing destination/callback configuration that blocked outbound AI handoff. Publication of these settings does **not** by itself confirm successful end-to-end authorization; credential compatibility and callback completion still require verification.
+
+**4. Five-minute admin queue alerts — completed in development; not yet published**
+- Added flashing red rows and a **“Waiting 5+ minutes”** indicator for actively queued tickets.
+- Added one-second timer updates and notification sounds using existing tone and volume settings, including mute.
+- Preserved business-hours timing and excluded claimed/completed tickets and researched NLA tickets with frozen handoff timers.
+
+**Expected impact:** Gives admins earlier visibility into unattended queue work. Development checks passed, including browser verification of the five-minute transition. Production impact will be assessed after publication.
+
+### Submission Quality and Coaching Opportunities
+
+| Top rejection reason | Recorded occurrences |
+|---|---:|
+| Photos do not meet submission criteria | 66 |
+| Photo does not show voltage/reading | 48 |
+| Missing required photos | 46 |
+| Estimate screenshot missing or incomplete | 24 |
+| Incomplete submission | 22 |
+
+Photo quality, diagnostic evidence, and complete estimate documentation remain the leading coaching priorities. Multiple reasons may be recorded on one ticket, so these counts are not mutually exclusive.
+
+### Leadership Focus
+
+- Review longer-duration cases contributing to the higher average review time.
+- Reinforce photo and diagnostic-documentation standards to address the lower approval rate.
+- Monitor Sasha photo availability and validate the production AI handoff through callback completion.
+- Publish and monitor the new queue alerts to assess whether they reduce unattended wait time.
+
+*Reporting notes: Figures use production data and compare equivalent Monday-to-Friday cutoffs in Eastern Time. Both cohorts use outcomes observed at query time, not historical snapshots; prior-period figures may therefore differ from last week’s email. Completed means ticket status “completed”; rejected includes “rejected_closed”; pending includes queued. Approval rate is completed ÷ (completed + rejected). Review time is wall-clock creation-to-review time, excluding missing or negative durations. Feature benefits are expected, not measured, and are not presented as the cause of this week’s performance changes.*

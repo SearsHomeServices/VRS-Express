@@ -1256,6 +1256,7 @@ function VrsAiPilotSection() {
 
 function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilot" }) {
   const vrsAiOnly = scope === "vrs-ai-pilot";
+  const { user: queueAlertUser } = useAuth();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [requestTypeFilter, setRequestTypeFilter] = useState<"all" | "auth" | "nla">("all");
@@ -1367,6 +1368,20 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
     refetchInterval: JITTERED_POLL_INTERVAL_MS,
     staleTime: 45000,
     refetchOnWindowFocus: false,
+  });
+  // Monitor active queue work independently of search, date, and table filters.
+  // Existing websocket invalidation applies to this query too.
+  const queueAlertUrl = `/api/submissions?ticketStatus=queued${vrsAiOnly ? "&vrsAiOnly=true" : ""}`;
+  const { data: queueAlertData, isError: queueAlertError } = useQuery<{ submissions: SubmissionListItemWithTech[] }>({
+    queryKey: [queueAlertUrl],
+    refetchInterval: JITTERED_POLL_INTERVAL_MS,
+    staleTime: 45000,
+    refetchOnWindowFocus: true,
+  });
+  const { config: bhConfig, isConfirmed: businessHoursConfirmed } = useBusinessHoursConfig();
+  const queueClock = useQueueWaitAlerts(queueAlertData?.submissions ?? [], bhConfig, {
+    enabled: businessHoursConfirmed && !queueAlertError && !!queueAlertUser,
+    sessionKey: queueAlertUser ? `vrs-queue-alerts:${queueAlertUser.id}:${scope}` : undefined,
   });
 
   // Tyler 2026-07-08 — all-time search (no createdAfter param, so the server
@@ -1521,7 +1536,13 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
         switch (field) {
           case "lastUpdated": return ts(t.updatedAt || t.statusChangedAt || t.createdAt);
           case "intakeForm": return ts(t.intakeFormCompletedAt);
-          case "queueWait": return ts(getQueueWaitEnd(t)) - ts(t.createdAt);
+          case "queueWait": {
+            const created = safeDate(t.createdAt);
+            const end = safeDate(getQueueWaitEnd(t, new Date(queueClock)));
+            return created && end
+              ? getBusinessElapsedMs(created, end, bhConfig[categoryForApplianceType(t.applianceType)])
+              : -1;
+          }
           case "handleTime": return t.claimedAt && t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.claimedAt) : -1;
           case "totalTime": return t.statusChangedAt ? ts(t.statusChangedAt) - ts(t.createdAt) : -1;
           default: return 0;
@@ -1566,7 +1587,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
       );
     }
     return out;
-  }, [allTickets, statusFilter, ticketSortField, ticketSortDir, searchQuery]);
+  }, [allTickets, statusFilter, ticketSortField, ticketSortDir, searchQuery, queueClock, bhConfig]);
 
   // Perf 2026-08-16: render at most a page of rows at a time. Rendering all
   // 10k+ filtered rows creates hundreds of thousands of DOM nodes and made
@@ -1797,8 +1818,6 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
   // 2026-05-01: now driven by the admin-configured Standard profile (HVAC
   // tickets render alongside in this view but the indicator uses the default
   // window since most rows are non-HVAC).
-  const { config: bhConfig } = useBusinessHoursConfig();
-  const queueClock = useQueueWaitAlerts(rawTickets, bhConfig);
   const defaultProfile = bhConfig.default;
   const businessHoursActive = isWithinBusinessHours(new Date(), defaultProfile);
   const defaultHoursLabel = formatHoursLabel(defaultProfile);
@@ -2124,7 +2143,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                     const ageHours = created ? getBusinessElapsedMs(created, new Date(), rowProfile) / 3600000 : 0;
                     const isUrgent = ageHours >= 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
                     const isAging = ageHours >= 2 && ageHours < 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
-                    const queueOverdue = isQueueWaitOverdue(ticket, queueClock, bhConfig);
+                    const queueOverdue = businessHoursConfirmed && isQueueWaitOverdue(ticket, queueClock, bhConfig);
 
                     return (
                       <TableRow

@@ -34,6 +34,7 @@ export {
 export function useBusinessHoursConfig(): {
   config: BusinessHoursConfig;
   isLoading: boolean;
+  isConfirmed: boolean;
 } {
   const q = useQuery<BusinessHoursConfig>({
     queryKey: ["/api/business-hours"],
@@ -44,6 +45,7 @@ export function useBusinessHoursConfig(): {
   return {
     config: q.data ?? DEFAULT_BUSINESS_HOURS_CONFIG,
     isLoading: q.isLoading,
+    isConfirmed: q.data !== undefined,
   };
 }
 

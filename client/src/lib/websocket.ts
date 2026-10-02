@@ -413,7 +413,7 @@ let cachedTone: ToneId = "chime";
 let cachedVolume = 0.5;
 let settingsLoaded = false;
 
-export async function loadNotificationSettings(): Promise<{ tone: ToneId; volume: number }> {
+export async function loadNotificationSettings(options?: { requireSuccess?: boolean }): Promise<{ tone: ToneId; volume: number }> {
   try {
     const token = getToken();
     const headers: Record<string, string> = {};
@@ -424,8 +424,12 @@ export async function loadNotificationSettings(): Promise<{ tone: ToneId; volume
       cachedTone = TONE_OPTIONS.some(o => o.id === data.tone) ? data.tone : "chime";
       cachedVolume = typeof data.volume === "number" ? data.volume : 0.5;
       settingsLoaded = true;
+    } else if (options?.requireSuccess) {
+      throw new Error("Notification settings unavailable");
     }
-  } catch {}
+  } catch (error) {
+    if (options?.requireSuccess) throw error;
+  }
   return { tone: cachedTone, volume: cachedVolume };
 }
 

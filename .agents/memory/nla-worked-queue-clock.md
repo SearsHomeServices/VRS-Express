@@ -25,3 +25,13 @@ queue work or disagree with the queue wait shown to admins.
 **How to apply:** Preserve these exclusions when changing alert thresholds or
 timer behavior. Audio uses the existing notification settings, not a separate
 alarm volume.
+
+Queue monitoring must not narrow with the admin table's search or date filters.
+Consume a threshold crossing even when muted, and retain the per-ticket audio
+deduplication for the same user and queue scope within a browser-tab session.
+
+**Why:** Filtering the table can otherwise silently stop monitoring, and
+reopening the overview or unmuting can replay a backlog of alarms.
+
+**How to apply:** Keep monitoring separate from presentation filters; wait for
+confirmed business hours and successful sound-settings loading before sound.

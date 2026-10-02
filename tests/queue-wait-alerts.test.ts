@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BUSINESS_HOURS_CONFIG } from "../shared/business-hours";
 import { isQueueWaitOverdue, useQueueWaitAlerts, type QueueAlertTicket } from "../client/src/hooks/use-queue-wait-alerts";
 
@@ -16,6 +16,11 @@ const start = Date.parse("2026-10-01T14:00:00Z");
 const ticket: QueueAlertTicket = { id: 1, ticketStatus: "queued", createdAt: new Date(start), requestType: "authorization" };
 const config = DEFAULT_BUSINESS_HOURS_CONFIG;
 
+beforeEach(() => {
+  sessionStorage.clear();
+  audio.getNotificationVolume.mockReturnValue(0.5);
+  audio.loadNotificationSettings.mockResolvedValue({ tone: "chime", volume: 0.5 });
+});
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe("five-minute queue alerts", () => {
@@ -38,6 +43,59 @@ describe("five-minute queue alerts", () => {
   it("does not count overnight hours", () => {
     expect(isQueueWaitOverdue({ ...ticket, createdAt: "2026-10-01T02:00:00Z" },
       Date.parse("2026-10-01T10:00:00Z"), config)).toBe(false);
+  });
+
+  it("applies the HVAC rather than standard Saturday schedule", () => {
+    const saturday = Date.parse("2026-10-03T14:00:00Z");
+    expect(isQueueWaitOverdue({ ...ticket, applianceType: "hvac", createdAt: new Date(saturday) }, saturday + 300000, config)).toBe(false);
+    expect(isQueueWaitOverdue({ ...ticket, createdAt: new Date(saturday) }, saturday + 300000, config)).toBe(true);
+  });
+
+  it("does not replay on remount, reload-like mounts, or unmute; isolates users", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start + 300000);
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    function Harness({ sessionKey }: { sessionKey: string }) {
+      useQueueWaitAlerts([ticket], config, { sessionKey });
+      return null;
+    }
+    const mount = async (key: string) => {
+      const root = createRoot(document.createElement("div"));
+      await act(async () => root.render(createElement(Harness, { sessionKey: key })));
+      await act(async () => root.unmount());
+    };
+    audio.getNotificationVolume.mockReturnValue(0);
+    await mount("user-a");
+    expect(audio.playNotificationDing).not.toHaveBeenCalled();
+    audio.getNotificationVolume.mockReturnValue(0.5);
+    await mount("user-a");
+    expect(audio.playNotificationDing).not.toHaveBeenCalled();
+    await mount("user-b");
+    expect(audio.playNotificationDing).toHaveBeenCalledTimes(1);
+    // jsdom dispatches sessionStorage events via zero-delay timers.
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("waits for confirmed business hours and retries failed notification settings safely", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start + 300000);
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    audio.loadNotificationSettings.mockRejectedValueOnce(new Error("offline"));
+    function Harness({ enabled }: { enabled: boolean }) {
+      useQueueWaitAlerts([ticket], config, { enabled });
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    try {
+      await act(async () => root.render(createElement(Harness, { enabled: false })));
+      await act(async () => { vi.advanceTimersByTime(30000); });
+      expect(audio.loadNotificationSettings).toHaveBeenCalledWith({ requireSuccess: true });
+      expect(audio.playNotificationDing).not.toHaveBeenCalled();
+      await act(async () => root.render(createElement(Harness, { enabled: true })));
+      expect(audio.playNotificationDing).toHaveBeenCalledTimes(1);
+    } finally { await act(async () => root.unmount()); }
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([0, 0.5])("updates without a refetch, deduplicates, stops on claim, and honors volume %s", async (volume) => {
