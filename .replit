@@ -82,6 +82,8 @@ VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
 ENABLE_TECHHUB_PHOTOS = "true"
 VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
 VRS_AI_PRODUCTION_ENABLED = "true"
+VRS_AI_BASE_URL = "https://agentic-vrs-agent.prod.nextgen.shs.com"
+VRS_EXPRESS_PUBLIC_URL = "https://vrs-auth-tool.replit.app"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-70466883-0558-4e18-a808-47d0ed26c418"
