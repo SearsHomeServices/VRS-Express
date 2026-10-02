@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { categoryForApplianceType, getBusinessElapsedMs, type BusinessHoursConfig } from "@shared/business-hours";
 import type { QueueWaitState } from "@shared/nla-ready-for-order";
-import { getNotificationVolume, loadNotificationSettings, playNotificationDing } from "@/lib/websocket";
+import { getNotificationVolume, loadNotificationSettings, playNotificationDing, playPilotQueueChime } from "@/lib/websocket";
 
 export type QueueAlertTicket = QueueWaitState & { id: number; applianceType?: string | null };
 export const QUEUE_ALERT_THRESHOLD_MS = 5 * 60 * 1000;
@@ -19,7 +19,7 @@ export function isQueueWaitOverdue(ticket: QueueAlertTicket, now: number, config
 export function useQueueWaitAlerts(
   tickets: QueueAlertTicket[],
   config: BusinessHoursConfig,
-  { enabled = true, sessionKey }: { enabled?: boolean; sessionKey?: string } = {},
+  { enabled = true, sessionKey, pilot = false }: { enabled?: boolean; sessionKey?: string; pilot?: boolean } = {},
 ) {
   const [now, setNow] = useState(Date.now);
   const [settingsReady, setSettingsReady] = useState(false);
@@ -71,8 +71,11 @@ export function useQueueWaitAlerts(
     }
     // Batch simultaneous crossings into one chime. The existing player honors
     // the current tone and volume (including mute); no repeating alarm.
-    if (newlyOverdue && getNotificationVolume() > 0) playNotificationDing();
-  }, [tickets, config, now, settingsReady, enabled, sessionKey]);
+    if (newlyOverdue && getNotificationVolume() > 0) {
+      if (pilot) playPilotQueueChime();
+      else playNotificationDing();
+    }
+  }, [tickets, config, now, settingsReady, enabled, sessionKey, pilot]);
 
   return now;
 }

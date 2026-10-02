@@ -8,6 +8,7 @@ import { isQueueWaitOverdue, useQueueWaitAlerts, type QueueAlertTicket } from ".
 const audio = vi.hoisted(() => ({
   loadNotificationSettings: vi.fn().mockResolvedValue({ tone: "chime", volume: 0.5 }),
   playNotificationDing: vi.fn(),
+  playPilotQueueChime: vi.fn(),
   getNotificationVolume: vi.fn().mockReturnValue(0.5),
 }));
 vi.mock("../client/src/lib/websocket", () => audio);
@@ -98,7 +99,7 @@ describe("five-minute queue alerts", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([0, 0.5])("updates without a refetch, deduplicates, stops on claim, and honors volume %s", async (volume) => {
+  it.each([[0, false], [0.5, false], [0, true], [0.5, true]] as const)("updates without refetch, deduplicates, stops on claim, volume %s, pilot %s", async (volume, pilot) => {
     audio.getNotificationVolume.mockReturnValue(volume);
     vi.useFakeTimers();
     vi.setSystemTime(start + 299000);
@@ -106,7 +107,7 @@ describe("five-minute queue alerts", () => {
     const container = document.createElement("div");
     const root = createRoot(container);
     function Harness({ tickets }: { tickets: QueueAlertTicket[] }) {
-      const now = useQueueWaitAlerts(tickets, config);
+      const now = useQueueWaitAlerts(tickets, config, { pilot });
       return createElement("div", { "data-overdue": isQueueWaitOverdue(tickets[0], now, config) }, String(now));
     }
     const tickets = [ticket, { ...ticket, id: 2 }];
@@ -115,10 +116,12 @@ describe("five-minute queue alerts", () => {
       expect(container.firstElementChild?.getAttribute("data-overdue")).toBe("false");
       await act(async () => { vi.advanceTimersByTime(1000); });
       expect(container.firstElementChild?.getAttribute("data-overdue")).toBe("true");
-      expect(audio.playNotificationDing).toHaveBeenCalledTimes(volume > 0 ? 1 : 0);
+      expect(audio.playNotificationDing).toHaveBeenCalledTimes(volume > 0 && !pilot ? 1 : 0);
+      expect(audio.playPilotQueueChime).toHaveBeenCalledTimes(volume > 0 && pilot ? 1 : 0);
       await act(async () => { vi.advanceTimersByTime(10000); });
       await act(async () => root.render(createElement(Harness, { tickets: [...tickets] })));
-      expect(audio.playNotificationDing).toHaveBeenCalledTimes(volume > 0 ? 1 : 0);
+      expect(audio.playNotificationDing).toHaveBeenCalledTimes(volume > 0 && !pilot ? 1 : 0);
+      expect(audio.playPilotQueueChime).toHaveBeenCalledTimes(volume > 0 && pilot ? 1 : 0);
       await act(async () => root.render(createElement(Harness, {
         tickets: [{ ...ticket, ticketStatus: "pending", claimedAt: new Date() }],
       })));

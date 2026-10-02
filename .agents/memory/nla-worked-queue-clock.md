@@ -35,3 +35,7 @@ reopening the overview or unmuting can replay a backlog of alarms.
 
 **How to apply:** Keep monitoring separate from presentation filters; wait for
 confirmed business hours and successful sound-settings loading before sound.
+
+Pilot queue wait alerts must sound different from traditional queue alerts.
+**Why:** The user requested an audible distinction between the two queues.
+**How to apply:** Preserve the distinct Pilot chime while sharing existing volume and mute settings.

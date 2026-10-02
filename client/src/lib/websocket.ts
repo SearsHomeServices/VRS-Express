@@ -583,6 +583,35 @@ export function playNotificationDing() {
   playToneWithWebAudio(cachedTone, cachedVolume);
 }
 
+// Reserved for Pilot queue wait alerts, distinct from every selectable tone.
+export function playPilotQueueChime() {
+  if (cachedVolume <= 0) return;
+  try {
+    const ctx = getAudioContext();
+    const play = () => {
+      if (cachedVolume <= 0) return;
+      [1047, 784, 1319].forEach((frequency, index) => {
+        const start = ctx.currentTime + index * 0.22;
+        const gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        gain.gain.setValueAtTime(cachedVolume * 0.3, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.2);
+        const oscillator = ctx.createOscillator();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gain);
+        oscillator.start(start);
+        oscillator.stop(start + 0.2);
+      });
+    };
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(play).catch(error => console.warn("[notification] Pilot audio resume failed:", error));
+    } else play();
+  } catch (error) {
+    console.warn("[notification] Pilot audio failed:", error);
+  }
+}
+
 export function playTonePreview(tone: ToneId) {
   playToneWithWebAudio(tone, cachedVolume);
 }

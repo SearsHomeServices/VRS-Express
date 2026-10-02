@@ -1380,6 +1380,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
   });
   const { config: bhConfig, isConfirmed: businessHoursConfirmed } = useBusinessHoursConfig();
   const queueClock = useQueueWaitAlerts(queueAlertData?.submissions ?? [], bhConfig, {
+    pilot: vrsAiOnly,
     enabled: businessHoursConfirmed && !queueAlertError && !!queueAlertUser,
     sessionKey: queueAlertUser ? `vrs-queue-alerts:${queueAlertUser.id}:${scope}` : undefined,
   });
