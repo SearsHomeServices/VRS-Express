@@ -1,3 +1,18 @@
+/* Slow queue alert pulse; retain a visible warning with reduced motion. */
+@keyframes queue-wait-flash {
+  0%, 100% { background-color: rgba(239, 68, 68, 0.10); }
+  50% { background-color: rgba(239, 68, 68, 0.30); }
+}
+.queue-wait-alert {
+  animation: queue-wait-flash 2s ease-in-out infinite;
+  box-shadow: inset 3px 0 0 rgb(220, 38, 38);
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue-wait-alert {
+    animation: none;
+    background-color: rgba(239, 68, 68, 0.18);
+  }
+}
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

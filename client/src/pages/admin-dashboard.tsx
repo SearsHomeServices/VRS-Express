@@ -9,6 +9,7 @@ import { SnowflakeBackfillStatus, type SnowflakeBackfillResult } from "@/compone
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { isQueueWaitOverdue, useQueueWaitAlerts } from "@/hooks/use-queue-wait-alerts";
 import { usePortal1099Enabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
@@ -1797,6 +1798,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
   // tickets render alongside in this view but the indicator uses the default
   // window since most rows are non-HVAC).
   const { config: bhConfig } = useBusinessHoursConfig();
+  const queueClock = useQueueWaitAlerts(rawTickets, bhConfig);
   const defaultProfile = bhConfig.default;
   const businessHoursActive = isWithinBusinessHours(new Date(), defaultProfile);
   const defaultHoursLabel = formatHoursLabel(defaultProfile);
@@ -2122,11 +2124,13 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                     const ageHours = created ? getBusinessElapsedMs(created, new Date(), rowProfile) / 3600000 : 0;
                     const isUrgent = ageHours >= 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
                     const isAging = ageHours >= 2 && ageHours < 4 && (ticket.ticketStatus === "queued" || ticket.ticketStatus === "pending");
+                    const queueOverdue = isQueueWaitOverdue(ticket, queueClock, bhConfig);
 
                     return (
                       <TableRow
                         key={ticket.id}
-                        className={`cursor-pointer hover:bg-muted/50 transition-colors ${isUrgent ? "bg-red-50 dark:bg-red-950/20" : isAging ? "bg-amber-50 dark:bg-amber-950/20" : ""}`}
+                        className={`cursor-pointer hover:bg-muted/50 transition-colors ${queueOverdue ? "queue-wait-alert" : isUrgent ? "bg-red-50 dark:bg-red-950/20" : isAging ? "bg-amber-50 dark:bg-amber-950/20" : ""}`}
+                        data-queue-overdue={queueOverdue || undefined}
                         onClick={() => setSelectedTicketId(ticket.id)}
                         data-testid={`ticket-row-${ticket.id}`}
                       >
@@ -2334,7 +2338,12 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                         <TableCell className="text-sm text-right whitespace-nowrap text-muted-foreground" data-testid={`last-updated-${ticket.id}`}>
                           {formatDate(ticket.updatedAt || ticket.statusChangedAt || ticket.createdAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}
                         </TableCell>
-                        <TableCell className="text-sm font-medium text-right whitespace-nowrap">
+                        <TableCell className="text-sm font-medium text-right whitespace-nowrap" data-testid={`queue-wait-${ticket.id}`}>
+                          {queueOverdue && (
+                            <span className="block text-xs font-semibold text-red-700 dark:text-red-300" role="status">
+                              Waiting 5+ minutes
+                            </span>
+                          )}
                           {getQueueWaitEnd(ticket)
                             ? ticket.ticketStatus === "queued" && !ticket.claimedAt && !ticket.nlaReadyForOrderAt
                               ? <span className="text-amber-600 dark:text-amber-400">{getTimeInStatus(ticket.createdAt, getQueueWaitEnd(ticket), rowProfile)} ⏳</span>
