@@ -14,3 +14,9 @@ The pre-VRS Express process was via phone, not a previous version of this app.
 **Why:** The user corrected an executive summary that could imply app-period comparisons measured improvement over the old process.
 
 **How to apply:** Use phone-process baseline data for before/after impact claims. App week-over-week comparisons are not that baseline. Elapsed creation-to-review time is not active labor time; do not convert it directly into dollar savings.
+
+Field-technician labor capacity is valued at $29 per hour.
+
+**Why:** The user supplied this rate for the VRS Express business-impact estimate.
+
+**How to apply:** Apply this rate only to field-technician time saved, not reviewer time. Keep assumed minutes saved distinct from measured savings.
