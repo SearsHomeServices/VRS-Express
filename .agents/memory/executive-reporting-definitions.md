@@ -20,3 +20,9 @@ Field-technician labor capacity is valued at $29 per hour.
 **Why:** The user supplied this rate for the VRS Express business-impact estimate.
 
 **How to apply:** Apply this rate only to field-technician time saved, not reviewer time. Keep assumed minutes saved distinct from measured savings.
+
+The user supplied an average of 15 minutes per phone call/touchpoint for the field-technician productivity comparison.
+
+**Why:** The requested leadership narrative focuses on the dollar value of technician and employee time freed up.
+
+**How to apply:** At $29/hour, a 15-minute technician call represents $7.25 in capacity. Count avoided calls and subtract replacement submission/follow-up effort before claiming net savings; ticket or message counts alone do not establish calls avoided.
