@@ -2243,8 +2243,9 @@ export class DatabaseStorage implements IStorage {
     avgTimeToAuthCodeMs: number | null;
   }> {
     const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
+    // created_at stores UTC without a timezone. Convert Eastern midnight
+    // back to UTC, with PostgreSQL handling daylight-saving transitions.
+    const startOfToday = sql`((date_trunc('day', ${now}::timestamptz AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York') AT TIME ZONE 'UTC')`;
 
     const sevenDaysAgo = new Date(now);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);

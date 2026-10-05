@@ -10,6 +10,7 @@ import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { isQueueWaitOverdue, useQueueWaitAlerts } from "@/hooks/use-queue-wait-alerts";
+import { isAdminAnalyticsQuery } from "@/lib/analytics-refresh";
 import { usePortal1099Enabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
@@ -3800,7 +3801,26 @@ export default function AdminDashboard() {
     enabled: selectedAgentIds.length === 1,
   });
 
-  const { data: analyticsData, isLoading: analyticsLoading } = useQuery<AnalyticsData>({
+  const [analyticsRefreshing, setAnalyticsRefreshing] = useState(false);
+  const [analyticsRefreshError, setAnalyticsRefreshError] = useState(false);
+  const [analyticsRefreshedAt, setAnalyticsRefreshedAt] = useState<Date | null>(null);
+  const refreshAnalytics = async () => {
+    if (analyticsRefreshing) return;
+    setAnalyticsRefreshing(true);
+    setAnalyticsRefreshError(false);
+    try {
+      await queryClient.refetchQueries({
+        predicate: (query) => isAdminAnalyticsQuery(query.queryKey[0]),
+        type: "active",
+      }, { throwOnError: true });
+      setAnalyticsRefreshedAt(new Date());
+    } catch {
+      setAnalyticsRefreshError(true);
+    } finally {
+      setAnalyticsRefreshing(false);
+    }
+  };
+  const { data: analyticsData, isLoading: analyticsLoading, isError: analyticsError } = useQuery<AnalyticsData>({
     queryKey: ["/api/admin/analytics"],
     enabled: activeView === "analytics",
   });
@@ -5309,6 +5329,20 @@ export default function AdminDashboard() {
 
             {activeView === "analytics" && (
               <div className="p-4 space-y-4" data-testid="analytics-view">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-sm text-muted-foreground">
+                    <p>Live operational analytics · all submissions, including resubmissions and Pilot tickets.</p>
+                    <p>Export dates below apply only to downloaded tickets, not these dashboard cards.</p>
+                    {analyticsRefreshedAt && <p role="status">Last successful manual update: {formatDate(analyticsRefreshedAt)}</p>}
+                  </div>
+                  <Button onClick={refreshAnalytics} disabled={analyticsRefreshing || analyticsLoading} data-testid="button-refresh-analytics">
+                    {analyticsRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
+                    {analyticsRefreshing ? "Updating…" : "Search / Update Analytics"}
+                  </Button>
+                </div>
+                {(analyticsError || analyticsRefreshError) && (
+                  <p role="alert" className="text-sm text-destructive">Could not update all analytics. Any displayed values may be stale. Use Search / Update Analytics to retry.</p>
+                )}
                 {analyticsLoading ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -5337,12 +5371,12 @@ export default function AdminDashboard() {
 
                     <div className="space-y-1">
                       <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Volume</h2>
-                      <p className="text-xs text-muted-foreground">Submission counts across timeframes.</p>
+                      <p className="text-xs text-muted-foreground">Today starts at midnight Eastern. Last 7 and 30 days are rolling windows, not calendar weeks or months. Weekly updates use a Monday-start reporting period and the cutoff printed in the report; their totals will differ unless the time windows match.</p>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       <Card>
                         <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-                          <CardTitle className="text-sm font-medium text-muted-foreground">Today</CardTitle>
+                          <CardTitle className="text-sm font-medium text-muted-foreground">Today (Eastern)</CardTitle>
                           <Calendar className="w-4 h-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
@@ -5352,7 +5386,7 @@ export default function AdminDashboard() {
                       </Card>
                       <Card>
                         <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-                          <CardTitle className="text-sm font-medium text-muted-foreground">This Week</CardTitle>
+                          <CardTitle className="text-sm font-medium text-muted-foreground">Last 7 Days</CardTitle>
                           <CalendarDays className="w-4 h-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
@@ -5362,7 +5396,7 @@ export default function AdminDashboard() {
                       </Card>
                       <Card>
                         <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-                          <CardTitle className="text-sm font-medium text-muted-foreground">This Month</CardTitle>
+                          <CardTitle className="text-sm font-medium text-muted-foreground">Last 30 Days</CardTitle>
                           <CalendarRange className="w-4 h-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
@@ -5683,11 +5717,12 @@ export default function AdminDashboard() {
                       <Card>
                         <CardHeader>
                           <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <CardTitle className="text-base">Approval Rate</CardTitle>
+                            <CardTitle className="text-base">Operational Outcome Mix (All Time)</CardTitle>
                             <TrendingUp className="w-4 h-4 text-muted-foreground" />
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-3">
+                          <p className="text-xs text-muted-foreground">Operational status percentages use all submissions as the denominator. Weekly reports instead use final ticket outcomes and approved ÷ (approved + rejected). These percentages are not directly comparable.</p>
                           <div className="flex items-center justify-between gap-2 flex-wrap">
                             <div className="flex items-center gap-2">
                               <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
