@@ -1,0 +1,20 @@
+VRS Express: less time on the phone, more time fixing appliances
+VRS Express turns phone-based repair approvals into a digital “submit, track, and decide” workflow. Technicians send the information reviewers need without both people having to be available on the same call.
+
+What makes it valuable
+Evidence in one place: Photos, videos, estimates, and repair details travel with the request, reducing the need to explain the same issue repeatedly.
+A shared work queue: Reviewers claim and process requests; technicians can track their status instead of calling for updates.
+Parts support: Hard-to-find parts requests move from research to a clearly marked “Ready for Order” handoff.
+Management visibility: Dashboards show waiting work, turnaround, outcomes, and submission-quality issues. Alerts flag tickets waiting too long.
+AI-assisted authorization pilot: Connects selected requests to the AI authorization service and records returned outcomes alongside the ticket.
+Adoption and productivity value
+The saved October 2 reporting snapshot recorded 898 requests from 519 technicians—evidence that the workflow is being used in daily operations.
+
+Using your baseline:
+
+15-minute technician call × $29/hour = $7.25 per call avoided.
+If each of those 898 requests replaced one full call, that represents 224.5 technician hours, worth approximately $6,511, before subtracting time spent submitting and following up.
+Employees receiving the requests can also gain productivity: they can review documented information, manage multiple requests, and avoid repeated live explanations. That additional benefit needs its own time measurement and employee hourly rate.
+
+Leadership takeaway
+“VRS Express digitizes repair approvals and parts support so technicians spend less time coordinating and more time repairing. With 898 requests from 519 technicians in the reported period, eliminating one 15-minute call per request would represent roughly $6,500 in field-technician capacity alone, with additional reviewer productivity potential.”

@@ -26,3 +26,9 @@ The user supplied an average of 15 minutes per phone call/touchpoint for the fie
 **Why:** The requested leadership narrative focuses on the dollar value of technician and employee time freed up.
 
 **How to apply:** At $29/hour, a 15-minute technician call represents $7.25 in capacity. Count avoided calls and subtract replacement submission/follow-up effort before claiming net savings; ticket or message counts alone do not establish calls avoided.
+
+The user estimates $3 million in annual replacement savings for the internal warranty program from better human-in-the-loop review plus AI-first triaging, in addition to technician productivity value.
+
+**Why:** The user supplied this business-impact estimate for leadership reporting.
+
+**How to apply:** Attribute it as a user-provided estimate, not an independently validated result. Distinguish replacement-cost savings from labor capacity value, and disclose assumptions when combining them.
