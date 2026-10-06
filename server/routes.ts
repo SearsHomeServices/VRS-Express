@@ -2174,21 +2174,16 @@ export async function registerRoutes(
         if (s.stage2ReviewedBy) reviewerIds.add(s.stage2ReviewedBy);
       });
 
-      // Tyler perf: fetch the (handful of) reviewers + the technician in one
-      // bounded Promise.all instead of sequential per-reviewer getUser calls.
-      // This runs on every ticket-detail history load, so cutting the
-      // round-trips helps a hot path (set is small, so no pool pressure).
+      // Display names only, in one query after authorization. No full user
+      // records or per-reviewer pool connections are needed for this response.
       const reviewerIdList = [...reviewerIds];
-      const [techUser, ...reviewerUsers] = await Promise.all([
-        storage.getUser(submission.technicianId),
-        ...reviewerIdList.map(rid => storage.getUser(rid)),
-      ]);
+      const nameRows = await storage.getUserDisplayNames([submission.technicianId, ...reviewerIdList]);
+      const namesById = new Map(nameRows.map(row => [row.id, row.name]));
       const reviewerNames: Record<number, string> = {};
-      reviewerIdList.forEach((rid, i) => {
-        const u = reviewerUsers[i];
-        if (u) reviewerNames[rid] = u.name;
+      reviewerIdList.forEach(rid => {
+        if (namesById.has(rid)) reviewerNames[rid] = namesById.get(rid)!;
       });
-      const techName = techUser?.name || "Technician";
+      const techName = namesById.get(submission.technicianId) || "Technician";
 
       const resubmissionCount = chain.filter(s => s.resubmissionOf != null && s.stage1Status !== "invalid").length;
       const maxResubmissions = 3;

@@ -155,6 +155,7 @@ export { pool };
 export interface IStorage {
   // User methods
   getUser(id: number): Promise<User | undefined>;
+  getUserDisplayNames(ids: number[]): Promise<{ id: number; name: string }[]>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByRacId(racId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -540,6 +541,12 @@ export class DatabaseStorage implements IStorage {
   async getUser(id: number): Promise<User | undefined> {
     const result = await db.select().from(users).where(eq(users.id, id));
     return result[0];
+  }
+
+  async getUserDisplayNames(ids: number[]): Promise<{ id: number; name: string }[]> {
+    if (ids.length === 0) return [];
+    return db.select({ id: users.id, name: users.name })
+      .from(users).where(inArray(users.id, [...new Set(ids)]));
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {

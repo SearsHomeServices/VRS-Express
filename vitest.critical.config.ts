@@ -32,6 +32,7 @@ export default defineConfig({
       "tests/nla-ready-for-order.test.ts",
       "tests/queue-wait-alerts.test.ts",
       "tests/analytics-refresh.test.ts",
+      "tests/ticket-media-metadata.test.ts",
       "tests/pilot-queue-audio.test.ts",
     ],
     maxWorkers: 2,

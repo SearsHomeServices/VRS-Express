@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
+import { parseTicketMediaMetadata, preparePriorTicketMedia } from "@/lib/ticket-media-metadata";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1233,6 +1234,19 @@ export default function AgentDashboard() {
     queryKey: ["/api/submissions", selectedId, "history"],
     enabled: !!selectedId,
   });
+
+  // Typing notes/review controls must not re-parse unchanged media or sort
+  // history. Dependencies are the actual metadata, not unrelated form state.
+  const selectedMediaMetadata = useMemo(
+    () => parseTicketMediaMetadata(selectedSubmission?.photos, selectedSubmission?.photoThumbnails),
+    [selectedSubmission?.photos, selectedSubmission?.photoThumbnails],
+  );
+  const priorTicketMedia = useMemo(
+    () => preparePriorTicketMedia(
+      submissionHistoryQuery.data?.history ?? [], selectedId, selectedSubmission?.createdAt,
+    ),
+    [submissionHistoryQuery.data?.history, selectedId, selectedSubmission?.createdAt],
+  );
 
   // Stage 3 visibility — server is the single source of truth (matches the
   // 24h claim-gate predicate on the storage side). `required: true` means the
@@ -2966,8 +2980,7 @@ export default function AgentDashboard() {
                       </CardHeader>
                       <CardContent className="space-y-4">
                         {(() => {
-                          let parsed: any = null;
-                          try { parsed = selectedSubmission.photos ? JSON.parse(selectedSubmission.photos) : null; } catch { parsed = null; }
+                          const { parsed, thumbs } = selectedMediaMetadata;
                           const bridgePhotos = bridgePhotoProxyEnabled
                             ? selectedSubmission.vrsAi?.reviewContext?.appliance_photos ?? []
                             : [];
@@ -2975,15 +2988,6 @@ export default function AgentDashboard() {
                           // Grid <img> src swaps to the thumb when one exists;
                           // FULL paths stay the identity for rejection toggles,
                           // lightbox, and downloads. Junk/missing → empty map.
-                          let thumbs: Record<string, string> = {};
-                          try {
-                            const rawT = (selectedSubmission as any).photoThumbnails ? JSON.parse((selectedSubmission as any).photoThumbnails) : null;
-                            if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
-                              for (const [k, v] of Object.entries(rawT)) {
-                                if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
-                              }
-                            }
-                          } catch {}
                           // Tyler 2026-05-07 (prod fire — VRS rejecting
                           // tickets as "no photos"): if the heavy detail
                           // fetch is still in-flight AND the slim row
@@ -3328,43 +3332,14 @@ export default function AgentDashboard() {
                         red ring + badge (parsed from that row's
                         rejectedMedia). */}
                     {submissionHistoryQuery.data && selectedSubmission.resubmissionOf != null && (() => {
-                      const histAll = submissionHistoryQuery.data!.history;
                       // Strictly EARLIER rows only (not just "other rows") —
                       // if an agent opens an older ticket in a chain that has
                       // newer resubmissions, those future rows must not
                       // appear in a "previous submissions" audit. Same
                       // chronology rule as the priorRejection memo above.
-                      const selCreatedMs = (selectedSubmission as any).createdAt
-                        ? new Date((selectedSubmission as any).createdAt).getTime()
-                        : Number.POSITIVE_INFINITY;
-                      const priorRows = histAll
-                        .filter((h: any) => {
-                          if (h.id === selectedId) return false;
-                          const t = h.createdAt ? new Date(h.createdAt).getTime() : 0;
-                          return t < selCreatedMs;
-                        })
-                        .sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
-                      if (priorRows.length === 0) return null;
+                      if (priorTicketMedia.length === 0) return null;
                       const reviewerNames = submissionHistoryQuery.data!.reviewerNames || {};
-                      const sections = priorRows.map((item: any) => {
-                        let parsed: any = null;
-                        try { parsed = item.photos ? JSON.parse(item.photos) : null; } catch {}
-                        let thumbs: Record<string, string> = {};
-                        try {
-                          const rawT = item.photoThumbnails ? JSON.parse(item.photoThumbnails) : null;
-                          if (rawT && typeof rawT === "object" && !Array.isArray(rawT)) {
-                            for (const [k, v] of Object.entries(rawT)) {
-                              if (typeof k === "string" && typeof v === "string") thumbs[k] = v;
-                            }
-                          }
-                        } catch {}
-                        let rejectedUrls = new Set<string>();
-                        try {
-                          const rawR = item.rejectedMedia ? (typeof item.rejectedMedia === "string" ? JSON.parse(item.rejectedMedia) : item.rejectedMedia) : null;
-                          for (const p of rawR?.photos || []) {
-                            if (typeof p?.url === "string") rejectedUrls.add(p.url);
-                          }
-                        } catch {}
+                      const sections = priorTicketMedia.map(({ item, parsed, thumbs, rejectedUrls }) => {
                         const isObj = parsed && typeof parsed === "object" && !Array.isArray(parsed);
                         const issue: string[] = isObj ? (parsed.issue || []) : [];
                         const estimate: string[] = isObj ? (parsed.estimate || []) : [];

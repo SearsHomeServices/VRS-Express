@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const pool = { on: vi.fn() };
-  const db = { execute: vi.fn(), transaction: vi.fn() };
+  const db = { execute: vi.fn(), transaction: vi.fn(), select: vi.fn() };
   return { pool, db, Pool: vi.fn(function () { return pool; }), drizzle: vi.fn(() => db) };
 });
 
@@ -16,6 +16,29 @@ describe("DatabaseStorage result handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("fetches display names with one narrow query and deduplicated user IDs", async () => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const rows = [{ id: 7, name: "Technician" }, { id: 9, name: "Reviewer" }];
+    const where = vi.fn().mockResolvedValue(rows);
+    const from = vi.fn(() => ({ where }));
+    mocks.db.select.mockReturnValue({ from });
+    await expect(storage.getUserDisplayNames([7, 9, 7])).resolves.toEqual(rows);
+    expect(mocks.db.select).toHaveBeenCalledTimes(1);
+    expect(Object.keys(mocks.db.select.mock.calls[0][0])).toEqual(["id", "name"]);
+    expect(new PgDialect().sqlToQuery(where.mock.calls[0][0]).params).toEqual([7, 9]);
+  });
+
+  it("skips empty display-name lookups", async () => {
+    await expect(storage.getUserDisplayNames([])).resolves.toEqual([]);
+    expect(mocks.db.select).not.toHaveBeenCalled();
+  });
+
+  it("does not hide display-name query failures", async () => {
+    const error = new Error("lookup failed");
+    mocks.db.select.mockReturnValue({ from: () => ({ where: () => Promise.reject(error) }) });
+    await expect(storage.getUserDisplayNames([7])).rejects.toBe(error);
   });
 
   it("returns node-postgres rows from getTechnicianUsers", async () => {
