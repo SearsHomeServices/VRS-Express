@@ -1,0 +1,323 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  APP_ORIGIN_VRS_COMMENT,
+  buildAppVrsAuthorizePayload,
+  enrollAppSubmissionInVrsAi,
+  toE164UsPhone,
+  type AppVrsAiEnrollSubmission,
+} from "../server/vrs-app-enroll";
+import {
+  buildVrsAuthorizeEnrichmentCandidates,
+  dispatchVrsAiForSubmission,
+  processVrsAiWebhookEvent,
+} from "../server/vrs-sasha-queue";
+import {
+  getVrsAuthorizeContractVersion,
+  safeParseVrsOutboundSourceRequest,
+  sendVrsAuthorizeRequest,
+  type VrsWebhookEvent,
+} from "../server/vrs-sasha-contract";
+
+const EXPRESS_WEBHOOK =
+  "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook";
+
+const appTicket: AppVrsAiEnrollSubmission = {
+  id: 501,
+  serviceOrder: "8175-13538277",
+  districtCode: "8175",
+  applianceType: "laundry",
+  requestType: "authorization",
+  warrantyType: "american_home_shield",
+  ticketStatus: "queued",
+  issueDescription: "Washer will not spin; control board failed diagnostic.",
+  phone: "(214) 555-0199",
+  phoneOverride: null,
+  technicianLdapId: "crivera",
+  createdAt: new Date("2026-10-08T14:00:00.000Z"),
+};
+
+const technician = { name: "Carlos Rivera", racId: "crivera" };
+
+function createdIntake(callId = "vrs_call_app_1") {
+  return {
+    kind: "accepted" as const,
+    record: {
+      id: 77,
+      submissionId: appTicket.id,
+      callId,
+      state: "pending_review",
+      requestPayload: {} as any,
+    },
+    createdAt: new Date(),
+  };
+}
+
+describe("technician AHS ticket → VRS AI bridge enrollment", () => {
+  it("builds a V9 payload that passes dispatch validation once a callback is supplied", () => {
+    const built = buildAppVrsAuthorizePayload(appTicket, technician);
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    expect(getVrsAuthorizeContractVersion(built.payload)).toBe("v9");
+    expect(built.payload).not.toHaveProperty("callback_secret");
+    expect(built.payload.callback_url).toBe("");
+    expect(built.payload).toMatchObject({
+      service_order: "13538277",
+      tech_id: "crivera",
+      tech_phone: "+12145550199",
+      tech_name: "Carlos Rivera",
+      partner_id: "ahs",
+      district_number: "8175",
+      appliance_type: "Laundry",
+      symptom: appTicket.issueDescription,
+      appliance_photos: [],
+    });
+    expect(built.payload.comments?.map((c) => c.text)).toContain(
+      APP_ORIGIN_VRS_COMMENT,
+    );
+    expect(built.serviceOrder).toBe("13538277");
+
+    const outbound = safeParseVrsOutboundSourceRequest({
+      ...built.payload,
+      callback_url: EXPRESS_WEBHOOK,
+      callback_secret: "express-ai-webhook-secret",
+    });
+    expect(outbound.success).toBe(true);
+  });
+
+  it.each([
+    ["Sears Protect", { warrantyType: "sears_protect" }],
+    ["First American", { warrantyType: "first_american" }],
+    ["NLA parts", { requestType: "parts_nla" }],
+    ["already claimed", { ticketStatus: "pending" }],
+  ])("skips %s tickets without touching the store", async (_label, override) => {
+    const store = { createIntake: vi.fn() };
+    const result = await enrollAppSubmissionInVrsAi(
+      { store, generateCallId: () => "vrs_call_x" },
+      { ...appTicket, ...override },
+      technician,
+    );
+    expect(result.kind).toBe("skipped");
+    expect(store.createIntake).not.toHaveBeenCalled();
+  });
+
+  it("skips a ticket without a usable service order or technician id", () => {
+    expect(
+      buildAppVrsAuthorizePayload({ ...appTicket, serviceOrder: "8175-1234" }, technician),
+    ).toMatchObject({ ok: false });
+    expect(
+      buildAppVrsAuthorizePayload(
+        { ...appTicket, technicianLdapId: null },
+        { name: "No Id", racId: null },
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("normalizes US phone numbers to E.164 and falls back to N/A", () => {
+    expect(toE164UsPhone("(214) 555-0199")).toBe("+12145550199");
+    expect(toE164UsPhone("1-214-555-0199")).toBe("+12145550199");
+    expect(toE164UsPhone("+12145550199")).toBe("+12145550199");
+    expect(toE164UsPhone("555-0199")).toBeNull();
+    expect(
+      buildAppVrsAuthorizePayload({ ...appTicket, phone: "unknown" }, technician),
+    ).toMatchObject({ ok: true, payload: { tech_phone: "N/A" } });
+  });
+
+  it("stores an app-origin row with no upstream callback and supersedes closed undispatched rows", async () => {
+    const store = { createIntake: vi.fn().mockResolvedValue(createdIntake()) };
+    const result = await enrollAppSubmissionInVrsAi(
+      { store, generateCallId: () => "vrs_call_app_1" },
+      appTicket,
+      technician,
+    );
+
+    expect(result).toEqual({ kind: "enrolled", callId: "vrs_call_app_1" });
+    expect(store.createIntake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        submissionId: 501,
+        callId: "vrs_call_app_1",
+        serviceOrder: "13538277",
+        techId: "crivera",
+        techName: "Carlos Rivera",
+        callbackUrl: "",
+        callbackSecretCipher: "",
+      }),
+      { supersedeClosedUndispatched: true },
+    );
+  });
+
+  it("reports an active bridge call for the same order as a duplicate", async () => {
+    const store = {
+      createIntake: vi.fn().mockResolvedValue({
+        kind: "duplicate",
+        record: { callId: "vrs_call_sasha", state: "queued" },
+      }),
+    };
+    expect(
+      await enrollAppSubmissionInVrsAi(
+        { store, generateCallId: () => "vrs_call_app_2" },
+        appTicket,
+        technician,
+      ),
+    ).toEqual({ kind: "duplicate", existingCallId: "vrs_call_sasha", state: "queued" });
+  });
+
+  it("never throws when the store fails", async () => {
+    const store = { createIntake: vi.fn().mockRejectedValue(new Error("db down")) };
+    expect(
+      await enrollAppSubmissionInVrsAi(
+        { store, generateCallId: () => "vrs_call_app_3" },
+        appTicket,
+        technician,
+      ),
+    ).toEqual({ kind: "failed", message: "db down" });
+  });
+
+  it("dispatches an app-origin row with the Express callback and signed technician photos", async () => {
+    const built = buildAppVrsAuthorizePayload(appTicket, technician);
+    if (!built.ok) throw new Error(built.reason);
+
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ call_id: "vrs_ai_777", state: "queued" }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 77,
+        submissionId: 501,
+        callId: "vrs_call_app_1",
+        state: "pending_review",
+        requestPayload: built.payload,
+        callbackUrl: "",
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn().mockResolvedValue(undefined),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await dispatchVrsAiForSubmission({
+      submissionId: 501,
+      store,
+      client: {
+        authorize: ({ payload }) =>
+          sendVrsAuthorizeRequest({
+            baseUrl: "https://vrs-ai.example",
+            apiKey: "vrs-ai-key",
+            callbackUrl: EXPRESS_WEBHOOK,
+            callbackSecret: "express-ai-webhook-secret",
+            payload,
+            fetchImpl,
+          }),
+      },
+      callbackUrl: EXPRESS_WEBHOOK,
+      callbackSecret: "express-ai-webhook-secret",
+      enrichment: buildVrsAuthorizeEnrichmentCandidates({
+        submissionPhone: "(214) 555-0199",
+        technicianName: "Carlos Rivera",
+        submissionPhotos: JSON.stringify({
+          estimate: ["/objects/uploads/estimate.jpg"],
+          issue: ["/objects/uploads/issue.jpg"],
+        }),
+      }),
+      signObjectPhotoUrl: async (path) =>
+        `https://storage.example/bucket${path.slice("/objects".length)}?X-Goog-Signature=abc`,
+    });
+
+    expect(store.markDispatchFailed).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ kind: "accepted", providerCallId: "vrs_ai_777" });
+    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(sent.callback_url).toBe(EXPRESS_WEBHOOK);
+    expect(sent.callback_secret).toBe("express-ai-webhook-secret");
+    expect(sent.cta_no).toBe("N/A");
+    expect(sent.appliance_photos).toEqual([
+      "https://storage.example/bucket/uploads/estimate.jpg?X-Goog-Signature=abc",
+      "https://storage.example/bucket/uploads/issue.jpg?X-Goog-Signature=abc",
+    ]);
+  });
+
+  it("still requires the SASHA callback pin on SASHA-origin rows at dispatch", async () => {
+    const built = buildAppVrsAuthorizePayload(appTicket, technician);
+    if (!built.ok) throw new Error(built.reason);
+    const store = {
+      getBySubmissionId: vi.fn().mockResolvedValue({
+        id: 78,
+        submissionId: 502,
+        callId: "vrs_call_sasha_1",
+        state: "pending_review",
+        requestPayload: { ...built.payload, callback_url: EXPRESS_WEBHOOK },
+        callbackUrl: "https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook",
+      }),
+      markDispatching: vi.fn().mockResolvedValue(true),
+      markAccepted: vi.fn(),
+      markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = { authorize: vi.fn() };
+
+    const result = await dispatchVrsAiForSubmission({
+      submissionId: 502,
+      store,
+      client,
+      callbackUrl: EXPRESS_WEBHOOK,
+      callbackSecret: "express-ai-webhook-secret",
+    });
+
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(client.authorize).not.toHaveBeenCalled();
+  });
+
+  it("applies a result for an app-origin row without forwarding to SASHA", async () => {
+    const event: VrsWebhookEvent = {
+      version: 1,
+      eventId: "evt_app_1",
+      callId: "vrs_ai_777",
+      soNo: "13538277",
+      occurredAt: "2026-10-08T15:00:00Z",
+      state: "approved",
+      authNumber: "AHS-123",
+      authorizedAmount: 312.4,
+    };
+    const store = {
+      getByProviderCallId: vi.fn().mockResolvedValue({
+        id: 77,
+        submissionId: 501,
+        callId: "vrs_call_app_1",
+        providerCallId: "vrs_ai_777",
+        state: "queued",
+        requestPayload: { service_order: "13538277" },
+        callbackUrl: "",
+        callbackSecretCipher: "",
+        callbackSecretIv: "",
+        callbackSecretAuthTag: "",
+        callbackSecretSalt: "",
+      }),
+      beginWebhookEvent: vi.fn().mockResolvedValue({ kind: "claimed", alreadyApplied: false }),
+      markWebhookApplied: vi.fn().mockResolvedValue(undefined),
+      markWebhookForwarded: vi.fn().mockResolvedValue(undefined),
+      markWebhookFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    const applyResult = vi.fn().mockResolvedValue(undefined);
+    const forward = vi.fn();
+    const decryptCallbackSecret = vi.fn();
+
+    const outcome = await processVrsAiWebhookEvent({
+      event,
+      store,
+      decryptCallbackSecret,
+      applyResult,
+      forward,
+    });
+
+    expect(outcome).toBe("processed");
+    expect(applyResult).toHaveBeenCalledWith(501, event);
+    expect(forward).not.toHaveBeenCalled();
+    expect(decryptCallbackSecret).not.toHaveBeenCalled();
+    expect(store.markWebhookForwarded).toHaveBeenCalledWith(
+      77,
+      "evt_app_1",
+      { delivered: true, attempts: 0 },
+    );
+    expect(store.markWebhookFailed).not.toHaveBeenCalled();
+  });
+});

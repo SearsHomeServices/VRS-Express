@@ -41,6 +41,7 @@ import {
   type VrsAiCallResultCandidate,
 } from "./vrs-ai-call-result";
 import { vrsBridgeStore } from "./vrs-sasha-store";
+import { enrollAppSubmissionInVrsAi } from "./vrs-app-enroll";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
@@ -72,6 +73,7 @@ import {
   is1099PortalEnabled,
   isTechHubPhotosEnabled,
   isVrsBridgePhotoProxyEnabled,
+  isVrsAiAppEnrollEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -1152,6 +1154,8 @@ export async function registerRoutes(
     res: Response,
     internalOptions?: {
       ignoreLegacyDuplicateSubmissionIds?: readonly number[];
+      // SASHA intake creates its own bridge row right after this handler.
+      skipAppVrsAiEnroll?: boolean;
     },
   ) => {
     try {
@@ -1598,6 +1602,30 @@ export async function registerRoutes(
         return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
       }
 
+      // Technician-posted AHS authorization tickets get the same VRS AI
+      // bridge row a SASHA call gets, before any broadcast, so the ticket
+      // lands in the Pilot view and Stage 1 approval sends it to VRS AI.
+      // Failure is logged and leaves the ticket on the legacy manual flow.
+      if (!internalOptions?.skipAppVrsAiEnroll && isVrsAiAppEnrollEnabled()) {
+        const enrollment = await enrollAppSubmissionInVrsAi(
+          {
+            store: vrsBridgeStore,
+            generateCallId: () => `vrs_call_${randomUUID()}`,
+          },
+          submission,
+          user,
+        );
+        if (enrollment.kind === "enrolled") {
+          console.log(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} call=${enrollment.callId}`);
+        } else if (enrollment.kind === "duplicate") {
+          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} not enrolled: active bridge call ${enrollment.existingCallId} (${enrollment.state})`);
+        } else if (enrollment.kind === "failed") {
+          console.error(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} enrollment failed: ${enrollment.message}`);
+        } else if (submission.warrantyType === "american_home_shield") {
+          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} skipped: ${enrollment.reason}`);
+        }
+      }
+
       const submissionReceivedPhone = submission.phoneOverride || submission.phone;
       if (submissionReceivedPhone) {
         const body = await buildSubmissionReceivedMessage(
@@ -1701,7 +1729,10 @@ export async function registerRoutes(
         isTechnician: true,
       };
       const { res: capturedRes, captured } = makeCapturedResponse();
-      await createSubmissionHandler(internalRequest, capturedRes, internalOptions);
+      await createSubmissionHandler(internalRequest, capturedRes, {
+        ...internalOptions,
+        skipAppVrsAiEnroll: true,
+      });
       const responseBody = captured.body as any;
       if (captured.statusCode === 201 && responseBody?.submission?.id) {
         return {

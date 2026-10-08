@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Technician AHS tickets enroll in the VRS AI bridge (2026-10-08)
+- New flag `VRS_AI_APP_ENROLL_ENABLED` (default off). When it is `"true"`, every
+  new queued AHS authorization ticket from the technician app or the external
+  v1 API gets a `vrs_ai_calls` row at creation, the same row a SASHA call gets.
+  The ticket moves to the VRS AI Pilot view, and Stage 1 approval sends it to
+  VRS AI. Enrollment never blocks ticket creation; failures are logged under
+  `[vrs-app-enroll]`.
+- App-origin rows carry a V9 payload built from the ticket. Fields the app does
+  not capture use contract placeholders and `0` amounts, and a comment tells
+  VRS AI to use the photos or look up the order. Technician photos are signed
+  at dispatch.
+- App-origin rows have no SASHA callback. Dispatch revalidates without the
+  SASHA pin, and VRS AI results are applied locally without an upstream
+  forward. SASHA-origin rows behave exactly as before.
+- For app enrollment only, an earlier undispatched row for the same order whose
+  ticket is rejected or invalid is retired as `superseded`, so resubmissions
+  can enroll.
+- No schema change. Tests: `tests/vrs-app-enroll.test.ts`.
+
 
 ### Fixed - Release type-check gate (2026-09-18)
 - `npm run build` now requires the strict TypeScript check to pass before

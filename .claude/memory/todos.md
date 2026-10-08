@@ -1,3 +1,20 @@
+## Open — technician AHS → VRS AI enrollment (2026-10-08)
+
+- [x] Enroll new queued AHS authorization tickets from the app or external API
+      in the VRS AI bridge, behind `VRS_AI_APP_ENROLL_ENABLED` (default off).
+- [ ] Before enabling: confirm VRS AI handles app-origin V9 payloads. These
+      have `"N/A"` parts/model/serial/contract, `0` amounts and a
+      `tech_recommendation` of `repair`, so VRS AI must use the photos or its
+      own lookup of the order.
+- [ ] Before enabling: confirm VRS AI does not also post app-origin results
+      straight to SASHA (its pinned `VRS_SASHA_CALLBACK_URL`). SASHA has no
+      record of these calls.
+- [ ] Enable in DEV (`VRS_AI_APP_ENROLL_ENABLED=true` in `[userenv.development]`),
+      submit a test AHS ticket, check the `[vrs-app-enroll]` log and the Pilot
+      view, then approve Stage 1 and confirm the VRS AI 202.
+- [ ] Optional: fill customer/model/serial/contract from Snowflake
+      `IH_SERVICEORDER_FULLDETAIL_TBL`. Column names have not been verified yet.
+
 ## Open — weekly executive summary (2026-09-11)
 
 - [ ] BLOCKING BEFORE FIRST SEND: confirm `notifications@shs.com` is a verified

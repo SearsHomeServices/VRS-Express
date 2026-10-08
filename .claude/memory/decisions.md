@@ -1,3 +1,30 @@
+## 2026-10-08 — Technician AHS tickets enroll in the VRS AI bridge
+
+**Reuse the bridge row; don't add a second dispatch path.** Pilot membership,
+the Stage 1 "Approve & Send to VRS AI" gate, the dispatch, the webhook ledger
+and the per-order duplicate lock all key off a `vrs_ai_calls` row. Giving app
+tickets that row at creation is the smallest change that gets them all of it.
+The human Stage 1 approval stays the only gate before VRS AI.
+
+**Empty `callback_url` marks app origin, so no schema change.** An `origin`
+column would need a `db:push` in both environments before publishing. The
+empty string satisfies the existing NOT NULL columns and can never be a valid
+SASHA URL. Code checks it only through `isAppOriginVrsBridgeRecord`. SASHA
+rows keep the inbound revalidation and the mandatory upstream forward
+unchanged.
+
+**Placeholders, not guesses.** The technician form has no customer,
+model/serial, parts or price fields; that data is in the estimate and tag
+photos. The payload uses the V9 contract's own `"N/A"`/`""` values and `0`
+amounts, and says so in a comment. It does not invent values. The flag stays
+off until VRS AI is confirmed to handle these payloads.
+
+**Supersede only for app enrollment.** Stage 1 rejection never updates the
+bridge row, so an undispatched `pending_review` row would block a resubmission
+forever. Retiring it is limited to rows VRS AI never received
+(`provider_call_id IS NULL`) whose ticket is closed without approval. SASHA
+intake keeps its existing duplicate behavior.
+
 ## 2026-09-11 — Weekly exec summary + post-close agent notes
 
 **Raw fetch to SendGrid, not `@sendgrid/mail`.** A new npm dependency is a live
