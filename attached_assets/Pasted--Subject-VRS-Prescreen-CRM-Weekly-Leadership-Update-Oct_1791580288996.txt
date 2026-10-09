@@ -1,0 +1,120 @@
+**Subject: VRS Prescreen CRM — Weekly Leadership Update | October 5–11, 2026**
+
+**Reporting cutoff:** Friday, October 9, at 4:25 p.m. Eastern. Friday is partial; weekend activity is not included. Daily reporting buckets use UTC.
+
+## Executive Summary
+
+The VRS Prescreen CRM continues to support a previously phone-based coordination process through a shared queue, assigned ownership, and traceable service-order outcomes.
+
+This week to date:
+- **5,932 tickets entered the CRM.**
+- **21 agent IDs** had attributed status activity across **2,049 distinct tickets**.
+- **1,562 unique SOs reached a qualifying pre-screen disposition.**
+- **588 unique SOs were marked “Closed - Parts Ordered” by our team**, representing **37.6%** of those prescreened SOs.
+- **6,074 distinct tickets reached a closed status**, including automated closures.
+- Photo submissions were recorded against **568 unique SO identifiers**.
+
+The activity and outcome counts are measured. Technician time savings, financial value, and review staffing remain estimates based on the assumptions below.
+
+## 1. Daily Operational Results
+
+| Day | Tickets Received | Distinct Tickets Closed | SOs With Parts Ordered by Our Team |
+|---|---:|---:|---:|
+| Monday, October 5 | 1,605 | 1,463 | 125 |
+| Tuesday, October 6 | 1,255 | 1,469 | 136 |
+| Wednesday, October 7 | 1,256 | 1,364 | 140 |
+| Thursday, October 8 | 1,073 | 1,291 | 144 |
+| Friday, October 9 — partial | 743 | 690 | 46 |
+| **Week to date — deduplicated** | **5,932** | **6,074** | **588** |
+
+Daily totals can exceed weekly distinct totals when an SO or ticket reaches the same outcome on multiple days. Intake and closure populations differ; these figures do not independently establish a reduction in backlog.
+
+## 2. Pre-Screen and Parts-Order Outcomes
+
+| Metric | Week to Date |
+|---|---:|
+| Unique SOs with qualifying pre-screen dispositions | **1,562** |
+| Of those, SOs marked “Closed - Parts Ordered” | **588** |
+| **Recorded parts-order outcome rate** | **37.6%** |
+| Qualifying prescreened SOs without a parts-order event in this window | **974** |
+
+This definition includes **all prior statuses**, including Chatbot Complete and Chatbot Incomplete. Qualifying dispositions are parts ordered, not eligible, no parts needed, parts NLA, and do-not-order.
+
+Other recorded outcomes included:
+- **476 distinct tickets:** Not Eligible for Parts Order.
+- **385:** Do-Not-Order list.
+- **103:** Did Not Need Parts.
+- **24:** Parts NLA.
+
+These outcome categories may overlap when a ticket changes disposition. A parts-order status is a CRM-recorded outcome—not proof of delivery, a successful repair, or an incremental order caused by the CRM. Warehouse parts quantities were not refreshed for this update.
+
+## 3. Adoption and Visibility
+
+| Measure | Week to Date |
+|---|---:|
+| Agent IDs with attributed activity | **21** |
+| Distinct tickets with attributed status changes | **2,049** |
+| Attributed status-change events | **2,241** |
+| Status-change events without attribution | **7,174** |
+
+These figures demonstrate recorded usage, not an adoption percentage or a ranking of agent productivity. Attribution alone does not prove every action was manual.
+
+## 4. Estimated Technician Capacity Benefit
+
+Using the reported **10-minute technician saving per interaction**, and assuming one qualifying interaction per agent-active ticket:
+
+**2,049 × 10 minutes = 341.5 technician hours of estimated released capacity.**
+
+| Estimate | Value |
+|---|---:|
+| Technician capacity released this reporting period | **341.5 hours** |
+| Annualized at the same volume for 52 weeks | **17,758 hours** |
+| Annualized capacity value at an illustrative $40/hour | **$710,320** |
+
+This is **capacity value versus the previous phone-based process**, not verified cash savings. It assumes sustained volume and excludes CRM operating costs. The interaction count and actual loaded technician rate still require validation.
+
+## 5. Photo-Review Workload and Staffing
+
+Photo submissions during the four complete weekdays, October 5–8, averaged **126 SO identifiers per day**.
+
+For review-only staffing, use **six minutes per ticket** to examine photos and proposed parts, select the disposition, and document the reason.
+
+| Capacity Measure | One Agent | Two Agents |
+|---|---:|---:|
+| Productive hours/day: 8-hour shift less 1-hour lunch | **7** | **14** |
+| Reviews/day at six minutes each | **70** | **140** |
+| Productive hours per five-day week | **35** | **70** |
+| Reviews per five-day week | **350** | **700** |
+
+At the recent **126-photo-SO daily volume**, estimated review work is **12.6 hours/day**, or approximately **90% of two agents’ available capacity**.
+
+**Recommendation:** Two weekday reviewers with shared backup, plus weekend coverage if same-day review is required.
+
+This assumes all other work is automated, one review per photo-bearing SO, and all non-lunch time is available for reviews. Photos do not necessarily mean a ticket is complete or eligible for review. Six minutes remains a planning estimate; available logs have not established active review time.
+
+## 6. Improvements and Business Impact
+
+| Improvement | Status | Business Impact |
+|---|---|---|
+| Broader SO-level reporting across all prior chatbot statuses | Delivered this week as CSV exports | Prevents parts-order reporting from excluding SOs solely because they lacked Chatbot Complete history |
+| Deduplicated SO exports with prior statuses and transition timestamps | Delivered this week | Makes results auditable and distinguishes unique SOs from repeated status events |
+| Photo-volume and staffing analysis | Completed this week | Replaces the earlier 400-review/day scenario with observed photo-submission volume |
+| Independent ticket-detail loading | Previously completed in September | Addresses the identified failure when an open ticket disappears from the queue |
+| Type/validation cleanup, dependency updates, and post-merge checks | Previously completed in September | Improves maintainability and catches development issues earlier |
+
+**Release distinction:** No new application-feature commits were identified this reporting week. This week’s improvements were reporting and analysis deliverables—not a new production feature release. The September maintenance changes are carried forward for visibility; their production deployment status was not reverified for this update.
+
+## 7. Platform Cost Context
+
+The previously checked HubSpot Service Hub benchmark for **22 paid seats** was approximately **$23,760–$39,600 annually**, before onboarding, custom implementation, and additional usage.
+
+That remains a comparison scenario—not confirmed avoided cost. The custom CRM’s actual development, hosting, integration, and maintenance costs still need reconciliation. Technician-capacity benefits versus phone handling should **not** also be claimed as benefits versus HubSpot.
+
+## Leadership Priorities
+
+1. **Validate active review time** to confirm staffing requirements.
+2. **Reconcile actual CRM costs** before presenting net ROI or platform savings.
+3. **Track downstream repair outcomes** to determine whether pre-screening improves first-visit completion or reduces repeat visits.
+4. **Refresh after the weekend** for a final October 5–11 report.
+
+**Bottom line:** The CRM provides measurable usage and traceable outcomes, with **588 SOs marked as parts ordered out of 1,562 qualifying prescreened SOs** this week to date. Current photo volume supports a provisional two-reviewer weekday model with backup; financial and staffing estimates should remain clearly separated from measured operational results.
