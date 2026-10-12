@@ -5,8 +5,9 @@ description: Where the V9 bridge pilot actually runs, its config invariants, and
 
 # VRS AI bridge DEV pilot
 
-- The SASHA/VRS AI bridge pilot runs on the **DEV instance** (the `.replit.dev` URL), not production. Contractors/agents doing pilot reviews are on DEV. Production `vrs_ai_calls` is empty by design so far — prod has no `VRS_AI_BASE_URL` configured, so bridge code is inert there.
-- **Why:** an Aug 2026 "production incident" Slack report ("Fetch error when approving", "no photos in VRS Express") turned out to be entirely DEV-pilot behavior. Check `vrs_ai_calls` in BOTH environments before assuming prod.
+- Do not assume the bridge is DEV-only or infer live activation from deployment configuration alone. The DEV-only description was an August 2026 observation, not a permanent scope restriction.
+- **Why:** an August 2026 "production incident" actually concerned DEV, but later production configuration work invalidated the assumption that production must be inert.
+- **How to apply:** Check the relevant environment's actual configuration, bridge records, and callback readiness before claiming where the pilot runs or whether production routing works.
 
 ## Config invariants
 - `sendVrsAuthorizeRequest` (server/vrs-sasha-contract.ts) requires `VRS_AI_BASE_URL` to be a **clean `https://` origin** — `new URL()` throws `Invalid URL` on a bare hostname, and non-https is rejected. A scheme-less env value silently breaks every dispatch.
