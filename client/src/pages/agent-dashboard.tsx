@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth, buildMediaUrl, buildMediaUrls, prefetchMediaTokens, collectSubmissionMediaPaths } from "@/lib/auth";
 import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
+import { PilotQueueAlert } from "@/components/pilot-queue-alert";
 import { parseTicketMediaMetadata, preparePriorTicketMedia } from "@/lib/ticket-media-metadata";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
@@ -2081,6 +2082,7 @@ export default function AgentDashboard() {
                       >
                         <Sparkles className="w-4 h-4" />
                         <span>VRS AI Pilot</span>
+                        <PilotQueueAlert />
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   )}

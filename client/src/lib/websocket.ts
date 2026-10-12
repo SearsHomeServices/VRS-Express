@@ -584,6 +584,35 @@ export function playNotificationDing() {
 }
 
 // Reserved for Pilot queue wait alerts, distinct from every selectable tone.
+/** New arrivals use a repeated ascending signal, distinct from overdue chimes. */
+export function playPilotNewTicketAlert() {
+  if (cachedVolume <= 0) return;
+  try {
+    const ctx = getAudioContext();
+    const play = () => {
+      if (cachedVolume <= 0) return;
+      [880, 1175, 1568, 880, 1175, 1568].forEach((frequency, index) => {
+        const start = ctx.currentTime + index * 0.16 + (index >= 3 ? 0.16 : 0);
+        const gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        gain.gain.setValueAtTime(cachedVolume * 0.3, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
+        const oscillator = ctx.createOscillator();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gain);
+        oscillator.start(start);
+        oscillator.stop(start + 0.14);
+      });
+    };
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(play).catch(error => console.warn("[notification] Pilot arrival audio resume failed:", error));
+    } else play();
+  } catch (error) {
+    console.warn("[notification] Pilot arrival audio unavailable:", error);
+  }
+}
+
 export function playPilotQueueChime() {
   if (cachedVolume <= 0) return;
   try {

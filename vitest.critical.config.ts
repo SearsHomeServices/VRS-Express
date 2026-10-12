@@ -34,6 +34,7 @@ export default defineConfig({
       "tests/analytics-refresh.test.ts",
       "tests/ticket-media-metadata.test.ts",
       "tests/pilot-queue-audio.test.ts",
+      "tests/pilot-queue-alert.test.ts",
     ],
     maxWorkers: 2,
   },

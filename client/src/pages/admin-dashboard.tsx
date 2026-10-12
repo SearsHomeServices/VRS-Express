@@ -167,6 +167,7 @@ import { useTheme } from "@/components/theme-provider";
 import { parseVideoUrls } from "@/lib/videoUrls";
 import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc-filter";
 import { filterVrsAiPilotRows } from "@shared/vrs-ai-pilot";
+import { PilotQueueAlert } from "@/components/pilot-queue-alert";
 
 interface AnalyticsData {
   submissionsToday: number;
@@ -4501,6 +4502,7 @@ export default function AdminDashboard() {
                     >
                       <Sparkles className="w-4 h-4" />
                       <span>VRS AI Pilot</span>
+                      <PilotQueueAlert />
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                   <SidebarMenuItem>

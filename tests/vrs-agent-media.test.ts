@@ -31,6 +31,7 @@ vi.mock("@/lib/websocket", () => ({
   requestNotificationPermission: vi.fn(),
   loadNotificationSettings: vi.fn(),
   playNotificationDing: vi.fn(),
+  playPilotNewTicketAlert: vi.fn(),
   showBrowserNotification: vi.fn(),
 }));
 vi.mock("@/lib/queryClient", async (importOriginal) => ({
@@ -93,6 +94,13 @@ beforeEach(() => {
   client.setQueryData(["/api/business-hours"], DEFAULT_BUSINESS_HOURS_CONFIG);
   client.setQueryData(["/api/agent/specializations"], { divisions: ["appliances"] });
   client.setQueryData(["/api/agent/stats"], { queueCount: 0, pendingCount: 2, completedToday: 0 });
+  // The persistent navigation now observes both Pilot status counts. Keep
+  // those read-only queries local to this media fixture (no live requests).
+  for (const status of ["queued", "pending"]) {
+    client.setQueryDefaults([`/api/submissions?vrsAiOnly=true&ticketStatus=${status}`], {
+      queryFn: async () => ({ submissions: [] }),
+    });
+  }
   client.setQueryData(["/api/agent/rgc-status"], { needsEntry: false, missingCode: false, code: "fixture" });
   client.setQueryData(["/api/submissions?ticketStatus=queued&excludeRequestType=parts_nla"], { submissions: [] });
   fetchMock = vi.fn(async (path: string) => {

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../client/src/lib/auth", () => ({ getToken: () => null }));
 import {
-  playPilotQueueChime, playNotificationDing, setCachedVolume, getSelectedTone,
+  playPilotQueueChime, playPilotNewTicketAlert, playNotificationDing, setCachedVolume, getSelectedTone,
 } from "../client/src/lib/websocket";
 
 const oscillators: any[] = [];
@@ -38,6 +38,25 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("real Pilot chime implementation with a simulated audio device", () => {
+  it("uses a distinct six-note arrival signal without changing the saved tone", () => {
+    const tone = getSelectedTone();
+    playPilotNewTicketAlert();
+    expect(oscillators.map(node => node.frequency.value)).toEqual([880, 1175, 1568, 880, 1175, 1568]);
+    expect(getSelectedTone()).toBe(tone);
+    expect(oscillators.every(node => node.stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("mutes new arrivals and waits for audio permission", async () => {
+    setCachedVolume(0);
+    playPilotNewTicketAlert();
+    expect(oscillators).toHaveLength(0);
+    setCachedVolume(0.5);
+    context.state = "suspended";
+    playPilotNewTicketAlert();
+    expect(oscillators).toHaveLength(0);
+    await Promise.resolve();
+    expect(oscillators).toHaveLength(6);
+  });
   it("schedules three distinct notes with bounded volume and stop times", () => {
     playPilotQueueChime();
     expect(oscillators.map(node => node.frequency.value)).toEqual([1047, 784, 1319]);

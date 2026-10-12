@@ -14,6 +14,14 @@
   }
 }
 @tailwind base;
+@keyframes pilot-pending-pulse {
+  0%, 100% { background-color: #fee2e2; color: #991b1b; border-color: #ef4444; }
+  50% { background-color: #991b1b; color: #ffffff; border-color: #991b1b; }
+}
+.pilot-pending-alert { animation: pilot-pending-pulse 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .pilot-pending-alert { animation: none; background: #fee2e2; color: #991b1b; border-color: #ef4444; }
+}
 @tailwind components;
 @tailwind utilities;
 
