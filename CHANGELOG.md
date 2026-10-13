@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Separate direct AHS AI workflow
+- Added assigned-reviewer “Approve and Send to VRS AI,” review confirmation, result/status display, and safe same-request retry.
+- Added independent dispatch records, signed result callbacks, callback deduplication, immutable decision handling, and concurrent-write protection. Sasha modules and callback forwarding are unchanged.
+- Approval/denial results close the ticket only after AI confirms a code-bearing technician SMS was sent; failed/pending SMS leaves the ticket open. Express does not send a second SMS.
+- Added structured WOM-ready notes without WOM writes. New AI-side contract and activation requirements are documented in `docs/integration/direct-ahs-v1.md`.
+- Dispatch defaults off pending AI-side implementation and controlled live acceptance. Simulated HTTP/PostgreSQL integration and UI regression coverage added.
+
 
 ### Fixed - Release type-check gate (2026-09-18)
 - `npm run build` now requires the strict TypeScript check to pass before

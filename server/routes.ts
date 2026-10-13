@@ -1,4 +1,7 @@
 import { retryVrsApprovalNotification } from "./vrs-notification-retry";
+import { DirectAhsStore } from "./direct-ahs/store";
+import { registerDirectAhsRoutes, directAhsMedia } from "./direct-ahs/routes";
+import { bumpSubmissionsDataVersion } from "./storage";
 import { PostgresDirectResultReceipts } from "./vrs-direct-result-store";
 import { automatedCallbackContexts, validateAutomatedApproval, VrsCallbackError } from "./vrs-callback-safety";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
@@ -550,6 +553,17 @@ export async function registerRoutes(
 
   registerObjectStorageRoutes(app);
   const vrsObjectStorageService = new ObjectStorageService();
+  registerDirectAhsRoutes(app, {
+    authenticate: authenticateToken,
+    store: new DirectAhsStore(pool, (submissionId, reviewerId) => {
+      bumpSubmissionsDataVersion();
+      const event = { type: "ticket_updated", payload: { submissionId } };
+      broadcastToAgent(reviewerId, event);
+      broadcastToAdmins(event);
+    }),
+    media: ticket => directAhsMedia(ticket, path =>
+      vrsObjectStorageService.getObjectEntityReadURL(path, 24 * 60 * 60)),
+  });
   const vrsBridgePhotoStorage = new VrsBridgePhotoStorage(vrsObjectStorageService);
 
   // Tyler 2026-05-12 — lightweight liveness + readiness probe. Returns 200 only
@@ -2867,6 +2881,12 @@ export async function registerRoutes(
       }
 
       const automation = automatedCallbackContexts.get(req);
+      // Additive direct-AHS guard; the existing Sasha processing logic below
+      // is unchanged. A database guard also catches already-running writers.
+      const directAhs = await pool.query("SELECT 1 FROM direct_ahs_workflows WHERE submission_id=$1", [id]);
+      if (directAhs.rowCount) {
+        return res.status(409).json({ error: "This ticket is managed by the direct AHS AI workflow. Check its result/status instead of processing it manually." });
+      }
       if (automation) {
         const tech = submission.technicianLdapId ? undefined : await storage.getUser(submission.technicianId);
         validateAutomatedApproval({...submission, technicianLdapId:submission.technicianLdapId || tech?.racId}, automation.event);

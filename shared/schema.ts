@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, index, boolean, jsonb, pgEnum, foreignKey, uuid } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, varchar, integer, timestamp, date, unique, uniqueIndex, index, boolean, jsonb, pgEnum, foreignKey, uuid, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -330,6 +330,34 @@ export type SubmissionListItemWithTech = SubmissionListItem & {
 // ============================================================================
 // SUBMISSION NOTES TABLE (technician follow-up notes after submission)
 // ============================================================================
+// Independent direct AHS contract. Never enrolls records in the Sasha tables.
+export const directAhsWorkflows = pgTable("direct_ahs_workflows", {
+  id: uuid("id").primaryKey(),
+  submissionId: integer("submission_id").notNull().unique().references(() => submissions.id),
+  reviewerId: integer("reviewer_id").notNull().references(() => users.id),
+  state: text("state").notNull(),
+  payload: jsonb("payload").notNull(),
+  callId: text("call_id"),
+  decision: jsonb("decision"),
+  sms: jsonb("sms"),
+  womNotes: jsonb("wom_notes"),
+  error: text("error"),
+  lastSequence: integer("last_sequence").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+export const directAhsEvents = pgTable("direct_ahs_events", {
+  requestId: uuid("request_id").notNull().references(() => directAhsWorkflows.id),
+  eventId: text("event_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => ({
+  identity: primaryKey({ columns: [table.requestId, table.eventId] }),
+  ordering: unique().on(table.requestId, table.sequence),
+}));
+
 export const submissionNotes = pgTable("submission_notes", {
   id: serial("id").primaryKey(),
   submissionId: integer("submission_id")

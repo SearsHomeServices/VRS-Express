@@ -10,3 +10,9 @@ Keep this workflow completely separate from Sasha and do not change any Sasha co
 **Why:** The user explicitly requested these boundaries.
 
 **How to apply:** Keep direct-workflow enrollment and callbacks separate from Sasha. Do not silently move SMS responsibility from AI to Express or invent denial codes. Verify the AI service contract and distinguish simulated tests from live end-to-end verification.
+
+Use a new direct-workflow API contract rather than extending the Sasha contract.
+
+**Why:** The user selected defining a new contract after being told the existing callbacks lacked denial-code and technician-SMS confirmation support, and that VRS AI would also need implementation.
+
+**How to apply:** Treat the Express and AI services as separate delivery boundaries. Simulated Express acceptance is not proof that the remote AI service supports the contract; require controlled live acceptance before activation.
