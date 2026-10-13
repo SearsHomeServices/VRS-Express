@@ -3,6 +3,12 @@ name: Direct AHS workflow boundaries
 description: User-required separation from Sasha and future WOM scope for direct AHS AI authorization.
 ---
 
+The user requires the warranty-lookup release to exclude the new direct AHS code, not just disable its routing. Keep the direct AHS work deferred until separately authorized.
+
+**Why:** The user explicitly chose a warranty-only release over including disabled AHS code.
+
+**How to apply:** Preserve the work separately in Git (archive branch `archive/direct-ahs-before-warranty-release`); do not reintroduce it during unrelated fixes. Existing Sasha and other established AI integrations must remain unchanged.
+
 Direct AHS workflow: VRS staff click “Approve and Send to VRS AI”; AI obtains AHS's decision, texts the approval or denial code to the IH technician, and the result and notes are saved before the Express ticket is closed.
 
 Keep this workflow completely separate from Sasha and do not change any Sasha code. Prepare notes for a future WOM integration, but do not build the WOM write. Test the full workflow before publishing.

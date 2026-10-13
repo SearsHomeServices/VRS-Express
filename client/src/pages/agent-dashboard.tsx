@@ -6,7 +6,6 @@ import { MediaImage, MediaVideo, MediaAudio } from "@/components/media";
 import { PilotQueueAlert } from "@/components/pilot-queue-alert";
 import { parseTicketMediaMetadata, preparePriorTicketMedia } from "@/lib/ticket-media-metadata";
 import { SubmissionNotesThread } from "@/components/submission-notes-thread";
-import { DirectAhsWorkflow, type DirectAhsWorkflowState } from "@/components/direct-ahs-workflow";
 import { apiRequest, apiRequestWithRetry, friendlyApiErrorMessage, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_MS } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { downloadPhotoUrl, safeDate, formatDate } from "@/lib/utils";
@@ -227,10 +226,6 @@ export default function AgentDashboard() {
   const [activeView, setActiveView] = useState<"queue" | "mytickets" | "completed" | "nla_queue" | "nla_mytickets" | "nla_completed" | "vrs_ai_pilot">("queue");
   const [queueMode, setQueueMode] = useState<"vrs" | "nla">("vrs");
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [directAhsState, setDirectAhsState] = useState<DirectAhsWorkflowState | null>(null);
-  useEffect(() => {
-    setDirectAhsState((previous) => previous?.submissionId === selectedId ? previous : null);
-  }, [selectedId]);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">(() => getNotificationPermission());
   const [notifBannerDismissed, setNotifBannerDismissed] = useState(false);
   const [pilotWorkflowId, setPilotWorkflowId] = useState<number | null>(null);
@@ -1183,16 +1178,6 @@ export default function AgentDashboard() {
   // Backward-compatible alias retained so any callsite still using the old
   // name continues to work; both reference the same snapshot-fallback value.
   const effectiveSelectedSubmission = selectedSubmission;
-  // Only full detail can establish that a ticket is not Sasha/bridge-linked.
-  // Never mount the isolated direct query against a slim, metadata-loading row.
-  const directAhsProvider = (selectedSubmission?.warrantyProvider || selectedSubmission?.warrantyType || "").toLowerCase().replace(/_/g, " ");
-  const showDirectAhsWorkflow = !!selectedFullData && !selectedSubmission?.vrsAi &&
-    selectedSubmission?.requestType === "authorization" &&
-    (directAhsProvider.includes("american home shield") || directAhsProvider.includes("ahs")) &&
-    (selectedSubmission.assignedTo === user?.id || isAdminViewing);
-  const directAhsBlocksProcessing = showDirectAhsWorkflow && (
-    directAhsState?.submissionId !== selectedId || directAhsState.ownsTicket || directAhsState.checking
-  );
   const vrsAiApprovalCopy = getVrsAiApprovalCopy(
     selectedSubmission?.vrsAi,
   );
@@ -1452,9 +1437,6 @@ export default function AgentDashboard() {
 
   const processMutation = useMutation({
     mutationFn: async ({ submissionId, body }: { submissionId: number; body: Record<string, unknown> }) => {
-      if (directAhsBlocksProcessing && submissionId === selectedId) {
-        throw new Error("Direct AHS workflow owns this ticket or its status is unavailable.");
-      }
       // Tyler 2026-05-11 — same edge-flake retry as nlaProcessMutation.
       // Server enforces optimistic-lock via updateSubmissionIfStatus,
       // so a duplicate retry returns JSON 409 STALE_STATUS rather than
@@ -1809,7 +1791,7 @@ export default function AgentDashboard() {
   };
 
   const handleProcessSubmit = () => {
-    if (!selectedSubmission || !selectedAction || directAhsBlocksProcessing) return;
+    if (!selectedSubmission || !selectedAction) return;
     const body: Record<string, unknown> = {
       action: selectedAction,
       agentNotes: agentNotes || undefined,
@@ -4058,13 +4040,7 @@ export default function AgentDashboard() {
                         of truth for Stage 3 visibility, but selectedSubmission
                         comes from a separate query and may briefly still report
                         ticketStatus='pending' before refetch lands. */}
-                    {showDirectAhsWorkflow && (
-                      <DirectAhsWorkflow key={selectedSubmission.id} submissionId={selectedSubmission.id} onWorkflowState={setDirectAhsState} />
-                    )}
-                    {directAhsBlocksProcessing && (
-                      <p className="text-sm text-muted-foreground" role="status">Normal processing is unavailable while the direct AHS workflow owns this ticket or its status is being checked.</p>
-                    )}
-                    {isTicketWorkView && !directAhsBlocksProcessing && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType !== "parts_nla" && !stage3Required && !stage3Recorded && (
+                    {isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.requestType !== "parts_nla" && !stage3Required && !stage3Recorded && (
                       <Card>
                         <CardHeader className="pb-3">
                           <CardTitle className="text-base flex items-center gap-2">
@@ -5340,7 +5316,6 @@ export default function AgentDashboard() {
             <AlertDialogCancel data-testid="button-cancel-confirm">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleProcessSubmit}
-              disabled={directAhsBlocksProcessing || processMutation.isPending}
               className={selectedAction === "reject" || selectedAction === "reject_and_close" ? "bg-destructive text-destructive-foreground" : ""}
               data-testid="button-confirm-process"
             >

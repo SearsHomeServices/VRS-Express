@@ -190,10 +190,6 @@ function ticket({
 function seedTicket(detail: ReturnType<typeof ticket>) {
   const id = detail.submission.id;
   client.setQueryData(["/api/submissions", id], detail);
-  client.setQueryData(["/api/submissions", id, "direct-ahs"], { eligible: true, reason: "AI-side integration pending.", enabled: false, workflow: null });
-  client.setQueryDefaults(["/api/submissions", id, "direct-ahs"], {
-    queryFn: async () => ({ eligible: true, reason: "AI-side integration pending.", enabled: false, workflow: null }),
-  });
   client.setQueryData(["/api/submissions", id, "history"], { history: [], reviewerNames: {} });
   client.setQueryData(["/api/submissions", id, "intake-form-status"], { required: false, recorded: false });
   client.setQueryData(["/api/submissions", id, "techhub-photos"], { enabled: false, photos: [] });

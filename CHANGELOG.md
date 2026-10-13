@@ -6,12 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added - Separate direct AHS AI workflow
-- Added assigned-reviewer “Approve and Send to VRS AI,” review confirmation, result/status display, and safe same-request retry.
-- Added independent dispatch records, signed result callbacks, callback deduplication, immutable decision handling, and concurrent-write protection. Sasha modules and callback forwarding are unchanged.
-- Approval/denial results close the ticket only after AI confirms a code-bearing technician SMS was sent; failed/pending SMS leaves the ticket open. Express does not send a second SMS.
-- Added structured WOM-ready notes without WOM writes. New AI-side contract and activation requirements are documented in `docs/integration/direct-ahs-v1.md`.
-- Dispatch defaults off pending AI-side implementation and controlled live acceptance. Simulated HTTP/PostgreSQL integration and UI regression coverage added.
+### Fixed - Technician warranty lookup
+- Corrected the form's warranty lookup URL and retained compatibility with older open forms.
+- Allowed first-ticket warranty classification without requiring a prior submission; retained technician role restrictions, rate limiting, limited responses, and submission-time verification.
+- Release scope excludes the new direct AHS AI workflow; existing Sasha and AI integrations are unchanged.
 
 
 ### Fixed - Release type-check gate (2026-09-18)

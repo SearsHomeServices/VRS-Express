@@ -31,5 +31,5 @@
 - [Managed history cleanup](managed-history-cleanup.md) — active-branch cleanup does not purge auto-restored upstream refs or managed cloud assets; verify each boundary separately.
 - [Release validation isolation](release-validation-scope.md) — build tests must not depend on live services; merged include arrays can silently select server-dependent suites.
 - [Agent performance scope](agent-performance-scope.md) — performance work must preserve workflows, AI/Sasha, integrations, and existing optimizations; identify isolated changes before editing.
-- [Direct AHS workflow](direct-ahs-workflow.md) — separate from Sasha; AI sends technician decision texts; prepare WOM notes only; test before publishing.
+- [Direct AHS workflow](direct-ahs-workflow.md) — deferred and excluded from the warranty-only release; preserve separately from Sasha and require authorization before restoring.
 - [Warranty intake scope](warranty-intake-scope.md) — first-ticket warranty preview cannot require a prior submission; retain limited classification access and final submission verification.
