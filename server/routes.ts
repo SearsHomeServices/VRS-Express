@@ -7412,21 +7412,20 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tech/lookup-warranty", authenticateToken, requireRole("technician", "flexed_technician"), async (req, res) => {
-    // Three-layer authorization:
+  app.get(["/api/tech/lookup-warranty", "/api/tech/lookup-warranty/:serviceOrder"], authenticateToken, requireRole("technician", "flexed_technician"), async (req, res) => {
+    // Pre-submission classification lookup (including older open forms using
+    // the path-param URL). This does not grant access to an existing ticket.
     //
     // 1. Role gate (requireRole above): only technician / flexed_technician.
     //    All other roles (agents, admins, providers) receive 403 immediately.
     //
-    // 2. Ownership check (primary authorization): the caller must have at
-    //    least one existing submission tied to this service order. If none
-    //    exists, the request is denied with 403 — no Snowflake call is made.
-    //    This scopes the lookup to service orders the technician has already
-    //    submitted through the platform.
+    // 2. No prior-submission requirement: this lookup runs BEFORE a new ticket
+    //    exists. Submission-time Snowflake verification and all ticket access
+    //    controls remain authoritative and unchanged.
     //
     // 3. Rate limiting (secondary defense-in-depth): caps Snowflake traffic
     //    to WARRANTY_LOOKUP_MAX_PER_WINDOW calls per rolling hour per user
-    //    even for authorized lookups, limiting resubmission / refresh abuse.
+    //    for all lookups, including first submissions and retries.
     //
     // Response scoping: procId and clientNm (third-party Snowflake identifiers)
     // are never returned to the client; only the derived warranty classification
@@ -7440,30 +7439,12 @@ export async function registerRoutes(
       const callerUserId = caller.id;
       const callerIdentity = caller.ldapId ?? caller.email;
 
-      const so = String(req.query.serviceOrder || "").trim();
+      const so = String(req.params.serviceOrder || req.query.serviceOrder || "").trim();
       if (!/^\d{4}-\d{8}$/.test(so)) {
         return res.status(400).json({ error: "Invalid service order format" });
       }
 
-      // Ownership check: the caller must have at least one submission for this
-      // service order. Returns 403 without touching Snowflake otherwise.
-      const ownedRows = await db
-        .select({ id: submissions.id })
-        .from(submissions)
-        .where(
-          and(
-            eq(submissions.technicianId, callerUserId),
-            eq(submissions.serviceOrder, so)
-          )
-        )
-        .limit(1);
-
-      if (ownedRows.length === 0) {
-        console.warn(`[lookup-warranty] denied (no submission): user=${callerIdentity} (${callerUserId}) so=${so}`);
-        return res.status(403).json({ error: "Access denied: service order not associated with your submissions" });
-      }
-
-      // Secondary rate limit: cap Snowflake traffic even for owned orders.
+      // Cap Snowflake traffic before every lookup, including first submissions.
       const now = Date.now();
       const cutoff = now - WARRANTY_LOOKUP_WINDOW_MS;
       const recentTimestamps = (warrantyLookupLog.get(callerUserId) ?? []).filter(ts => ts > cutoff);

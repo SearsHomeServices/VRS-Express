@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     ...base.test,
     include: [
+      "tests/tech-warranty-lookup.test.ts",
       "tests/direct-ahs.test.ts",
       "tests/direct-ahs-workflow-ui.test.ts",
       "tests/release-gate.test.ts",

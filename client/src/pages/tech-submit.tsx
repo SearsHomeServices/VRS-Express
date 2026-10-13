@@ -821,6 +821,13 @@ export default function TechSubmitPage() {
     derived: { warrantyType: "sears_protect" | "american_home_shield" | "first_american"; warrantyProvider: string; source: "client_nm" | "proc_id" } | null;
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        `/api/tech/lookup-warranty?serviceOrder=${encodeURIComponent(watchedServiceOrder)}`,
+      );
+      return res.json();
+    },
     enabled: isValidSo && !isProvider1099,
     staleTime: 5 * 60 * 1000,
   });
