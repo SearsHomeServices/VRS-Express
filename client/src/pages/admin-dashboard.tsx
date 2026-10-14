@@ -11,6 +11,7 @@ import { apiRequest, queryClient, scheduleWsInvalidate, JITTERED_POLL_INTERVAL_M
 import { useToast } from "@/hooks/use-toast";
 import { isQueueWaitOverdue, useQueueWaitAlerts } from "@/hooks/use-queue-wait-alerts";
 import { isAdminAnalyticsQuery } from "@/lib/analytics-refresh";
+import { filterAgents, type AgentStatusFilter } from "@/lib/agent-status-filter";
 import { usePortal1099Enabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { safeDate, formatDate, formatDateShort, cn } from "@/lib/utils";
 import {
@@ -285,6 +286,8 @@ type AgentStatusInfo = {
 
 function AgentStatusSection() {
   const { toast } = useToast();
+  const [agentSearch, setAgentSearch] = useState("");
+  const [agentStatusFilter, setAgentStatusFilter] = useState<AgentStatusFilter>("all");
 
   // Tyler 2026-05-05 (perf): see paired comment on the /api/submissions
   // useQuery below. The `agent_status_changed` WS event already
@@ -333,6 +336,15 @@ function AgentStatusSection() {
     });
   }, [data?.agents]);
 
+  const matchingAgents = useMemo(
+    () => filterAgents(agents, agentSearch, agentStatusFilter),
+    [agents, agentSearch, agentStatusFilter],
+  );
+  const clearAgentFilters = () => {
+    setAgentSearch("");
+    setAgentStatusFilter("all");
+  };
+
   const statusDot = (status: string) => {
     if (status === "online") return "bg-green-500";
     if (status === "working") return "bg-yellow-500";
@@ -352,6 +364,45 @@ function AgentStatusSection() {
           <CardTitle className="text-base">Live Agent Status</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="agent-status-search">Search agents</Label>
+              <Input
+                id="agent-status-search"
+                type="search"
+                placeholder="Search by name or enterprise ID"
+                value={agentSearch}
+                onChange={(event) => setAgentSearch(event.target.value)}
+                data-testid="input-agent-status-search"
+              />
+            </div>
+            <div className="space-y-2 sm:w-48">
+              <Label htmlFor="agent-status-filter">Status</Label>
+              <Select
+                value={agentStatusFilter}
+                onValueChange={(value) => setAgentStatusFilter(value as AgentStatusFilter)}
+              >
+                <SelectTrigger id="agent-status-filter" data-testid="select-agent-status-filter">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="online">Available</SelectItem>
+                  <SelectItem value="working">Working</SelectItem>
+                  <SelectItem value="offline">Unavailable</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {!isLoading && (
+            <p
+              className="mb-3 text-sm text-muted-foreground"
+              role="status"
+              data-testid="text-agent-status-count"
+            >
+              Showing {matchingAgents.length} of {agents.length} agents
+            </p>
+          )}
           {isLoading ? (
             <div className="space-y-2">
               {[1, 2, 3].map((i) => (
@@ -360,6 +411,19 @@ function AgentStatusSection() {
             </div>
           ) : agents.length === 0 ? (
             <p className="text-sm text-muted-foreground">No active agents found.</p>
+          ) : matchingAgents.length === 0 ? (
+            <div className="space-y-3 rounded-md border p-6 text-center" data-testid="agent-status-no-matches">
+              <p className="text-sm text-muted-foreground">No agents match your search and status filters.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={clearAgentFilters}
+                data-testid="button-clear-agent-status-filters"
+              >
+                Clear filters
+              </Button>
+            </div>
           ) : (
             <div className="overflow-x-auto">
             <Table className="min-w-[600px]">
@@ -374,7 +438,7 @@ function AgentStatusSection() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {agents.map((agent) => (
+                {matchingAgents.map((agent) => (
                   <TableRow key={agent.id} data-testid={`agent-status-row-${agent.id}`}>
                     <TableCell className="font-medium">{agent.name}</TableCell>
                     <TableCell className="text-muted-foreground">{agent.racId || "—"}</TableCell>
