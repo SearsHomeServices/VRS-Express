@@ -1,4 +1,5 @@
 import { retryVrsApprovalNotification } from "./vrs-notification-retry";
+import { releaseProcessedTicketAgent } from "./agent-availability";
 import { PostgresDirectResultReceipts } from "./vrs-direct-result-store";
 import { automatedCallbackContexts, validateAutomatedApproval, VrsCallbackError } from "./vrs-callback-safety";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
@@ -3347,18 +3348,24 @@ export async function registerRoutes(
       // effect below is best-effort — the DB transition + SMS attempt are
       // the contract; agent status/broadcast failures must NOT 500 a
       // route that already succeeded.
-      if (authReq.user!.role === "vrs_agent") {
+      const availabilityAgentIds = [...new Set([
+        submission.assignedTo,
+        authReq.user!.role === "vrs_agent" ? authReq.user!.id : null,
+      ].filter((agentId): agentId is number => agentId != null))];
+      for (const agentId of availabilityAgentIds) {
         try {
-          await storage.updateUser(authReq.user!.id, { agentStatus: "online", updatedAt: new Date() } as any);
-          await safeLogActivity(authReq.user!.id, "status_change_ticket_flow", {
+          const releasedAgent = await releaseProcessedTicketAgent(pool, agentId, id);
+          if (!releasedAgent) continue;
+          await safeLogActivity(agentId, "status_change_ticket_flow", {
             from: "working", to: "online", trigger: "process", submissionId: id, action: req.body?.action ?? null,
+            actorId: authReq.user!.id,
           });
-          updateClientStatus(authReq.user!.id, "online");
+          updateClientStatus(agentId, "online");
           broadcastToAdmins({
             type: "agent_status_changed",
-            payload: { userId: authReq.user!.id, name: authReq.user!.name, status: "online" },
+            payload: { userId: agentId, name: releasedAgent.name, status: "online" },
           });
-          broadcastToAgent(authReq.user!.id, {
+          broadcastToAgent(agentId, {
             type: "own_status_changed",
             payload: { status: "online" },
           });
