@@ -33,3 +33,4 @@
 - [Agent performance scope](agent-performance-scope.md) — performance work must preserve workflows, AI/Sasha, integrations, and existing optimizations; identify isolated changes before editing.
 - [Direct AHS workflow](direct-ahs-workflow.md) — deferred and excluded from the warranty-only release; preserve separately from Sasha and require authorization before restoring.
 - [Warranty intake scope](warranty-intake-scope.md) — first-ticket warranty preview cannot require a prior submission; retain limited classification access and final submission verification.
+- [Bridge result routing](bridge-result-routing.md) — AI must use the supplied signed webhook for bridge results; stable retry event IDs and no dual-endpoint completions.
