@@ -77,6 +77,7 @@ TECH_PDC_API_URL = "https://tech-pdc.replit.app/api/external/coaching-intake"
 VRS_AI_BASE_URL = "https://agentic-vrs-agent.prod.nextgen.shs.com"
 VRS_EXPRESS_PUBLIC_URL = "https://vrs-auth-tool.replit.app"
 VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
+VRS_AI_APP_ENROLL_ENABLED = "true"
 
 [userenv.production]
 ENABLE_TECHHUB_PHOTOS = "true"
