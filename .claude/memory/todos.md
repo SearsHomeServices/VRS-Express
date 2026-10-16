@@ -1,3 +1,26 @@
+## Open — technician AHS → VRS AI enrollment (2026-10-08)
+
+- [x] Enroll new queued AHS authorization tickets from the app or external API
+      in the VRS AI bridge, behind `VRS_AI_APP_ENROLL_ENABLED` (default off).
+- [x] Replace the placeholder payload with real fields entered by the tech
+      (2026-10-16, `shared/ahs-details.ts`).
+- [ ] Before enabling: confirm VRS AI is fine with quantity carried in
+      `part_description` (price multiplied out), failure reasons in `comments`,
+      `tech_recommendation` always `repair` and `purchase_year` `N/A`.
+- [ ] Confirm the division mapping with VRS ops: Trash Compactor → Dishwasher,
+      Free Standing Ice Maker → Refrigeration, Garbage Disposal → All Other.
+- [ ] Before enabling: confirm VRS AI does not also post app-origin results
+      straight to SASHA (its pinned `VRS_SASHA_CALLBACK_URL`). SASHA has no
+      record of these calls.
+- [ ] Enable in DEV (`VRS_AI_APP_ENROLL_ENABLED=true` in `[userenv.development]`),
+      submit a test AHS ticket, check the `[vrs-app-enroll]` log and the Pilot
+      view, then approve Stage 1 and confirm the VRS AI 202.
+- [ ] Optional: prefill customer/model/serial/contract from Snowflake
+      `IH_SERVICEORDER_FULLDETAIL_TBL` so techs type less. Column names have
+      not been verified yet.
+- [ ] 1099 providers and the external v1 API have no AHS details, so their AHS
+      tickets are not enrolled.
+
 ## Open — weekly executive summary (2026-09-11)
 
 - [ ] BLOCKING BEFORE FIRST SEND: confirm `notifications@shs.com` is a verified

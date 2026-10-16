@@ -70,7 +70,10 @@ export interface VrsBridgeIntakeStore {
   findLocallyAppliedRetryableFailedV8SubmissionsByServiceOrder(
     serviceOrder: string,
   ): Promise<readonly { submissionId: number }[]>;
-  createIntake(input: NewVrsBridgeIntake): Promise<
+  createIntake(
+    input: NewVrsBridgeIntake,
+    options?: { supersedeClosedUndispatched?: boolean },
+  ): Promise<
     | { kind: "accepted"; record: VrsBridgeRecord; createdAt: Date }
     | { kind: "duplicate"; record: VrsBridgeRecord }
   >;
@@ -317,6 +320,7 @@ export class DrizzleVrsBridgeStore
 
   async createIntake(
     input: NewVrsBridgeIntake,
+    options?: { supersedeClosedUndispatched?: boolean },
   ): Promise<
     | { kind: "accepted"; record: VrsBridgeRecord; createdAt: Date }
     | { kind: "duplicate"; record: VrsBridgeRecord }
@@ -325,6 +329,35 @@ export class DrizzleVrsBridgeStore
       await transaction.execute(
         sql`SELECT pg_advisory_xact_lock(hashtext(${`vrs-express:${input.serviceOrder}`}))`,
       );
+      if (options?.supersedeClosedUndispatched) {
+        // A Stage 1 rejection never touches the bridge row, so a rejected
+        // ticket's undispatched row would otherwise block its resubmission
+        // forever. Retire only rows VRS AI never received whose ticket is
+        // closed without approval.
+        await transaction
+          .update(vrsAiCalls)
+          .set({ state: "superseded", updatedAt: new Date() })
+          .where(
+            and(
+              eq(vrsAiCalls.serviceOrder, input.serviceOrder),
+              inArray(vrsAiCalls.state, ["pending_review", "dispatch_failed"]),
+              isNull(vrsAiCalls.providerCallId),
+              inArray(
+                vrsAiCalls.submissionId,
+                transaction
+                  .select({ id: submissions.id })
+                  .from(submissions)
+                  .where(
+                    inArray(submissions.ticketStatus, [
+                      "rejected",
+                      "rejected_closed",
+                      "invalid",
+                    ]),
+                  ),
+              ),
+            ),
+          );
+      }
       const [existing] = await transaction
         .select()
         .from(vrsAiCalls)

@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Technician AHS tickets enroll in the VRS AI bridge (2026-10-08)
+- New flag `VRS_AI_APP_ENROLL_ENABLED` (default off). When it is `"true"`:
+  - the tech submit and resubmit forms show an **AHS Authorization Details**
+    section for AHS + Authorization. It collects the dispatch/contract number,
+    customer name and address, brand, model, serial, age, location, grade,
+    color, failure cause, labor and tax, and up to 10 parts (number, quantity,
+    description, price each, function, failure reason). The appliance dropdown
+    switches to 15 detailed AHS types, and each one maps to an agent division;
+  - the details are stored in the new `submissions.ahs_details` column
+    (`shared/ahs-details.ts`). Part numbers and the total also go into the
+    existing `partNumbers` and `estimateAmount` fields;
+  - each new queued AHS authorization ticket that has these details gets a
+    `vrs_ai_calls` row at creation, the same row a SASHA call gets. The ticket
+    moves to the VRS AI Pilot view, and Stage 1 approval sends it to VRS AI.
+    Tickets without details are not enrolled. Enrollment never blocks ticket
+    creation; failures are logged under `[vrs-app-enroll]`.
+- App-origin rows carry a V9 payload built from the entered details. Part
+  quantity and failure reason have no contract field, so quantity goes into
+  the part description (with the price multiplied out) and failure reasons
+  into the technician comments. The recommendation is `repair` and the
+  purchase year is `N/A`. Technician photos are signed at dispatch.
+- App-origin rows have no SASHA callback. Dispatch revalidates without the
+  SASHA pin, and VRS AI results are applied locally without an upstream
+  forward. SASHA-origin rows behave exactly as before.
+- For app enrollment only, an earlier undispatched row for the same order whose
+  ticket is rejected or invalid is retired as `superseded`, so resubmissions
+  can enroll.
+- One new nullable column, `submissions.ahs_details`, added at boot by
+  `ensureAhsDetailsColumn` in seed.ts. Tests: `tests/vrs-app-enroll.test.ts`,
+  `tests/ahs-details.test.ts`.
+
 
 ### Fixed - Release type-check gate (2026-09-18)
 - `npm run build` now requires the strict TypeScript check to pass before

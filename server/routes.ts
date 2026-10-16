@@ -41,6 +41,7 @@ import {
   type VrsAiCallResultCandidate,
 } from "./vrs-ai-call-result";
 import { vrsBridgeStore } from "./vrs-sasha-store";
+import { enrollAppSubmissionInVrsAi } from "./vrs-app-enroll";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
@@ -67,11 +68,17 @@ import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
+import {
+  ahsDetailsSchema,
+  ahsDivisionFor,
+  ahsGrandTotal,
+} from "@shared/ahs-details";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import {
   is1099PortalEnabled,
   isTechHubPhotosEnabled,
   isVrsBridgePhotoProxyEnabled,
+  isVrsAiAppEnrollEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -669,6 +676,7 @@ export async function registerRoutes(
       portal1099Enabled: is1099PortalEnabled(),
       techHubPhotosEnabled: isTechHubPhotosEnabled(),
       vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
+      vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
     });
   });
 
@@ -1122,6 +1130,11 @@ export async function registerRoutes(
     // is currently ACTIVE and never overrides the permanent rejected_closed
     // block. Transient request flag only — not persisted as a column.
     additionalRequest: z.boolean().optional(),
+    // AHS authorization details for VRS AI (shared/ahs-details.ts). Kept for
+    // authorization requests only; never required here, so older clients
+    // and other warranties are unaffected. Tickets without it are simply
+    // not enrolled in the VRS AI bridge.
+    ahsDetails: ahsDetailsSchema.optional(),
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -1152,6 +1165,8 @@ export async function registerRoutes(
     res: Response,
     internalOptions?: {
       ignoreLegacyDuplicateSubmissionIds?: readonly number[];
+      // SASHA intake creates its own bridge row right after this handler.
+      skipAppVrsAiEnroll?: boolean;
     },
   ) => {
     try {
@@ -1159,6 +1174,15 @@ export async function registerRoutes(
       const parsed = createSubmissionSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+      // AHS details only apply to authorization requests. Their detailed
+      // appliance type decides the agent division, so every downstream use
+      // of applianceType (routing, broadcasts, SMS) stays consistent.
+      const ahsDetails = parsed.data.requestType === "authorization"
+        ? parsed.data.ahsDetails
+        : undefined;
+      if (ahsDetails) {
+        parsed.data.applianceType = ahsDivisionFor(ahsDetails.applianceKind);
       }
 
       const user = await storage.getUser(authReq.user!.id);
@@ -1514,8 +1538,13 @@ export async function registerRoutes(
         issueDescription: parsed.data.issueDescription,
         originalDescription: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? parsed.data.originalDescription : null,
         aiEnhanced: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? true : false,
-        estimateAmount: parsed.data.estimateAmount || null,
-        partNumbers: parsed.data.partNumbers || null,
+        // AHS tickets fill these from their details, like SASHA tickets do,
+        // so agents see the total and part numbers in the usual places.
+        estimateAmount: parsed.data.estimateAmount ||
+          (ahsDetails ? ahsGrandTotal(ahsDetails).toFixed(2) : null),
+        partNumbers: parsed.data.partNumbers ||
+          (ahsDetails ? JSON.stringify(ahsDetails.parts.map((part) => part.partNumber)) : null),
+        ahsDetails: ahsDetails ? JSON.stringify(ahsDetails) : null,
         photos: parsed.data.photos || null,
         photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent
@@ -1596,6 +1625,30 @@ export async function registerRoutes(
           `for tech=${user.id} SO=${parsed.data.serviceOrder}. Skipping SMS / broadcast / Smartsheet.`
         );
         return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
+      }
+
+      // Technician-posted AHS authorization tickets get the same VRS AI
+      // bridge row a SASHA call gets, before any broadcast, so the ticket
+      // lands in the Pilot view and Stage 1 approval sends it to VRS AI.
+      // Failure is logged and leaves the ticket on the legacy manual flow.
+      if (!internalOptions?.skipAppVrsAiEnroll && isVrsAiAppEnrollEnabled()) {
+        const enrollment = await enrollAppSubmissionInVrsAi(
+          {
+            store: vrsBridgeStore,
+            generateCallId: () => `vrs_call_${randomUUID()}`,
+          },
+          submission,
+          user,
+        );
+        if (enrollment.kind === "enrolled") {
+          console.log(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} call=${enrollment.callId}`);
+        } else if (enrollment.kind === "duplicate") {
+          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} not enrolled: active bridge call ${enrollment.existingCallId} (${enrollment.state})`);
+        } else if (enrollment.kind === "failed") {
+          console.error(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} enrollment failed: ${enrollment.message}`);
+        } else if (submission.warrantyType === "american_home_shield") {
+          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} skipped: ${enrollment.reason}`);
+        }
       }
 
       const submissionReceivedPhone = submission.phoneOverride || submission.phone;
@@ -1701,7 +1754,10 @@ export async function registerRoutes(
         isTechnician: true,
       };
       const { res: capturedRes, captured } = makeCapturedResponse();
-      await createSubmissionHandler(internalRequest, capturedRes, internalOptions);
+      await createSubmissionHandler(internalRequest, capturedRes, {
+        ...internalOptions,
+        skipAppVrsAiEnroll: true,
+      });
       const responseBody = captured.body as any;
       if (captured.statusCode === 201 && responseBody?.submission?.id) {
         return {
