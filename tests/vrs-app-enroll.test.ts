@@ -17,15 +17,50 @@ import {
   sendVrsAuthorizeRequest,
   type VrsWebhookEvent,
 } from "../server/vrs-sasha-contract";
+import type { AhsDetails } from "../shared/ahs-details";
 
 const EXPRESS_WEBHOOK =
   "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook";
+
+const ahsDetails: AhsDetails = {
+  contractNumber: "AHS-778812",
+  customerName: "Maria Gonzalez",
+  customerAddress: "742 Evergreen Terrace, Hagerstown, MD 21740",
+  applianceKind: "washer",
+  brand: "Whirlpool",
+  modelNumber: "WTW5000DW1",
+  serialNumber: "C31290822",
+  applianceAge: 4,
+  applianceLocation: "Laundry room",
+  applianceGrade: "mid",
+  applianceColor: "White",
+  failureCause: "normal-wear",
+  laborAmount: 120,
+  taxAmount: 15.6,
+  parts: [
+    {
+      partNumber: "WPW10503278",
+      quantity: 1,
+      description: "Electronic control board",
+      unitPrice: 245,
+      partFunction: "Controls wash cycle timing and motor speed",
+      failureReason: "Relay failed; board shows error F3E1",
+    },
+    {
+      partNumber: "W10820048",
+      quantity: 2,
+      description: "Drain pump clip",
+      unitPrice: 4.25,
+      partFunction: "Holds the drain pump in place",
+      failureReason: "Cracked",
+    },
+  ],
+};
 
 const appTicket: AppVrsAiEnrollSubmission = {
   id: 501,
   serviceOrder: "8175-13538277",
   districtCode: "8175",
-  applianceType: "laundry",
   requestType: "authorization",
   warrantyType: "american_home_shield",
   ticketStatus: "queued",
@@ -33,6 +68,7 @@ const appTicket: AppVrsAiEnrollSubmission = {
   phone: "(214) 555-0199",
   phoneOverride: null,
   technicianLdapId: "crivera",
+  ahsDetails: JSON.stringify(ahsDetails),
   createdAt: new Date("2026-10-08T14:00:00.000Z"),
 };
 
@@ -68,13 +104,49 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
       tech_name: "Carlos Rivera",
       partner_id: "ahs",
       district_number: "8175",
-      appliance_type: "Laundry",
+      contract_number: "AHS-778812",
+      cta_no: "AHS-778812",
+      customer_name: "Maria Gonzalez",
+      customer_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
+      service_address: "742 Evergreen Terrace, Hagerstown, MD 21740",
+      brand: "Whirlpool",
+      model_number: "WTW5000DW1",
+      serial_number: "C31290822",
+      appliance_type: "Washer",
+      appliance_age: 4,
+      appliance_location: "Laundry room",
+      appliance_grade: "mid",
+      appliance_color: "White",
+      failure_cause: "normal-wear",
+      labor_amount: 120,
+      tax_amount: 15.6,
+      part_price: 253.5,
+      tech_recommendation: "repair",
+      purchase_year: "N/A",
       symptom: appTicket.issueDescription,
       appliance_photos: [],
     });
-    expect(built.payload.comments?.map((c) => c.text)).toContain(
+    expect(built.payload.parts).toEqual([
+      {
+        part_id: "WPW10503278",
+        part_description: "Electronic control board",
+        sell_price: 245,
+        part_function: "Controls wash cycle timing and motor speed",
+      },
+      {
+        part_id: "W10820048",
+        part_description: "Drain pump clip (qty 2)",
+        sell_price: 8.5,
+        part_function: "Holds the drain pump in place",
+      },
+    ]);
+    const commentTexts = built.payload.comments?.map((c) => c.text);
+    expect(commentTexts).toEqual([
+      appTicket.issueDescription,
+      "Part WPW10503278 (qty 1) failure reason: Relay failed; board shows error F3E1",
+      "Part W10820048 (qty 2) failure reason: Cracked",
       APP_ORIGIN_VRS_COMMENT,
-    );
+    ]);
     expect(built.serviceOrder).toBe("13538277");
 
     const outbound = safeParseVrsOutboundSourceRequest({
@@ -98,6 +170,21 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
       technician,
     );
     expect(result.kind).toBe("skipped");
+    expect(store.createIntake).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", null],
+    ["unreadable", "{not json"],
+    ["incomplete", JSON.stringify({ ...ahsDetails, modelNumber: "" })],
+  ])("never enrolls an AHS ticket whose details are %s", async (_label, stored) => {
+    const store = { createIntake: vi.fn() };
+    const result = await enrollAppSubmissionInVrsAi(
+      { store, generateCallId: () => "vrs_call_x" },
+      { ...appTicket, ahsDetails: stored },
+      technician,
+    );
+    expect(result).toEqual({ kind: "skipped", reason: "AHS details were not entered" });
     expect(store.createIntake).not.toHaveBeenCalled();
   });
 
@@ -230,7 +317,8 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
     const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(sent.callback_url).toBe(EXPRESS_WEBHOOK);
     expect(sent.callback_secret).toBe("express-ai-webhook-secret");
-    expect(sent.cta_no).toBe("N/A");
+    expect(sent.cta_no).toBe("AHS-778812");
+    expect(sent.parts).toHaveLength(2);
     expect(sent.appliance_photos).toEqual([
       "https://storage.example/bucket/uploads/estimate.jpg?X-Goog-Signature=abc",
       "https://storage.example/bucket/uploads/issue.jpg?X-Goog-Signature=abc",

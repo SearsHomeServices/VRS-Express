@@ -200,6 +200,11 @@ export const submissions = pgTable("submissions", {
   resubmissionOf: integer("resubmission_of"),
   procId: varchar("proc_id", { length: 50 }),
   clientNm: varchar("client_nm", { length: 150 }),
+  // 2026-10-16 — AHS authorization details for VRS AI (contract, customer,
+  // appliance, failure cause, amounts, parts). JSON matching
+  // shared/ahs-details.ts ahsDetailsSchema; null for every other ticket.
+  // Migrated idempotently in seed.ts (ensureAhsDetailsColumn).
+  ahsDetails: text("ahs_details"),
   // Tyler 2026-05-20 (afternoon) — Replacement Review outcome. Set true when
   // a standard /process action of `approve_replacement_review` is used so VRS
   // can flag tickets where the warranty company is taking over replacement.

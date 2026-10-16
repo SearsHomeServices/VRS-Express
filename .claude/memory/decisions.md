@@ -13,7 +13,17 @@ SASHA URL. Code checks it only through `isAppOriginVrsBridgeRecord`. SASHA
 rows keep the inbound revalidation and the mandatory upstream forward
 unchanged.
 
-**Placeholders, not guesses.** The technician form has no customer,
+**Superseded 2026-10-16: the tech now enters real AHS details.** A
+technician gave the required field list. The details are stored as JSON in
+`submissions.ahs_details`, using the same idempotent ensure-column pattern
+as the other columns, so no `db:push` is needed. Tickets without them are no
+longer enrolled. The detailed AHS appliance list is used only for AHS
+tickets, and the routing division is derived from it; other warranties keep
+the old dropdown (user's choice). Quantity and failure reason have no
+contract field, so they are carried in the part description and the
+comments rather than changing the VRS AI contract (user's choice).
+
+**Placeholders, not guesses (original, superseded).** The technician form has no customer,
 model/serial, parts or price fields; that data is in the estimate and tag
 photos. The payload uses the V9 contract's own `"N/A"`/`""` values and `0`
 amounts, and says so in a comment. It does not invent values. The flag stays

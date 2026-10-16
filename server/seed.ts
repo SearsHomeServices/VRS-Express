@@ -97,6 +97,9 @@ export async function seedDatabase() {
   // 2026-08-06 — coaching/Tech PDC columns: referenced by the Drizzle schema,
   // so they must exist BEFORE the first submissions query (same reasoning).
   await ensureCoachingColumns();
+  // 2026-10-16 — submissions.ahs_details is referenced by the Drizzle
+  // schema, so it must exist BEFORE the first submissions query too.
+  await ensureAhsDetailsColumn();
   await ensureWeeklyReportsTable();
   // Must precede scheduler startup and any report-delivery query on a fresh
   // dev/prod database.  This table is an audit ledger, not seed data.
@@ -413,6 +416,22 @@ async function ensureCoachingColumns() {
     console.log("[coaching] submissions coaching/tech-pdc columns ensured");
   } catch (err: any) {
     console.warn(`[coaching] Failed to ensure columns: ${err?.message || err}`);
+  }
+}
+
+// 2026-10-16 — AHS authorization details (JSON text) captured on the tech
+// form for VRS AI. Same one-shot idempotent pattern as the other ensure*
+// helpers. Must be awaited before the first submissions query on boot
+// (Drizzle selects all columns). Safe to re-run.
+async function ensureAhsDetailsColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS ahs_details TEXT
+    `));
+    console.log("[ahs-details] submissions.ahs_details ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[ahs-details] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

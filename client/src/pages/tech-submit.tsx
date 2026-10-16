@@ -50,6 +50,14 @@ import {
   type DraftEnvelope,
 } from "@/lib/draft-identity";
 import { getEtDateString } from "@shared/business-hours";
+import { ahsApplianceKind, ahsDetailsSchema, ahsGrandTotal, ahsPartLineTotal } from "@shared/ahs-details";
+import {
+  AhsApplianceKindField,
+  AhsDetailsCard,
+  addAhsDetailsIssues,
+  emptyAhsDetailsForm,
+} from "@/components/ahs-details-fields";
+import { useVrsAiAppEnrollEnabled } from "@/hooks/use-feature-flags";
 
 // Tyler 2026-06-30 — one-day holiday closure notice shown on the tech submit
 // form. Gated to the Eastern-Time calendar date so it appears only on July 4,
@@ -101,7 +109,11 @@ const submissionFormSchema = z.object({
   warrantyProvider: z.string().optional(),
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
   partNumbers: z.array(z.string()).optional(),
-});
+  // AHS details for VRS AI. `ahsRequired` is kept in sync by the page
+  // (AHS + Authorization + enrollment flag on); see ahs-details-fields.tsx.
+  ahsRequired: z.boolean().optional(),
+  ahsDetails: z.any().optional(),
+}).superRefine(addAhsDetailsIssues);
 
 type SubmissionFormData = z.infer<typeof submissionFormSchema>;
 
@@ -860,6 +872,23 @@ export default function TechSubmitPage() {
     }
   }, [watchedRequestTypeForMatrix, derivedWarranty?.warrantyType]);
 
+  // AHS details for VRS AI: shown for AHS + Authorization while enrollment
+  // is on. 1099 providers never see their warranty client-side, so they
+  // keep the regular form. Synced after every render (not just on change)
+  // so a restored draft can't leave a stale `ahsRequired` behind.
+  const vrsAiAppEnrollEnabled = useVrsAiAppEnrollEnabled();
+  const ahsMode = vrsAiAppEnrollEnabled && !isProvider1099 &&
+    watchedWarrantyForMatrix === "american_home_shield" &&
+    watchedRequestTypeForMatrix === "authorization";
+  useEffect(() => {
+    if (Boolean(form.getValues("ahsRequired")) !== ahsMode) {
+      form.setValue("ahsRequired", ahsMode, { shouldDirty: false });
+    }
+    if (ahsMode && !form.getValues("ahsDetails")) {
+      form.setValue("ahsDetails", emptyAhsDetailsForm(), { shouldDirty: false });
+    }
+  });
+
   const mutation = useMutation({
     mutationFn: async (data: SubmissionFormData & { originalDescription?: string; aiEnhanced?: boolean }) => {
       // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) hit a
@@ -939,6 +968,10 @@ export default function TechSubmitPage() {
     }
     const payload: any = { ...data };
     delete payload.partNumbers;
+    delete payload.ahsRequired;
+    delete payload.ahsDetails;
+    // Already validated by the form resolver; parse to send real numbers.
+    if (data.ahsRequired) payload.ahsDetails = ahsDetailsSchema.parse(data.ahsDetails);
     if (aiUsed && originalBeforeAi) {
       payload.originalDescription = originalBeforeAi;
       payload.aiEnhanced = true;
@@ -1546,6 +1579,10 @@ export default function TechSubmitPage() {
                     );
                   }}
                 />
+                {ahsMode && watchedValues.ahsDetails ? (
+                  // AHS: detailed appliance list; it also sets the division.
+                  <AhsApplianceKindField form={form} />
+                ) : (
                 <FormField
                   control={form.control}
                   name="applianceType"
@@ -1577,6 +1614,7 @@ export default function TechSubmitPage() {
                     </FormItem>
                   )}
                 />
+                )}
 
                 {/* Tyler 2026-04-29 (warranty × request-type matrix): the
                     `watchedRequestType !== "parts_nla"` gate that previously
@@ -1698,6 +1736,8 @@ export default function TechSubmitPage() {
                 )}
               </CardContent>
             </Card>
+
+            {ahsMode && watchedValues.ahsDetails ? <AhsDetailsCard form={form} /> : null}
 
             <Card>
               <CardContent className="p-4 space-y-4">
@@ -2341,7 +2381,7 @@ export default function TechSubmitPage() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Appliance</span>
-                    <span className="font-medium text-right" data-testid="review-appliance">{formatApplianceLabel(pendingData.applianceType)}</span>
+                    <span className="font-medium text-right" data-testid="review-appliance">{pendingData.ahsRequired ? (ahsApplianceKind(pendingData.ahsDetails?.applianceKind)?.label ?? "—") : formatApplianceLabel(pendingData.applianceType)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Warranty</span>
@@ -2377,6 +2417,37 @@ export default function TechSubmitPage() {
                     <span className="font-medium" data-testid="review-voice">{voiceNoteUrl ? "Attached" : "None"}</span>
                   </div>
                 </div>
+
+                {pendingPayload?.ahsDetails && (
+                  <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-ahs-details">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Contract #</span>
+                      <span className="font-medium text-right">{pendingPayload.ahsDetails.contractNumber}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Customer</span>
+                      <span className="font-medium text-right">{pendingPayload.ahsDetails.customerName}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Model / Serial</span>
+                      <span className="font-medium text-right">{pendingPayload.ahsDetails.modelNumber} / {pendingPayload.ahsDetails.serialNumber}</span>
+                    </div>
+                    <div className="pt-2 border-t">
+                      <p className="text-muted-foreground mb-1">Parts</p>
+                      <ul className="list-disc pl-5 space-y-0.5">
+                        {pendingPayload.ahsDetails.parts.map((part: any, i: number) => (
+                          <li key={i} className="font-medium">
+                            {part.partNumber} × {part.quantity} — ${ahsPartLineTotal(part).toFixed(2)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex justify-between gap-3 pt-2 border-t">
+                      <span className="text-muted-foreground">Total (parts + labor + tax)</span>
+                      <span className="font-semibold text-right" data-testid="review-ahs-total">${ahsGrandTotal(pendingPayload.ahsDetails).toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
 
                 {pendingData.requestType === "parts_nla" && (
                   <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-nla-parts">

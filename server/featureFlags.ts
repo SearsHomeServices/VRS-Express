@@ -37,8 +37,10 @@ export function isVrsBridgePhotoProxyEnabled(): boolean {
 // Technician-submitted AHS authorization tickets → VRS AI bridge enrollment
 // (server/vrs-app-enroll.ts). Default OFF everywhere; only the exact value
 // "true" enables it. When on, each new queued AHS authorization ticket from
-// the app or the external v1 API gets a vrs_ai_calls row at creation, so it
-// moves to the VRS AI Pilot view and Stage 1 approval sends it to VRS AI.
+// the app gets a vrs_ai_calls row at creation, so it moves to the VRS AI
+// Pilot view and Stage 1 approval sends it to VRS AI. Also shows the AHS
+// details section (shared/ahs-details.ts) on the tech submit/resubmit forms;
+// tickets without those details are never enrolled.
 export function isVrsAiAppEnrollEnabled(): boolean {
   return process.env.VRS_AI_APP_ENROLL_ENABLED === "true";
 }

@@ -3,20 +3,27 @@
 // SASHA-originated AHS calls get a vrs_ai_calls row at intake
 // (vrs-sasha-intake.ts), which is what routes Stage 1 approval through
 // "Approve & Send to VRS AI". Technicians also post AHS calls straight into
-// VRS Express (POST /api/submissions, or the external v1 API); those tickets
-// never touched SASHA and previously had no bridge row, so they could never
-// reach VRS AI. This module gives them the same durable row at creation.
+// VRS Express (POST /api/submissions); those tickets never touched SASHA and
+// previously had no bridge row, so they could never reach VRS AI. This
+// module gives them the same durable row at creation.
 //
 // Nothing is sent to VRS AI here. Dispatch still happens only when a human
 // agent approves Stage 1, exactly like a SASHA ticket.
 //
-// The app form captures far less than the VRS AI contract: no customer,
-// address, model/serial, parts, or price breakdown (those live in the
-// technician's model/serial-tag and TechHub-estimate photos). The payload
-// uses the V9 contract's own placeholders where it has them ("N/A", "",
-// "TBD") and zero amounts otherwise, and says so in a comment for VRS AI.
-// Photos are attached at dispatch by the existing enrichment step.
+// The payload is built from the AHS details the technician entered on the
+// form (submissions.ahs_details, shared/ahs-details.ts). A ticket without
+// them is not enrolled and keeps the manual Stage 1 flow. Part quantity and
+// failure reason have no contract field: quantity goes into the part
+// description (with the price multiplied out) and failure reasons into the
+// technician comments. Photos are attached at dispatch by the existing
+// enrichment step.
 import type { Submission } from "@shared/schema";
+import {
+  ahsApplianceKind,
+  ahsPartLineTotal,
+  ahsPartsTotal,
+  parseStoredAhsDetails,
+} from "@shared/ahs-details";
 import {
   safeParseVrsOutboundSourceRequest,
   type VrsAuthorizeV9Request,
@@ -27,21 +34,8 @@ import {
 } from "./vrs-sasha-queue";
 import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
 
-const APPLIANCE_LABELS: Record<string, string> = {
-  cooking: "Cooking",
-  dishwasher: "Dishwasher",
-  microwave: "Microwave",
-  laundry: "Laundry",
-  refrigeration: "Refrigeration",
-  hvac: "HVAC",
-  all_other: "Other appliance",
-};
-
 export const APP_ORIGIN_VRS_COMMENT =
-  "Submitted directly in VRS Express by the technician (not via SASHA). " +
-  "Customer, model/serial, parts and pricing were not entered as fields; " +
-  "use the attached model/serial tag and TechHub estimate photos, or look up " +
-  "the service order.";
+  "Submitted directly in VRS Express by the technician (not via SASHA).";
 
 // Only used to prove the stored payload will pass dispatch revalidation; the
 // real Express webhook URL and secret are substituted at dispatch time.
@@ -54,7 +48,6 @@ export type AppVrsAiEnrollSubmission = Pick<
   | "id"
   | "serviceOrder"
   | "districtCode"
-  | "applianceType"
   | "requestType"
   | "warrantyType"
   | "ticketStatus"
@@ -62,6 +55,7 @@ export type AppVrsAiEnrollSubmission = Pick<
   | "phone"
   | "phoneOverride"
   | "technicianLdapId"
+  | "ahsDetails"
   | "createdAt"
 >;
 
@@ -112,6 +106,11 @@ export function buildAppVrsAuthorizePayload(
   if (!techId || techId.length > 50) {
     return { ok: false, reason: "ticket has no usable technician id" };
   }
+  const details = parseStoredAhsDetails(submission.ahsDetails);
+  if (!details) {
+    return { ok: false, reason: "AHS details were not entered" };
+  }
+
   const techName = (technician.name ?? "").trim().slice(0, 255);
   const description = submission.issueDescription.trim() || "Authorization review requested";
   const district = submission.districtCode && /^\d{4}$/.test(submission.districtCode)
@@ -127,30 +126,32 @@ export function buildAppVrsAuthorizePayload(
     reason_for_call: "authorization",
     callback_url: VALIDATION_CALLBACK_URL,
     callback_secret: VALIDATION_CALLBACK_SECRET,
-    parts: [
-      {
-        part_id: "N/A",
-        part_description: "Not entered in VRS Express; see TechHub estimate photo",
-        sell_price: 0,
-        part_function: "",
-      },
-    ],
-    customer_name: "",
-    customer_address: "N/A",
-    service_address: "N/A",
-    brand: "N/A",
-    model_number: "N/A",
-    serial_number: "N/A",
-    appliance_type: APPLIANCE_LABELS[submission.applianceType] ?? "Other appliance",
-    appliance_age: 0,
-    labor_amount: 0,
-    tax_amount: 0,
-    part_price: 0,
-    appliance_location: "N/A",
-    failure_cause: "other",
+    parts: details.parts.map((part) => ({
+      part_id: part.partNumber,
+      part_description: part.quantity > 1
+        ? `${part.description} (qty ${part.quantity})`
+        : part.description,
+      sell_price: ahsPartLineTotal(part),
+      part_function: part.partFunction,
+    })),
+    customer_name: details.customerName,
+    customer_address: details.customerAddress,
+    service_address: details.customerAddress,
+    brand: details.brand,
+    model_number: details.modelNumber,
+    serial_number: details.serialNumber,
+    appliance_type: ahsApplianceKind(details.applianceKind)?.label ?? details.applianceKind,
+    appliance_age: details.applianceAge,
+    labor_amount: details.laborAmount,
+    tax_amount: details.taxAmount,
+    part_price: ahsPartsTotal(details),
+    appliance_location: details.applianceLocation,
+    failure_cause: details.failureCause,
+    // The form has no repair/replace choice; an AHS parts authorization is
+    // a repair.
     tech_recommendation: "repair",
     repair_replace_rationale: description,
-    appliance_grade: "N/A",
+    appliance_grade: details.applianceGrade,
     partner_id: "ahs",
     appliance_photos: [],
     comments: [
@@ -160,6 +161,12 @@ export function buildAppVrsAuthorizePayload(
         text: description.slice(0, 2_000),
         timestamp: occurredAt,
       },
+      ...details.parts.map((part) => ({
+        tech_id: techId,
+        work_item: "failure_diagnosis" as const,
+        text: `Part ${part.partNumber} (qty ${part.quantity}) failure reason: ${part.failureReason}`,
+        timestamp: occurredAt,
+      })),
       {
         tech_id: techId,
         work_item: "other",
@@ -167,11 +174,11 @@ export function buildAppVrsAuthorizePayload(
         timestamp: occurredAt,
       },
     ],
-    appliance_color: "N/A",
-    contract_number: "N/A",
+    appliance_color: details.applianceColor,
+    contract_number: details.contractNumber,
     purchase_year: "N/A",
     symptom: description,
-    cta_no: "N/A",
+    cta_no: details.contractNumber,
     district_number: district,
   };
 

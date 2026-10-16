@@ -10,6 +10,12 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **AHS details on the tech form** (2026-10-16, same branch). This replaces the placeholder payload. A technician supplied the field list. The fields are defined in the new `shared/ahs-details.ts`: a zod schema, 15 detailed appliance types mapped to divisions, and totals. The form UI is the new `client/src/components/ahs-details-fields.tsx`, used by `tech-submit.tsx` and `tech-resubmit.tsx`.
+  - **When it shows:** only for AHS + Authorization, when `/api/config.vrsAiAppEnrollEnabled` is on, and never for 1099 providers.
+  - **Validation:** runs through each page's resolver via `superRefine(addAhsDetailsIssues)` and a hidden `ahsRequired` value that is re-synced after every render.
+  - **Server:** `createSubmissionSchema.ahsDetails` (optional), and the division is derived from the appliance type. The details are stored in the new `submissions.ahs_details` (`ensureAhsDetailsColumn` in seed.ts). `partNumbers` and `estimateAmount` are filled from them.
+  - **Enrollment:** builds the V9 payload from the details and skips tickets that have none.
+  - **Verified locally:** I ran the dev server against a scratch Postgres and drove headless Chrome. The form, validation and totals all worked. An end-to-end submit is blocked locally because there is no Snowflake.
 - **Technician AHS tickets → VRS AI bridge enrollment** (2026-10-08, branch `feat/app-ahs-vrs-ai-enroll`). New `server/vrs-app-enroll.ts`, called from `createSubmissionHandler` right after a non-duplicate insert. It runs only when `VRS_AI_APP_ENROLL_ENABLED === "true"`, and the SASHA intake opts out via `skipAppVrsAiEnroll`. A queued `american_home_shield` + `authorization` ticket gets a `vrs_ai_calls` row (`pending_review`) with a V9 payload of placeholders (the app captures no customer, model/serial, parts or prices), `callback_url = ""` and empty secret columns. That is the "app-origin" marker: `isAppOriginVrsBridgeRecord` in `vrs-sasha-queue.ts`.
   - **Dispatch:** revalidates app-origin rows with `safeParseVrsOutboundSourceRequest`, with no SASHA callback pin.
   - **Webhook:** applies results locally and records `{delivered:true, attempts:0}` instead of forwarding to SASHA.

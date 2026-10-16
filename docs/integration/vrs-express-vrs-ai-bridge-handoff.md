@@ -49,14 +49,17 @@ forwarding without repeating the ticket action.
 | VRS AI | Simulate the upstream sender for inbound testing; receive approved requests for outbound testing; own call admission, rate limits, call execution, recordings, callback production, and callback retries |
 
 Manual and PWA tickets with no bridge record never call VRS AI. When
-`VRS_AI_APP_ENROLL_ENABLED=true`, a new queued AHS authorization ticket posted
-from the technician app or the external v1 API gets a bridge record at creation
-(`server/vrs-app-enroll.ts`) and then follows the same human Stage 1 dispatch.
-These app-origin records:
+`VRS_AI_APP_ENROLL_ENABLED=true`, the technician app collects AHS details
+(contract, customer, appliance, failure cause, amounts, and parts) on AHS
+authorization tickets. A new queued ticket with those details gets a bridge
+record at creation (`server/vrs-app-enroll.ts`) and then follows the same
+human Stage 1 dispatch. These app-origin records:
 
-- send a V9 payload built from the ticket. Fields the app does not capture use
-  the contract's placeholders (`"N/A"`, `""`) and `0` amounts. A comment marks
-  the request as app-originated, and photos are attached at dispatch;
+- send a V9 payload built from the entered details. Part quantity goes into
+  `part_description` and multiplies `sell_price`; part failure reasons are
+  `comments`. `tech_recommendation` is `repair`, `purchase_year` is `N/A`, a
+  comment marks the request as app-originated, and photos are attached at
+  dispatch;
 - store an empty `callback_url` and secret, and are never forwarded to an
   upstream partner; VRS AI results are applied locally only;
 - retire (`superseded`) an earlier undispatched record for the same order whose

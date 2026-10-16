@@ -68,6 +68,11 @@ import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
+import {
+  ahsDetailsSchema,
+  ahsDivisionFor,
+  ahsGrandTotal,
+} from "@shared/ahs-details";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import {
   is1099PortalEnabled,
@@ -671,6 +676,7 @@ export async function registerRoutes(
       portal1099Enabled: is1099PortalEnabled(),
       techHubPhotosEnabled: isTechHubPhotosEnabled(),
       vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
+      vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
     });
   });
 
@@ -1124,6 +1130,11 @@ export async function registerRoutes(
     // is currently ACTIVE and never overrides the permanent rejected_closed
     // block. Transient request flag only — not persisted as a column.
     additionalRequest: z.boolean().optional(),
+    // AHS authorization details for VRS AI (shared/ahs-details.ts). Kept for
+    // authorization requests only; never required here, so older clients
+    // and other warranties are unaffected. Tickets without it are simply
+    // not enrolled in the VRS AI bridge.
+    ahsDetails: ahsDetailsSchema.optional(),
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -1163,6 +1174,15 @@ export async function registerRoutes(
       const parsed = createSubmissionSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+      // AHS details only apply to authorization requests. Their detailed
+      // appliance type decides the agent division, so every downstream use
+      // of applianceType (routing, broadcasts, SMS) stays consistent.
+      const ahsDetails = parsed.data.requestType === "authorization"
+        ? parsed.data.ahsDetails
+        : undefined;
+      if (ahsDetails) {
+        parsed.data.applianceType = ahsDivisionFor(ahsDetails.applianceKind);
       }
 
       const user = await storage.getUser(authReq.user!.id);
@@ -1518,8 +1538,13 @@ export async function registerRoutes(
         issueDescription: parsed.data.issueDescription,
         originalDescription: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? parsed.data.originalDescription : null,
         aiEnhanced: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? true : false,
-        estimateAmount: parsed.data.estimateAmount || null,
-        partNumbers: parsed.data.partNumbers || null,
+        // AHS tickets fill these from their details, like SASHA tickets do,
+        // so agents see the total and part numbers in the usual places.
+        estimateAmount: parsed.data.estimateAmount ||
+          (ahsDetails ? ahsGrandTotal(ahsDetails).toFixed(2) : null),
+        partNumbers: parsed.data.partNumbers ||
+          (ahsDetails ? JSON.stringify(ahsDetails.parts.map((part) => part.partNumber)) : null),
+        ahsDetails: ahsDetails ? JSON.stringify(ahsDetails) : null,
         photos: parsed.data.photos || null,
         photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent
