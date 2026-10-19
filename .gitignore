@@ -12,3 +12,4 @@ vite.config.ts.*
 /exports/*.csv
 /exports/*.xlsx
 /exports/*.xls
+/generated-artifacts/

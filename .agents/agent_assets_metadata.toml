@@ -35,3 +35,17 @@ mtime_ms = 1789755051906
 storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:a11bb216-7de2-40f6-ada7-2f3b2631048f/8177fdad-5b89-4e22-a7c6-c77f87f0b005/1d0864c1-a521-463f-ad6d-82b7d182bebd"
 storage_version_token = "1789755057164242"
 content_type = "text/html"
+
+[[outputs]]
+id = "OIUJ6FfXIfloZE6xDG3T_"
+uri = "file://generated-artifacts/vrs-express-four-saturdays-by-appliance.xlsx"
+type = "table"
+title = "VRS Express — Four Saturdays by Appliance"
+description = "Excel workbook covering September 26 and October 3, 10, and 17, 2026: Saturday totals, appliance breakdowns, outcomes, elapsed review times, and all 227 ticket records."
+logical_id = "91ae1dd1-c004-42a5-946b-2691736cda34"
+content_hash = "sha256:13becd6098b6b4046e88b2c804d65e31a955f72726eafb6b7e9c20e4608ec4ef"
+size = 30556
+mtime_ms = 1792425748675
+storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:a11bb216-7de2-40f6-ada7-2f3b2631048f/91ae1dd1-c004-42a5-946b-2691736cda34/edcb4104-048b-42d3-a51c-2f20f9a33092"
+storage_version_token = "1792425756358664"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
