@@ -26,6 +26,9 @@ the VRS AI `202` response means asynchronous admission only.
 
 Manual and PWA tickets without a bridge record never invoke VRS AI. Their
 current approval, ticket, WebSocket, and SMS behavior remains unchanged.
+With `VRS_AI_APP_ENROLL_ENABLED=true`, technician-posted AHS authorization
+tickets receive an app-origin bridge record at creation; see
+`docs/integration/vrs-express-vrs-ai-bridge-handoff.md`.
 The current automated bridge accepts American Home Shield authorization only;
 other partner workflows remain outside this interface.
 

@@ -8,6 +8,7 @@ import type {
 import {
   getVrsAuthorizeContractVersion,
   safeParseVrsAuthorizeRequest,
+  safeParseVrsOutboundSourceRequest,
 } from "./vrs-sasha-contract";
 
 export type VrsExpressApplianceDivision =
@@ -286,6 +287,18 @@ export interface VrsBridgeRecord {
   webhookEventId?: string | null;
 }
 
+// App-originated bridge rows (technician tickets enrolled at creation, see
+// vrs-app-enroll.ts) have no upstream partner: SASHA never saw them. They
+// store an empty callback URL and no usable secret, so dispatch revalidates
+// without the SASHA callback pin and results are applied locally only.
+export const VRS_APP_ORIGIN_CALLBACK_URL = "";
+
+export function isAppOriginVrsBridgeRecord(
+  record: Pick<VrsBridgeRecord, "callbackUrl">,
+): boolean {
+  return record.callbackUrl === VRS_APP_ORIGIN_CALLBACK_URL;
+}
+
 export interface VrsBridgeStore {
   claimWebhookForwarding?(id:number,eventId:string):Promise<{kind:"claimed";claimedAt:Date}|{kind:"duplicate"|"in_progress"|"superseded"}>;
   withWebhookApplicationLock?<T>(id:number,work:()=>Promise<T>):Promise<T>;
@@ -406,7 +419,12 @@ export async function dispatchVrsAiForSubmission(options: {
       sourcePayload,
       enrichment,
     );
-    const revalidated = safeParseVrsAuthorizeRequest(enrichedPayload);
+    const revalidated = isAppOriginVrsBridgeRecord(record)
+      ? safeParseVrsOutboundSourceRequest({
+        ...enrichedPayload,
+        callback_url: options.callbackUrl,
+      })
+      : safeParseVrsAuthorizeRequest(enrichedPayload);
     if (!revalidated.success || revalidated.version !== sourceVersion) {
       const fields = revalidated.success
         ? "contract version"
@@ -633,20 +651,23 @@ export async function processVrsAiWebhookEvent(options: {
   const forwardingClaimedAt = "claimedAt" in forwarding ? forwarding.claimedAt : undefined;
   let deliveryRecorded = false;
   try {
-    const callbackSecret = options.decryptCallbackSecret({
-      cipher: record.callbackSecretCipher ?? "",
-      iv: record.callbackSecretIv ?? "",
-      authTag: record.callbackSecretAuthTag ?? "",
-      salt: record.callbackSecretSalt ?? "",
-    });
-    const delivery = await options.forward({
-      callbackUrl: record.callbackUrl ?? "",
-      callbackSecret,
-      event: {
-        ...upstreamVrsWebhookEvent(options.event),
-        callId: record.callId,
-      },
-    });
+    // No upstream partner for app-originated rows: record the event as
+    // complete (zero delivery attempts) so retries dedupe like a forward.
+    const delivery = isAppOriginVrsBridgeRecord(record)
+      ? { delivered: true, attempts: 0 }
+      : await options.forward({
+        callbackUrl: record.callbackUrl ?? "",
+        callbackSecret: options.decryptCallbackSecret({
+          cipher: record.callbackSecretCipher ?? "",
+          iv: record.callbackSecretIv ?? "",
+          authTag: record.callbackSecretAuthTag ?? "",
+          salt: record.callbackSecretSalt ?? "",
+        }),
+        event: {
+          ...upstreamVrsWebhookEvent(options.event),
+          callId: record.callId,
+        },
+      });
     if (forwardingClaimedAt) await options.store.markWebhookForwarded(record.id,options.event.eventId,delivery,forwardingClaimedAt);
     else await options.store.markWebhookForwarded(record.id,options.event.eventId,delivery);
     deliveryRecorded = true;

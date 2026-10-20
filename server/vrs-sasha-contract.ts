@@ -368,6 +368,33 @@ const vrsAuthorizeV9OutboundSourceSchema = z
     }
   });
 
+// Same strict per-version field rules as safeParseVrsAuthorizeRequest, but
+// with the outbound callback rule (any clean HTTPS URL) instead of the SASHA
+// pin. Used to revalidate app-originated bridge payloads, which never had a
+// SASHA callback because SASHA never saw them.
+export function safeParseVrsOutboundSourceRequest(input: unknown):
+  | {
+      success: true;
+      version: VrsAuthorizeContractVersion;
+      data: VrsAuthorizeRequest;
+    }
+  | {
+      success: false;
+      version: VrsAuthorizeContractVersion;
+      error: z.ZodError;
+    } {
+  const version = getVrsAuthorizeContractVersion(input);
+  const parsed = version === "v9"
+    ? vrsAuthorizeV9OutboundSourceSchema.safeParse(input)
+    : version === "v8"
+      ? vrsAuthorizeV8OutboundSourceSchema.safeParse(input)
+      : vrsAuthorizeV5OutboundSourceSchema.safeParse(input);
+
+  return parsed.success
+    ? { success: true, version, data: parsed.data as VrsAuthorizeRequest }
+    : { success: false, version, error: parsed.error };
+}
+
 export function isValidVrsExpressCallbackUrl(value: string): boolean {
   try {
     const url = new URL(value);

@@ -1,3 +1,40 @@
+## 2026-10-08 — Technician AHS tickets enroll in the VRS AI bridge
+
+**Reuse the bridge row; don't add a second dispatch path.** Pilot membership,
+the Stage 1 "Approve & Send to VRS AI" gate, the dispatch, the webhook ledger
+and the per-order duplicate lock all key off a `vrs_ai_calls` row. Giving app
+tickets that row at creation is the smallest change that gets them all of it.
+The human Stage 1 approval stays the only gate before VRS AI.
+
+**Empty `callback_url` marks app origin, so no schema change.** An `origin`
+column would need a `db:push` in both environments before publishing. The
+empty string satisfies the existing NOT NULL columns and can never be a valid
+SASHA URL. Code checks it only through `isAppOriginVrsBridgeRecord`. SASHA
+rows keep the inbound revalidation and the mandatory upstream forward
+unchanged.
+
+**Superseded 2026-10-16: the tech now enters real AHS details.** A
+technician gave the required field list. The details are stored as JSON in
+`submissions.ahs_details`, using the same idempotent ensure-column pattern
+as the other columns, so no `db:push` is needed. Tickets without them are no
+longer enrolled. The detailed AHS appliance list is used only for AHS
+tickets, and the routing division is derived from it; other warranties keep
+the old dropdown (user's choice). Quantity and failure reason have no
+contract field, so they are carried in the part description and the
+comments rather than changing the VRS AI contract (user's choice).
+
+**Placeholders, not guesses (original, superseded).** The technician form has no customer,
+model/serial, parts or price fields; that data is in the estimate and tag
+photos. The payload uses the V9 contract's own `"N/A"`/`""` values and `0`
+amounts, and says so in a comment. It does not invent values. The flag stays
+off until VRS AI is confirmed to handle these payloads.
+
+**Supersede only for app enrollment.** Stage 1 rejection never updates the
+bridge row, so an undispatched `pending_review` row would block a resubmission
+forever. Retiring it is limited to rows VRS AI never received
+(`provider_call_id IS NULL`) whose ticket is closed without approval. SASHA
+intake keeps its existing duplicate behavior.
+
 ## 2026-09-11 — Weekly exec summary + post-close agent notes
 
 **Raw fetch to SendGrid, not `@sendgrid/mail`.** A new npm dependency is a live
