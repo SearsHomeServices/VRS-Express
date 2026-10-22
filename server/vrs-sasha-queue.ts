@@ -8,7 +8,7 @@ import type {
 import {
   getVrsAuthorizeContractVersion,
   safeParseVrsAuthorizeRequest,
-  safeParseVrsOutboundSourceRequest,
+  safeParseVrsAppOriginOutboundRequest,
 } from "./vrs-sasha-contract";
 
 export type VrsExpressApplianceDivision =
@@ -343,6 +343,9 @@ export interface VrsBridgeStore {
 export interface VrsAiClient {
   authorize(options: {
     payload: VrsAuthorizeRequest;
+    // Set (true) only for app-origin rows; pass it through to
+    // sendVrsAuthorizeRequest so the relaxed app-origin V9 rules apply.
+    appOrigin?: boolean;
   }): Promise<VrsAiAuthorizeResult>;
 }
 
@@ -419,8 +422,9 @@ export async function dispatchVrsAiForSubmission(options: {
       sourcePayload,
       enrichment,
     );
-    const revalidated = isAppOriginVrsBridgeRecord(record)
-      ? safeParseVrsOutboundSourceRequest({
+    const appOrigin = isAppOriginVrsBridgeRecord(record);
+    const revalidated = appOrigin
+      ? safeParseVrsAppOriginOutboundRequest({
         ...enrichedPayload,
         callback_url: options.callbackUrl,
       })
@@ -440,7 +444,9 @@ export async function dispatchVrsAiForSubmission(options: {
       callback_url: options.callbackUrl,
       callback_secret: options.callbackSecret,
     } as VrsAuthorizeRequest;
-    result = await options.client.authorize({ payload });
+    result = await options.client.authorize(
+      appOrigin ? { payload, appOrigin: true } : { payload },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await options.store.markDispatchFailed(record.id, message);

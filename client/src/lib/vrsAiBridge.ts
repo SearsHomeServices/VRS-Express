@@ -26,7 +26,8 @@ export interface VrsAiBridgeStatus {
     model_number: string;
     serial_number: string;
     appliance_type: string;
-    appliance_age: number;
+    // Omitted on app-origin tickets where the tech left the age blank.
+    appliance_age?: number;
     labor_amount: number;
     tax_amount: number;
     part_price: number;

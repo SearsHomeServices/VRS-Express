@@ -65,69 +65,105 @@ const requiredText = (label: string, max: number) =>
     .min(1, `${label} is required`)
     .max(max, `${label} must be ${max} characters or less`);
 
+// Blank (or whitespace-only) form input means "not entered".
+const blankToUndefined = (value: unknown) =>
+  value === null || (typeof value === "string" && value.trim() === "") ? undefined : value;
+
+const optionalText = (label: string, max: number) =>
+  z.preprocess(
+    blankToUndefined,
+    z.string().trim().max(max, `${label} must be ${max} characters or less`).optional(),
+  );
+
 // Form inputs arrive as strings; "" means not entered. "$1,234.50" is fine.
 // NaN from junk text fails z.number() with its invalid_type_error message.
-const numberFrom = (schema: z.ZodNumber) =>
+const numberFrom = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((value) => {
+    if (value === null) return undefined;
     if (typeof value !== "string") return value;
     const cleaned = value.replace(/[$,\s]/g, "");
     return cleaned === "" ? undefined : Number(cleaned);
   }, schema);
 
-const money = (label: string) =>
-  numberFrom(
-    z
-      .number({
-        required_error: `${label} is required`,
-        invalid_type_error: `${label} must be a number`,
-      })
-      .nonnegative(`${label} can't be negative`)
-      .max(1_000_000, `${label} is too large`)
-      .multipleOf(0.01, `${label} can have at most 2 decimal places`),
-  );
+const moneyNumber = (label: string) =>
+  z
+    .number({
+      required_error: `${label} is required`,
+      invalid_type_error: `${label} must be a number`,
+    })
+    .nonnegative(`${label} can't be negative`)
+    .max(1_000_000, `${label} is too large`)
+    .multipleOf(0.01, `${label} can have at most 2 decimal places`);
+
+const money = (label: string) => numberFrom(moneyNumber(label));
 
 const enumOf = <T extends readonly { value: string }[]>(options: T, message: string) =>
   z.enum(options.map((option) => option.value) as [T[number]["value"], ...T[number]["value"][]], {
     errorMap: () => ({ message }),
   });
 
+export const AHS_TECH_RECOMMENDATIONS = [
+  { value: "repair", label: "Repair" },
+  { value: "replace", label: "Replace" },
+] as const;
+
+export type AhsTechRecommendation = (typeof AHS_TECH_RECOMMENDATIONS)[number]["value"];
+
+// What the tech types is kept to the minimum AHS asks for on the call
+// (diagnosis, location, repair/replace, labor and the parts). Everything
+// else is optional: VRS AI treats a missing value as "I'll confirm" and
+// carries on. Contract number, brand, model and serial are filled from the
+// service order on the server when available (prefilledFields).
+//
+// Every field that used to be required is still accepted, so tickets stored
+// in the older, stricter shape keep parsing (parseStoredAhsDetails).
 export const ahsPartSchema = z.object({
   partNumber: requiredText("Part number", 100),
   quantity: numberFrom(
     z
-      .number({ required_error: "Quantity is required", invalid_type_error: "Quantity must be a number" })
+      .number({ invalid_type_error: "Quantity must be a number" })
       .int("Quantity must be a whole number")
       .min(1, "Quantity must be at least 1")
-      .max(99, "Quantity must be 99 or less"),
+      .max(99, "Quantity must be 99 or less")
+      .default(1),
   ),
   // 480 leaves room for the " (qty N)" suffix inside VRS AI's 500 limit.
   description: requiredText("Part description", 480),
   unitPrice: money("Part price"),
-  partFunction: requiredText("Part function", 200),
-  failureReason: requiredText("Part failure reason", 500),
+  partFunction: optionalText("Part function", 200),
+  failureReason: optionalText("Part failure reason", 500),
 });
 
 export const ahsDetailsSchema = z.object({
-  contractNumber: requiredText("Dispatch / contract number", 100),
-  customerName: requiredText("Customer name", 255),
-  customerAddress: requiredText("Customer address", 1_000),
+  contractNumber: optionalText("Dispatch / contract number", 100),
+  customerName: optionalText("Customer name", 255),
+  customerAddress: optionalText("Customer address", 1_000),
   applianceKind: enumOf(AHS_APPLIANCE_KINDS, "Select an appliance type"),
-  brand: requiredText("Brand", 100),
-  modelNumber: requiredText("Model number", 100),
-  serialNumber: requiredText("Serial number", 100),
+  brand: optionalText("Brand", 100),
+  modelNumber: optionalText("Model number", 100),
+  serialNumber: optionalText("Serial number", 100),
   applianceAge: numberFrom(
     z
-      .number({ required_error: "Appliance age is required", invalid_type_error: "Appliance age must be a number" })
+      .number({ invalid_type_error: "Appliance age must be a number" })
       .int("Enter the age in whole years")
       .min(0, "Appliance age can't be negative")
-      .max(100, "Appliance age must be 100 years or less"),
+      .max(100, "Appliance age must be 100 years or less")
+      .optional(),
   ),
   applianceLocation: requiredText("Appliance location", 100),
-  applianceGrade: enumOf(AHS_APPLIANCE_GRADES, "Select the appliance grade"),
-  applianceColor: requiredText("Appliance color", 40),
+  applianceGrade: z.preprocess(
+    blankToUndefined,
+    enumOf(AHS_APPLIANCE_GRADES, "Select the appliance grade").optional(),
+  ),
+  applianceColor: optionalText("Appliance color", 40),
   failureCause: enumOf(AHS_FAILURE_CAUSES, "Select the failure cause"),
+  // Absent on tickets stored before the choice existed; those were repairs.
+  techRecommendation: z.preprocess(
+    blankToUndefined,
+    enumOf(AHS_TECH_RECOMMENDATIONS, "Choose repair or replace").default("repair"),
+  ),
   laborAmount: money("Labor amount"),
-  taxAmount: money("Tax amount"),
+  taxAmount: numberFrom(moneyNumber("Tax amount").default(0)),
   parts: z
     .array(ahsPartSchema, { required_error: "Add at least one part" })
     .min(1, "Add at least one part")

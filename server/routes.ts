@@ -2995,13 +2995,14 @@ export async function registerRoutes(
           store: vrsBridgeStore,
           resolveConfig: () => resolveVrsStageOneBridgeConfig(process.env),
           createClient: ({ baseUrl, apiKey, callbackUrl, callbackSecret }) => ({
-            authorize: ({ payload }) =>
+            authorize: ({ payload, appOrigin }) =>
               sendVrsAuthorizeRequest({
                 baseUrl,
                 apiKey,
                 callbackUrl,
                 callbackSecret,
                 payload,
+                appOrigin,
               }),
           }),
           resolveEnrichment: async () => {

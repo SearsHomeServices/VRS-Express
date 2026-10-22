@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -24,17 +25,25 @@ import {
   AHS_APPLIANCE_KINDS,
   AHS_APPLIANCE_LOCATIONS,
   AHS_FAILURE_CAUSES,
+  AHS_TECH_RECOMMENDATIONS,
   ahsApplianceKind,
   ahsDetailsSchema,
   roundCents,
   type AhsDetails,
 } from "@shared/ahs-details";
+import type { AhsPrefillResponse } from "@shared/ahs-prefill";
 
 // AHS authorization details on the tech submit and resubmit forms. Shown
-// only for AHS + Authorization while VRS AI enrollment is enabled; VRS AI
-// needs every field to call American Home Shield. Validation is the shared
-// schema (shared/ahs-details.ts), wired into each page's form resolver via
-// addAhsDetailsIssues so errors behave like every other field.
+// only for AHS + Authorization while VRS AI enrollment is enabled.
+// Validation is the shared schema (shared/ahs-details.ts), wired into each
+// page's form resolver via addAhsDetailsIssues so errors behave like every
+// other field.
+//
+// The tech types only what AHS asks for on the call: failure cause,
+// location, repair or replace, labor, and each part's number, description
+// and price. Everything else is optional; VRS AI confirms a missing value
+// with AHS. Dispatch number, brand, model and serial come from the service
+// order when the lookup has them (useAhsServiceOrderPrefill).
 
 // Form-side shape: numbers stay as the strings the tech typed until submit.
 export interface AhsPartFormValues {
@@ -59,6 +68,7 @@ export interface AhsDetailsFormValues {
   applianceGrade: string;
   applianceColor: string;
   failureCause: string;
+  techRecommendation: string;
   laborAmount: string;
   taxAmount: string;
   parts: AhsPartFormValues[];
@@ -91,22 +101,34 @@ export function emptyAhsDetailsForm(): AhsDetailsFormValues {
     applianceGrade: "",
     applianceColor: "",
     failureCause: "",
+    techRecommendation: "repair",
     laborAmount: "",
     taxAmount: "",
     parts: [emptyAhsPart()],
   };
 }
 
+// Stored details (current or older, stricter shape) → form strings.
 export function ahsDetailsToForm(details: AhsDetails): AhsDetailsFormValues {
   return {
     ...details,
-    applianceAge: String(details.applianceAge),
+    contractNumber: details.contractNumber ?? "",
+    customerName: details.customerName ?? "",
+    customerAddress: details.customerAddress ?? "",
+    brand: details.brand ?? "",
+    modelNumber: details.modelNumber ?? "",
+    serialNumber: details.serialNumber ?? "",
+    applianceAge: details.applianceAge === undefined ? "" : String(details.applianceAge),
+    applianceGrade: details.applianceGrade ?? "",
+    applianceColor: details.applianceColor ?? "",
     laborAmount: details.laborAmount.toFixed(2),
     taxAmount: details.taxAmount.toFixed(2),
     parts: details.parts.map((part) => ({
       ...part,
       quantity: String(part.quantity),
       unitPrice: part.unitPrice.toFixed(2),
+      partFunction: part.partFunction ?? "",
+      failureReason: part.failureReason ?? "",
     })),
   };
 }
@@ -123,6 +145,90 @@ export function addAhsDetailsIssues(
   for (const issue of parsed.error.issues) {
     ctx.addIssue({ ...issue, path: ["ahsDetails", ...issue.path] });
   }
+}
+
+// The tech-submit localStorage draft must not hold customer PII. Everything
+// else in the AHS section is kept so a resumed draft loses nothing else.
+export function omitAhsCustomerPiiFromDraft<T extends Record<string, unknown>>(formValues: T): T {
+  const details = formValues.ahsDetails;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return formValues;
+  const { customerName: _name, customerAddress: _address, ...rest } = details as Record<string, unknown>;
+  return { ...formValues, ahsDetails: rest };
+}
+
+// ---------------------------------------------------------------------------
+// Service-order prefill (GET /api/tech/ahs-prefill, shared/ahs-prefill.ts)
+// ---------------------------------------------------------------------------
+
+// Appliance fields the browser may receive and put into the form. The
+// dispatch number is filled on the server; the browser only learns whether
+// one exists.
+export const AHS_PREFILL_APPLIANCE_FIELDS = ["brand", "modelNumber", "serialNumber"] as const;
+export type AhsPrefillApplianceField = (typeof AHS_PREFILL_APPLIANCE_FIELDS)[number];
+export type AhsPrefillApplianceValues = Partial<Record<AhsPrefillApplianceField, string>>;
+
+export const AHS_PREFILL_HINT = "From service order — check against the model tag photo";
+export const AHS_DISPATCH_FROM_SO_TEXT = "Dispatch number will be filled from the service order";
+
+// "DDDD-SSSSSSSS" → its two parts, or null while the SO is incomplete.
+export function splitAhsServiceOrder(
+  value: string | null | undefined,
+): { district: string; serviceOrder: string } | null {
+  const match = /^(\d{4})-(\d{8})$/.exec((value ?? "").trim());
+  return match ? { district: match[1], serviceOrder: match[2] } : null;
+}
+
+// Anything that isn't a well-formed response is treated as "unavailable",
+// so the form falls back to manual entry.
+export function normalizeAhsPrefillResponse(body: unknown): AhsPrefillResponse {
+  if (!body || typeof body !== "object") return { status: "unavailable" };
+  const value = body as Record<string, unknown>;
+  if (value.status === "not_found") return { status: "not_found" };
+  if (value.status !== "found") return { status: "unavailable" };
+  const raw = value.appliance && typeof value.appliance === "object"
+    ? (value.appliance as Record<string, unknown>)
+    : {};
+  const appliance: AhsPrefillApplianceValues = {};
+  for (const field of AHS_PREFILL_APPLIANCE_FIELDS) {
+    const text = typeof raw[field] === "string" ? (raw[field] as string).trim().slice(0, 100) : "";
+    if (text) appliance[field] = text;
+  }
+  return { status: "found", appliance, hasDispatchNumber: value.hasDispatchNumber === true };
+}
+
+// Which form values to set from a lookup. A field is filled only when it is
+// blank, or still holds the value an earlier lookup put there (the tech
+// changed the service order); such a leftover is cleared when the new
+// lookup has no value for it. A value the tech typed is never overwritten.
+export function ahsPrefillUpdates(
+  current: Partial<Record<AhsPrefillApplianceField, unknown>> | null | undefined,
+  appliance: AhsPrefillApplianceValues,
+  previouslyFilled: AhsPrefillApplianceValues = {},
+): AhsPrefillApplianceValues {
+  const updates: AhsPrefillApplianceValues = {};
+  for (const field of AHS_PREFILL_APPLIANCE_FIELDS) {
+    const next = appliance[field] ?? "";
+    const value = typeof current?.[field] === "string" ? (current[field] as string).trim() : "";
+    const untouched = value === "" || value === previouslyFilled[field];
+    if (untouched && value !== next) updates[field] = next;
+  }
+  return updates;
+}
+
+export function isAhsPrefilledValue(
+  prefill: AhsPrefillResponse | null | undefined,
+  field: AhsPrefillApplianceField,
+  value: unknown,
+): boolean {
+  if (prefill?.status !== "found") return false;
+  const expected = prefill.appliance[field];
+  return Boolean(expected) && typeof value === "string" && value.trim() === expected;
+}
+
+export function ahsDispatchNumberFromServiceOrder(
+  prefill: AhsPrefillResponse | null | undefined,
+): boolean {
+  return prefill?.status === "found" && prefill.hasDispatchNumber;
 }
 
 function toAmount(value: unknown): number | null {
@@ -142,6 +248,7 @@ function TextField({
   placeholder,
   inputMode,
   testId,
+  hint,
 }: {
   form: UseFormReturn<any>;
   name: string;
@@ -149,6 +256,7 @@ function TextField({
   placeholder?: string;
   inputMode?: "text" | "numeric" | "decimal";
   testId: string;
+  hint?: string | null;
 }) {
   return (
     <FormField
@@ -166,6 +274,11 @@ function TextField({
               data-testid={testId}
             />
           </FormControl>
+          {hint ? (
+            <FormDescription className="text-xs" data-testid={`${testId}-hint`}>
+              {hint}
+            </FormDescription>
+          ) : null}
           <FormMessage />
         </FormItem>
       )}
@@ -266,14 +379,22 @@ export function AhsApplianceKindField({ form }: { form: UseFormReturn<any> }) {
   );
 }
 
-export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
+export function AhsDetailsCard({
+  form,
+  prefill,
+}: {
+  form: UseFormReturn<any>;
+  // Latest service-order lookup; null/undefined while off or loading.
+  prefill?: AhsPrefillResponse | null;
+}) {
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "ahsDetails.parts",
   });
   const values = (form.watch("ahsDetails") ?? {}) as Partial<AhsDetailsFormValues>;
   const partLines = (values.parts ?? []).map((part) => {
-    const quantity = toAmount(part?.quantity);
+    // Blank quantity counts as 1, the same default the schema applies.
+    const quantity = String(part?.quantity ?? "").trim() === "" ? 1 : toAmount(part?.quantity);
     const price = toAmount(part?.unitPrice);
     return quantity !== null && price !== null ? roundCents(quantity * price) : null;
   });
@@ -282,6 +403,9 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
     partCost + (toAmount(values.laborAmount) ?? 0) + (toAmount(values.taxAmount) ?? 0),
   );
   const partsError = form.getFieldState("ahsDetails.parts", form.formState).error?.message;
+  const dispatchFromServiceOrder = ahsDispatchNumberFromServiceOrder(prefill);
+  const hintFor = (field: AhsPrefillApplianceField) =>
+    isAhsPrefilledValue(prefill, field, values[field]) ? AHS_PREFILL_HINT : null;
 
   return (
     <Card data-testid="card-ahs-details">
@@ -291,63 +415,61 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
             AHS Authorization Details
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            VRS AI uses these to call American Home Shield for you. Copy them from the
-            TechHub estimate.
+            VRS AI uses these to call American Home Shield for you. Fields marked * are
+            required. Leave the others blank if you don't have them; VRS AI confirms them
+            with AHS.
           </p>
         </div>
 
-        <TextField
-          form={form}
-          name="ahsDetails.contractNumber"
-          label="Dispatch / Contract Number *"
-          testId="input-ahs-contract-number"
-        />
-        <TextField
-          form={form}
-          name="ahsDetails.customerName"
-          label="Customer Name *"
-          testId="input-ahs-customer-name"
-        />
-        <FormField
-          control={form.control}
-          name="ahsDetails.customerAddress"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Customer Address *</FormLabel>
-              <FormControl>
-                <Textarea
-                  {...field}
-                  value={field.value ?? ""}
-                  rows={2}
-                  placeholder="Street, city, state, ZIP"
-                  data-testid="input-ahs-customer-address"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
+        <div className="space-y-4" data-testid="section-ahs-service-order">
+          {dispatchFromServiceOrder ? (
+            <p
+              className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground"
+              data-testid="text-ahs-dispatch-from-so"
+            >
+              {AHS_DISPATCH_FROM_SO_TEXT}
+            </p>
+          ) : (
+            <TextField
+              form={form}
+              name="ahsDetails.contractNumber"
+              label="Dispatch / Contract Number (optional)"
+              testId="input-ahs-contract-number"
+            />
           )}
-        />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              form={form}
+              name="ahsDetails.brand"
+              label="Brand (optional)"
+              testId="input-ahs-brand"
+              hint={hintFor("brand")}
+            />
+            <TextField
+              form={form}
+              name="ahsDetails.modelNumber"
+              label="Model Number (optional)"
+              testId="input-ahs-model"
+              hint={hintFor("modelNumber")}
+            />
+            <TextField
+              form={form}
+              name="ahsDetails.serialNumber"
+              label="Serial Number (optional)"
+              testId="input-ahs-serial"
+              hint={hintFor("serialNumber")}
+            />
+          </div>
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <TextField form={form} name="ahsDetails.brand" label="Brand *" testId="input-ahs-brand" />
-          <TextField
+          <SelectField
             form={form}
-            name="ahsDetails.modelNumber"
-            label="Model Number *"
-            testId="input-ahs-model"
-          />
-          <TextField
-            form={form}
-            name="ahsDetails.serialNumber"
-            label="Serial Number *"
-            testId="input-ahs-serial"
-          />
-          <TextField
-            form={form}
-            name="ahsDetails.applianceAge"
-            label="Appliance Age (years) *"
-            inputMode="numeric"
-            testId="input-ahs-age"
+            name="ahsDetails.failureCause"
+            label="Failure Cause *"
+            placeholder="Why did it break?"
+            options={AHS_FAILURE_CAUSES}
+            testId="select-ahs-failure-cause"
           />
           <SelectField
             form={form}
@@ -359,26 +481,11 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
           />
           <SelectField
             form={form}
-            name="ahsDetails.applianceGrade"
-            label="Appliance Grade *"
-            placeholder="Select grade"
-            options={AHS_APPLIANCE_GRADES}
-            testId="select-ahs-grade"
-          />
-          <TextField
-            form={form}
-            name="ahsDetails.applianceColor"
-            label="Appliance Color *"
-            placeholder="e.g., White, Stainless"
-            testId="input-ahs-color"
-          />
-          <SelectField
-            form={form}
-            name="ahsDetails.failureCause"
-            label="Failure Cause *"
-            placeholder="Why did it break?"
-            options={AHS_FAILURE_CAUSES}
-            testId="select-ahs-failure-cause"
+            name="ahsDetails.techRecommendation"
+            label="Repair or Replace *"
+            placeholder="Select one"
+            options={AHS_TECH_RECOMMENDATIONS}
+            testId="select-ahs-recommendation"
           />
         </div>
 
@@ -421,8 +528,9 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
                 <TextField
                   form={form}
                   name={`ahsDetails.parts.${index}.quantity`}
-                  label="Qty *"
+                  label="Qty"
                   inputMode="numeric"
+                  placeholder="1"
                   testId={`input-ahs-part-${index}-quantity`}
                 />
               </div>
@@ -443,14 +551,14 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
               <TextField
                 form={form}
                 name={`ahsDetails.parts.${index}.partFunction`}
-                label="Part Function *"
+                label="Part Function (optional)"
                 placeholder="What the part does"
                 testId={`input-ahs-part-${index}-function`}
               />
               <TextField
                 form={form}
                 name={`ahsDetails.parts.${index}.failureReason`}
-                label="Failure Reason *"
+                label="Failure Reason (optional)"
                 placeholder="Why this part failed"
                 testId={`input-ahs-part-${index}-failure-reason`}
               />
@@ -485,7 +593,7 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
           <TextField
             form={form}
             name="ahsDetails.taxAmount"
-            label="Total Tax Amount *"
+            label="Total Tax Amount (optional)"
             inputMode="decimal"
             placeholder="0.00"
             testId="input-ahs-tax"
@@ -501,6 +609,61 @@ export function AhsDetailsCard({ form }: { form: UseFormReturn<any> }) {
             <span className="text-muted-foreground">Total (parts + labor + tax)</span>
             <span className="font-semibold" data-testid="text-ahs-total">{money(total)}</span>
           </div>
+        </div>
+
+        <div className="space-y-4 border-t pt-4" data-testid="section-ahs-optional">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            More details (optional)
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectField
+              form={form}
+              name="ahsDetails.applianceGrade"
+              label="Appliance Grade"
+              placeholder="Select grade"
+              options={AHS_APPLIANCE_GRADES}
+              testId="select-ahs-grade"
+            />
+            <TextField
+              form={form}
+              name="ahsDetails.applianceColor"
+              label="Appliance Color"
+              placeholder="e.g., White, Stainless"
+              testId="input-ahs-color"
+            />
+            <TextField
+              form={form}
+              name="ahsDetails.applianceAge"
+              label="Appliance Age (years)"
+              inputMode="numeric"
+              testId="input-ahs-age"
+            />
+          </div>
+          <TextField
+            form={form}
+            name="ahsDetails.customerName"
+            label="Customer Name"
+            testId="input-ahs-customer-name"
+          />
+          <FormField
+            control={form.control}
+            name="ahsDetails.customerAddress"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Customer Address</FormLabel>
+                <FormControl>
+                  <Textarea
+                    {...field}
+                    value={field.value ?? ""}
+                    rows={2}
+                    placeholder="Street, city, state, ZIP"
+                    data-testid="input-ahs-customer-address"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
       </CardContent>
     </Card>

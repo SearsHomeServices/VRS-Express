@@ -44,6 +44,7 @@ import {
   emptyAhsDetailsForm,
 } from "@/components/ahs-details-fields";
 import { useVrsAiAppEnrollEnabled } from "@/hooks/use-feature-flags";
+import { useAhsServiceOrderPrefill, useAhsServiceOrderPrefillEnabled } from "@/hooks/use-ahs-prefill";
 
 const APPLIANCE_TYPES = [
   { value: "refrigeration", label: "Refrigerator" },
@@ -138,6 +139,13 @@ export default function TechResubmitPage() {
     if (ahsMode && !form.getValues("ahsDetails")) {
       form.setValue("ahsDetails", emptyAhsDetailsForm(), { shouldDirty: false });
     }
+  });
+  // Same service-order prefill as tech-submit. Values loaded from the
+  // original ticket are never overwritten; only blanks are filled.
+  const ahsPrefillEnabled = useAhsServiceOrderPrefillEnabled();
+  const ahsPrefill = useAhsServiceOrderPrefill(form, {
+    enabled: ahsMode && ahsPrefillEnabled,
+    serviceOrder: form.watch("serviceOrder"),
   });
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
@@ -803,7 +811,7 @@ export default function TechResubmitPage() {
                 </CardContent>
               </Card>
 
-              {ahsMode && watchedAhsDetails ? <AhsDetailsCard form={form} /> : null}
+              {ahsMode && watchedAhsDetails ? <AhsDetailsCard form={form} prefill={ahsPrefill} /> : null}
 
               <Card>
                 <CardContent className="p-4 space-y-4">

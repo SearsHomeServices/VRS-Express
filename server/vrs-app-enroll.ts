@@ -17,6 +17,12 @@
 // description (with the price multiplied out) and failure reasons into the
 // technician comments. Photos are attached at dispatch by the existing
 // enrichment step.
+//
+// Most AHS fields are optional on the tech form. A value the tech left
+// blank (and the server could not fill from the service order) is sent as
+// "" (appliance_age is omitted), never "N/A": VRS AI reads "" as unknown
+// and confirms it with AHS, but would speak "N/A" aloud. The payload is
+// validated with the app-origin V9 rules (safeParseVrsAppOriginOutboundRequest).
 import type { Submission } from "@shared/schema";
 import {
   ahsApplianceKind,
@@ -25,8 +31,8 @@ import {
   parseStoredAhsDetails,
 } from "@shared/ahs-details";
 import {
-  safeParseVrsOutboundSourceRequest,
-  type VrsAuthorizeV9Request,
+  safeParseVrsAppOriginOutboundRequest,
+  type VrsAuthorizeV9AppOriginRequest,
 } from "./vrs-sasha-contract";
 import {
   VRS_APP_ORIGIN_CALLBACK_URL,
@@ -118,7 +124,9 @@ export function buildAppVrsAuthorizePayload(
     : "N/A";
   const occurredAt = (submission.createdAt ?? new Date()).toISOString();
 
-  const payload: VrsAuthorizeV9Request = {
+  const customerAddress = details.customerAddress ?? "";
+  const contractNumber = details.contractNumber ?? "";
+  const payload: VrsAuthorizeV9AppOriginRequest = {
     service_order: serviceOrder,
     tech_id: techId,
     tech_phone: toE164UsPhone(submission.phoneOverride || submission.phone) ?? "N/A",
@@ -132,26 +140,24 @@ export function buildAppVrsAuthorizePayload(
         ? `${part.description} (qty ${part.quantity})`
         : part.description,
       sell_price: ahsPartLineTotal(part),
-      part_function: part.partFunction,
+      part_function: part.partFunction ?? "",
     })),
-    customer_name: details.customerName,
-    customer_address: details.customerAddress,
-    service_address: details.customerAddress,
-    brand: details.brand,
-    model_number: details.modelNumber,
-    serial_number: details.serialNumber,
+    customer_name: details.customerName ?? "",
+    customer_address: customerAddress,
+    service_address: customerAddress,
+    brand: details.brand ?? "",
+    model_number: details.modelNumber ?? "",
+    serial_number: details.serialNumber ?? "",
     appliance_type: ahsApplianceKind(details.applianceKind)?.label ?? details.applianceKind,
-    appliance_age: details.applianceAge,
+    ...(details.applianceAge === undefined ? {} : { appliance_age: details.applianceAge }),
     labor_amount: details.laborAmount,
     tax_amount: details.taxAmount,
     part_price: ahsPartsTotal(details),
     appliance_location: details.applianceLocation,
     failure_cause: details.failureCause,
-    // The form has no repair/replace choice; an AHS parts authorization is
-    // a repair.
-    tech_recommendation: "repair",
+    tech_recommendation: details.techRecommendation,
     repair_replace_rationale: description,
-    appliance_grade: details.applianceGrade,
+    appliance_grade: details.applianceGrade ?? "",
     partner_id: "ahs",
     appliance_photos: [],
     comments: [
@@ -161,12 +167,14 @@ export function buildAppVrsAuthorizePayload(
         text: description.slice(0, 2_000),
         timestamp: occurredAt,
       },
-      ...details.parts.map((part) => ({
-        tech_id: techId,
-        work_item: "failure_diagnosis" as const,
-        text: `Part ${part.partNumber} (qty ${part.quantity}) failure reason: ${part.failureReason}`,
-        timestamp: occurredAt,
-      })),
+      ...details.parts.flatMap((part) => part.failureReason
+        ? [{
+          tech_id: techId,
+          work_item: "failure_diagnosis" as const,
+          text: `Part ${part.partNumber} (qty ${part.quantity}) failure reason: ${part.failureReason}`,
+          timestamp: occurredAt,
+        }]
+        : []),
       {
         tech_id: techId,
         work_item: "other",
@@ -174,15 +182,17 @@ export function buildAppVrsAuthorizePayload(
         timestamp: occurredAt,
       },
     ],
-    appliance_color: details.applianceColor,
-    contract_number: details.contractNumber,
+    appliance_color: details.applianceColor ?? "",
+    contract_number: contractNumber,
+    // The V9 contract has no blank option for purchase_year (a year, "TBD"
+    // or "N/A"), and the form does not collect one.
     purchase_year: "N/A",
     symptom: description,
-    cta_no: details.contractNumber,
+    cta_no: contractNumber,
     district_number: district,
   };
 
-  const checked = safeParseVrsOutboundSourceRequest(payload);
+  const checked = safeParseVrsAppOriginOutboundRequest(payload);
   if (!checked.success || checked.version !== "v9") {
     const fields = checked.success
       ? "contract version"
@@ -193,7 +203,12 @@ export function buildAppVrsAuthorizePayload(
   const { callback_secret: _secret, ...stored } = payload;
   return {
     ok: true,
-    payload: { ...stored, callback_url: VRS_APP_ORIGIN_CALLBACK_URL },
+    // Stored with the bridge's general payload type; dispatch revalidates
+    // app-origin rows with the same app-origin rules used here.
+    payload: {
+      ...stored,
+      callback_url: VRS_APP_ORIGIN_CALLBACK_URL,
+    } as unknown as VrsStoredAuthorizeRequest,
     serviceOrder,
     techId,
     techPhone: (submission.phoneOverride || submission.phone || "").slice(0, 20),
