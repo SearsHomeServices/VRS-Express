@@ -1,3 +1,17 @@
+## 2026-10-22 — Customer name/address from HSSOM, never shown to the tech
+
+**HSSOM Order Lookup is the only confirmed source.** ai-agent-mcp reads it with
+`CustomerTools.get_customer_details_by_order`. The internal address
+(`hssolookup.intra.searshc.com`) needs no secret, but Replit can't reach it. So
+VRS Express uses the gateway with an HSSOM client token, under the same env
+names as the planned HSSOM Send Message work, so one credential covers both.
+
+**Server-only PII.** The browser learns only `hasCustomer`. Technician-facing
+submission responses strip customer fields the server filled, and a
+resubmission restores them on the server. Reviewers (agents) see them with a
+"From service order" badge. Both lookups are bounded and best-effort: a
+failure only means the tech can type the values.
+
 ## 2026-10-22 — Trim the technician AHS form; prefill from Snowflake on the server
 
 **Ask the tech only what no system has.** VRS AI hard-requires only

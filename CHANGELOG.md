@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Customer name and address from the HSSOM Order Lookup (2026-10-22)
+- New flag `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED` (default off). When it is
+  `"true"` and the HSSOM env vars are set, AHS tickets get the customer's
+  name and address (and gap-fill for dispatch number, brand, model, serial
+  and purchase year) from the HSSOM Order Lookup, keyed by
+  `<district padded to 7>-<service order>`. New `server/services/hssom-auth.ts`
+  (nested Base64 Basic token, cached, 401 retry once) and
+  `server/services/hssom-order-lookup.ts`. Env: `HSSOM_AUTH_URL`,
+  `HSSOM_ORDER_LOOKUP_URL`, `HSSOM_CLIENT_CODE`, `HSSOM_CLIENT_SECRET`,
+  `HSSOM_CLIENT_ID`, optional `HSSOM_USER_ID` and `HSSOM_TIMEOUT_MS`. No URL
+  defaults; https only.
+- It runs at submit in parallel with Snowflake, each lookup bounded at about
+  5s and never blocking. Snowflake wins for appliance fields, HSSOM is the only
+  source for customer fields, and a tech-entered value always wins.
+- Customer PII never reaches a technician's browser. The prefill endpoint
+  returns only `hasCustomer`, the form hides the customer inputs with a note,
+  and technician-facing submission responses strip server-filled customer
+  fields. Resubmissions restore them on the server. Logs carry field names
+  and statuses only.
+- Stage 1 reviewers see "From service order" on customer fields, with a hint
+  to check them against the service order.
+
 ### Changed - Fewer fields for technician AHS tickets; service-order prefill (2026-10-22)
 - The AHS section of the tech submit and resubmit forms now requires only
   failure cause, appliance location, repair or replace (new), labor, and for

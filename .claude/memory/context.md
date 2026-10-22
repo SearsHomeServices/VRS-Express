@@ -10,6 +10,12 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **HSSOM customer prefill** (2026-10-22, same branch `feat/ahs-tech-form-few`).
+  - **What it does:** `lookupHssomOrder` (server/services/hssom-order-lookup.ts) fills customer name and address. `mergeAhsPrefillSources` / `applyAhsSubmitPrefill` in server/ahs-prefill.ts merge it with Snowflake.
+  - **Flag:** `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`; `/api/config` exposes `ahsHssomCustomerPrefill`.
+  - **Auth:** the token client uses the same env names as the teammate's unpushed HSSOM Send Message branch (`VRS-Express-HSSOM-Handoff.md`), so the two can share it.
+  - **Redaction:** technician-facing responses go through `redactSubmissionForRole`.
+  - **Unverified:** the gateway Order Lookup URL, the client-id value (ai-agent-mcp hard-codes WBOT), the no-data response, whether `thirdParty.contractNumber` is the AHS dispatch number, and name casing. No live call has been made.
 - **Trimmed AHS tech form + Snowflake prefill** (2026-10-22, branch `feat/ahs-tech-form-few` off `merge-check`, not pushed).
   - **Required now:** failure cause, location, repair or replace, labor, and part number/description/price. Everything else is optional.
   - **Prefill:** `server/ahs-prefill.ts`, plus `createAhsPrefillLookup` in `snowflake-lookup.ts` and `fetchAhsServiceOrderPrefill` in `snowflake.ts`. It runs two statements: confirmed columns (MFG_BND_NM, CMB_THD_PTY_ID, CLIENT_NM) and unverified ones (CTA_NO, PSV_ITM_MDL_NO, PSV_MDS_SRL_NO), so a wrong unverified column still returns brand. The flag `AHS_SERVICE_ORDER_PREFILL_ENABLED` defaults off.

@@ -29,8 +29,16 @@
       the part of CTA_NO before "/" with a real AHS dispatch number. Check for
       duplicate (SVC_UN_NO, SO_NO) rows, since the query uses LIMIT 1 with no
       ORDER BY. Time it on the prod warehouse (deadline is 5s).
-- [ ] Customer name and address have no confirmed Snowflake source (VRS AI
-      notes name lives in SCH_JOBS_PROD). They stay optional tech input.
+- [x] Customer name and address from the HSSOM Order Lookup (2026-10-22,
+      flag `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`, default off).
+- [ ] BEFORE enabling the HSSOM prefill, ask HSSOM (HSSOM-QUESTIONS@SEARSHC.COM):
+      grant the VRS Express client OrderLookup method access (or reuse the
+      Send Message client from the HSSOM handoff); provide the gateway Order
+      Lookup base URL (working host `hssom-api-gateway.shs-core.com`) and auth
+      URL; confirm the registered `clientId` header value (ai-agent-mcp sends
+      WBOT); confirm the no-data response (404 vs ResponseCode "02"); provide
+      a safe test order. Then verify `thirdParty.contractNumber` against a real
+      AHS dispatch number and check the name casing.
 - [ ] Assigned-tech check on /api/tech/ahs-prefill: no SO→tech mapping in the
       repo (LST_ATP_TECH_ID_NO meaning unverified).
 - [ ] ProcID/warranty lookup (`snowflake.ts` ~:326) still filters on SO_NO
