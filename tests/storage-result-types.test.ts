@@ -18,6 +18,27 @@ describe("DatabaseStorage result handling", () => {
     vi.clearAllMocks();
   });
 
+  it("projects recorded agent names and IDs without multiplying ticket rows", async () => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const result = [{
+      s: { technicianLdapId: "TECH1", phoneOverride: null },
+      vrsAi: null, workedAgentSearchTerms: ["First Reviewer", "AGENT1"],
+      technicianName: "Tech", assignedAgentName: null,
+    }];
+    const query: any = {};
+    for (const method of ["from", "innerJoin", "leftJoin", "where"]) query[method] = vi.fn(() => query);
+    query.orderBy = vi.fn().mockResolvedValue(result);
+    mocks.db.select.mockReturnValue(query);
+    const rows = await storage.getSubmissionsListView({});
+    expect(rows[0].workedAgentSearchTerms).toEqual(["First Reviewer", "AGENT1"]);
+    const projection = mocks.db.select.mock.calls[0][0].workedAgentSearchTerms;
+    const sql = new PgDialect().sqlToQuery(projection).sql;
+    for (const column of ["assigned_to", "reviewed_by", "stage1_reviewed_by", "stage2_reviewed_by", "nla_escalated_by"]) {
+      expect(sql).toContain(column);
+    }
+    expect(sql).toContain("worked_agent.rac_id");
+  });
+
   it("fetches display names with one narrow query and deduplicated user IDs", async () => {
     const { PgDialect } = await import("drizzle-orm/pg-core");
     const rows = [{ id: 7, name: "Technician" }, { id: 9, name: "Reviewer" }];

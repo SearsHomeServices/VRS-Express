@@ -167,6 +167,7 @@ import HelpTooltip from "@/components/help-tooltip";
 import { useTheme } from "@/components/theme-provider";
 import { parseVideoUrls } from "@/lib/videoUrls";
 import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc-filter";
+import { matchesTicketSearch } from "@shared/ticket-search";
 import { filterVrsAiPilotRows } from "@shared/vrs-ai-pilot";
 import { PilotQueueAlert } from "@/components/pilot-queue-alert";
 
@@ -1332,11 +1333,8 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
   // the bulk push receive the same value via coachingFilterParams().
   const [pdcFilter, setPdcFilter] = useState<"all" | "sent" | "not_sent" | "pending" | "failed" | "missing_notes">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  // Tyler 2026-07-08 — search covers ALL tickets, not just the visible
-  // window. The table defaults to the last 30 days ("auto-archive"), but
-  // typing a search switches the data source to a debounced server-side
-  // all-time search so older tickets are still findable without widening
-  // the default view. Debounce keeps us from firing a request per keystroke.
+  // Search respects the selected created-date window. Choose All time
+  // explicitly to find older tickets. Debounce avoids per-keystroke requests.
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
     const trimmed = searchQuery.trim();
@@ -1451,10 +1449,9 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
     sessionKey: queueAlertUser ? `vrs-queue-alerts:${queueAlertUser.id}:${scope}` : undefined,
   });
 
-  // Tyler 2026-07-08 — all-time search (no createdAfter param, so the server
-  // applies its own generous floor + row cap). Only fetches while a search
-  // term is present; results replace the windowed rows as the table source.
+  // Search uses the same lower date bound as the unsearched table.
   const searchSubmissionsParams = new URLSearchParams();
+  if (createdAfterIso) searchSubmissionsParams.set("createdAfter", createdAfterIso);
   if (debouncedSearch) searchSubmissionsParams.set("search", debouncedSearch);
   if (vrsAiOnly) searchSubmissionsParams.set("vrsAiOnly", "true");
   const searchSubmissionsUrl = `/api/submissions?${searchSubmissionsParams.toString()}`;
@@ -1545,11 +1542,10 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
   // when its actual inputs change.
   //
   // Custom "To" cutoff (inclusive end of day) — client-side, before the
-  // status counts so the cards reflect the selected range too. Skipped
-  // while searching (search is explicitly all-time).
+  // status counts so the cards reflect the selected range during search too.
   const rawTickets = useMemo(() => {
     const scopeRows = vrsAiOnly ? filterVrsAiPilotRows(rawTicketsUnbounded) : rawTicketsUnbounded;
-    if (searchActive || createdBeforeMs == null) return scopeRows;
+    if (createdBeforeMs == null) return scopeRows;
     return scopeRows.filter((t: any) => {
       const created = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
       return !isNaN(created) && created <= createdBeforeMs;
@@ -1645,13 +1641,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
     }
 
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      out = out.filter(t =>
-        t.serviceOrder?.toLowerCase().includes(q) ||
-        t.technicianName?.toLowerCase().includes(q) ||
-        t.technicianLdapId?.toLowerCase().includes(q) ||
-        t.assignedAgentName?.toLowerCase().includes(q)
-      );
+      out = out.filter(t => matchesTicketSearch(t, searchQuery));
     }
     return out;
   }, [allTickets, statusFilter, ticketSortField, ticketSortDir, searchQuery, queueClock, bhConfig]);
@@ -2098,7 +2088,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
         </div>
         {searchActive && (
           <p className="text-xs text-muted-foreground mt-1 pl-1" data-testid="text-search-scope">
-            Searching all tickets, including those outside the {createdAfterWindow === "all" ? "current" : createdAfterWindow.replace("d", "-day")} view.
+            Searching within the selected date range, including assigned agents and recorded reviewers. Select All time to search older tickets.
           </p>
         )}
       </div>

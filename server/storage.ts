@@ -1384,6 +1384,17 @@ export class DatabaseStorage implements IStorage {
           dispatchedAt: vrsAiCalls.dispatchedAt,
           completedAt: vrsAiCalls.completedAt,
         },
+        // Indexed user-ID lookups retain reviewer identity after assignment
+        // is cleared. No one-to-many joins or heavy ticket history payload.
+        workedAgentSearchTerms: sql<string[]>`ARRAY(
+          SELECT term FROM users AS worked_agent
+          CROSS JOIN LATERAL unnest(ARRAY[worked_agent.name, worked_agent.rac_id]) AS terms(term)
+          WHERE worked_agent.id IN (
+            ${submissions.assignedTo}, ${submissions.reviewedBy},
+            ${submissions.stage1ReviewedBy}, ${submissions.stage2ReviewedBy},
+            ${submissions.nlaEscalatedBy}
+          ) AND term IS NOT NULL
+        )`,
         technicianName: users.name,
         technicianPhone: users.phone,
         ldapTechName: technicians.name,
@@ -1416,6 +1427,7 @@ export class DatabaseStorage implements IStorage {
     return result.map((r) => ({
       ...r.s,
       vrsAi: r.vrsAi?.callId ? r.vrsAi : null,
+      workedAgentSearchTerms: r.workedAgentSearchTerms,
       technicianName: r.ldapTechName || r.technicianName,
       technicianPhone: r.s.phoneOverride || r.ldapTechPhone || r.technicianPhone,
       assignedAgentName: r.assignedAgentName,
