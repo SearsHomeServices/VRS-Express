@@ -2,6 +2,43 @@ import React, { type ReactNode } from "react";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
+import { AhsTicketReview, type AhsReviewMedia } from "@/components/ahs-ticket-review";
+import { parseAhsDetailsForReview } from "@/lib/ahsReview";
+import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
+import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
+
+export const VRS_SOURCE_APP_LABEL = "Submitted by technician in VRS Express";
+export const VRS_SOURCE_SASHA_LABEL = "SASHA";
+
+// The ticket columns the panel reads besides the bridge row. All of them are
+// already on the agent's GET /api/submissions/:id response.
+export interface VrsAiBridgePanelSubmission {
+  ahsDetails?: string | null;
+  photos?: string | null;
+  photoThumbnails?: string | null;
+  videoUrl?: string | null;
+}
+
+function ahsReviewMedia(submission: VrsAiBridgePanelSubmission): AhsReviewMedia {
+  const { parsed, thumbs } = parseTicketMediaMetadata(
+    submission.photos,
+    submission.photoThumbnails,
+  );
+  // The tech form files model/serial and estimate screenshots under
+  // "estimate"; an old flat array has no categories, so show all of it.
+  const raw = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray(parsed.estimate)
+      ? parsed.estimate
+      : [];
+  return {
+    estimatePhotos: raw.filter(
+      (url: unknown): url is string => typeof url === "string" && url !== "",
+    ),
+    thumbnails: thumbs,
+    videos: parseVideoUrls(submission.videoUrl).slice(0, MAX_VIDEOS_PER_TICKET),
+  };
+}
 
 function ReviewField({
   label,
@@ -41,7 +78,9 @@ export function VrsAiBridgeReview({
   return (
     <details className="mt-3 border-t border-blue-200 pt-3 dark:border-blue-900">
       <summary className="cursor-pointer text-xs font-medium text-blue-800 dark:text-blue-300">
-        Review SASHA / Tech Hub details
+        {bridge.origin === "app"
+          ? "Review the VRS AI request built from these details"
+          : "Review SASHA / Tech Hub details"}
       </summary>
       <div className="mt-3 space-y-3 text-xs">
         <div className="grid gap-2 sm:grid-cols-2">
@@ -238,10 +277,51 @@ export function VrsAiBridgeReview({
 
 export function VrsAiBridgePanel({
   bridge,
+  submission,
+  onOpenPhoto,
 }: {
   bridge: VrsAiBridgeStatus | null | undefined;
+  // Optional so read-only callers (Pilot closed review) keep the bridge-only
+  // view. When given, the AHS details the technician filed are shown too,
+  // including when the ticket has no bridge row (enrollment skipped or
+  // failed).
+  submission?: VrsAiBridgePanelSubmission | null;
+  onOpenPhoto?: (photos: string[], index: number) => void;
 }) {
-  if (!bridge) return null;
+  const ahsDetails = parseAhsDetailsForReview(submission?.ahsDetails);
+  const ahsReview =
+    ahsDetails && submission ? (
+      <AhsTicketReview
+        details={ahsDetails}
+        media={ahsReviewMedia(submission)}
+        onOpenPhoto={onOpenPhoto}
+      />
+    ) : null;
+
+  if (!bridge) {
+    if (!ahsReview) return null;
+    return (
+      <div
+        className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
+        data-testid="ahs-details-no-bridge"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-medium">AHS ticket</span>
+          <span className="whitespace-nowrap rounded-md bg-secondary px-2.5 py-0.5 text-xs font-semibold text-secondary-foreground">
+            not sent to VRS AI
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="vrs-ai-bridge-source">
+          Source: {VRS_SOURCE_APP_LABEL}
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          This ticket is not enrolled in VRS AI. Review the details below and
+          use the manual authorization flow.
+        </p>
+        {ahsReview}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -254,6 +334,9 @@ export function VrsAiBridgePanel({
           {bridge.state.replace(/_/g, " ")}
         </span>
       </div>
+      <p className="mt-1 text-xs text-muted-foreground" data-testid="vrs-ai-bridge-source">
+        Source: {bridge.origin === "app" ? VRS_SOURCE_APP_LABEL : VRS_SOURCE_SASHA_LABEL}
+      </p>
       {bridge.dispatchError && (
         <p className="mt-2 text-xs text-destructive">
           Last send failed: {bridge.dispatchError}
@@ -269,6 +352,7 @@ export function VrsAiBridgePanel({
             : ""}
         </p>
       )}
+      {ahsReview}
       <VrsAiBridgeReview bridge={bridge} />
     </div>
   );

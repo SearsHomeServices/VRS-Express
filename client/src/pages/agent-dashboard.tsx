@@ -4155,7 +4155,11 @@ export default function AgentDashboard() {
                           )}
                         </CardHeader>
                         <CardContent className="space-y-5">
-                          <VrsAiBridgePanel bridge={selectedSubmission.vrsAi} />
+                          <VrsAiBridgePanel
+                            bridge={selectedSubmission.vrsAi}
+                            submission={selectedSubmission}
+                            onOpenPhoto={async (photos, index) => openLightbox(await buildMediaUrls(photos), index)}
+                          />
                           {(
                             <>
                               <div className={`grid ${isTwoStageWarranty(selectedSubmission) ? "grid-cols-3" : "grid-cols-3"} gap-3`}>

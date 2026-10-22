@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, lt, gt, ne, isNull, or, sql } from "drizzle-orm
 import { submissions, vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
 import { db, pool } from "./storage";
 import {
+  isAppOriginVrsBridgeRecord,
   projectVrsBridgeReviewContext,
   type VrsBridgeRecord,
   type VrsBridgeReviewContext,
@@ -60,8 +61,15 @@ export interface VrsAiBridgeStatus {
   failureReason: string | null;
   retryable: boolean | null;
   dispatchedAt: Date | null;
+  // Where the ticket came from: "sasha" (POST /vrs/authorize) or "app" (a
+  // technician filed it in VRS Express, see vrs-app-enroll.ts). Derived from
+  // the stored callback URL, which itself never leaves the server. Optional
+  // so older fixtures without it still read as SASHA.
+  origin?: VrsAiBridgeOrigin;
   reviewContext: VrsBridgeReviewContext;
 }
+
+export type VrsAiBridgeOrigin = "sasha" | "app";
 
 export interface VrsBridgeIntakeStore {
   findActiveByServiceOrder(
@@ -134,18 +142,24 @@ export function selectLocallyAppliedRetryableFailedV8SubmissionIds(
 
 export type VrsAiBridgeStatusRow = Omit<
   VrsAiBridgeStatus,
-  "contractVersion" | "reviewContext"
+  "contractVersion" | "reviewContext" | "origin"
 > & {
   requestPayload: VrsStoredAuthorizeRequest;
+  // Read only to derive `origin`; never copied into the status.
+  callbackUrl?: string;
 };
 
 export function projectVrsAiBridgeStatus(
   row: VrsAiBridgeStatusRow,
 ): VrsAiBridgeStatus {
-  const { requestPayload, ...status } = row;
+  const { requestPayload, callbackUrl, ...status } = row;
   return {
     ...status,
     contractVersion: getVrsAuthorizeContractVersion(requestPayload),
+    origin:
+      callbackUrl !== undefined && isAppOriginVrsBridgeRecord({ callbackUrl })
+        ? "app"
+        : "sasha",
     reviewContext: projectVrsBridgeReviewContext(requestPayload),
   };
 }
@@ -167,6 +181,7 @@ async function loadVrsAiBridgeStatusRow(
       retryable: vrsAiCalls.retryable,
       dispatchedAt: vrsAiCalls.dispatchedAt,
       requestPayload: vrsAiCalls.requestPayload,
+      callbackUrl: vrsAiCalls.callbackUrl,
     })
     .from(vrsAiCalls)
     .where(eq(vrsAiCalls.submissionId, submissionId))

@@ -153,10 +153,11 @@ type TicketOptions = {
   thumbnails?: Record<string, string>;
   videoUrl?: string;
   voiceNoteUrl?: string;
+  ahsDetails?: string;
 };
 
 function ticket({
-  id = 44, photos = null, bridgePhotos, thumbnails, videoUrl, voiceNoteUrl,
+  id = 44, photos = null, bridgePhotos, thumbnails, videoUrl, voiceNoteUrl, ahsDetails,
 }: TicketOptions = {}) {
   return {
     submission: {
@@ -166,6 +167,7 @@ function ticket({
       stage1Status: "pending", assignedTo: 7, description: "Fixture repair",
       createdAt: "2026-09-01T12:00:00Z", photos,
       photoThumbnails: JSON.stringify(thumbnails ?? {}), videoUrl, voiceNoteUrl,
+      ahsDetails: ahsDetails ?? null,
     },
     vrsAi: bridgePhotos === undefined ? null : {
       callId: `fixture-call-${id}`, contractVersion: "v9", state: "pending_review",
@@ -454,5 +456,30 @@ describe("Agent Photos & Media mounted runtime", () => {
     expect(commits.flat()).not.toContain("blob:agent-photo-1");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-photo-1");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows technician-filed AHS details beside their screenshots when the ticket has no bridge row", async () => {
+    await renderDashboard([ticket({
+      photos: JSON.stringify({ issue: [legacy], estimate: ["/objects/model-tag.jpg"] }),
+      videoUrl: JSON.stringify(["/objects/video-one.mp4"]),
+      ahsDetails: JSON.stringify({
+        contractNumber: "fixture-dispatch-1", brand: "Fixture brand",
+        modelNumber: "Fixture model", serialNumber: "Fixture serial",
+        customerName: "", parts: [],
+        prefilledFields: ["contractNumber", "brand", "modelNumber", "serialNumber"],
+      }),
+    })]);
+    const panel = document.querySelector<HTMLElement>('[data-testid="ahs-details-no-bridge"]');
+    expect(panel, "AHS fallback panel must be mounted on the ticket").not.toBeNull();
+    expect(document.querySelector('[data-testid="vrs-ai-bridge-status"]')).toBeNull();
+    expect(panel!.textContent).toContain("Submitted by technician in VRS Express");
+    expect(panel!.querySelector('[data-field="ahs-brand"]')?.textContent).toBe("Fixture brand");
+    expect(panel!.querySelector('[data-field="ahs-customer-name"]')?.textContent).toBe("Not provided");
+    expect(panel!.querySelector('[data-testid="ahs-review-video-0"]')?.getAttribute("src"))
+      .toBe("/objects/video-one.mp4");
+    await click('[data-testid="ahs-review-estimate-photo-0"]');
+    expect(fixtures.buildMediaUrls).toHaveBeenCalledWith(["/objects/model-tag.jpg"]);
+    expect(document.querySelector('[data-testid="img-lightbox-photo"]')?.getAttribute("src"))
+      .toBe("/objects/model-tag.jpg?media-token=fixture");
   });
 });
