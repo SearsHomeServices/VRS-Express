@@ -6,6 +6,7 @@
 // submissions.ahs_details; server/vrs-app-enroll.ts maps it onto the VRS AI
 // V9 authorize contract.
 import { z } from "zod";
+import { AHS_PREFILL_FIELDS } from "./ahs-prefill";
 
 export const AHS_APPLIANCE_KINDS = [
   { value: "cooktop", label: "Cooktop", division: "cooking" },
@@ -131,6 +132,9 @@ export const ahsDetailsSchema = z.object({
     .array(ahsPartSchema, { required_error: "Add at least one part" })
     .min(1, "Add at least one part")
     .max(10, "No more than 10 parts"),
+  // Which fields the server filled from the service order (Snowflake). Set
+  // only by the server at submit; any client-sent value is discarded.
+  prefilledFields: z.array(z.enum(AHS_PREFILL_FIELDS)).optional(),
 });
 
 export type AhsPart = z.infer<typeof ahsPartSchema>;
