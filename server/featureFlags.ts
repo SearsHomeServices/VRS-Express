@@ -54,3 +54,12 @@ export function isVrsAiAppEnrollEnabled(): boolean {
 export function isAhsServiceOrderPrefillEnabled(): boolean {
   return process.env.AHS_SERVICE_ORDER_PREFILL_ENABLED === "true";
 }
+
+// AHS customer name/address prefill from the HSSOM Order Lookup API
+// (server/services/hssom-order-lookup.ts). Default OFF everywhere; only the
+// exact value "true" enables it. Also needs HSSOM_ORDER_LOOKUP_URL,
+// HSSOM_AUTH_URL, HSSOM_CLIENT_CODE, HSSOM_CLIENT_SECRET and HSSOM_CLIENT_ID;
+// without them every lookup returns "unavailable" and no request is made.
+export function isAhsHssomCustomerPrefillEnabled(): boolean {
+  return process.env.AHS_HSSOM_CUSTOMER_PREFILL_ENABLED === "true";
+}
