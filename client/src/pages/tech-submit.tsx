@@ -50,14 +50,24 @@ import {
   type DraftEnvelope,
 } from "@/lib/draft-identity";
 import { getEtDateString } from "@shared/business-hours";
-import { ahsApplianceKind, ahsDetailsSchema, ahsGrandTotal, ahsPartLineTotal } from "@shared/ahs-details";
+import {
+  AHS_FAILURE_CAUSES,
+  AHS_TECH_RECOMMENDATIONS,
+  ahsApplianceKind,
+  ahsDetailsSchema,
+  ahsGrandTotal,
+  ahsPartLineTotal,
+} from "@shared/ahs-details";
 import {
   AhsApplianceKindField,
   AhsDetailsCard,
   addAhsDetailsIssues,
+  ahsDispatchNumberFromServiceOrder,
   emptyAhsDetailsForm,
+  omitAhsCustomerPiiFromDraft,
 } from "@/components/ahs-details-fields";
 import { useVrsAiAppEnrollEnabled } from "@/hooks/use-feature-flags";
+import { useAhsServiceOrderPrefill, useAhsServiceOrderPrefillEnabled } from "@/hooks/use-ahs-prefill";
 
 // Tyler 2026-06-30 — one-day holiday closure notice shown on the tech submit
 // form. Gated to the Eastern-Time calendar date so it appears only on July 4,
@@ -895,6 +905,13 @@ export default function TechSubmitPage() {
       form.setValue("ahsDetails", emptyAhsDetailsForm(), { shouldDirty: false });
     }
   });
+  // Brand / model / serial (and whether a dispatch number exists) from the
+  // service order. Off or unavailable → the AHS section is manual entry.
+  const ahsPrefillEnabled = useAhsServiceOrderPrefillEnabled();
+  const ahsPrefill = useAhsServiceOrderPrefill(form, {
+    enabled: ahsMode && ahsPrefillEnabled,
+    serviceOrder: watchedServiceOrder,
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: SubmissionFormData & { originalDescription?: string; aiEnhanced?: boolean }) => {
@@ -1210,7 +1227,8 @@ export default function TechSubmitPage() {
       }
       const currentLdap = (user as any).ldapId ?? user.racId ?? null;
       const draft = stampDraftIdentity({
-        formValues,
+        // Customer name and address are PII and never go to localStorage.
+        formValues: omitAhsCustomerPiiFromDraft(formValues),
         estimatePhotoUrls,
         issuePhotoUrls,
         photoThumbs,
@@ -1744,7 +1762,7 @@ export default function TechSubmitPage() {
               </CardContent>
             </Card>
 
-            {ahsMode && watchedValues.ahsDetails ? <AhsDetailsCard form={form} /> : null}
+            {ahsMode && watchedValues.ahsDetails ? <AhsDetailsCard form={form} prefill={ahsPrefill} /> : null}
 
             <Card>
               <CardContent className="p-4 space-y-4">
@@ -2425,36 +2443,44 @@ export default function TechSubmitPage() {
                   </div>
                 </div>
 
-                {pendingPayload?.ahsDetails && (
-                  <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-ahs-details">
+                {pendingPayload?.ahsDetails && (() => {
+                  const ahs = pendingPayload.ahsDetails;
+                  const row = (label: string, value: string | undefined, testId?: string) => (
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Contract #</span>
-                      <span className="font-medium text-right">{pendingPayload.ahsDetails.contractNumber}</span>
+                      <span className="text-muted-foreground">{label}</span>
+                      <span className="font-medium text-right" data-testid={testId}>{value || "—"}</span>
                     </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Customer</span>
-                      <span className="font-medium text-right">{pendingPayload.ahsDetails.customerName}</span>
+                  );
+                  const dispatch = ahs.contractNumber
+                    || (ahsDispatchNumberFromServiceOrder(ahsPrefill) ? "From service order" : undefined);
+                  return (
+                    <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-ahs-details">
+                      {row("Dispatch #", dispatch, "review-ahs-dispatch")}
+                      {row("Brand", ahs.brand, "review-ahs-brand")}
+                      {row("Model / Serial", ahs.modelNumber || ahs.serialNumber ? `${ahs.modelNumber || "—"} / ${ahs.serialNumber || "—"}` : undefined, "review-ahs-model-serial")}
+                      {row("Location", ahs.applianceLocation, "review-ahs-location")}
+                      {row("Failure cause", AHS_FAILURE_CAUSES.find((c) => c.value === ahs.failureCause)?.label, "review-ahs-failure-cause")}
+                      {row("Recommendation", AHS_TECH_RECOMMENDATIONS.find((r) => r.value === ahs.techRecommendation)?.label, "review-ahs-recommendation")}
+                      {ahs.customerName ? row("Customer", ahs.customerName) : null}
+                      <div className="pt-2 border-t">
+                        <p className="text-muted-foreground mb-1">Parts</p>
+                        <ul className="list-disc pl-5 space-y-0.5">
+                          {ahs.parts.map((part: any, i: number) => (
+                            <li key={i} className="font-medium">
+                              {part.partNumber} × {part.quantity} — ${ahsPartLineTotal(part).toFixed(2)}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      {row("Labor", `$${ahs.laborAmount.toFixed(2)}`, "review-ahs-labor")}
+                      {row("Tax", `$${ahs.taxAmount.toFixed(2)}`, "review-ahs-tax")}
+                      <div className="flex justify-between gap-3 pt-2 border-t">
+                        <span className="text-muted-foreground">Total (parts + labor + tax)</span>
+                        <span className="font-semibold text-right" data-testid="review-ahs-total">${ahsGrandTotal(ahs).toFixed(2)}</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Model / Serial</span>
-                      <span className="font-medium text-right">{pendingPayload.ahsDetails.modelNumber} / {pendingPayload.ahsDetails.serialNumber}</span>
-                    </div>
-                    <div className="pt-2 border-t">
-                      <p className="text-muted-foreground mb-1">Parts</p>
-                      <ul className="list-disc pl-5 space-y-0.5">
-                        {pendingPayload.ahsDetails.parts.map((part: any, i: number) => (
-                          <li key={i} className="font-medium">
-                            {part.partNumber} × {part.quantity} — ${ahsPartLineTotal(part).toFixed(2)}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="flex justify-between gap-3 pt-2 border-t">
-                      <span className="text-muted-foreground">Total (parts + labor + tax)</span>
-                      <span className="font-semibold text-right" data-testid="review-ahs-total">${ahsGrandTotal(pendingPayload.ahsDetails).toFixed(2)}</span>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {pendingData.requestType === "parts_nla" && (
                   <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-nla-parts">

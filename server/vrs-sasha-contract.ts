@@ -395,6 +395,72 @@ export function safeParseVrsOutboundSourceRequest(input: unknown):
     : { success: false, version, error: parsed.error };
 }
 
+// App-origin rows (technician tickets enrolled by vrs-app-enroll.ts, which
+// SASHA never saw) are sent to VRS AI with blanks where the tech left an
+// optional field empty. VRS AI's receiver hard-requires only service_order,
+// tech_id, tech_phone, callback and parts; every other field defaults to ""
+// and the agent says it will confirm the value with AHS. It speaks "N/A"
+// literally, so app-origin payloads send "" (or omit appliance_age) instead.
+//
+// This relaxation applies ONLY to app-origin V9 payloads, through the two
+// entry points below. The SASHA inbound /vrs/authorize schema, SASHA-origin
+// dispatch revalidation (safeParseVrsAuthorizeRequest) and the default
+// outbound parse in sendVrsAuthorizeRequest are unchanged.
+const vrsAuthorizeV9AppOriginShape = {
+  ...vrsAuthorizeV9RequestShape,
+  callback_url: cleanHttpsUrl,
+  customer_name: z.string().max(255),
+  customer_address: z.string().max(1_000),
+  service_address: z.string().max(1_000),
+  brand: z.string().max(100),
+  model_number: z.string().max(100),
+  serial_number: z.string().max(100),
+  appliance_age: z.number().finite().nonnegative().max(100).optional(),
+  appliance_grade: z.enum(["entry", "mid", "top", "N/A", ""]),
+  appliance_color: z.string().max(40),
+  contract_number: z.string(),
+  cta_no: z.string(),
+};
+
+const vrsAuthorizeV9AppOriginOutboundSchema = z
+  .object(vrsAuthorizeV9AppOriginShape)
+  .strict()
+  .superRefine((value, context) => {
+    if (value.cta_no !== value.contract_number) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cta_no"],
+        message: "cta_no must match contract_number",
+      });
+    }
+  });
+
+export type VrsAuthorizeV9AppOriginRequest = z.infer<
+  typeof vrsAuthorizeV9AppOriginOutboundSchema
+>;
+
+// Validation for app-origin bridge payloads: V9 with the relaxed fields
+// above. Older versions (never produced by app enrollment) keep the strict
+// outbound rules.
+export function safeParseVrsAppOriginOutboundRequest(input: unknown):
+  | {
+      success: true;
+      version: VrsAuthorizeContractVersion;
+      data: VrsAuthorizeRequest;
+    }
+  | {
+      success: false;
+      version: VrsAuthorizeContractVersion;
+      error: z.ZodError;
+    } {
+  const version = getVrsAuthorizeContractVersion(input);
+  if (version !== "v9") return safeParseVrsOutboundSourceRequest(input);
+  const parsed = vrsAuthorizeV9AppOriginOutboundSchema.safeParse(input);
+  return parsed.success
+    ? { success: true, version, data: parsed.data as unknown as VrsAuthorizeRequest }
+    : { success: false, version, error: parsed.error };
+}
+
 export function isValidVrsExpressCallbackUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -539,11 +605,16 @@ export async function sendVrsAuthorizeRequest(options: {
   callbackUrl: string;
   callbackSecret: string;
   payload: VrsAuthorizeRequest;
+  // True only for app-origin bridge rows (see isAppOriginVrsBridgeRecord):
+  // their V9 payload is checked with the relaxed app-origin schema.
+  appOrigin?: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<VrsAiAuthorizeResult> {
   const sourceVersion = getVrsAuthorizeContractVersion(options.payload);
   const sourcePayload = sourceVersion === "v9"
-    ? vrsAuthorizeV9OutboundSourceSchema.parse(options.payload)
+    ? (options.appOrigin
+      ? vrsAuthorizeV9AppOriginOutboundSchema
+      : vrsAuthorizeV9OutboundSourceSchema).parse(options.payload)
     : sourceVersion === "v8"
       ? vrsAuthorizeV8OutboundSourceSchema.parse(options.payload)
       : vrsAuthorizeV5OutboundSourceSchema.parse(options.payload);
@@ -567,11 +638,13 @@ export async function sendVrsAuthorizeRequest(options: {
     );
   }
 
-  const outboundPayload: VrsAuthorizeRequest = {
+  // App-origin payloads may carry "" grade / no appliance_age, which the
+  // shared request type does not model; the parse above is what vouches for them.
+  const outboundPayload = {
     ...sourcePayload,
     callback_url: callbackUrl.toString(),
     callback_secret: options.callbackSecret,
-  };
+  } as VrsAuthorizeRequest;
   const endpoint = new URL("/vrs/authorize", baseUrl);
   const fetchImpl = options.fetchImpl ?? fetch;
 
