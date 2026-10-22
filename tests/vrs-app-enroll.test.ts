@@ -512,6 +512,21 @@ describe("trimmed AHS form → VRS AI payload", () => {
     expect(built).toMatchObject({ ok: true, payload: { tech_recommendation: "replace" } });
   });
 
+  it("uses the server-stored HSSOM purchase year only when the age is blank", () => {
+    const blankAge = buildAppVrsAuthorizePayload(
+      { ...minimalTicket, ahsDetails: JSON.stringify({ ...minimalAhsDetails, purchaseYear: 2019 }) },
+      technician,
+    );
+    expect(blankAge).toMatchObject({ ok: true, payload: { purchase_year: 2019 } });
+    if (blankAge.ok) expect(blankAge.payload).not.toHaveProperty("appliance_age");
+    // The tech's age wins: createdAt 2026-10-08, appliance age 4.
+    const withAge = buildAppVrsAuthorizePayload(
+      { ...appTicket, ahsDetails: JSON.stringify({ ...ahsDetails, purchaseYear: 2019 }) },
+      technician,
+    );
+    expect(withAge).toMatchObject({ ok: true, payload: { purchase_year: 2022, appliance_age: 4 } });
+  });
+
   it("maps a ticket stored in the old shape (no recommendation) as a repair", () => {
     const { techRecommendation: _r, ...oldShape } = ahsDetails;
     const built = buildAppVrsAuthorizePayload(
