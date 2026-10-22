@@ -16,6 +16,10 @@ export const AHS_PREFILL_FIELDS = [
   "brand",
   "modelNumber",
   "serialNumber",
+  // From the HSSOM Order Lookup (server/services/hssom-order-lookup.ts).
+  // Customer PII: filled on the server only, never returned to the browser.
+  "customerName",
+  "customerAddress",
 ] as const;
 
 export type AhsPrefillField = (typeof AHS_PREFILL_FIELDS)[number];
@@ -28,6 +32,9 @@ export type AhsPrefillResponse =
       appliance: { brand?: string; modelNumber?: string; serialNumber?: string };
       // The value itself never leaves the server.
       hasDispatchNumber: boolean;
+      // True when the server will fill customer name and address from the
+      // HSSOM Order Lookup. The values themselves never leave the server.
+      hasCustomer?: boolean;
     }
   | { status: "not_found" }
   // Lookup disabled, Snowflake down, or a column mismatch. The form falls back
