@@ -184,9 +184,11 @@ export function buildAppVrsAuthorizePayload(
     ],
     appliance_color: details.applianceColor ?? "",
     contract_number: contractNumber,
-    // The V9 contract has no blank option for purchase_year (a year, "TBD"
-    // or "N/A"), and the form does not collect one.
-    purchase_year: "N/A",
+    // Derived from the appliance age the tech entered; "" when unknown.
+    purchase_year:
+      details.applianceAge === undefined
+        ? ""
+        : (submission.createdAt ?? new Date()).getUTCFullYear() - details.applianceAge,
     symptom: description,
     cta_no: contractNumber,
     district_number: district,

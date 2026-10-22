@@ -173,7 +173,8 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
       tax_amount: 15.6,
       part_price: 253.5,
       tech_recommendation: "repair",
-      purchase_year: "N/A",
+      // createdAt 2026-10-08, appliance age 4.
+      purchase_year: 2022,
       symptom: appTicket.issueDescription,
       appliance_photos: [],
     });
@@ -495,11 +496,12 @@ describe("trimmed AHS form → VRS AI payload", () => {
       appTicket.issueDescription,
       APP_ORIGIN_VRS_COMMENT,
     ]);
-    // purchase_year is the only N/A left: the V9 type has no blank for it.
+    // Nothing goes out as "N/A": VRS AI would speak it literally.
     const naFields = Object.entries(payload)
       .filter(([, value]) => value === "N/A")
       .map(([key]) => key);
-    expect(naFields).toEqual(["purchase_year"]);
+    expect(naFields).toEqual([]);
+    expect(payload.purchase_year).toBe("");
   });
 
   it("maps the tech's repair-or-replace choice", () => {

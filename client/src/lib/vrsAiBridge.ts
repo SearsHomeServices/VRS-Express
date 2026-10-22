@@ -43,7 +43,7 @@ export interface VrsAiBridgeStatus {
     contract_number?: string;
     cta_no?: string;
     district_number?: string;
-    purchase_year?: number | "TBD" | "N/A";
+    purchase_year?: number | "TBD" | "N/A" | "";
     symptom?: string;
     partner_id?: string;
     appliance_photos?: string[];

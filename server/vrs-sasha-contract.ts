@@ -420,6 +420,9 @@ const vrsAuthorizeV9AppOriginShape = {
   appliance_color: z.string().max(40),
   contract_number: z.string(),
   cta_no: z.string(),
+  // "" when the tech gave no appliance age: VRS AI would say "purchased
+  // around N/A" otherwise.
+  purchase_year: z.union([z.number().int().positive(), z.literal("TBD"), z.literal("N/A"), z.literal("")]),
 };
 
 const vrsAuthorizeV9AppOriginOutboundSchema = z

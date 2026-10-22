@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { UseFormReturn } from "react-hook-form";
 import { apiRequest } from "@/lib/queryClient";
-import { useAppConfig } from "@/hooks/use-feature-flags";
+import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import type { AhsPrefillResponse } from "@shared/ahs-prefill";
 import {
   ahsPrefillUpdates,
@@ -15,8 +15,7 @@ import {
 // `ahsServiceOrderPrefill`). Off unless the server says exactly true, so an
 // older server without the flag keeps the manual-entry form.
 export function useAhsServiceOrderPrefillEnabled(): boolean {
-  const { data } = useAppConfig();
-  return (data as { ahsServiceOrderPrefill?: unknown } | undefined)?.ahsServiceOrderPrefill === true;
+  return useFeatureFlags().ahsServiceOrderPrefill === true;
 }
 
 // Looks up the service order and fills brand, model and serial into the AHS

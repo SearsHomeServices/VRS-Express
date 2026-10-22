@@ -219,8 +219,9 @@ describe("AHS prefill rules", () => {
       prefilledFields: ["contractNumber", "brand", "modelNumber", "serialNumber"],
     });
     expect(details.brand).toBe(""); // input not mutated
-    // What gets stored still parses as valid details.
-    expect(parseStoredAhsDetails(JSON.stringify(next))).toEqual(next);
+    // What gets stored still parses as valid details (parsing may add
+    // schema defaults such as techRecommendation).
+    expect(parseStoredAhsDetails(JSON.stringify(next))).toMatchObject(next);
   });
 
   it("never overwrites a value the tech entered", () => {
