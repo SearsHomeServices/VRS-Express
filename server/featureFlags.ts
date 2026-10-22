@@ -44,3 +44,13 @@ export function isVrsBridgePhotoProxyEnabled(): boolean {
 export function isVrsAiAppEnrollEnabled(): boolean {
   return process.env.VRS_AI_APP_ENROLL_ENABLED === "true";
 }
+
+// AHS service-order prefill (server/ahs-prefill.ts). Default OFF everywhere;
+// only the exact value "true" enables it. When on, GET /api/tech/ahs-prefill
+// returns brand/model/serial for the tech form, and POST /api/submissions
+// fills blank AHS dispatch number/brand/model/serial from Snowflake
+// (IH_SERVICEORDER_FULLDETAIL_TBL) before the ticket is stored. Check the
+// unverified column names in server/services/snowflake-lookup.ts first.
+export function isAhsServiceOrderPrefillEnabled(): boolean {
+  return process.env.AHS_SERVICE_ORDER_PREFILL_ENABLED === "true";
+}

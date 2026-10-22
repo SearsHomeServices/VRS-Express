@@ -5,6 +5,7 @@ interface AppConfig {
   techHubPhotosEnabled: boolean;
   vrsBridgePhotoProxyEnabled: boolean;
   vrsAiAppEnrollEnabled?: boolean;
+  ahsServiceOrderPrefill?: boolean;
 }
 
 // Runtime feature flags sourced from GET /api/config. Defaults to disabled
@@ -31,4 +32,18 @@ export function useVrsBridgePhotoProxyEnabled(): boolean {
 export function useVrsAiAppEnrollEnabled(): boolean {
   const { data } = useAppConfig();
   return data?.vrsAiAppEnrollEnabled ?? false;
+}
+
+// Every runtime flag, each false until /api/config confirms it.
+export function useFeatureFlags() {
+  const { data } = useAppConfig();
+  return {
+    portal1099Enabled: data?.portal1099Enabled ?? false,
+    techHubPhotosEnabled: data?.techHubPhotosEnabled ?? false,
+    vrsBridgePhotoProxyEnabled: data?.vrsBridgePhotoProxyEnabled ?? false,
+    vrsAiAppEnrollEnabled: data?.vrsAiAppEnrollEnabled ?? false,
+    // AHS form reads brand/model/serial from GET /api/tech/ahs-prefill
+    // (server AHS_SERVICE_ORDER_PREFILL_ENABLED).
+    ahsServiceOrderPrefill: data?.ahsServiceOrderPrefill ?? false,
+  };
 }

@@ -73,6 +73,8 @@ import {
   ahsDetailsSchema,
   ahsDivisionFor,
   ahsGrandTotal,
+  parseStoredAhsDetails,
+  type AhsDetails,
 } from "@shared/ahs-details";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import {
@@ -80,6 +82,7 @@ import {
   isTechHubPhotosEnabled,
   isVrsBridgePhotoProxyEnabled,
   isVrsAiAppEnrollEnabled,
+  isAhsServiceOrderPrefillEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -116,7 +119,15 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
-import { fetchProcIdForServiceOrder } from "./services/snowflake";
+import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder } from "./services/snowflake";
+import {
+  applyAhsServiceOrderPrefill,
+  boundedAhsPrefillLookup,
+  isAhsOrder,
+  keepPrefilledFromPrevious,
+  toAhsPrefillResponse,
+  withoutPrefilledFields,
+} from "./ahs-prefill";
 import { applyProcIdRepair } from "./services/snowflake-lookup";
 import { runTechnicianSync } from "./services/tech-sync";
 import { isTechPdcConfigured, pushSubmissionToTechPdc, rejectionTimestampOf, TECH_PDC_NOT_CONFIGURED_MESSAGE } from "./services/tech-pdc";
@@ -173,6 +184,12 @@ const execFileAsync = promisify(execFile);
 const WARRANTY_LOOKUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const WARRANTY_LOOKUP_MAX_PER_WINDOW = 20;
 const warrantyLookupLog = new Map<number, number[]>(); // userId -> timestamps
+
+// Same per-user cap for GET /api/tech/ahs-prefill, tracked separately so the
+// two lookups never eat each other's budget.
+const AHS_PREFILL_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const AHS_PREFILL_MAX_PER_WINDOW = 20;
+const ahsPrefillLookupLog = new Map<number, number[]>(); // userId -> timestamps
 
 // ---------------------------------------------------------------------------
 // Video conversion helpers (Task: fix admin video playback for failed iPhone
@@ -678,6 +695,7 @@ export async function registerRoutes(
       techHubPhotosEnabled: isTechHubPhotosEnabled(),
       vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
       vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
+      ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),
     });
   });
 
@@ -1179,8 +1197,9 @@ export async function registerRoutes(
       // AHS details only apply to authorization requests. Their detailed
       // appliance type decides the agent division, so every downstream use
       // of applianceType (routing, broadcasts, SMS) stays consistent.
-      const ahsDetails = parsed.data.requestType === "authorization"
-        ? parsed.data.ahsDetails
+      // prefilledFields is server-only provenance (set by the prefill below).
+      let ahsDetails = parsed.data.requestType === "authorization" && parsed.data.ahsDetails
+        ? withoutPrefilledFields(parsed.data.ahsDetails)
         : undefined;
       if (ahsDetails) {
         parsed.data.applianceType = ahsDivisionFor(ahsDetails.applianceKind);
@@ -1477,13 +1496,21 @@ export async function registerRoutes(
       // tech resubmitted" in their UI) but the ticket itself is unassigned.
       let originalAgent: number | null = null; // assignment intentionally disabled
       let priorReviewer: number | null = null; // for informational notification only
+      let previousAhsDetails: AhsDetails | null = null;
       if (parsed.data.resubmissionOf) {
         const origSub = await storage.getSubmission(parsed.data.resubmissionOf);
         if (origSub) {
           priorReviewer = origSub.reviewedBy || origSub.stage1ReviewedBy || null;
+          previousAhsDetails = parseStoredAhsDetails(origSub.ahsDetails);
         }
       }
 
+      // AHS service-order prefill (server/ahs-prefill.ts): runs alongside the
+      // ProcID lookup, settles within ~5s and never rejects, so it can never
+      // block or fail the submission.
+      const ahsPrefillLookup = ahsDetails && isAhsServiceOrderPrefillEnabled()
+        ? boundedAhsPrefillLookup(parsed.data.serviceOrder, fetchAhsServiceOrderPrefill)
+        : null;
 
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
       if (procIdResult.status === "LOOKUP_UNAVAILABLE") {
@@ -1512,6 +1539,22 @@ export async function registerRoutes(
       const finalWarrantyProvider = derivedWarranty ? derivedWarranty.warrantyProvider : (parsed.data.warrantyProvider || null);
       if (derivedWarranty && derivedWarranty.warrantyType !== parsed.data.warrantyType) {
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
+      }
+
+      // Fill blank dispatch number / brand / model / serial before the details
+      // are stored and before VRS AI enrollment reads them. Tech values win.
+      if (ahsDetails && ahsPrefillLookup) {
+        const prefill = await ahsPrefillLookup;
+        if (finalWarrantyType === "american_home_shield" && isAhsOrder(prefill)) {
+          ahsDetails = applyAhsServiceOrderPrefill(ahsDetails, prefill);
+        }
+        console.log(
+          `[ahs-prefill] submit SO=${parsed.data.serviceOrder} status=${prefill.status} ` +
+          `filled=${ahsDetails.prefilledFields?.join(",") || "none"}`,
+        );
+      }
+      if (ahsDetails && previousAhsDetails) {
+        ahsDetails = keepPrefilledFromPrevious(ahsDetails, previousAhsDetails);
       }
 
       // Architect-flagged race-window close. The pre-handler call to
@@ -7452,6 +7495,58 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Snowflake sync error:", error);
       return res.status(500).json({ error: `Sync failed: ${error.message || "Unknown error"}` });
+    }
+  });
+
+  app.get("/api/tech/ahs-prefill", authenticateToken, requireRole("technician", "flexed_technician"), async (req, res) => {
+    // AHS service-order prefill for the tech form (shared/ahs-prefill.ts).
+    // Same gates as lookup-warranty below: role gate, no prior-submission
+    // requirement, and its own per-user rate limit.
+    //
+    // Response scoping: only brand / model / serial and whether a dispatch
+    // number exists. The dispatch number itself is filled server-side at
+    // submit; it, the partner ID and the client name never reach the browser.
+    // Non-AHS orders answer not_found. Every outcome is 200 so the form falls
+    // back to manual entry without error handling.
+    res.set("Cache-Control", "no-store");
+    try {
+      if (!isAhsServiceOrderPrefillEnabled()) {
+        return res.json({ status: "unavailable" });
+      }
+      const authReq = req as AuthenticatedRequest;
+      const caller = authReq.user;
+      if (!caller) {
+        return res.status(401).json({ error: "No user found" });
+      }
+      const callerUserId = caller.id;
+      const callerIdentity = caller.ldapId ?? caller.email;
+
+      const district = String(req.query.district || "").trim();
+      const serviceOrder = String(req.query.serviceOrder || "").trim();
+      if (!/^\d{4}$/.test(district) || !/^\d{8}$/.test(serviceOrder)) {
+        return res.status(400).json({ error: "Invalid district or service order format" });
+      }
+      const so = `${district}-${serviceOrder}`;
+
+      const now = Date.now();
+      const cutoff = now - AHS_PREFILL_WINDOW_MS;
+      const recentTimestamps = (ahsPrefillLookupLog.get(callerUserId) ?? []).filter(ts => ts > cutoff);
+      if (recentTimestamps.length >= AHS_PREFILL_MAX_PER_WINDOW) {
+        console.warn(`[ahs-prefill] rate-limit exceeded: user=${callerIdentity} (${callerUserId}) so=${so} count=${recentTimestamps.length}`);
+        return res.status(429).json({ error: "Too many service order lookups. Please try again later." });
+      }
+      recentTimestamps.push(now);
+      ahsPrefillLookupLog.set(callerUserId, recentTimestamps);
+
+      // Bounded at ~5s; never logs the returned values.
+      const response = toAhsPrefillResponse(
+        await boundedAhsPrefillLookup(so, fetchAhsServiceOrderPrefill),
+      );
+      console.info(`[ahs-prefill] lookup: user=${callerIdentity} (${callerUserId}) so=${so} status=${response.status}`);
+      res.json(response);
+    } catch (err) {
+      console.error("ahs-prefill error:", err instanceof Error ? err.message : String(err));
+      res.json({ status: "unavailable" });
     }
   });
 
