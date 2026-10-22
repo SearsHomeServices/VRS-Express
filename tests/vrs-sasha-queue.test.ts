@@ -129,6 +129,39 @@ describe("VRS Express bridge orchestration", () => {
   });
 
   it.each([
+    ["", "app"],
+    ["https://sasha-dev.stage.nextgen.shs.com/sasha/api/vrs/webhook", "sasha"],
+    [undefined, "sasha"],
+  ] as const)(
+    "derives the ticket origin from callback URL %j without exposing it",
+    async (callbackUrl, origin) => {
+      const {
+        callback_secret: _callbackSecret,
+        ...storedPayload
+      } = validV8AuthorizePayload;
+      const store = new storeModule.DrizzleVrsBridgeStore(async () => ({
+        callId: "vrs_call_origin",
+        state: "pending_review",
+        providerCallId: null,
+        dispatchError: null,
+        failureReason: null,
+        retryable: null,
+        dispatchedAt: null,
+        requestPayload: storedPayload,
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
+      }));
+
+      const status = await store.getStatusBySubmissionId(7);
+      expect(status?.origin).toBe(origin);
+      expect(status).not.toHaveProperty("callbackUrl");
+      expect(status?.reviewContext).not.toHaveProperty("callback_url");
+      if (callbackUrl) {
+        expect(JSON.stringify(status)).not.toContain(callbackUrl);
+      }
+    },
+  );
+
+  it.each([
     ["v5", validV5AuthorizePayload],
     ["v8", {
       ...validV8AuthorizePayload,

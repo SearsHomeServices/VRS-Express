@@ -388,7 +388,9 @@ describe("VRS AI bridge review rendering", () => {
       "utf8",
     ).replace(/\r\n/g, "\n");
     const componentUse = dashboardSource.indexOf(
-      "<VrsAiBridgePanel bridge={selectedSubmission.vrsAi} />",
+      `<VrsAiBridgePanel
+                            bridge={selectedSubmission.vrsAi}
+                            submission={selectedSubmission}`,
     );
 
     expect(componentUse).toBeGreaterThan(-1);
@@ -399,5 +401,263 @@ describe("VRS AI bridge review rendering", () => {
 
     // Photos & Media integration is exercised by the mounted dashboard in
     // vrs-agent-media.test.ts, not by assertions about its source text.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 1 reviewer: technician-filed AHS tickets (submissions.ahs_details)
+// ---------------------------------------------------------------------------
+
+const appOriginBridge: VrsAiBridgeStatus = {
+  ...v9Bridge,
+  callId: "vrs_call_app_origin",
+  origin: "app",
+};
+
+const prefilledAhsDetails = {
+  contractNumber: "ahs-dispatch-77001",
+  customerName: "",
+  customerAddress: "   ",
+  applianceKind: "washer",
+  brand: "brand-from-so-Whirlpool",
+  modelNumber: "model-from-so-WTW5000",
+  serialNumber: "serial-from-so-C3129",
+  applianceLocation: "Laundry room",
+  applianceGrade: "",
+  failureCause: "normal-wear",
+  techRecommendation: "replace",
+  laborAmount: 120,
+  taxAmount: 8.5,
+  parts: [{
+    partNumber: "part-WPW10503278",
+    quantity: 2,
+    description: "part-desc-control-board",
+    unitPrice: 50.25,
+    partFunction: "",
+  }],
+  prefilledFields: ["contractNumber", "brand", "modelNumber", "serialNumber"],
+};
+
+const ticketMedia = {
+  photos: JSON.stringify({
+    issue: ["/objects/issue-1.jpg"],
+    estimate: ["/objects/model-tag.jpg", "/objects/estimate.jpg"],
+  }),
+  photoThumbnails: JSON.stringify({}),
+  videoUrl: JSON.stringify([
+    "/objects/video-1.mp4",
+    "/objects/video-2.mp4",
+    "/objects/video-3.mp4",
+  ]),
+};
+
+type PanelProps = {
+  bridge: VrsAiBridgeStatus | null | undefined;
+  submission?: {
+    ahsDetails?: string | null;
+    photos?: string | null;
+    photoThumbnails?: string | null;
+    videoUrl?: string | null;
+  } | null;
+};
+
+function renderAhsPanel(props: PanelProps): string {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  queryClient.setQueryData(["/api/config"], {
+    portal1099Enabled: false,
+    techHubPhotosEnabled: false,
+    vrsBridgePhotoProxyEnabled: false,
+  });
+  return renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(reviewComponents.VrsAiBridgePanel, props),
+    ),
+  );
+}
+
+// The source badge rendered next to one AHS field's label.
+function fieldSource(html: string, field: string): string | null {
+  const start = html.indexOf(`data-field-wrapper="${field}"`);
+  if (start === -1) return null;
+  const end = html.indexOf(`data-field="${field}"`, start);
+  return /data-source="([a-z_]+)"/.exec(html.slice(start, end))?.[1] ?? null;
+}
+
+describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
+  it("labels the source as the technician in VRS Express for app-origin rows", () => {
+    const html = renderAhsPanel({ bridge: appOriginBridge });
+    expect(html).toMatch(
+      /data-testid="vrs-ai-bridge-source"[^>]*>Source: Submitted by technician in VRS Express</,
+    );
+    expect(html).not.toContain("Review SASHA / Tech Hub details");
+    expect(html).toContain("Review the VRS AI request built from these details");
+  });
+
+  it.each([["sasha" as const], [undefined]])(
+    "keeps the SASHA label for SASHA rows (origin %s)",
+    (origin) => {
+      const html = renderAhsPanel({ bridge: { ...v9Bridge, origin } });
+      expect(html).toMatch(/data-testid="vrs-ai-bridge-source"[^>]*>Source: SASHA</);
+      expect(html).not.toContain("Submitted by technician in VRS Express");
+      expect(html).toContain("Review SASHA / Tech Hub details");
+      expect(html).not.toContain('data-testid="ahs-ticket-review"');
+    },
+  );
+
+  it("marks prefilled fields as from the service order and everything else as entered by tech", () => {
+    const html = renderAhsPanel({
+      bridge: appOriginBridge,
+      submission: { ahsDetails: JSON.stringify(prefilledAhsDetails), ...ticketMedia },
+    });
+
+    expect(html).toContain('data-testid="ahs-ticket-review"');
+    for (const field of ["ahs-contract-number", "ahs-brand", "ahs-model", "ahs-serial"]) {
+      expect(fieldSource(html, field), field).toBe("service_order");
+    }
+    for (const field of [
+      "ahs-customer-name",
+      "ahs-customer-address",
+      "ahs-appliance-type",
+      "ahs-appliance-age",
+      "ahs-appliance-location",
+      "ahs-appliance-grade",
+      "ahs-appliance-color",
+      "ahs-failure-cause",
+      "ahs-tech-recommendation",
+      "ahs-labor",
+      "ahs-tax",
+      "ahs-part-0-number",
+      "ahs-part-0-function",
+      "ahs-part-0-failure-reason",
+    ]) {
+      expect(fieldSource(html, field), field).toBe("tech");
+    }
+    // Calculated totals are neither typed nor prefilled.
+    expect(fieldSource(html, "ahs-parts-total")).toBeNull();
+    expect(html).toContain("From service order");
+    expect(html).toContain("Entered by tech");
+    expect(html).toContain('data-testid="ahs-prefill-hint"');
+    expect(html).toContain("model tag photo");
+
+    expectField(html, "ahs-contract-number", "ahs-dispatch-77001");
+    expectField(html, "ahs-brand", "brand-from-so-Whirlpool");
+    expectField(html, "ahs-model", "model-from-so-WTW5000");
+    expectField(html, "ahs-serial", "serial-from-so-C3129");
+    expectField(html, "ahs-appliance-type", "Washer");
+    expectField(html, "ahs-failure-cause", "Normal wear");
+    expectField(html, "ahs-tech-recommendation", "Replace");
+    expectField(html, "ahs-part-0-quantity", "2");
+    expectField(html, "ahs-part-0-line-total", "$100.50");
+    expectField(html, "ahs-parts-total", "$100.50");
+    expectField(html, "ahs-total", "$229.00");
+  });
+
+  it("treats every field as entered by tech when nothing was prefilled", () => {
+    const { prefilledFields: _prefilled, ...typed } = prefilledAhsDetails;
+    const html = renderAhsPanel({
+      bridge: appOriginBridge,
+      submission: { ahsDetails: JSON.stringify(typed) },
+    });
+    for (const field of ["ahs-contract-number", "ahs-brand", "ahs-model", "ahs-serial"]) {
+      expect(fieldSource(html, field), field).toBe("tech");
+    }
+    expect(html).not.toContain('data-source="service_order"');
+    expect(html).not.toContain('data-testid="ahs-prefill-hint"');
+  });
+
+  it('shows blank and missing optional fields as "Not provided", never "N/A"', () => {
+    const html = renderAhsPanel({
+      bridge: appOriginBridge,
+      submission: { ahsDetails: JSON.stringify(prefilledAhsDetails), ...ticketMedia },
+    });
+    for (const field of [
+      "ahs-customer-name",
+      "ahs-customer-address",
+      "ahs-appliance-grade",
+      "ahs-appliance-color",
+      "ahs-appliance-age",
+      "ahs-part-0-function",
+      "ahs-part-0-failure-reason",
+    ]) {
+      expectField(html, field, "Not provided");
+    }
+    const ahsSection = html.slice(
+      html.indexOf('data-testid="ahs-ticket-review"'),
+      html.indexOf("Review the VRS AI request built from these details"),
+    );
+    expect(ahsSection).not.toContain("N/A");
+  });
+
+  it("shows the model/serial and estimate screenshots and up to 3 videos through the media-token components", () => {
+    const html = renderAhsPanel({
+      bridge: appOriginBridge,
+      submission: {
+        ahsDetails: JSON.stringify(prefilledAhsDetails),
+        ...ticketMedia,
+        videoUrl: JSON.stringify([
+          "/objects/video-1.mp4",
+          "/objects/video-2.mp4",
+          "/objects/video-3.mp4",
+          "/objects/video-4.mp4",
+        ]),
+      },
+    });
+    expect(html).toContain("Model, serial &amp; estimate screenshots (2)");
+    expect(html).toContain('data-testid="ahs-review-estimate-photo-0"');
+    expect(html).toContain('data-testid="ahs-review-estimate-photo-1"');
+    expect(html).not.toContain('data-testid="ahs-review-estimate-photo-2"');
+    expect(html).toContain("Videos (3)");
+    expect(html).toContain('data-testid="ahs-review-video-2"');
+    expect(html).not.toContain('data-testid="ahs-review-video-3"');
+    // MediaImage/MediaVideo only set src once a scoped media token arrives;
+    // raw /objects/ paths must never be rendered as a src.
+    expect(html).not.toMatch(/src="\/objects\//);
+  });
+
+  it("still shows the AHS details when the ticket has no bridge row", () => {
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: { ahsDetails: JSON.stringify(prefilledAhsDetails), ...ticketMedia },
+    });
+    expect(html).toContain('data-testid="ahs-details-no-bridge"');
+    expect(html).not.toContain('data-testid="vrs-ai-bridge-status"');
+    expect(html).toMatch(
+      /data-testid="vrs-ai-bridge-source"[^>]*>Source: Submitted by technician in VRS Express</,
+    );
+    expect(html).toContain("not enrolled in VRS AI");
+    expectField(html, "ahs-brand", "brand-from-so-Whirlpool");
+    expect(fieldSource(html, "ahs-brand")).toBe("service_order");
+    expectField(html, "ahs-customer-name", "Not provided");
+    expect(html).toContain('data-testid="ahs-review-estimate-photo-0"');
+  });
+
+  it("reads fields the strict schema does not know yet and ignores unknown prefill names", () => {
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: {
+        ahsDetails: JSON.stringify({
+          brand: "brand-typed",
+          techRecommendation: "repair",
+          prefilledFields: ["customerName", "brand"],
+          parts: [],
+        }),
+      },
+    });
+    expectField(html, "ahs-tech-recommendation", "Repair");
+    expect(fieldSource(html, "ahs-brand")).toBe("service_order");
+    expect(fieldSource(html, "ahs-customer-name")).toBe("tech");
+    expectField(html, "ahs-parts-total", "Not provided");
+    expectField(html, "ahs-total", "Not provided");
+  });
+
+  it("renders nothing without a bridge row or AHS details", () => {
+    expect(renderAhsPanel({ bridge: null, submission: { ahsDetails: null } })).toBe("");
+    expect(renderAhsPanel({ bridge: null, submission: { ahsDetails: "not-json" } })).toBe("");
+    expect(renderAhsPanel({ bridge: null, submission: { ahsDetails: "[]" } })).toBe("");
+    expect(renderAhsPanel({ bridge: undefined, submission: null })).toBe("");
   });
 });

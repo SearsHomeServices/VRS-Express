@@ -7,6 +7,9 @@ export interface VrsAiBridgeStatus {
   failureReason: string | null;
   retryable: boolean | null;
   dispatchedAt: string | Date | null;
+  // "app" when a technician filed the ticket directly in VRS Express (no
+  // SASHA). Absent on older responses; treat that as SASHA.
+  origin?: "sasha" | "app";
   reviewContext?: {
     service_order: string;
     reason_for_call: string;
