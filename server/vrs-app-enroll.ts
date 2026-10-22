@@ -184,10 +184,11 @@ export function buildAppVrsAuthorizePayload(
     ],
     appliance_color: details.applianceColor ?? "",
     contract_number: contractNumber,
-    // Derived from the appliance age the tech entered; "" when unknown.
+    // Derived from the appliance age the tech entered, else the HSSOM
+    // purchase year the server stored; "" when unknown.
     purchase_year:
       details.applianceAge === undefined
-        ? ""
+        ? details.purchaseYear ?? ""
         : (submission.createdAt ?? new Date()).getUTCFullYear() - details.applianceAge,
     symptom: description,
     cta_no: contractNumber,

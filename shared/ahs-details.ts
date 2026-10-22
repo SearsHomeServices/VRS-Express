@@ -171,6 +171,10 @@ export const ahsDetailsSchema = z.object({
   // Which fields the server filled from the service order (Snowflake). Set
   // only by the server at submit; any client-sent value is discarded.
   prefilledFields: z.array(z.enum(AHS_PREFILL_FIELDS)).optional(),
+  // Purchase year from the HSSOM Order Lookup, set by the server only when
+  // the tech left the appliance age blank (never an invented age). Any
+  // client-sent value is discarded.
+  purchaseYear: z.number().int().min(1900).max(2100).optional(),
 });
 
 export type AhsPart = z.infer<typeof ahsPartSchema>;

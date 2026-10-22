@@ -121,13 +121,16 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder } from "./services/snowflake";
 import {
-  applyAhsServiceOrderPrefill,
-  boundedAhsPrefillLookup,
-  isAhsOrder,
+  applyAhsSubmitPrefill,
+  boundedServerDerivedAhs,
   keepPrefilledFromPrevious,
+  lookupAhsPrefillSources,
+  needsServerDerivedAhs,
+  prefilledFieldNames,
   toAhsPrefillResponse,
-  withoutPrefilledFields,
+  withoutServerOnlyFields,
 } from "./ahs-prefill";
+import { lookupHssomOrder } from "./services/hssom-order-lookup";
 import { applyProcIdRepair } from "./services/snowflake-lookup";
 import { runTechnicianSync } from "./services/tech-sync";
 import { isTechPdcConfigured, pushSubmissionToTechPdc, rejectionTimestampOf, TECH_PDC_NOT_CONFIGURED_MESSAGE } from "./services/tech-pdc";
@@ -1197,9 +1200,9 @@ export async function registerRoutes(
       // AHS details only apply to authorization requests. Their detailed
       // appliance type decides the agent division, so every downstream use
       // of applianceType (routing, broadcasts, SMS) stays consistent.
-      // prefilledFields is server-only provenance (set by the prefill below).
+      // prefilledFields and purchaseYear are server-only (set by the prefill below).
       let ahsDetails = parsed.data.requestType === "authorization" && parsed.data.ahsDetails
-        ? withoutPrefilledFields(parsed.data.ahsDetails)
+        ? withoutServerOnlyFields(parsed.data.ahsDetails)
         : undefined;
       if (ahsDetails) {
         parsed.data.applianceType = ahsDivisionFor(ahsDetails.applianceKind);
@@ -1505,11 +1508,16 @@ export async function registerRoutes(
         }
       }
 
-      // AHS service-order prefill (server/ahs-prefill.ts): runs alongside the
-      // ProcID lookup, settles within ~5s and never rejects, so it can never
-      // block or fail the submission.
-      const ahsPrefillLookup = ahsDetails && isAhsServiceOrderPrefillEnabled()
-        ? boundedAhsPrefillLookup(parsed.data.serviceOrder, fetchAhsServiceOrderPrefill)
+      // AHS service-order prefill (server/ahs-prefill.ts): Snowflake and the
+      // HSSOM Order Lookup run in parallel alongside the ProcID lookup. Each
+      // settles within ~5s and never rejects, so they can never block or fail
+      // the submission. lookupHssomOrder answers unavailable while its own
+      // flag is off.
+      const ahsPrefillLookup = ahsDetails
+        ? lookupAhsPrefillSources(parsed.data.serviceOrder, {
+          snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
+          hssom: lookupHssomOrder,
+        })
         : null;
 
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
@@ -1541,16 +1549,19 @@ export async function registerRoutes(
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
       }
 
-      // Fill blank dispatch number / brand / model / serial before the details
-      // are stored and before VRS AI enrollment reads them. Tech values win.
+      // Fill blank dispatch number / brand / model / serial / customer name and
+      // address (and purchaseYear when the age is blank) before the details
+      // are stored and before VRS AI enrollment reads them. AHS tickets only;
+      // tech values win. Logs field names, never values.
       if (ahsDetails && ahsPrefillLookup) {
-        const prefill = await ahsPrefillLookup;
-        if (finalWarrantyType === "american_home_shield" && isAhsOrder(prefill)) {
-          ahsDetails = applyAhsServiceOrderPrefill(ahsDetails, prefill);
-        }
+        const sources = await ahsPrefillLookup;
+        ahsDetails = applyAhsSubmitPrefill(ahsDetails, sources, {
+          finalWarrantyType,
+          derivedWarrantyType: derivedWarranty?.warrantyType,
+        });
         console.log(
-          `[ahs-prefill] submit SO=${parsed.data.serviceOrder} status=${prefill.status} ` +
-          `filled=${ahsDetails.prefilledFields?.join(",") || "none"}`,
+          `[ahs-prefill] submit SO=${parsed.data.serviceOrder} snowflake=${sources.snowflake.status} ` +
+          `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDetails).join(",") || "none"}`,
         );
       }
       if (ahsDetails && previousAhsDetails) {
@@ -7504,16 +7515,17 @@ export async function registerRoutes(
     // Same gates as lookup-warranty below: role gate, no prior-submission
     // requirement, and its own per-user rate limit.
     //
+    // Sources: Snowflake (behind isAhsServiceOrderPrefillEnabled) and the
+    // HSSOM Order Lookup (behind its own flag inside lookupHssomOrder), in
+    // parallel and bounded at ~5s each.
+    //
     // Response scoping: only brand / model / serial and whether a dispatch
-    // number exists. The dispatch number itself is filled server-side at
-    // submit; it, the partner ID and the client name never reach the browser.
-    // Non-AHS orders answer not_found. Every outcome is 200 so the form falls
-    // back to manual entry without error handling.
+    // number and the customer name + address exist. Those values are filled
+    // server-side at submit; they, the partner ID and the client name never
+    // reach the browser. Non-AHS orders answer not_found. Every outcome is 200
+    // so the form falls back to manual entry without error handling.
     res.set("Cache-Control", "no-store");
     try {
-      if (!isAhsServiceOrderPrefillEnabled()) {
-        return res.json({ status: "unavailable" });
-      }
       const authReq = req as AuthenticatedRequest;
       const caller = authReq.user;
       if (!caller) {
@@ -7539,11 +7551,21 @@ export async function registerRoutes(
       recentTimestamps.push(now);
       ahsPrefillLookupLog.set(callerUserId, recentTimestamps);
 
-      // Bounded at ~5s; never logs the returned values.
-      const response = toAhsPrefillResponse(
-        await boundedAhsPrefillLookup(so, fetchAhsServiceOrderPrefill),
+      // Bounded at ~5s; never logs the returned values. HSSOM has no warranty
+      // data: without a Snowflake row the order counts as AHS only by the
+      // ProcID derivation submit uses (cached, also bounded).
+      const sources = await lookupAhsPrefillSources(so, {
+        snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
+        hssom: lookupHssomOrder,
+      });
+      const serverDerivedAhs = needsServerDerivedAhs(sources)
+        ? await boundedServerDerivedAhs(so, fetchProcIdForServiceOrder)
+        : undefined;
+      const response = toAhsPrefillResponse(sources.snowflake, sources.hssom, serverDerivedAhs);
+      console.info(
+        `[ahs-prefill] lookup: user=${callerIdentity} (${callerUserId}) so=${so} status=${response.status} ` +
+        `snowflake=${sources.snowflake.status} hssom=${sources.hssom.status}`,
       );
-      console.info(`[ahs-prefill] lookup: user=${callerIdentity} (${callerUserId}) so=${so} status=${response.status}`);
       res.json(response);
     } catch (err) {
       console.error("ahs-prefill error:", err instanceof Error ? err.message : String(err));
