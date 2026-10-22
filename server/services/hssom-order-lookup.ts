@@ -3,10 +3,20 @@
 // The exported HssomOrderLookupResult and lookupHssomOrder are the contract
 // with server/ahs-prefill.ts; keep the names and shape.
 //
-// Same service ai-agent-mcp calls through CustomerTools.
-// get_customer_details_by_order in gateway mode (HssomLookupClient with
-// use_gateway=True): GET {HSSOM_ORDER_LOOKUP_URL}/{orderId} with the HSSOM
-// bearer token (server/services/hssom-auth.ts) and a clientId header.
+// Same service the scheduling optimizer calls through HssomLookupClient in
+// gateway mode (src/clients/hssom_lookup_client.py): GET
+// {HSSOM_ORDER_LOOKUP_URL}/{orderId} with the HSSOM bearer token
+// (server/services/hssom-auth.ts) plus the Order Lookup headers (see
+// lookupHeaders below).
+//
+// HSSOM_ORDER_LOOKUP_URL is required and has no default. Examples:
+//   PROD (known good): https://hssom-api-gateway.shs-core.com/v1/api/HSSOMOrderLookupService/services/domi/orders
+//     (optimizer .env.example HSSOM_LOOKUP_URL_PROD_OPEN; HTTP 200 recorded
+//     in its troubleshooting notes, Part 20)
+//   QA (UNVERIFIED, inferred from the QA gateway host used by HSSOM auth,
+//     create, reschedule and message):
+//     https://hssom-api-gateway-qa.stage.nextgen.shs.com/v1/api/HSSOMOrderLookupService/services/domi/orders
+//
 // Disabled unless AHS_HSSOM_CUSTOMER_PREFILL_ENABLED is exactly "true" and
 // the HSSOM URLs and credentials are configured. Logs only the order ID,
 // status, HTTP status and duration: never customer values, tokens or bodies.
@@ -55,7 +65,11 @@ export function buildHssomOrderId(district: string, bareServiceOrder: string): s
 
 // ---------------------------------------------------------------------------
 // Response normalization (paths from ai-agent-mcp CustomerDetails.
-// from_hssom_response, src/agent_tools/data_service/models/customer_details.py)
+// from_hssom_response, src/agent_tools/data_service/models/customer_details.py;
+// the optimizer's copy, src/data_service/models/customer_details.py:203-289,
+// reads the same paths: serviceOrder wrapper, customer.name, customer.address,
+// merchandise.brand.brandName / modelNumber / serialNumber / purchaseDate,
+// thirdParty.contractNumber)
 // ---------------------------------------------------------------------------
 
 type Json = Record<string, unknown>;
@@ -149,9 +163,21 @@ export function classifyHssomOrderBody(body: unknown): HssomOrderLookupResult {
 // Client
 // ---------------------------------------------------------------------------
 
+// Order Lookup "clientid" value. Lookup and CreateOrder use different
+// headers: CreateOrder takes clientId: WBOT, Lookup takes clientid: TABS with
+// servicename: IHSOLookup and serviceversion: 1.0. With the wrong client
+// header the gateway still answers 200 but drops latitude/longitude from
+// customer.address (optimizer commit 39047f9, verified against the prod
+// gateway 2026-04-30). The optimizer has since added AIAG as its preferred
+// value with TABS as the fallback (commit 264bffe); TABS is the value
+// verified to return the full address. HSSOM_CLIENT_ID is the auth-service
+// client ID and is not sent here unless HSSOM_LOOKUP_CLIENT_ID is set to it.
+export const DEFAULT_HSSOM_LOOKUP_CLIENT_ID = "TABS";
+
 export interface HssomOrderLookupConfig {
   lookupUrl: string;
-  clientId: string;
+  // Sent as the Order Lookup "clientid" header (HSSOM_LOOKUP_CLIENT_ID).
+  lookupClientId: string;
   timeoutMs: number;
 }
 
@@ -160,7 +186,25 @@ export function readHssomOrderLookupConfig(env: NodeJS.ProcessEnv = process.env)
   const lookupUrl = env.HSSOM_ORDER_LOOKUP_URL?.trim();
   const auth = readHssomAuthConfig(env);
   if (!isHttpsUrl(lookupUrl) || !auth) return null;
-  return { lookupUrl: lookupUrl.replace(/\/+$/, ""), clientId: auth.clientId, timeoutMs: hssomTimeoutMs(env) };
+  return {
+    lookupUrl: lookupUrl.replace(/\/+$/, ""),
+    lookupClientId: env.HSSOM_LOOKUP_CLIENT_ID?.trim() || DEFAULT_HSSOM_LOOKUP_CLIENT_ID,
+    timeoutMs: hssomTimeoutMs(env),
+  };
+}
+
+// Headers the optimizer's fixed gateway mode sends (_get_headers in
+// src/clients/hssom_lookup_client.py): the Lookup headers, Accept,
+// Content-Type and the bearer token. Cache-Control is VPN mode only.
+export function lookupHeaders(config: Pick<HssomOrderLookupConfig, "lookupClientId">, token: string): Record<string, string> {
+  return {
+    servicename: "IHSOLookup",
+    serviceversion: "1.0",
+    clientid: config.lookupClientId,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
 }
 
 export interface HssomOrderLookupOptions {
@@ -199,17 +243,14 @@ export function createHssomOrderLookup(options: HssomOrderLookupOptions = {}) {
       try {
         res = await doFetch(url, {
           method: "GET",
-          headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${token}`,
-            clientId: config.clientId,
-          },
+          headers: lookupHeaders(config, token),
           signal: controller.signal,
         });
       } catch {
         return { result: { status: "unavailable" }, reason: controller.signal.aborted ? "timeout" : "network" };
       }
       if (res.status === 401) return "unauthorized";
+      if (res.status === 403) return { result: { status: "unavailable" }, httpStatus: 403, reason: "forbidden" };
       if (res.status === 404) return { result: { status: "not_found" }, httpStatus: 404 };
       if (!res.ok) return { result: { status: "unavailable" }, httpStatus: res.status };
       let body: unknown;
@@ -277,7 +318,10 @@ export function createHssomOrderLookup(options: HssomOrderLookupOptions = {}) {
         remember(orderId, result);
         const http = httpStatus === undefined ? "" : ` http=${httpStatus}`;
         const why = reason ? ` reason=${reason}` : "";
-        const line = `[hssom-lookup] order=${orderId} status=${result.status}${http}${why} ms=${now() - started}`;
+        // 403 usually means the bearer token is valid but not granted the
+        // Order Lookup service; say so without logging the token.
+        const hint = httpStatus === 403 ? " hint=token may lack OrderLookup grant" : "";
+        const line = `[hssom-lookup] order=${orderId} status=${result.status}${http}${why} ms=${now() - started}${hint}`;
         if (result.status === "unavailable") console.warn(line);
         else console.log(line);
         return { ...result };
