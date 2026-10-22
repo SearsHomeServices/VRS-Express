@@ -1,3 +1,26 @@
+## 2026-10-22 — Trim the technician AHS form; prefill from Snowflake on the server
+
+**Ask the tech only what no system has.** VRS AI hard-requires only
+service_order, tech_id, tech_phone, callback and parts. It defaults every
+other field to "" and says it will confirm with AHS. So the form requires
+only the diagnosis facts AHS asks for (failure cause, location, repair or
+replace, labor, parts with prices). Everything else is optional.
+
+**No new credentials or external services.** The prefill reuses the
+Snowflake connection the app already has. The HSSOM Order Lookup and Work
+Order APIs (used by ai-agent-mcp) would cover customer data too, but they
+need new credentials. Reading the estimate screenshot with OpenAI was
+rejected: it would send customer PII to a new place.
+
+**PII stays on the server.** The dispatch number is filled at submit and the
+browser only learns whether one exists. The endpoint returns brand, model and
+serial only. The lookup filters on SVC_UN_NO + SO_NO, because SO numbers
+repeat across units.
+
+**Relax validation only for app-origin payloads.** The SASHA contract and
+its dispatch checks are unchanged. App-origin payloads send "" rather than
+"N/A", because VRS AI reads "N/A" aloud.
+
 ## 2026-10-08 — Technician AHS tickets enroll in the VRS AI bridge
 
 **Reuse the bridge row; don't add a second dispatch path.** Pilot membership,

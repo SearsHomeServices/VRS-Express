@@ -1,5 +1,5 @@
 # Session Context
-> Last updated: 2026-05-06
+> Last updated: 2026-10-22
 
 ## Current State
 - Platform is deployed on Replit with PostgreSQL (Neon)
@@ -10,6 +10,14 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **Trimmed AHS tech form + Snowflake prefill** (2026-10-22, branch `feat/ahs-tech-form-few` off `merge-check`, not pushed).
+  - **Required now:** failure cause, location, repair or replace, labor, and part number/description/price. Everything else is optional.
+  - **Prefill:** `server/ahs-prefill.ts`, plus `createAhsPrefillLookup` in `snowflake-lookup.ts` and `fetchAhsServiceOrderPrefill` in `snowflake.ts`. It runs two statements: confirmed columns (MFG_BND_NM, CMB_THD_PTY_ID, CLIENT_NM) and unverified ones (CTA_NO, PSV_ITM_MDL_NO, PSV_MDS_SRL_NO), so a wrong unverified column still returns brand. The flag `AHS_SERVICE_ORDER_PREFILL_ENABLED` defaults off.
+  - **Endpoint:** `GET /api/tech/ahs-prefill` returns non-PII values plus `hasDispatchNumber` only.
+  - **Validation:** the app-origin relaxed V9 schema is `safeParseVrsAppOriginOutboundRequest`.
+  - **Reviewer panel:** `client/src/components/ahs-ticket-review.tsx` and `client/src/lib/ahsReview.ts`. The bridge status now carries `origin`.
+  - **Research behind it:** VRS AI (ai-agent-vrs `ws4_authorization/router.py`) hard-requires only service_order, tech_id, tech_phone, callback and parts. It reads "N/A" aloud, never reads appliance_color, and drops part_function. AHS's IVR asks for the dispatch ID, brand, location, model/serial, diagnosis and labor.
+  - **Tests:** tsc is clean. The bridge suite and the prefill tests (395) pass, and test:critical passes 468, apart from the known no-local-Postgres error. The jsdom suites only run with a scratch jsdom.
 - **AHS details on the tech form** (2026-10-16, same branch). This replaces the placeholder payload. A technician supplied the field list. The fields are defined in the new `shared/ahs-details.ts`: a zod schema, 15 detailed appliance types mapped to divisions, and totals. The form UI is the new `client/src/components/ahs-details-fields.tsx`, used by `tech-submit.tsx` and `tech-resubmit.tsx`.
   - **When it shows:** only for AHS + Authorization, when `/api/config.vrsAiAppEnrollEnabled` is on, and never for 1099 providers.
   - **Validation:** runs through each page's resolver via `superRefine(addAhsDetailsIssues)` and a hidden `ahsRequired` value that is re-synced after every render.

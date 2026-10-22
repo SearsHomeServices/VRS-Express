@@ -6,7 +6,8 @@
       (2026-10-16, `shared/ahs-details.ts`).
 - [ ] Before enabling: confirm VRS AI is fine with quantity carried in
       `part_description` (price multiplied out), failure reasons in `comments`,
-      `tech_recommendation` always `repair` and `purchase_year` `N/A`.
+      `tech_recommendation` from the tech (2026-10-22) and `purchase_year`
+      derived from age or "".
 - [ ] Confirm the division mapping with VRS ops: Trash Compactor → Dishwasher,
       Free Standing Ice Maker → Refrigeration, Garbage Disposal → All Other.
 - [ ] Before enabling: confirm VRS AI does not also post app-origin results
@@ -15,9 +16,31 @@
 - [ ] Enable in DEV (`VRS_AI_APP_ENROLL_ENABLED=true` in `[userenv.development]`),
       submit a test AHS ticket, check the `[vrs-app-enroll]` log and the Pilot
       view, then approve Stage 1 and confirm the VRS AI 202.
-- [ ] Optional: prefill customer/model/serial/contract from Snowflake
-      `IH_SERVICEORDER_FULLDETAIL_TBL` so techs type less. Column names have
-      not been verified yet.
+- [x] Prefill dispatch number/brand/model/serial from Snowflake
+      `IH_SERVICEORDER_FULLDETAIL_TBL` (2026-10-22, flag
+      `AHS_SERVICE_ORDER_PREFILL_ENABLED`, default off). Form trimmed to the
+      few fields VRS AI needs from the tech.
+- [ ] BEFORE enabling the prefill flag, run as the VRS Express Snowflake user
+      (SVC_SCA_AUTO / SCIENTIST): `SELECT COLUMN_NAME, DATA_TYPE FROM
+      PRD_DB2.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='HS_PERM_TBLS' AND
+      TABLE_NAME='IH_SERVICEORDER_FULLDETAIL_TBL' AND COLUMN_NAME IN
+      ('CTA_NO','PSV_ITM_MDL_NO','PSV_MDS_SRL_NO','MDL_NO','SRL_NO','SVC_UN_NO');`
+      If the names differ, edit `AHS_PREFILL_UNVERIFIED_COLUMNS` only. Compare
+      the part of CTA_NO before "/" with a real AHS dispatch number. Check for
+      duplicate (SVC_UN_NO, SO_NO) rows, since the query uses LIMIT 1 with no
+      ORDER BY. Time it on the prod warehouse (deadline is 5s).
+- [ ] Customer name and address have no confirmed Snowflake source (VRS AI
+      notes name lives in SCH_JOBS_PROD). They stay optional tech input.
+- [ ] Assigned-tech check on /api/tech/ahs-prefill: no SO→tech mapping in the
+      repo (LST_ATP_TECH_ID_NO meaning unverified).
+- [ ] ProcID/warranty lookup (`snowflake.ts` ~:326) still filters on SO_NO
+      only, and SO numbers repeat across units. Add the SVC_UN_NO filter.
+- [ ] A Stage 1 dispatch failure (VRS AI down) returns 502 and blocks approval
+      with no manual fallback (`vrs-stage-one-bridge.ts`). Fix before prod enable.
+- [ ] Reviewer panel shows only on claimed tickets; the Pilot closed review
+      does not show the AHS details section yet.
+- [ ] Ask VRS AI to read `part_function` (dropped at context.py:100-105) and
+      `appliance_color`, or stop collecting them.
 - [ ] 1099 providers and the external v1 API have no AHS details, so their AHS
       tickets are not enrolled.
 

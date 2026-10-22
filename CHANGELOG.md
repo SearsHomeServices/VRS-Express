@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - Fewer fields for technician AHS tickets; service-order prefill (2026-10-22)
+- The AHS section of the tech submit and resubmit forms now requires only
+  failure cause, appliance location, repair or replace (new), labor, and for
+  each part its number, description and unit price. Tax (defaults to 0),
+  quantity (defaults to 1), grade, color, age, customer name and address,
+  part function and part failure reason are optional. Photos, the required
+  model/serial and estimate screenshots, videos and voice note are unchanged.
+- New flag `AHS_SERVICE_ORDER_PREFILL_ENABLED` (default off). When it is
+  `"true"`, the server reads the AHS dispatch number (service contract ID
+  before the "/"), brand, model and serial from
+  `IH_SERVICEORDER_FULLDETAIL_TBL` through the existing Snowflake connection,
+  filtered on `SVC_UN_NO = LPAD(district, 7, '0') AND SO_NO`. The dispatch
+  number is filled only on the server at submit and never sent to the
+  browser. `GET /api/tech/ahs-prefill` returns brand, model and serial for
+  the tech to confirm. A tech-entered value always wins, and lookup failure
+  falls back to manual entry. `ahs_details.prefilledFields` records what the
+  server filled.
+- App-origin VRS AI payloads send `""` instead of `"N/A"` for unknown values
+  (VRS AI reads "N/A" aloud). They use a relaxed V9 schema
+  (`safeParseVrsAppOriginOutboundRequest`). SASHA inbound and SASHA-origin
+  dispatch validation are unchanged. `tech_recommendation` comes from the
+  tech's choice, and `purchase_year` is derived from appliance age.
+- Stage 1 reviewers see the ticket source (SASHA vs technician), a
+  "From service order" or "Entered by tech" badge on each AHS field, "Not
+  provided" for blanks, and the screenshots and videos beside them. AHS
+  tickets with details but no bridge row still show them.
+- Security: the tech-submit draft in localStorage no longer saves the
+  customer's name or address.
+
 ### Fixed - Technician warranty lookup
 - Corrected the form's warranty lookup URL and retained compatibility with older open forms.
 - Allowed first-ticket warranty classification without requiring a prior submission; retained technician role restrictions, rate limiting, limited responses, and submission-time verification.
