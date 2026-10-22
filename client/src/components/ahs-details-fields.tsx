@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import type { z } from "zod";
 import { Plus, Trash2 } from "lucide-react";
@@ -43,7 +44,9 @@ import type { AhsPrefillResponse } from "@shared/ahs-prefill";
 // location, repair or replace, labor, and each part's number, description
 // and price. Everything else is optional; VRS AI confirms a missing value
 // with AHS. Dispatch number, brand, model and serial come from the service
-// order when the lookup has them (useAhsServiceOrderPrefill).
+// order when the lookup has them (useAhsServiceOrderPrefill). Customer name
+// and address come from the HSSOM Order Lookup on the server at submit; the
+// browser only learns whether they will be filled (hasCustomer).
 
 // Form-side shape: numbers stay as the strings the tech typed until submit.
 export interface AhsPartFormValues {
@@ -169,6 +172,8 @@ export type AhsPrefillApplianceValues = Partial<Record<AhsPrefillApplianceField,
 
 export const AHS_PREFILL_HINT = "From service order — check against the model tag photo";
 export const AHS_DISPATCH_FROM_SO_TEXT = "Dispatch number will be filled from the service order";
+export const AHS_FROM_SERVICE_ORDER = "From service order";
+export const AHS_CUSTOMER_FROM_SO_TEXT = "Customer name and address will be filled from the service order.";
 
 // "DDDD-SSSSSSSS" → its two parts, or null while the SO is incomplete.
 export function splitAhsServiceOrder(
@@ -193,7 +198,12 @@ export function normalizeAhsPrefillResponse(body: unknown): AhsPrefillResponse {
     const text = typeof raw[field] === "string" ? (raw[field] as string).trim().slice(0, 100) : "";
     if (text) appliance[field] = text;
   }
-  return { status: "found", appliance, hasDispatchNumber: value.hasDispatchNumber === true };
+  return {
+    status: "found",
+    appliance,
+    hasDispatchNumber: value.hasDispatchNumber === true,
+    hasCustomer: value.hasCustomer === true,
+  };
 }
 
 // Which form values to set from a lookup. A field is filled only when it is
@@ -229,6 +239,36 @@ export function ahsDispatchNumberFromServiceOrder(
   prefill: AhsPrefillResponse | null | undefined,
 ): boolean {
   return prefill?.status === "found" && prefill.hasDispatchNumber;
+}
+
+// True when the server will fill customer name and address at submit. The
+// values themselves never reach the browser.
+export function ahsCustomerFromServiceOrder(
+  prefill: AhsPrefillResponse | null | undefined,
+): boolean {
+  return prefill?.status === "found" && prefill.hasCustomer === true;
+}
+
+// The review dialog's Customer row: what the tech typed, or "From service
+// order" when the name is blank and the server will fill it. The real value
+// is never fetched or shown.
+export function ahsReviewCustomer(
+  customerName: string | null | undefined,
+  prefill: AhsPrefillResponse | null | undefined,
+): string | undefined {
+  const typed = customerName?.trim();
+  if (typed) return typed;
+  return ahsCustomerFromServiceOrder(prefill) ? AHS_FROM_SERVICE_ORDER : undefined;
+}
+
+// Whether the tech has typed a customer name or address. A typed value wins
+// over the service order on the server, so its input stays on screen.
+export function hasAhsCustomerValues(
+  values: Partial<Record<"customerName" | "customerAddress", unknown>> | null | undefined,
+): boolean {
+  return (["customerName", "customerAddress"] as const).some(
+    (field) => typeof values?.[field] === "string" && (values[field] as string).trim() !== "",
+  );
 }
 
 function toAmount(value: unknown): number | null {
@@ -406,6 +446,12 @@ export function AhsDetailsCard({
   const dispatchFromServiceOrder = ahsDispatchNumberFromServiceOrder(prefill);
   const hintFor = (field: AhsPrefillApplianceField) =>
     isAhsPrefilledValue(prefill, field, values[field]) ? AHS_PREFILL_HINT : null;
+  // Once the tech has typed a customer value, the inputs stay on screen even
+  // if they clear it again, so they never vanish mid-edit.
+  const customerTypedRef = useRef(false);
+  if (hasAhsCustomerValues(values)) customerTypedRef.current = true;
+  const customerFromServiceOrder =
+    ahsCustomerFromServiceOrder(prefill) && !customerTypedRef.current;
 
   return (
     <Card data-testid="card-ahs-details">
@@ -639,31 +685,42 @@ export function AhsDetailsCard({
               testId="input-ahs-age"
             />
           </div>
-          <TextField
-            form={form}
-            name="ahsDetails.customerName"
-            label="Customer Name"
-            testId="input-ahs-customer-name"
-          />
-          <FormField
-            control={form.control}
-            name="ahsDetails.customerAddress"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Customer Address</FormLabel>
-                <FormControl>
-                  <Textarea
-                    {...field}
-                    value={field.value ?? ""}
-                    rows={2}
-                    placeholder="Street, city, state, ZIP"
-                    data-testid="input-ahs-customer-address"
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {customerFromServiceOrder ? (
+            <p
+              className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground"
+              data-testid="text-ahs-customer-from-so"
+            >
+              {AHS_CUSTOMER_FROM_SO_TEXT}
+            </p>
+          ) : (
+            <>
+              <TextField
+                form={form}
+                name="ahsDetails.customerName"
+                label="Customer Name"
+                testId="input-ahs-customer-name"
+              />
+              <FormField
+                control={form.control}
+                name="ahsDetails.customerAddress"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Customer Address</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        {...field}
+                        value={field.value ?? ""}
+                        rows={2}
+                        placeholder="Street, city, state, ZIP"
+                        data-testid="input-ahs-customer-address"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </>
+          )}
         </div>
       </CardContent>
     </Card>

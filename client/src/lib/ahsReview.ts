@@ -77,6 +77,8 @@ export function parseAhsDetailsForReview(
   if (!isRecord(parsed)) return null;
 
   const recommendation = text(parsed.techRecommendation)?.toLowerCase();
+  // Known names only (AHS_PREFILL_FIELDS, which includes customerName and
+  // customerAddress); anything else is dropped.
   const prefilled = Array.isArray(parsed.prefilledFields)
     ? AHS_PREFILL_FIELDS.filter((field) =>
         (parsed as { prefilledFields: unknown[] }).prefilledFields.includes(field),
