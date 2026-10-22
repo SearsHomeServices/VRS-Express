@@ -11,6 +11,7 @@ import {
   createHssomOrderLookup,
   formatCustomerAddress,
   formatCustomerName,
+  lookupHeaders,
   lookupHssomOrder,
   readHssomOrderLookupConfig,
   toIsoDate,
@@ -32,13 +33,24 @@ const LOOKUP_URL = "https://gateway.hssom.test/orders";
 
 const ENV_KEYS = [
   "AHS_HSSOM_CUSTOMER_PREFILL_ENABLED", "HSSOM_ORDER_LOOKUP_URL", "HSSOM_AUTH_URL", "HSSOM_CLIENT_CODE",
-  "HSSOM_CLIENT_SECRET", "HSSOM_CLIENT_ID", "HSSOM_USER_ID", "HSSOM_TIMEOUT_MS",
+  "HSSOM_CLIENT_SECRET", "HSSOM_CLIENT_ID", "HSSOM_USER_ID", "HSSOM_TIMEOUT_MS", "HSSOM_LOOKUP_CLIENT_ID",
 ];
 
 const authConfig: HssomAuthConfig = {
   authUrl: AUTH_URL, clientCode: CLIENT_CODE, clientSecret: SECRET, clientId: "VRSX", userId: "VRSXUSER", timeoutMs: 5000,
 };
-const lookupConfig: HssomOrderLookupConfig = { lookupUrl: LOOKUP_URL, clientId: "VRSX", timeoutMs: 5000 };
+const lookupConfig: HssomOrderLookupConfig = { lookupUrl: LOOKUP_URL, lookupClientId: "TABS", timeoutMs: 5000 };
+
+// Order Lookup headers (optimizer commit 39047f9): clientid TABS, not the
+// auth client ID and not CreateOrder's clientId WBOT.
+const lookupHeadersFor = (token: string, clientid = "TABS") => ({
+  servicename: "IHSOLookup",
+  serviceversion: "1.0",
+  clientid,
+  Accept: "application/json",
+  "Content-Type": "application/json",
+  Authorization: `Bearer ${token}`,
+});
 
 const orderBody = {
   serviceOrder: {
@@ -276,7 +288,7 @@ describe("order ID and formatting", () => {
 });
 
 describe("lookup classification", () => {
-  it("found: GET {base}/{orderId} with bearer and clientId headers", async () => {
+  it("found: GET {base}/{orderId} with bearer and Order Lookup headers", async () => {
     const fetchMock = vi.fn(async () => json(200, orderBody));
     const { lookup } = lookupWith(fetchMock);
     const result = await lookup("8175", "13717195");
@@ -284,7 +296,8 @@ describe("lookup classification", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${LOOKUP_URL}/0008175-13717195`);
     expect(init.method).toBe("GET");
-    expect(init.headers).toEqual({ Accept: "application/json", Authorization: `Bearer ${TOKEN}`, clientId: "VRSX" });
+    expect(init.headers).toEqual(lookupHeadersFor(TOKEN));
+    expect(init.headers).not.toHaveProperty("clientId");
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(logs.some((args) => String(args[0]).includes("order=0008175-13717195 status=found http=200"))).toBe(true);
     expectCleanLogs();
@@ -305,7 +318,7 @@ describe("lookup classification", () => {
     expect((await lookup("8175", "13717195")).status).toBe("found");
     expect(invalidated).toEqual([TOKEN]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toMatchObject({ Authorization: `Bearer ${TOKEN_2}` });
+    expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toEqual(lookupHeadersFor(TOKEN_2));
     expectCleanLogs();
   });
 
@@ -316,6 +329,19 @@ describe("lookup classification", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(invalidated).toEqual([TOKEN, TOKEN_2]);
     expect(logs.some((args) => String(args[0]).includes("status=unavailable http=401"))).toBe(true);
+  });
+
+  it("403: unavailable, no retry, one-line grant hint without token or body", async () => {
+    const fetchMock = vi.fn(async () => json(403, { message: `forbidden for ${TOKEN} ${FIRST}` }));
+    const { lookup, invalidated } = lookupWith(fetchMock);
+    expect(await lookup("8175", "13717195")).toEqual({ status: "unavailable" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(invalidated).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(String(logs[0][0])).toMatch(
+      /^\[hssom-lookup\] order=0008175-13717195 status=unavailable http=403 reason=forbidden ms=\d+ hint=token may lack OrderLookup grant$/,
+    );
+    expectCleanLogs();
   });
 
   it("unavailable on 5xx, other 4xx, network error, bad JSON and auth failure", async () => {
@@ -364,6 +390,40 @@ describe("lookup classification", () => {
   });
 });
 
+describe("lookup headers and config", () => {
+  const baseEnv = {
+    HSSOM_ORDER_LOOKUP_URL: LOOKUP_URL, HSSOM_AUTH_URL: AUTH_URL, HSSOM_CLIENT_CODE: CLIENT_CODE,
+    HSSOM_CLIENT_SECRET: SECRET, HSSOM_CLIENT_ID: "VRSX",
+  };
+
+  it("clientid defaults to TABS, not the auth HSSOM_CLIENT_ID", () => {
+    expect(readHssomOrderLookupConfig(baseEnv)).toEqual({ lookupUrl: LOOKUP_URL, lookupClientId: "TABS", timeoutMs: 5000 });
+    expect(readHssomOrderLookupConfig({ ...baseEnv, HSSOM_LOOKUP_CLIENT_ID: "  " })?.lookupClientId).toBe("TABS");
+  });
+
+  it("HSSOM_LOOKUP_CLIENT_ID overrides clientid, including setting it to the auth client ID", () => {
+    expect(readHssomOrderLookupConfig({ ...baseEnv, HSSOM_LOOKUP_CLIENT_ID: " AIAG " })?.lookupClientId).toBe("AIAG");
+    expect(readHssomOrderLookupConfig({ ...baseEnv, HSSOM_LOOKUP_CLIENT_ID: "VRSX" })?.lookupClientId).toBe("VRSX");
+  });
+
+  it("HSSOM_ORDER_LOOKUP_URL stays required: no URL default", () => {
+    const { HSSOM_ORDER_LOOKUP_URL: _url, ...noUrl } = baseEnv;
+    expect(readHssomOrderLookupConfig(noUrl)).toBeNull();
+    expect(readHssomOrderLookupConfig({ ...noUrl, HSSOM_LOOKUP_CLIENT_ID: "TABS" })).toBeNull();
+  });
+
+  it("sends the overridden clientid on the wire", async () => {
+    const fetchMock = vi.fn(async () => json(200, orderBody));
+    const { lookup } = lookupWith(fetchMock, { config: () => ({ ...lookupConfig, lookupClientId: "AIAG" }) });
+    await lookup("8175", "13717195");
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toEqual(lookupHeadersFor(TOKEN, "AIAG"));
+  });
+
+  it("lookupHeaders builds exactly the gateway-mode header set", () => {
+    expect(lookupHeaders({ lookupClientId: "TABS" }, TOKEN)).toEqual(lookupHeadersFor(TOKEN));
+  });
+});
+
 describe("gating", () => {
   it("flag is on only for the exact value true", () => {
     expect(isAhsHssomCustomerPrefillEnabled()).toBe(false);
@@ -405,9 +465,13 @@ describe("gating", () => {
       AHS_HSSOM_CUSTOMER_PREFILL_ENABLED: "true", HSSOM_ORDER_LOOKUP_URL: `${LOOKUP_URL}/`, HSSOM_AUTH_URL: AUTH_URL,
       HSSOM_CLIENT_CODE: CLIENT_CODE, HSSOM_CLIENT_SECRET: SECRET, HSSOM_CLIENT_ID: "VRSX",
     });
-    expect(readHssomOrderLookupConfig()).toEqual({ lookupUrl: LOOKUP_URL, clientId: "VRSX", timeoutMs: 5000 });
+    expect(readHssomOrderLookupConfig()).toEqual({ lookupUrl: LOOKUP_URL, lookupClientId: "TABS", timeoutMs: 5000 });
     expect(await lookupHssomOrder("7670", "13393180")).toMatchObject({ status: "found", customerName: "Helen Sanford" });
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([AUTH_URL, `${LOOKUP_URL}/0007670-13393180`]);
+    // The auth call carries HSSOM_CLIENT_ID; the lookup call carries clientid TABS.
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(calls[0][1].headers).toMatchObject({ clientid: "VRSX" });
+    expect(calls[1][1].headers).toEqual(lookupHeadersFor(TOKEN));
     expectCleanLogs();
   });
 });
