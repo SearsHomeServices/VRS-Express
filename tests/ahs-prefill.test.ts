@@ -22,6 +22,8 @@ import {
   mergeAhsPrefillSources,
   needsServerDerivedAhs,
   prefilledFieldNames,
+  redactServerPrefilledCustomer,
+  restoreRedactedCustomerFromPrevious,
   toAhsPrefillResponse,
   withoutPrefilledFields,
   withoutServerOnlyFields,
@@ -886,5 +888,55 @@ describe("POST /api/submissions prefill wiring", () => {
     expect(log).toContain("prefilledFieldNames(ahsDetails)");
     expect(log).not.toMatch(/ahsDetails\.(customerName|customerAddress|contractNumber|brand|modelNumber|serialNumber|purchaseYear)/);
     expect(log).not.toMatch(/sources\.(snowflake|hssom)\.(?!status)/);
+  });
+});
+
+describe("server-filled customer PII never reaches a technician's browser", () => {
+  const stored = JSON.stringify({
+    customerName: "Maria Gonzalez",
+    customerAddress: "742 Evergreen Terrace, Hagerstown, MD 21740",
+    brand: "Whirlpool",
+    prefilledFields: ["brand", "customerName", "customerAddress"],
+  });
+
+  it("drops customer fields the server filled, keeps everything else", () => {
+    const redacted = JSON.parse(redactServerPrefilledCustomer(stored)!);
+    expect(redacted).not.toHaveProperty("customerName");
+    expect(redacted).not.toHaveProperty("customerAddress");
+    expect(redacted.brand).toBe("Whirlpool");
+    expect(redacted.prefilledFields).toEqual(["brand", "customerName", "customerAddress"]);
+  });
+
+  it("leaves customer values the tech typed, and passes through junk unchanged", () => {
+    const typed = JSON.stringify({ customerName: "Typed By Tech", prefilledFields: ["brand"] });
+    expect(redactServerPrefilledCustomer(typed)).toBe(typed);
+    expect(redactServerPrefilledCustomer(null)).toBeNull();
+    expect(redactServerPrefilledCustomer("not json")).toBe("not json");
+  });
+
+  it("restores the previous server-filled values on a resubmission that came back blank", () => {
+    const previous = JSON.parse(stored);
+    const resent = { brand: "Whirlpool" } as Record<string, any>;
+    const restored = restoreRedactedCustomerFromPrevious(resent, previous);
+    expect(restored.customerName).toBe("Maria Gonzalez");
+    expect(restored.customerAddress).toBe("742 Evergreen Terrace, Hagerstown, MD 21740");
+    expect(keepPrefilledFromPrevious(restored as any, previous).prefilledFields).toEqual(
+      expect.arrayContaining(["customerName", "customerAddress"]),
+    );
+    // A tech-typed replacement wins and is not overwritten.
+    expect(restoreRedactedCustomerFromPrevious({ customerName: "New" } as any, previous).customerName).toBe("New");
+    // Nothing is restored from fields the tech originally typed.
+    expect(restoreRedactedCustomerFromPrevious({} as any, { customerName: "X" } as any)).toEqual({});
+  });
+
+  it("every technician-facing submission response goes through redactSubmissionForRole", () => {
+    const routes = fs.readFileSync("server/routes.ts", "utf8");
+    expect(routes).not.toMatch(/json\([^)]*redactWarrantyForProvider\(/);
+    expect(routes.match(/redactSubmissionForRole\(user\.role,/g)?.length).toBeGreaterThanOrEqual(6);
+    const helper = routes.slice(routes.indexOf("function redactSubmissionForRole"));
+    expect(helper).toContain('["technician", "flexed_technician", "provider_1099"]');
+    expect(helper).toContain("redactServerPrefilledCustomer(row.ahsDetails)");
+    const handler = routes.slice(routes.indexOf("restoreRedactedCustomerFromPrevious(ahsDetails, previousAhsDetails)"));
+    expect(handler.indexOf("keepPrefilledFromPrevious(ahsDetails, previousAhsDetails)")).toBeGreaterThan(0);
   });
 });

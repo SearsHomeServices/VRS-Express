@@ -83,6 +83,7 @@ import {
   isVrsBridgePhotoProxyEnabled,
   isVrsAiAppEnrollEnabled,
   isAhsServiceOrderPrefillEnabled,
+  isAhsHssomCustomerPrefillEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -124,6 +125,8 @@ import {
   applyAhsSubmitPrefill,
   boundedServerDerivedAhs,
   keepPrefilledFromPrevious,
+  redactServerPrefilledCustomer,
+  restoreRedactedCustomerFromPrevious,
   lookupAhsPrefillSources,
   needsServerDerivedAhs,
   prefilledFieldNames,
@@ -553,6 +556,19 @@ function redactWarrantyForProvider<T extends Record<string, any>>(role: string, 
   return (Array.isArray(payload) ? payload.map(strip) : strip(payload)) as T;
 }
 
+// Technician-facing submission payloads: warranty redaction for 1099
+// providers, plus server-filled AHS customer PII stripped for every
+// technician role (server/ahs-prefill.ts redactServerPrefilledCustomer).
+function redactSubmissionForRole<T extends Record<string, any>>(role: string, payload: T): T {
+  const redacted = redactWarrantyForProvider(role, payload);
+  if (!["technician", "flexed_technician", "provider_1099"].includes(role) || redacted == null) return redacted;
+  const strip = (row: any) =>
+    row && typeof row === "object" && typeof row.ahsDetails === "string"
+      ? { ...row, ahsDetails: redactServerPrefilledCustomer(row.ahsDetails) }
+      : row;
+  return (Array.isArray(redacted) ? redacted.map(strip) : strip(redacted)) as T;
+}
+
 type ExecSummaryRouteServices = {
   getLatestExecSummaries: (limit?: number) => Promise<Array<{ id: number }>>;
   retryExecSummaryDelivery: (
@@ -699,6 +715,7 @@ export async function registerRoutes(
       vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
       vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
       ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),
+      ahsHssomCustomerPrefill: isAhsHssomCustomerPrefillEnabled(),
     });
   });
 
@@ -1258,7 +1275,7 @@ export async function registerRoutes(
         // not the raw row, and the tech-submit / tech-resubmit clients
         // dereference `data.submission.id` / `.serviceOrder`. Match that
         // shape exactly so the idempotent-hit path doesn't crash the client.
-        return res.status(200).json({ submission: redactWarrantyForProvider(user.role, recentDup) });
+        return res.status(200).json({ submission: redactSubmissionForRole(user.role, recentDup) });
       }
 
       // Tier 2 (2026-04-28 hotfix): identity-mismatch detection.
@@ -1565,6 +1582,7 @@ export async function registerRoutes(
         );
       }
       if (ahsDetails && previousAhsDetails) {
+        ahsDetails = restoreRedactedCustomerFromPrevious(ahsDetails, previousAhsDetails);
         ahsDetails = keepPrefilledFromPrevious(ahsDetails, previousAhsDetails);
       }
 
@@ -1679,7 +1697,7 @@ export async function registerRoutes(
           `[idempotency-tx] Race detected — returning existing submission ${submission.id} ` +
           `for tech=${user.id} SO=${parsed.data.serviceOrder}. Skipping SMS / broadcast / Smartsheet.`
         );
-        return res.status(200).json({ submission: redactWarrantyForProvider(user.role, submission) });
+        return res.status(200).json({ submission: redactSubmissionForRole(user.role, submission) });
       }
 
       // Technician-posted AHS authorization tickets get the same VRS AI
@@ -1773,7 +1791,7 @@ export async function registerRoutes(
 
       await broadcastVrsAvailability();
 
-      return res.status(201).json({ submission: redactWarrantyForProvider(user.role, submission) });
+      return res.status(201).json({ submission: redactSubmissionForRole(user.role, submission) });
     } catch (error) {
       console.error("Create submission error:", error);
       return res.status(500).json({ error: "Failed to create submission" });
@@ -2159,7 +2177,7 @@ export async function registerRoutes(
         );
       }
 
-      return res.status(200).json({ submissions: redactWarrantyForProvider(user.role, techResult) });
+      return res.status(200).json({ submissions: redactSubmissionForRole(user.role, techResult) });
     } catch (error) {
       console.error("Get submissions error:", error);
       return res.status(500).json({ error: "Failed to get submissions" });
@@ -2214,7 +2232,7 @@ export async function registerRoutes(
           ? null
           : await vrsBridgeStore.getStatusBySubmissionId(submission.id);
       return res.status(200).json({
-        submission: redactWarrantyForProvider(user.role, submission),
+        submission: redactSubmissionForRole(user.role, submission),
         vrsAi: browserBridgeStatus(
           vrsAi,
           submission.id,
@@ -2300,7 +2318,7 @@ export async function registerRoutes(
       const maxResubmissions = 3;
 
       return res.status(200).json({
-        history: redactWarrantyForProvider(user.role, chain),
+        history: redactSubmissionForRole(user.role, chain),
         reviewerNames,
         technicianName: techName,
         resubmissionCount,

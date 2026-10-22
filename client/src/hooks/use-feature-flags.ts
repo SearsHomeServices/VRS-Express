@@ -6,6 +6,7 @@ interface AppConfig {
   vrsBridgePhotoProxyEnabled: boolean;
   vrsAiAppEnrollEnabled?: boolean;
   ahsServiceOrderPrefill?: boolean;
+  ahsHssomCustomerPrefill?: boolean;
 }
 
 // Runtime feature flags sourced from GET /api/config. Defaults to disabled
@@ -45,5 +46,8 @@ export function useFeatureFlags() {
     // AHS form reads brand/model/serial from GET /api/tech/ahs-prefill
     // (server AHS_SERVICE_ORDER_PREFILL_ENABLED).
     ahsServiceOrderPrefill: data?.ahsServiceOrderPrefill ?? false,
+    // Customer name/address from the HSSOM Order Lookup, filled on the
+    // server only (server AHS_HSSOM_CUSTOMER_PREFILL_ENABLED).
+    ahsHssomCustomerPrefill: data?.ahsHssomCustomerPrefill ?? false,
   };
 }

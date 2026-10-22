@@ -11,11 +11,13 @@ import {
   type AhsPrefillApplianceValues,
 } from "@/components/ahs-details-fields";
 
-// Server flag for the AHS service-order prefill (GET /api/config
-// `ahsServiceOrderPrefill`). Off unless the server says exactly true, so an
-// older server without the flag keeps the manual-entry form.
+// Server flags for the AHS service-order prefill (GET /api/config
+// `ahsServiceOrderPrefill` for Snowflake, `ahsHssomCustomerPrefill` for the
+// HSSOM customer lookup; either one turns the lookup on). Off unless the
+// server says exactly true, so an older server keeps the manual-entry form.
 export function useAhsServiceOrderPrefillEnabled(): boolean {
-  return useFeatureFlags().ahsServiceOrderPrefill === true;
+  const flags = useFeatureFlags();
+  return flags.ahsServiceOrderPrefill === true || flags.ahsHssomCustomerPrefill === true;
 }
 
 // Looks up the service order and fills brand, model and serial into the AHS

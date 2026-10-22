@@ -212,6 +212,46 @@ export function keepPrefilledFromPrevious<T extends PrefillableDetails>(
   return merged.length ? { ...details, prefilledFields: merged } : withoutPrefilledFields(details);
 }
 
+// Customer PII the server filled from HSSOM never goes back to a
+// technician's browser, not even on their own ticket. Technician-facing
+// submission responses drop these keys from the stored ahs_details JSON when
+// prefilledFields lists them; values the tech typed are left alone.
+const SERVER_ONLY_CUSTOMER_FIELDS = ["customerName", "customerAddress"] as const;
+
+export function redactServerPrefilledCustomer(raw: string | null | undefined): string | null | undefined {
+  if (!raw) return raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!parsed || typeof parsed !== "object") return raw;
+  const details = parsed as Record<string, unknown>;
+  const prefilled = Array.isArray(details.prefilledFields) ? details.prefilledFields : [];
+  const redact = SERVER_ONLY_CUSTOMER_FIELDS.filter((field) => prefilled.includes(field));
+  if (!redact.length) return raw;
+  for (const field of redact) delete details[field];
+  return JSON.stringify(details);
+}
+
+// A resubmission comes back with the redacted customer fields blank. When the
+// fresh lookup didn't refill them, carry the previous ticket's server-filled
+// values forward so keepPrefilledFromPrevious keeps their provenance.
+export function restoreRedactedCustomerFromPrevious<T extends PrefillableDetails>(
+  details: T,
+  previous: PrefillableDetails | null | undefined,
+): T {
+  const restored: Record<string, string> = {};
+  for (const field of SERVER_ONLY_CUSTOMER_FIELDS) {
+    const prior = previous?.[field]?.trim();
+    if (!details[field]?.trim() && prior && previous?.prefilledFields?.includes(field)) {
+      restored[field] = prior;
+    }
+  }
+  return Object.keys(restored).length ? { ...details, ...restored } : details;
+}
+
 // GET /api/tech/ahs-prefill needs the ProcID derivation only when HSSOM found
 // the order and Snowflake has no row to decide AHS by.
 export function needsServerDerivedAhs(sources: AhsPrefillSources): boolean {
