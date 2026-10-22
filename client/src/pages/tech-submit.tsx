@@ -63,6 +63,7 @@ import {
   AhsDetailsCard,
   addAhsDetailsIssues,
   ahsDispatchNumberFromServiceOrder,
+  ahsReviewCustomer,
   emptyAhsDetailsForm,
   omitAhsCustomerPiiFromDraft,
 } from "@/components/ahs-details-fields";
@@ -2453,6 +2454,7 @@ export default function TechSubmitPage() {
                   );
                   const dispatch = ahs.contractNumber
                     || (ahsDispatchNumberFromServiceOrder(ahsPrefill) ? "From service order" : undefined);
+                  const customer = ahsReviewCustomer(ahs.customerName, ahsPrefill);
                   return (
                     <div className="rounded-md border p-3 text-sm space-y-1.5" data-testid="review-ahs-details">
                       {row("Dispatch #", dispatch, "review-ahs-dispatch")}
@@ -2461,7 +2463,7 @@ export default function TechSubmitPage() {
                       {row("Location", ahs.applianceLocation, "review-ahs-location")}
                       {row("Failure cause", AHS_FAILURE_CAUSES.find((c) => c.value === ahs.failureCause)?.label, "review-ahs-failure-cause")}
                       {row("Recommendation", AHS_TECH_RECOMMENDATIONS.find((r) => r.value === ahs.techRecommendation)?.label, "review-ahs-recommendation")}
-                      {ahs.customerName ? row("Customer", ahs.customerName) : null}
+                      {customer ? row("Customer", customer, "review-ahs-customer") : null}
                       <div className="pt-2 border-t">
                         <p className="text-muted-foreground mb-1">Parts</p>
                         <ul className="list-disc pl-5 space-y-0.5">

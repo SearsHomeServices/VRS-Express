@@ -1,11 +1,12 @@
 // Stage 1 reviewer view of the AHS details a technician filed in VRS Express
 // (submissions.ahs_details). Each field says where it came from: the server
 // fills some from the service order (ahs_details.prefilledFields, see
-// shared/ahs-prefill.ts), the technician typed the rest. The model/serial and
-// estimate screenshots and the videos sit next to the appliance fields so the
-// reviewer can check them. Media goes through the existing MediaImage /
-// MediaVideo components, so every /objects/ path still gets a scoped media
-// token.
+// shared/ahs-prefill.ts: dispatch number and brand/model/serial from
+// Snowflake, customer name and address from the HSSOM Order Lookup), the
+// technician typed the rest. The model/serial and estimate screenshots and
+// the videos sit next to the appliance fields so the reviewer can check them.
+// Media goes through the existing MediaImage / MediaVideo components, so
+// every /objects/ path still gets a scoped media token.
 import React, { type ReactNode } from "react";
 import { MediaImage, MediaVideo } from "@/components/media";
 import {
@@ -24,6 +25,21 @@ import type { AhsPrefillField } from "@shared/ahs-prefill";
 export const AHS_NOT_PROVIDED = "Not provided";
 export const AHS_SOURCE_SERVICE_ORDER = "From service order";
 export const AHS_SOURCE_TECH = "Entered by tech";
+export const AHS_CHECK_APPLIANCE = "Brand, model and serial against the model tag photo.";
+export const AHS_CHECK_CUSTOMER =
+  "Customer name and address against the service order. Confirm with the customer if unsure.";
+
+const AHS_APPLIANCE_PREFILL: readonly AhsPrefillField[] = ["brand", "modelNumber", "serialNumber"];
+const AHS_CUSTOMER_PREFILL: readonly AhsPrefillField[] = ["customerName", "customerAddress"];
+
+// What the reviewer should check before approving, for the fields the
+// server filled on this ticket.
+export function ahsPrefillChecks(prefilled: ReadonlySet<AhsPrefillField>): string[] {
+  const checks: string[] = [];
+  if (AHS_APPLIANCE_PREFILL.some((field) => prefilled.has(field))) checks.push(AHS_CHECK_APPLIANCE);
+  if (AHS_CUSTOMER_PREFILL.some((field) => prefilled.has(field))) checks.push(AHS_CHECK_CUSTOMER);
+  return checks;
+}
 
 export interface AhsReviewMedia {
   // Model, serial & estimate screenshots (photos.estimate).
@@ -180,6 +196,7 @@ export function AhsTicketReview({
   const prefilled = new Set<AhsPrefillField>(details.prefilledFields);
   const sourceOf = (field: AhsPrefillField | null): FieldSource =>
     field && prefilled.has(field) ? "service_order" : "tech";
+  const checks = ahsPrefillChecks(prefilled);
   const age =
     details.applianceAge === undefined
       ? undefined
@@ -189,14 +206,23 @@ export function AhsTicketReview({
     <div className="mt-3 space-y-3 border-t border-blue-200 pt-3 text-xs dark:border-blue-900" data-testid="ahs-ticket-review">
       <p className="text-sm font-medium">AHS details</p>
       {prefilled.size > 0 && (
-        <p
+        <div
           className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
           data-testid="ahs-prefill-hint"
         >
-          Fields marked “{AHS_SOURCE_SERVICE_ORDER}” were filled from the
-          service order, not typed by the technician. Check brand, model and
-          serial against the model tag photo before approving.
-        </p>
+          <p>
+            Fields marked “{AHS_SOURCE_SERVICE_ORDER}” were filled from the
+            service order, not typed by the technician.
+            {checks.length > 0 && " Before approving, check:"}
+          </p>
+          {checks.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {checks.map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -211,13 +237,13 @@ export function AhsTicketReview({
           label="Customer name"
           dataField="ahs-customer-name"
           value={details.customerName}
-          source="tech"
+          source={sourceOf("customerName")}
         />
         <AhsField
           label="Customer address"
           dataField="ahs-customer-address"
           value={details.customerAddress}
-          source="tech"
+          source={sourceOf("customerAddress")}
         />
         <AhsField
           label="Appliance type"

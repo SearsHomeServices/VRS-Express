@@ -5,6 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import * as reviewComponents from "../client/src/components/vrs-ai-bridge-review";
 import {
+  AHS_CHECK_APPLIANCE,
+  AHS_CHECK_CUSTOMER,
+} from "../client/src/components/ahs-ticket-review";
+import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
 } from "../client/src/lib/vrsAiBridge";
@@ -487,6 +491,14 @@ function fieldSource(html: string, field: string): string | null {
   return /data-source="([a-z_]+)"/.exec(html.slice(start, end))?.[1] ?? null;
 }
 
+// The amber "check before approving" hint, tags stripped.
+function prefillHint(html: string): string {
+  const start = html.indexOf('data-testid="ahs-prefill-hint"');
+  if (start === -1) return "";
+  const end = html.indexOf("</div>", start);
+  return html.slice(start, end).replace(/<[^>]+>/g, "");
+}
+
 describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
   it("labels the source as the technician in VRS Express for app-origin rows", () => {
     const html = renderAhsPanel({ bridge: appOriginBridge });
@@ -542,6 +554,9 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     expect(html).toContain("Entered by tech");
     expect(html).toContain('data-testid="ahs-prefill-hint"');
     expect(html).toContain("model tag photo");
+    expect(prefillHint(html)).toContain(AHS_CHECK_APPLIANCE);
+    // No customer field was prefilled, so the hint doesn't ask about one.
+    expect(prefillHint(html)).not.toContain(AHS_CHECK_CUSTOMER);
 
     expectField(html, "ahs-contract-number", "ahs-dispatch-77001");
     expectField(html, "ahs-brand", "brand-from-so-Whirlpool");
@@ -554,6 +569,66 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     expectField(html, "ahs-part-0-line-total", "$100.50");
     expectField(html, "ahs-parts-total", "$100.50");
     expectField(html, "ahs-total", "$229.00");
+  });
+
+  const customerPrefilledDetails = {
+    ...prefilledAhsDetails,
+    customerName: "so-customer-Maria",
+    customerAddress: "so-address-742-Evergreen",
+    prefilledFields: [...prefilledAhsDetails.prefilledFields, "customerName", "customerAddress"],
+  };
+
+  it("marks a server-filled customer name and address as from the service order", () => {
+    const html = renderAhsPanel({
+      bridge: appOriginBridge,
+      submission: { ahsDetails: JSON.stringify(customerPrefilledDetails), ...ticketMedia },
+    });
+    for (const field of ["ahs-customer-name", "ahs-customer-address", "ahs-brand"]) {
+      expect(fieldSource(html, field), field).toBe("service_order");
+    }
+    expectField(html, "ahs-customer-name", "so-customer-Maria");
+    expectField(html, "ahs-customer-address", "so-address-742-Evergreen");
+    const hint = prefillHint(html);
+    expect(hint).toContain("Before approving, check:");
+    expect(hint).toContain(AHS_CHECK_APPLIANCE);
+    expect(hint).toContain(AHS_CHECK_CUSTOMER);
+    expect(AHS_CHECK_APPLIANCE).toBe("Brand, model and serial against the model tag photo.");
+    expect(AHS_CHECK_CUSTOMER).toBe(
+      "Customer name and address against the service order. Confirm with the customer if unsure.",
+    );
+  });
+
+  it("lists only the customer check when only the customer was prefilled", () => {
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: {
+        ahsDetails: JSON.stringify({
+          ...prefilledAhsDetails,
+          customerName: "so-customer-Maria",
+          customerAddress: "typed-address",
+          prefilledFields: ["customerName"],
+        }),
+      },
+    });
+    expect(fieldSource(html, "ahs-customer-name")).toBe("service_order");
+    expect(fieldSource(html, "ahs-customer-address")).toBe("tech");
+    expect(fieldSource(html, "ahs-brand")).toBe("tech");
+    expect(prefillHint(html)).toContain(AHS_CHECK_CUSTOMER);
+    expect(prefillHint(html)).not.toContain(AHS_CHECK_APPLIANCE);
+  });
+
+  it("keeps the hint to its first sentence when only the dispatch number was prefilled", () => {
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: {
+        ahsDetails: JSON.stringify({ ...prefilledAhsDetails, prefilledFields: ["contractNumber"] }),
+      },
+    });
+    const hint = prefillHint(html);
+    expect(hint).toContain("were filled from the");
+    expect(hint).not.toContain("Before approving, check:");
+    expect(hint).not.toContain(AHS_CHECK_APPLIANCE);
+    expect(hint).not.toContain(AHS_CHECK_CUSTOMER);
   });
 
   it("treats every field as entered by tech when nothing was prefilled", () => {
@@ -641,15 +716,18 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
       submission: {
         ahsDetails: JSON.stringify({
           brand: "brand-typed",
+          applianceColor: "color-typed",
           techRecommendation: "repair",
-          prefilledFields: ["customerName", "brand"],
+          prefilledFields: ["applianceColor", "customerPhone", "customerName", "brand"],
           parts: [],
         }),
       },
     });
     expectField(html, "ahs-tech-recommendation", "Repair");
     expect(fieldSource(html, "ahs-brand")).toBe("service_order");
-    expect(fieldSource(html, "ahs-customer-name")).toBe("tech");
+    // customerName is a known prefill field now; the others are not.
+    expect(fieldSource(html, "ahs-customer-name")).toBe("service_order");
+    expect(fieldSource(html, "ahs-appliance-color")).toBe("tech");
     expectField(html, "ahs-parts-total", "Not provided");
     expectField(html, "ahs-total", "Not provided");
   });

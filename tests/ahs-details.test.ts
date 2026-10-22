@@ -14,13 +14,17 @@ import {
 } from "../shared/ahs-details";
 import type { AhsPrefillResponse } from "../shared/ahs-prefill";
 import {
+  AHS_CUSTOMER_FROM_SO_TEXT,
   AHS_DISPATCH_FROM_SO_TEXT,
   AHS_PREFILL_HINT,
   AhsDetailsCard,
   addAhsDetailsIssues,
+  ahsCustomerFromServiceOrder,
   ahsDetailsToForm,
   ahsPrefillUpdates,
+  ahsReviewCustomer,
   emptyAhsDetailsForm,
+  hasAhsCustomerValues,
   isAhsPrefilledValue,
   normalizeAhsPrefillResponse,
   omitAhsCustomerPiiFromDraft,
@@ -280,6 +284,38 @@ describe("AHS details on the tech forms", () => {
     const page = readFileSync(new URL("../client/src/pages/tech-submit.tsx", import.meta.url), "utf8");
     expect(page).toContain("formValues: omitAhsCustomerPiiFromDraft(formValues)");
   });
+
+  // A resubmission loads the stored ticket, which may hold customer values
+  // the server filled from the service order.
+  const storedWithServerCustomer = JSON.stringify({
+    ...ahsDetailsSchema.parse(minimalFormValues),
+    customerName: "so-customer-Maria",
+    customerAddress: "so-address-742-Evergreen",
+    prefilledFields: ["customerName", "customerAddress"],
+  });
+
+  it("keeps loading stored details, server-filled customer values included, on resubmit", () => {
+    const stored = parseStoredAhsDetails(storedWithServerCustomer);
+    expect(stored?.prefilledFields).toEqual(["customerName", "customerAddress"]);
+    const asForm = ahsDetailsToForm(stored!);
+    expect(asForm).toMatchObject({
+      customerName: "so-customer-Maria",
+      customerAddress: "so-address-742-Evergreen",
+    });
+  });
+
+  it("never saves customer name or address to a draft, resubmit included", () => {
+    const asForm = ahsDetailsToForm(parseStoredAhsDetails(storedWithServerCustomer)!);
+    const saved = JSON.stringify(omitAhsCustomerPiiFromDraft({ serviceOrder: "8175-13538277", ahsDetails: asForm }));
+    expect(saved).not.toContain("so-customer-Maria");
+    expect(saved).not.toContain("so-address-742-Evergreen");
+    // tech-resubmit keeps no localStorage draft today. If one is added it
+    // must go through omitAhsCustomerPiiFromDraft like tech-submit.
+    const page = readFileSync(new URL("../client/src/pages/tech-resubmit.tsx", import.meta.url), "utf8");
+    if (/(localStorage|sessionStorage)\.setItem/.test(page)) {
+      expect(page).toContain("omitAhsCustomerPiiFromDraft(");
+    }
+  });
 });
 
 describe("AHS service-order prefill", () => {
@@ -298,8 +334,34 @@ describe("AHS service-order prefill", () => {
         status: "found",
         appliance: { brand: " Whirlpool ", modelNumber: "", serialNumber: 42, contractNumber: "leak" },
         hasDispatchNumber: "yes",
+        hasCustomer: "yes",
+        customerName: "leak",
       }),
-    ).toEqual({ status: "found", appliance: { brand: "Whirlpool" }, hasDispatchNumber: false });
+    ).toEqual({ status: "found", appliance: { brand: "Whirlpool" }, hasDispatchNumber: false, hasCustomer: false });
+  });
+
+  it("keeps only whether the server will fill the customer, never the values", () => {
+    const normalized = normalizeAhsPrefillResponse({
+      status: "found",
+      appliance: { customerName: "leak-name", customerAddress: "leak-address" },
+      hasDispatchNumber: false,
+      hasCustomer: true,
+      customer: { name: "leak-name" },
+    });
+    expect(normalized).toEqual({ status: "found", appliance: {}, hasDispatchNumber: false, hasCustomer: true });
+    expect(JSON.stringify(normalized)).not.toContain("leak");
+    expect(ahsCustomerFromServiceOrder(normalized)).toBe(true);
+    expect(ahsCustomerFromServiceOrder({ status: "found", appliance: {}, hasDispatchNumber: true })).toBe(false);
+    expect(ahsCustomerFromServiceOrder({ status: "not_found" })).toBe(false);
+    expect(ahsCustomerFromServiceOrder(null)).toBe(false);
+  });
+
+  it("detects customer values the tech typed", () => {
+    expect(hasAhsCustomerValues({ customerName: " ", customerAddress: "" })).toBe(false);
+    expect(hasAhsCustomerValues({})).toBe(false);
+    expect(hasAhsCustomerValues(null)).toBe(false);
+    expect(hasAhsCustomerValues({ customerName: "Maria" })).toBe(true);
+    expect(hasAhsCustomerValues({ customerAddress: "742 Evergreen" })).toBe(true);
   });
 
   it("fills blanks but never overwrites a value the tech typed", () => {
@@ -371,6 +433,57 @@ describe("AHS service-order prefill", () => {
     expect(html).toContain("Dispatch / Contract Number (optional)");
     expect(html).not.toContain('data-testid="text-ahs-dispatch-from-so"');
     expect(html.includes(AHS_PREFILL_HINT)).toBe(hints);
+  });
+
+  const withCustomer: AhsPrefillResponse = { ...found, hasCustomer: true };
+
+  it("hides the customer inputs and says the service order fills them when hasCustomer", () => {
+    const html = renderCard(minimalFormValues, withCustomer);
+    expect(html).not.toContain('data-testid="input-ahs-customer-name"');
+    expect(html).not.toContain('data-testid="input-ahs-customer-address"');
+    expect(html).toContain('data-testid="text-ahs-customer-from-so"');
+    expect(html).toContain(AHS_CUSTOMER_FROM_SO_TEXT);
+    expect(AHS_CUSTOMER_FROM_SO_TEXT).toBe("Customer name and address will be filled from the service order.");
+  });
+
+  it.each([
+    ["a name", { customerName: "Maria Gonzalez" }],
+    ["an address", { customerAddress: "742 Evergreen Terrace" }],
+  ])("keeps the customer inputs and their values when the tech typed %s", (_label, typed) => {
+    const html = renderCard({ ...minimalFormValues, ...typed }, withCustomer);
+    expect(html).toContain('data-testid="input-ahs-customer-name"');
+    expect(html).toContain('data-testid="input-ahs-customer-address"');
+    expect(html).not.toContain('data-testid="text-ahs-customer-from-so"');
+    for (const value of Object.values(typed)) expect(html).toContain(value);
+  });
+
+  it.each([
+    ["not found", { status: "not_found" } as AhsPrefillResponse],
+    ["unavailable", { status: "unavailable" } as AhsPrefillResponse],
+    ["found without customer", { ...found, hasCustomer: false } as AhsPrefillResponse],
+    ["an older server without hasCustomer", found],
+    ["flag off / loading", null],
+  ])("shows the customer name and address as optional inputs when %s", (_label, prefill) => {
+    const html = renderCard(minimalFormValues, prefill);
+    expect(html).toContain('data-testid="input-ahs-customer-name"');
+    expect(html).toContain('data-testid="input-ahs-customer-address"');
+    expect(html).toContain(">Customer Name<");
+    expect(html).toContain(">Customer Address<");
+    expect(html).not.toContain('data-testid="text-ahs-customer-from-so"');
+    expect(html).not.toContain(AHS_CUSTOMER_FROM_SO_TEXT);
+  });
+
+  it("shows \"From service order\" for a blank customer on the review dialog, never a value", () => {
+    expect(ahsReviewCustomer(undefined, withCustomer)).toBe("From service order");
+    expect(ahsReviewCustomer("  ", withCustomer)).toBe("From service order");
+    expect(ahsReviewCustomer("Maria Gonzalez", withCustomer)).toBe("Maria Gonzalez");
+    expect(ahsReviewCustomer("Maria Gonzalez", { status: "not_found" })).toBe("Maria Gonzalez");
+    expect(ahsReviewCustomer(undefined, found)).toBeUndefined();
+    expect(ahsReviewCustomer(undefined, { status: "unavailable" })).toBeUndefined();
+    expect(ahsReviewCustomer(undefined, null)).toBeUndefined();
+    const page = readFileSync(new URL("../client/src/pages/tech-submit.tsx", import.meta.url), "utf8");
+    expect(page).toContain("ahsReviewCustomer(ahs.customerName, ahsPrefill)");
+    expect(page).toContain('row("Customer", customer, "review-ahs-customer")');
   });
 
   it("marks only the trimmed set of inputs as required", () => {
