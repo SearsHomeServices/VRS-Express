@@ -121,13 +121,13 @@ describe("HSSOM auth", () => {
     expectCleanLogs();
   });
 
-  it("omits userid when not configured and accepts access_token or jwt", async () => {
+  it("defaults userid to clientid when not configured and accepts access_token or jwt", async () => {
     for (const body of [{ access_token: TOKEN }, { jwt: TOKEN }]) {
       const fetchMock = vi.fn(async () => json(200, body));
       const client = createHssomTokenClient({ config: () => ({ ...authConfig, userId: undefined }), fetch: fetchMock as unknown as typeof fetch });
       await expect(client.getToken()).resolves.toBe(TOKEN);
       const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
-      expect(init.headers).not.toHaveProperty("userid");
+      expect(init.headers).toMatchObject({ clientid: "VRSX", userid: "VRSX" });
     }
   });
 
