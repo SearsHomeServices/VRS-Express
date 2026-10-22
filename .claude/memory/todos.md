@@ -31,6 +31,14 @@
       ORDER BY. Time it on the prod warehouse (deadline is 5s).
 - [x] Customer name and address from the HSSOM Order Lookup (2026-10-22,
       flag `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`, default off).
+- [ ] HSSOM QA credentials for client code `VRS` were provided on 2026-10-22.
+      Run a token claims check (allowed services in `auth.components[].uris`) to
+      confirm the token includes `/v1/api/HSSOMOrderLookupService/**`. Put
+      `HSSOM_CLIENT_CODE`, `HSSOM_CLIENT_SECRET` and `HSSOM_CLIENT_ID` in Replit
+      Secrets only, never in `.replit`.
+- [ ] Tell HSSOM that both spec docs embed live credentials (a D&G Basic
+      credential in the auth screenshot, and a long-lived WBOT bearer token in
+      the Send Message doc's embedded Postman collection). Ask them to rotate both.
 - [ ] BEFORE enabling the HSSOM prefill, ask HSSOM (HSSOM-QUESTIONS@SEARSHC.COM):
       grant the VRS Express client OrderLookup method access (or reuse the
       Send Message client from the HSSOM handoff); provide the gateway Order

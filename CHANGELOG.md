@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - HSSOM client matches the HSSOM auth and lookup specs (2026-10-22)
+- Auth (`server/services/hssom-auth.ts`):
+  - rejects a token response whose `responseCode` isn't "00", reporting only the code;
+  - caps the cached token at min(tokenLife, 5400 s), or the JWT `exp` if earlier;
+  - fetches a fresh token when the secret or userid changes;
+  - always sends `userid`, defaulting to the client ID.
+- New diagnostic helpers `hssomTokenGrants` and `hssomTokenAllows` read a
+  token's allowed services locally. They don't verify the signature, so
+  they're never used for authorization.
+- Order Lookup now sends the gateway's lookup headers (`clientid`,
+  `servicename: IHSOLookup`, `serviceversion: 1.0`). New optional
+  `HSSOM_LOOKUP_CLIENT_ID` defaults to `TABS`, the value the scheduling
+  optimizer verified returns full addresses. `HSSOM_CLIENT_ID` goes only to
+  the auth service. A 403 is logged as a likely missing OrderLookup grant.
+- Known URLs: prod Order Lookup
+  `https://hssom-api-gateway.shs-core.com/v1/api/HSSOMOrderLookupService/services/domi/orders`;
+  QA (inferred, unverified)
+  `https://hssom-api-gateway-qa.stage.nextgen.shs.com/v1/api/HSSOMOrderLookupService/services/domi/orders`;
+  stage auth `https://api-st.shs-core.com/sis/proxy/HSSOMAuthService/services/auth/token`.
+
 ### Added - Customer name and address from the HSSOM Order Lookup (2026-10-22)
 - New flag `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED` (default off). When it is
   `"true"` and the HSSOM env vars are set, AHS tickets get the customer's

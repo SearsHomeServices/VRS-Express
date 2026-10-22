@@ -10,6 +10,7 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **HSSOM spec review** (2026-10-22): auth responseCode check, TTL cap, secret-aware token cache, userid always sent, local token-grant helpers. Order Lookup now sends `clientid` (`HSSOM_LOOKUP_CLIENT_ID`, default TABS), `servicename: IHSOLookup` and `serviceversion: 1.0`, as fixed in the scheduling optimizer's commit 39047f9. The prod lookup URL is confirmed from optimizer-upstream `.env.example:44`. The Send Message docx embeds the Postman collection the handoff called missing: its path is `POST {base}/services/domi/orders/{orderId}/message`, not the bare URL the handoff uses.
 - **HSSOM customer prefill** (2026-10-22, same branch `feat/ahs-tech-form-few`).
   - **What it does:** `lookupHssomOrder` (server/services/hssom-order-lookup.ts) fills customer name and address. `mergeAhsPrefillSources` / `applyAhsSubmitPrefill` in server/ahs-prefill.ts merge it with Snowflake.
   - **Flag:** `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`; `/api/config` exposes `ahsHssomCustomerPrefill`.
