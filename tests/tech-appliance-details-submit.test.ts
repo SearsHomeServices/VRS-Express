@@ -9,6 +9,8 @@ import jwt from "jsonwebtoken";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TechApplianceDetails } from "../shared/tech-appliance-details";
+import { divisionFromServiceOrderProduct } from "../shared/appliance-division";
+import { applianceKindFromServiceOrderProduct } from "../shared/appliance-types";
 
 const mocks = vi.hoisted(() => ({
   previous: undefined as Record<string, any> | undefined,
@@ -174,6 +176,26 @@ describe("POST /api/submissions — techApplianceDetails", () => {
     expect(inserted().applianceType).toBe("laundry");
     expect(inserted().applianceKind).toBe("washer");
     expect(res.body.submission.applianceKind).toBe("washer");
+  });
+
+  it.each([
+    "WASHERDD - WASHER, DIRECT DRIVE",
+    "WASHER/DRYER COMBO",
+    "REFSBS - REFRIGERATOR, SIDE BY SIDE",
+    "COMPACTR - TRASH COMPACTOR",
+    "DISPOSER - FOOD WASTE DISPOSER",
+    "HOOD - RANGE HOOD",
+  ])("accepts the kind and division the tech form preselects for %j", async (text) => {
+    // What tech-submit sends after the lookup: the division the server
+    // derived (divisionFromServiceOrderProduct) and the kind the product
+    // names (applianceKindFromServiceOrderProduct).
+    const applianceType = divisionFromServiceOrderProduct(text)!;
+    const applianceKind = applianceKindFromServiceOrderProduct(text)!;
+    expect(applianceKind).toBeDefined();
+    const res = await submit(body({ applianceType, applianceKind }));
+    expect(res.status).toBe(201);
+    expect(inserted().applianceType).toBe(applianceType);
+    expect(inserted().applianceKind).toBe(applianceKind);
   });
 
   it("rejects a detailed appliance paired with the wrong routing division", async () => {

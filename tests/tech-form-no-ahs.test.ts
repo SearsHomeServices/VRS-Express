@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { APPLIANCE_CHOICES } from "../shared/appliance-types";
 
 // Product decision (2026-10): the technician on the ground never sees an AHS
 // details section, not even optional fields. The server looks the service
@@ -17,10 +18,12 @@ const pages = {
   "tech-resubmit": readFileSync(new URL("../client/src/pages/tech-resubmit.tsx", import.meta.url), "utf8"),
 };
 
-// Source of the single <FormField name="applianceType"> element, plus the
-// source just before and after it.
+// Source of the single Appliance Type <FormField name="applianceKind">
+// element (the specific appliance; the routing division applianceType is set
+// from the choice and has no field of its own), plus the source just before
+// and after it.
 function applianceTypeField(src: string) {
-  const nameAt = src.indexOf('name="applianceType"');
+  const nameAt = src.indexOf('name="applianceKind"');
   const start = src.lastIndexOf("<FormField", nameAt);
   const end = src.indexOf("/>", src.indexOf("</FormItem>", nameAt)) + 2;
   return { before: src.slice(0, start), field: src.slice(start, end), after: src.slice(end) };
@@ -66,20 +69,26 @@ describe.each(Object.entries(pages))("%s has no AHS details section", (_name, sr
     expect(keys.has("techApplianceDetails")).toBe(true);
   });
 
-  it("uses the standard appliance type dropdown for every warranty, American Home Shield included", () => {
-    expect(src.match(/name="applianceType"/g)).toHaveLength(1);
+  it("uses the standard 16-choice appliance dropdown for every warranty, American Home Shield included", () => {
+    expect(src.match(/name="applianceKind"/g)).toHaveLength(1);
+    expect(src).not.toContain('name="applianceType"');
     const { before, field, after } = applianceTypeField(src);
+    expect(field).toContain("<FormLabel>Appliance Type *</FormLabel>");
     // Not the branch of a ternary or && on the warranty: the field follows
     // and precedes plain JSX.
     expect(before.trimEnd().endsWith(">")).toBe(true);
     expect(after.trimStart()).toMatch(/^(<|\{\/\*)/);
-    // Its options are the standard divisions; only NLA hides HVAC.
-    expect(field).toContain("APPLIANCE_TYPES.filter(");
+    // Its options are the shared 16 APPLIANCE_CHOICES; only NLA hides HVAC.
+    expect(APPLIANCE_CHOICES).toHaveLength(16);
+    expect(src).toMatch(/import \{[^}]*\bAPPLIANCE_CHOICES\b[^}]*\} from "@shared\/appliance-types";/);
+    expect(field).toContain("APPLIANCE_CHOICES.filter(");
     expect(field).toContain('!(watchedRequestType === "parts_nla" && type.value === "hvac")');
     expect(field).not.toMatch(/warranty|american_home_shield/i);
-    for (const division of ["refrigeration", "laundry", "cooking", "dishwasher", "microwave", "hvac", "all_other"]) {
-      expect(src).toContain(`{ value: "${division}", label: `);
-    }
+    // A choice sets its routing division; routing stays on applianceType.
+    expect(field).toContain('form.setValue("applianceType", choice.division, { shouldValidate: true });');
+    // No local list of the old seven-division options.
+    expect(src).not.toContain("APPLIANCE_TYPES");
+    expect(src).not.toMatch(/\{ value: "all_other", label: /);
   });
 });
 
@@ -93,7 +102,7 @@ describe("tech-submit draft and review dialog", () => {
   });
 
   it("shows the standard appliance label on the review dialog", () => {
-    expect(src).toContain('data-testid="review-appliance">{formatApplianceLabel(pendingData.applianceType)}</span>');
+    expect(src).toContain('data-testid="review-appliance">{applianceLabel(pendingData)}</span>');
     expect(src).not.toContain("review-ahs-");
   });
 });

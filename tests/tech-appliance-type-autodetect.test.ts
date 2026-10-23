@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
 // Appliance Type on the tech submit form is preselected from GET
-// /api/tech/lookup-warranty (derived.applianceType, from the service order's
-// product code), with an "Auto-detected from service order" note. Unlike the
+// /api/tech/lookup-warranty. The dropdown holds the specific appliance
+// (applianceKind, one of the 16 APPLIANCE_CHOICES); the routing division
+// (applianceType) comes from the lookup's applianceType. The kind is the one
+// the service order's product category names (serviceOrderProduct.text, via
+// applianceKindFromServiceOrderProduct) when its division is the looked-up
+// one, else the division's only appliance (microwave, hvac), else empty with
+// "<Category> category detected — select the specific appliance". Unlike the
 // warranty it stays editable, and it never overwrites the tech's own choice.
-// When the lookup also returns the service order's product category
-// (serviceOrderProduct), that line replaces the generic note.
+// When the lookup returns the product category, that line replaces the
+// generic "Auto-detected from service order" note.
 // Mounted DOM checks with the lookup response mocked.
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import TechSubmitPage, { lookupApplianceType } from "../client/src/pages/tech-submit";
+import TechSubmitPage, { lookupApplianceKind, lookupApplianceType } from "../client/src/pages/tech-submit";
 
 const fixtures = vi.hoisted(() => ({
   user: { id: 12, role: "technician", fullName: "Fixture Tech", racId: "RAC12", ldapId: "ldap12", phone: "5555550148" },
@@ -64,6 +69,9 @@ const NOTE = "text-appliance-type-auto-note";
 const PRODUCT = "text-appliance-type-product";
 const WOM_WASHER = { text: "WASHERDD - WASHER, DIRECT DRIVE", source: "wom" };
 const SNOWFLAKE_FRIDGE = { text: "REFSBS - REFRIGERATOR, SIDE BY SIDE", source: "snowflake" };
+const WOM_COMBO = { text: "WASHER/DRYER COMBO", source: "wom" };
+const WOM_DRYER = { text: "DRYERELE - DRYER, ELECTRIC", source: "wom" };
+const WOM_FREEZER = { text: "FREEZER", source: "wom" };
 
 let root: Root;
 let client: QueryClient;
@@ -162,6 +170,32 @@ describe("lookupApplianceType", () => {
       expect(lookupApplianceType(derived)).toBeNull();
     },
   );
+});
+
+describe("lookupApplianceKind", () => {
+  it.each([
+    ["laundry", "WASHERDD - WASHER, DIRECT DRIVE", "washer"],
+    ["laundry", "WASHER/DRYER COMBO", "washer_dryer_combo"],
+    ["refrigeration", "REFSBS - REFRIGERATOR, SIDE BY SIDE", "refrigerator"],
+    ["cooking", "HOOD - RANGE HOOD", "range_hood"],
+    ["dishwasher", "COMPACTR - TRASH COMPACTOR", "trash_compactor"],
+  ] as const)("uses the product's kind when it is in the division (%s, %j)", (division, text, kind) => {
+    expect(lookupApplianceKind(division, text)).toBe(kind);
+  });
+
+  it("falls back to the division's only appliance, else nothing", () => {
+    expect(lookupApplianceKind("microwave", undefined)).toBe("microwave");
+    expect(lookupApplianceKind("hvac", "ZZTOP")).toBe("hvac");
+    expect(lookupApplianceKind("laundry", undefined)).toBeUndefined();
+    expect(lookupApplianceKind("refrigeration", "FREEZER")).toBeUndefined();
+    expect(lookupApplianceKind(null, "WASHERDD - WASHER, DIRECT DRIVE")).toBeUndefined();
+  });
+
+  it("does not use a product kind whose division disagrees with the looked-up one", () => {
+    expect(lookupApplianceKind("cooking", "WASHERDD - WASHER, DIRECT DRIVE")).toBeUndefined();
+    expect(lookupApplianceKind("hvac", "WASHERDD - WASHER, DIRECT DRIVE")).toBe("hvac");
+    expect(lookupApplianceKind("microwave", "REFSBS - REFRIGERATOR, SIDE BY SIDE")).toBe("microwave");
+  });
 });
 
 describe("tech-submit Appliance Type auto-detection", () => {
@@ -264,6 +298,14 @@ describe("tech-submit Appliance Type auto-detection", () => {
     expect(byTestId(NOTE)).toBeNull();
   });
 
+  it("selects the division's only appliance (HVAC) with the generic note", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "hvac" };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("HVAC");
+    expect(byTestId(NOTE)!.textContent).toBe("Auto-detected from service order");
+  });
+
   it("hides the note while the SO is incomplete", async () => {
     fixtures.lookups[SO_A] = { applianceType: "hvac" };
     await mount();
@@ -338,13 +380,14 @@ describe("tech-submit warranty auto-detection still holds", () => {
 });
 
 describe("tech-submit service order product line", () => {
-  it("replaces the generic note with the WOM product, under the dropdown", async () => {
+  it("selects Washer from the WOM product and shows the product under the dropdown", async () => {
     fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
     await mount();
     expect(byTestId(PRODUCT)).toBeNull();
 
     await enterServiceOrder(SO_A);
-    expect(applianceTypeText()).toBe("Laundry");
+    expect(applianceTypeText()).toBe("Washer");
+    expect(byTestId("select-appliance-type")!.hasAttribute("data-placeholder")).toBe(false);
     const line = byTestId(PRODUCT)!;
     expect(line.textContent).toBe("From service order product: WASHERDD - WASHER, DIRECT DRIVE");
     expect(line.getAttribute("data-auto-detected")).toBe("true");
@@ -384,13 +427,92 @@ describe("tech-submit service order product line", () => {
     ["a blank text", { text: "   ", source: "wom" }],
     ["an unknown source", { text: "WASHERDD - WASHER, DIRECT DRIVE", source: "hssom" }],
     ["a non-object", "WASHERDD - WASHER, DIRECT DRIVE"],
-  ])("keeps the generic note for %s", async (_label, serviceOrderProduct) => {
+  ])("asks for the specific appliance with the category note for %s", async (_label, serviceOrderProduct) => {
     fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct };
     await mount();
     await enterServiceOrder(SO_A);
-    expect(applianceTypeText()).toBe("Laundry");
+    expect(applianceTypeText()).toBe("Select appliance type");
     expect(byTestId(PRODUCT)).toBeNull();
-    expect(byTestId(NOTE)!.textContent).toBe("Auto-detected from service order");
+    expect(byTestId(NOTE)!.textContent).toBe("Laundry category detected — select the specific appliance");
+  });
+
+  it("selects Washer/Dryer Combo for WASHER/DRYER COMBO", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_COMBO };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Washer/Dryer Combo");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: WASHER/DRYER COMBO");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+
+  it("leaves the kind empty for a bare FREEZER, keeping the product line and the hint", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "refrigeration", serviceOrderProduct: WOM_FREEZER };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: FREEZER");
+    expect(byTestId(PRODUCT)!.getAttribute("data-auto-detected")).toBe("true");
+    const hint = byTestId(NOTE)!;
+    expect(hint.textContent).toBe("Refrigerator category detected — select the specific appliance");
+    expect(byTestId("select-appliance-type")!.closest("div")!.contains(hint)).toBe(true);
+
+    // The tech picks it; the hint goes, the product line stays.
+    await pickApplianceType("chest_freezer");
+    expect(applianceTypeText()).toBe("Chest Freezer");
+    expect(byTestId(NOTE)).toBeNull();
+    expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: FREEZER");
+  });
+
+  it("does not use a product kind whose division disagrees with the looked-up division", async () => {
+    // The division came from elsewhere (e.g. Snowflake HS_SP_CD "Cooking").
+    fixtures.lookups[SO_A] = { applianceType: "cooking", serviceOrderProduct: WOM_WASHER };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: WASHERDD - WASHER, DIRECT DRIVE");
+    expect(byTestId(NOTE)!.textContent).toBe("Cooking category detected — select the specific appliance");
+  });
+
+  it("falls back to the division's only appliance when the product kind disagrees", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "hvac", serviceOrderProduct: WOM_WASHER };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("HVAC");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+
+  it("never overwrites a kind the tech chose before the lookup, even when the product names another", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    await mount();
+    await pickApplianceType("dryer");
+    await enterServiceOrder(SO_A);
+    expect(fixtures.lookupCalls).toEqual([SO_A]);
+    expect(applianceTypeText()).toBe("Dryer");
+    expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
+  });
+
+  it("a lookup-set kind follows the service order within the same division", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry" };
+    fixtures.lookups[SO_B] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    const SO_C = "8175-11112222";
+    fixtures.lookups[SO_C] = { applianceType: "laundry", serviceOrderProduct: WOM_DRYER };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toBe("Laundry category detected — select the specific appliance");
+
+    await type("input-service-order", SO_B.split("-")[1]);
+    expect(applianceTypeText()).toBe("Washer");
+    expect(byTestId(NOTE)).toBeNull();
+
+    await type("input-service-order", SO_C.split("-")[1]);
+    expect(fixtures.lookupCalls).toEqual([SO_A, SO_B, SO_C]);
+    expect(applianceTypeText()).toBe("Dryer");
+
+    // Back to SO A (cached): the kind the lookup set goes with it.
+    await type("input-service-order", SO_A.split("-")[1]);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toBe("Laundry category detected — select the specific appliance");
   });
 
   it("keeps the product but drops the auto-detected wording once the tech changes the type", async () => {
@@ -399,15 +521,16 @@ describe("tech-submit service order product line", () => {
     await enterServiceOrder(SO_A);
     expect(byTestId(PRODUCT)!.getAttribute("data-auto-detected")).toBe("true");
 
-    await pickApplianceType("cooking");
-    expect(applianceTypeText()).toBe("Cooking");
+    await pickApplianceType("cooktop");
+    expect(applianceTypeText()).toBe("Cooktop");
     const line = byTestId(PRODUCT)!;
     expect(line.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
     expect(line.getAttribute("data-auto-detected")).toBe("false");
     expect(byTestId(NOTE)).toBeNull();
 
     // Back to the detected value: still the tech's choice.
-    await pickApplianceType("laundry");
+    await pickApplianceType("washer");
+    expect(applianceTypeText()).toBe("Washer");
     expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
   });
 
@@ -449,9 +572,9 @@ describe("tech-submit service order product line", () => {
     expect(byTestId(PRODUCT)).not.toBeNull();
 
     await type("input-service-order", SO_B.split("-")[1]);
-    expect(applianceTypeText()).toBe("Dishwasher / Compactor");
+    expect(applianceTypeText()).toBe("Select appliance type");
     expect(byTestId(PRODUCT)).toBeNull();
-    expect(byTestId(NOTE)!.textContent).toBe("Auto-detected from service order");
+    expect(byTestId(NOTE)!.textContent).toBe("Dishwasher / Compactor category detected — select the specific appliance");
   });
 
   it("hides the line while the service order is incomplete and on a failed lookup", async () => {

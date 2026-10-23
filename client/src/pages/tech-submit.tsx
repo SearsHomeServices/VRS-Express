@@ -1,4 +1,13 @@
-import { APPLIANCE_CHOICES, applianceChoice, applianceKindSchema, applianceLabel, unambiguousApplianceKind } from "@shared/appliance-types";
+import {
+  APPLIANCE_CHOICES,
+  applianceChoice,
+  applianceKindFromServiceOrderProduct,
+  applianceKindSchema,
+  applianceLabel,
+  unambiguousApplianceKind,
+  type ApplianceKind,
+} from "@shared/appliance-types";
+import { APPLIANCE_DIVISIONS, type ApplianceDivision } from "@shared/appliance-division";
 import { useState, useRef, useEffect } from "react";
 import { useForm, type Control, type FieldErrors, type FieldPath, type FieldValues, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -68,23 +77,26 @@ import {
 // 2026 and self-hides afterward (no cleanup needed).
 const HOLIDAY_CLOSURE_DATE = "2026-07-04";
 
-const APPLIANCE_TYPES = [
-  { value: "refrigeration", label: "Refrigerator" },
-  { value: "laundry", label: "Laundry" },
-  { value: "cooking", label: "Cooking" },
-  { value: "dishwasher", label: "Dishwasher / Compactor" },
-  { value: "microwave", label: "Microwave" },
-  { value: "hvac", label: "HVAC" },
-  { value: "all_other", label: "All Other" },
-] as const;
-type ApplianceTypeValue = (typeof APPLIANCE_TYPES)[number]["value"];
-
-// The appliance type GET /api/tech/lookup-warranty derived from the service
-// order's product code (derived.applianceType), when it is one of the
-// dropdown values; null otherwise (missing, unknown or no lookup).
-export function lookupApplianceType(derived: unknown): ApplianceTypeValue | null {
+// The routing division GET /api/tech/lookup-warranty derived from the
+// service order's product code (applianceType), when it is one of the seven
+// divisions; null otherwise (missing, unknown or no lookup).
+export function lookupApplianceType(derived: unknown): ApplianceDivision | null {
   const value = derived && typeof derived === "object" ? (derived as { applianceType?: unknown }).applianceType : undefined;
-  return APPLIANCE_TYPES.some((type) => type.value === value) ? (value as ApplianceTypeValue) : null;
+  return APPLIANCE_DIVISIONS.some((division) => division === value) ? (value as ApplianceDivision) : null;
+}
+
+// The specific appliance (applianceKind) to preselect for a looked-up
+// division: the one the service order's product category names, when its
+// division is the looked-up one; else the division's only appliance
+// (microwave, hvac); else undefined, and the tech picks it.
+export function lookupApplianceKind(
+  division: ApplianceDivision | null,
+  productText: string | null | undefined,
+): ApplianceKind | undefined {
+  if (!division) return undefined;
+  const mapped = applianceKindFromServiceOrderProduct(productText);
+  if (mapped && applianceChoice(mapped)?.division === division) return mapped;
+  return unambiguousApplianceKind(division);
 }
 
 const WARRANTY_PROVIDERS = [
@@ -1088,12 +1100,14 @@ export default function TechSubmitPage() {
     lookupDerived?.warrantyType && lookupDerived.warrantyProvider ? (lookupDerived as DerivedWarranty) : null;
 
   // Appliance Type is preselected from the same lookup, but stays editable
-  // (the product-code mapping is a heuristic). `autoApplianceType` records
-  // the value the lookup set and for which service order; it is cleared as
-  // soon as the tech picks a type, so a tech-chosen value is never
-  // overwritten. A lookup-set value follows the service order: replaced by
-  // the new order's type, or cleared when the new order has none.
-  const [autoApplianceType, setAutoApplianceType] = useState<{ value: ApplianceTypeValue; serviceOrder: string } | null>(null);
+  // (the product-code mapping is a heuristic): the routing division
+  // (applianceType) and, when lookupApplianceKind can tell, the specific
+  // appliance (applianceKind). `autoApplianceType` records the division the
+  // lookup set and for which service order; it is cleared as soon as the
+  // tech picks an appliance, so a tech-chosen value is never overwritten. A
+  // lookup-set value follows the service order: replaced by the new order's
+  // division and kind, or cleared when the new order has none.
+  const [autoApplianceType, setAutoApplianceType] = useState<{ value: ApplianceDivision; serviceOrder: string } | null>(null);
   const autoApplianceTypeRef = useRef(autoApplianceType);
   autoApplianceTypeRef.current = autoApplianceType;
   // The server returns the type at the top level (always, when known) and
@@ -1109,6 +1123,8 @@ export default function TechSubmitPage() {
     isValidSo && !isProvider1099 && warrantyLookup.isSuccess
       ? parseServiceOrderProduct(warrantyLookup.data?.serviceOrderProduct)
       : null;
+  // The specific appliance the lookup preselects along with the division.
+  const derivedApplianceKind = lookupApplianceKind(derivedApplianceType, serviceOrderProduct?.text);
   useEffect(() => {
     if (!applianceLookupSettled) return;
     const auto = autoApplianceTypeRef.current;
@@ -1118,7 +1134,14 @@ export default function TechSubmitPage() {
     if (derivedApplianceType) {
       if (current !== derivedApplianceType) {
         form.setValue("applianceType", derivedApplianceType, { shouldDirty: false, shouldValidate: form.formState.isSubmitted });
-        form.setValue("applianceKind", unambiguousApplianceKind(derivedApplianceType) as any, { shouldValidate: false });
+      }
+      // Also when the division is unchanged: a lookup-set kind follows the
+      // service order (e.g. laundry with no kind, then a Washer order).
+      if (form.getValues("applianceKind") !== derivedApplianceKind) {
+        form.setValue("applianceKind", derivedApplianceKind as any, {
+          shouldDirty: false,
+          shouldValidate: form.formState.isSubmitted && !!derivedApplianceKind,
+        });
       }
       setAutoApplianceType({ value: derivedApplianceType, serviceOrder: watchedServiceOrder });
     } else if (setByLookup && auto!.serviceOrder !== watchedServiceOrder) {
@@ -1127,7 +1150,7 @@ export default function TechSubmitPage() {
       form.setValue("applianceKind", undefined as any, { shouldValidate: false });
       setAutoApplianceType(null);
     }
-  }, [applianceLookupSettled, derivedApplianceType, watchedServiceOrder]);
+  }, [applianceLookupSettled, derivedApplianceType, derivedApplianceKind, watchedServiceOrder]);
 
   useEffect(() => {
     if (derivedWarranty) {
@@ -1318,10 +1341,6 @@ export default function TechSubmitPage() {
       }
     }
     return warnings;
-  }
-
-  function formatApplianceLabel(value: string | undefined): string {
-    return APPLIANCE_TYPES.find(a => a.value === value)?.label || value || "—";
   }
 
   function formatRequestTypeLabel(value: string | undefined): string {
@@ -1905,10 +1924,19 @@ export default function TechSubmitPage() {
                           autoApplianceType.value === watchedApplianceType &&
                           autoApplianceType.serviceOrder === watchedServiceOrder;
                         const needsSpecific = autoDetected && !field.value;
+                        // The lookup found only the category: ask for the
+                        // specific appliance (with or without a product line).
+                        const hint = needsSpecific ? (
+                          <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-appliance-type-auto-note">
+                            <Info className="w-3 h-3" />
+                            {`${applianceLabel({ applianceType: watchedApplianceType })} category detected — select the specific appliance`}
+                          </p>
+                        ) : null;
                         // The product line replaces the generic note; once
                         // the type is the tech's own it drops "From".
                         if (serviceOrderProduct) {
                           return (
+                            <>
                             <p
                               className="mt-1 text-xs text-muted-foreground flex items-start gap-1"
                               data-testid="text-appliance-type-product"
@@ -1920,19 +1948,17 @@ export default function TechSubmitPage() {
                                 <span className="font-medium text-foreground" data-testid="text-appliance-type-product-text">
                                   <ServiceOrderProductText product={serviceOrderProduct} />
                                 </span>
-                                {needsSpecific && (
-                                  <span data-testid="text-appliance-type-select-specific">
-                                    {` — ${formatApplianceLabel(watchedApplianceType)} category; select the specific appliance`}
-                                  </span>
-                                )}
                               </span>
                             </p>
+                            {hint}
+                            </>
                           );
                         }
+                        if (hint) return hint;
                         return autoDetected ? (
                           <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-appliance-type-auto-note">
                             <Info className="w-3 h-3" />
-                            {field.value ? "Auto-detected from service order" : `${formatApplianceLabel(watchedApplianceType)} category detected — select the specific appliance`}
+                            Auto-detected from service order
                           </p>
                         ) : null;
                       })()}

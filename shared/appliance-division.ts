@@ -25,11 +25,11 @@ export type ApplianceDivision = (typeof APPLIANCE_DIVISIONS)[number];
 const RULES: { division: ApplianceDivision; pattern: RegExp }[] = [
   { division: "microwave", pattern: /MICRO\s*WAVE|\bMICRO\b|\bMWO\b|\bOTR\b/ },
   { division: "dishwasher", pattern: /DISH\s*WASH|\bDW\b|COMPACTOR/ },
-  { division: "refrigeration", pattern: /REFRIG|FRIDGE|FREEZER|ICE\s*MAKER|\bICE\b|WINE|BEVERAGE/ },
+  { division: "refrigeration", pattern: /REFRIG|FRIDGE|FREEZER|ICE\s*MAKER|\bICE\b|\bIM\b|WINE|BEVERAGE/ },
   { division: "laundry", pattern: /WASH|DRYER|LAUNDRY/ },
   { division: "cooking", pattern: /RANGE|OVEN|COOK|STOVE|HOOD|COOKTOP|GRILL|WARMING/ },
   { division: "hvac", pattern: /HVAC|AIR\s*COND|\bA\/?C\b|FURNACE|HEAT\s*PUMP|AIR\s*HANDLER|BOILER|DEHUMID|THERMOSTAT/ },
-  { division: "all_other", pattern: /DISPOSER|DISPOSAL|WATER\s*HEATER|SOFTENER|GENERATOR|VACUUM|MOWER|TRACTOR/ },
+  { division: "all_other", pattern: /DISPOS|WATER\s*HEATER|SOFTENER|GENERATOR|VACUUM|MOWER|TRACTOR/ },
 ];
 
 export function divisionFromServiceOrderProduct(raw: string | null | undefined): ApplianceDivision | undefined {
