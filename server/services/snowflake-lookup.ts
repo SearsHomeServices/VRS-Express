@@ -83,11 +83,74 @@ function createBoundedLookup<R>(
   };
 }
 
-/** ProcID / client name for a service order (warranty classification). */
-export function createProcLookup(
-  query: (key: string, signal: AbortSignal) => Promise<any[]>,
-  options: LookupOptions = {},
-) {
+// A positional statement for a lookup driver. A null bind is SQL NULL.
+export interface LookupStatement {
+  sqlText: string;
+  binds: Array<string | null>;
+}
+
+// Runs one statement. Statements run for one lookup (the same signal) share
+// a connection (server/services/snowflake.ts).
+export type LookupStatementQuery = (statement: LookupStatement, signal: AbortSignal) => Promise<any[]>;
+
+const SERVICE_ORDER_TABLE = "PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL";
+
+// The district's row first, then the most recently created order. Service
+// order numbers are reused across units (see "Service unit resolution"
+// below); SO_CRT_DT is the order's create date (ai-agent-mcp
+// service_order_tools.py filters this table on it). Binds: [serviceOrder,
+// district].
+const SO_MATCH_DISTRICT_THEN_RECENT =
+  "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END, SO_CRT_DT DESC NULLS LAST LIMIT 1";
+
+// ProcID / client name, district's order first, else the most recent one.
+// Binds: [serviceOrder, district or null].
+export const PROC_ID_SQL =
+  `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_DISTRICT_THEN_RECENT}`;
+// The statement before the ordering, run only when PROC_ID_SQL fails (e.g.
+// a column name the live schema rejects), so warranty detection and submit
+// never depend on SO_CRT_DT. Binds: [serviceOrder].
+export const PROC_ID_FALLBACK_SQL =
+  `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM ${SERVICE_ORDER_TABLE} WHERE SO_NO = ? LIMIT 1`;
+
+// "DDDD-SSSSSSSS" -> the district before the "-" (1-7 digits) or null, and
+// the SO after it (normalizeServiceOrder); a bare SO has no district.
+export function procLookupKey(raw: string): { district: string | null; serviceOrder: string } {
+  const value = String(raw ?? "").trim();
+  const district = value.includes("-") ? value.split("-")[0].trim() : "";
+  return {
+    district: /^\d{1,7}$/.test(district) ? district.padStart(7, "0") : null,
+    serviceOrder: normalizeServiceOrder(value),
+  };
+}
+
+// Runs `statement`; if it fails (not the deadline), logs the message and
+// runs `fallback` on the same lookup's connection instead.
+async function withFallbackStatement(
+  query: LookupStatementQuery,
+  statement: LookupStatement,
+  fallback: LookupStatement,
+  signal: AbortSignal,
+  label: string,
+): Promise<{ rows: any[]; fallback: boolean }> {
+  try {
+    return { rows: await query(statement, signal), fallback: false };
+  } catch (err) {
+    if (signal.aborted) throw err;
+    // The error message only (a column name or SQL error); never row values.
+    const message = String((err as any)?.message ?? err).slice(0, 200);
+    console.warn(`${label} ordered statement failed, retrying the unordered statement: ${message}`);
+    return { rows: await query(fallback, signal), fallback: true };
+  }
+}
+
+/**
+ * ProcID / client name for a service order (warranty classification).
+ * "DDDD-SSSSSSSS" prefers the district's order among SOs reused across
+ * units, else the most recent; a bare SO takes the most recent. Cached by
+ * district and SO.
+ */
+export function createProcLookup(query: LookupStatementQuery, options: LookupOptions = {}) {
   const lookup = createBoundedLookup<ProcIdResult>(
     () => ({ status: "LOOKUP_UNAVAILABLE", retryable: true }),
     (result, ttl) => result.status === "FOUND" ? ttl.positiveMs
@@ -95,12 +158,22 @@ export function createProcLookup(
     options,
   );
   return (raw: string): Promise<ProcIdResult> => {
-    const key = normalizeServiceOrder(raw);
-    return lookup(key, signal => query(key, signal).then((rows): ProcIdResult => rows.length ? {
-      status: "FOUND",
-      procId: String(rows[0].CMB_THD_PTY_ID ?? "").trim() || "Not Found",
-      clientNm: String(rows[0].CLIENT_NM ?? "").trim() || "Not Found",
-    } : { status: "NOT_FOUND", procId: "Not Found", clientNm: "Not Found" }));
+    const { district, serviceOrder } = procLookupKey(raw);
+    const key = district ? `${district}-${serviceOrder}` : serviceOrder;
+    return lookup(key, async (signal): Promise<ProcIdResult> => {
+      const { rows } = await withFallbackStatement(
+        query,
+        { sqlText: PROC_ID_SQL, binds: [serviceOrder, district] },
+        { sqlText: PROC_ID_FALLBACK_SQL, binds: [serviceOrder] },
+        signal,
+        `[proc-id] SO=${serviceOrder}`,
+      );
+      return rows.length ? {
+        status: "FOUND",
+        procId: String(rows[0].CMB_THD_PTY_ID ?? "").trim() || "Not Found",
+        clientNm: String(rows[0].CLIENT_NM ?? "").trim() || "Not Found",
+      } : { status: "NOT_FOUND", procId: "Not Found", clientNm: "Not Found" };
+    });
   };
 }
 
@@ -112,17 +185,17 @@ export function createProcLookup(
 // types is not always the unit the order lives under: a tech in district
 // 7995 can work SO 11075199 that lives under unit 0008366 (ServicePower
 // "0008366-11075199"). So the statements match on SO_NO and resolve the unit
-// from the rows:
+// from the rows (the AHS prefill, which returns customer-related data):
 //   1. the row under the tech's padded district ("7995" -> "0007995") wins;
 //   2. else, if every row for the SO is under one unit, that unit wins;
 //   3. else the order is ambiguous (several units, none the district) and the
 //      lookup answers not_found rather than return another unit's data.
+// The appliance type (non-PII) relaxes 3: its statement orders by
+// SO_CRT_DT too and takes the most recent order (pickApplianceServiceUnit).
 // One statement does it: the ORDER BY puts the district's row first, and the
 // window COUNT(DISTINCT SVC_UN_NO) OVER () is computed over every row the
 // WHERE matched (before LIMIT 1), so one row tells both the chosen unit and
 // how many units the SO spans. Rows for one SO are few; no second statement.
-
-const SERVICE_ORDER_TABLE = "PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL";
 
 // Binds: [serviceOrder, district].
 const SO_MATCH_PREFER_DISTRICT =
@@ -386,15 +459,38 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
 // ai-agent-mcp service_order_tools.py) mapped to the tech form's appliance
 // type by divisionFromServiceOrderProduct. Its own statement and its own
 // bounded lookup, never part of the ProcID statement: a failure here can
-// never touch warranty detection or submit. Same unit resolution as the AHS
-// prefill. The raw HS_SP_CD value (non-PII) leaves this module as `product`,
-// the fallback the tech form shows under Appliance Type when WOM has no
+// never touch warranty detection or submit. The unit: the district's order,
+// else the most recent order even when the SO spans several units (the
+// product is not PII; the AHS prefill stays strict). The raw HS_SP_CD value
+// (non-PII) leaves this module as `product`, the fallback the tech form shows under Appliance Type when WOM has no
 // product category (server/services/wom-work-order.ts), with the resolved
 // unit the WOM lookup uses. Neither is ever logged.
 
-// Binds: [serviceOrder, district].
+// Binds: [serviceOrder, district]. The district's order, else the most
+// recent one; UNIT_COUNT is for the log only.
 export const SERVICE_ORDER_APPLIANCE_SQL =
+  `SELECT ${SERVICE_UNIT_SELECT}, HS_SP_CD AS PRODUCT FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_DISTRICT_THEN_RECENT}`;
+// The statement before the SO_CRT_DT ordering, run only when
+// SERVICE_ORDER_APPLIANCE_SQL fails; its row is arbitrary among several
+// units, so it keeps the strict rule (resolveServiceUnit). Binds:
+// [serviceOrder, district].
+export const SERVICE_ORDER_APPLIANCE_FALLBACK_SQL =
   `SELECT ${SERVICE_UNIT_SELECT}, HS_SP_CD AS PRODUCT FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
+
+export type ApplianceUnitPick = "district" | "single" | "recent";
+
+// The unit of SERVICE_ORDER_APPLIANCE_SQL's row and why it won: the
+// district's, the SO's only unit, or the most recent of several. Undefined
+// when the row has no usable unit.
+export function pickApplianceServiceUnit(
+  row: any,
+  district: string,
+): { serviceUnit: string; pick: ApplianceUnitPick } | undefined {
+  const serviceUnit = normalizeServiceUnit(row?.SERVICE_UNIT);
+  if (!serviceUnit) return undefined;
+  if (serviceUnit === district.padStart(7, "0")) return { serviceUnit, pick: "district" };
+  return { serviceUnit, pick: Number(row?.UNIT_COUNT) === 1 ? "single" : "recent" };
+}
 
 export type ServiceOrderApplianceResult =
   // applianceType is absent when the product does not map to a division;
@@ -404,19 +500,17 @@ export type ServiceOrderApplianceResult =
   | { status: "not_found" }
   | { status: "unavailable" };
 
-export type ServiceOrderApplianceQuery = (
-  statement: { sqlText: string; binds: string[] },
-  signal: AbortSignal,
-) => Promise<any[]>;
+export type ServiceOrderApplianceQuery = LookupStatementQuery;
 
 // For a "DDDD-SSSSSSSS" service order. Never rejects; bounded by the
-// lookup's deadline (5s by default), coalesced and cached like the others.
+// lookup's deadline (the same default as the ProcID lookup), coalesced and
+// cached like the others.
 export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQuery, options: LookupOptions = {}) {
   const lookup = createBoundedLookup<ServiceOrderApplianceResult>(
     () => ({ status: "unavailable" }),
     (result, ttl) => result.status === "found" ? ttl.positiveMs
       : result.status === "not_found" ? ttl.negativeMs : ttl.unavailableMs,
-    { deadlineMs: 5000, ...options },
+    options,
   );
   return (serviceOrder: string): Promise<ServiceOrderApplianceResult> => {
     const match = /^(\d{4})-(\d{8})$/.exec(String(serviceOrder ?? "").trim());
@@ -425,27 +519,41 @@ export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQu
     const [, district, so] = match;
     return lookup(`${district}-${so}`, async (signal) => {
       let result: ServiceOrderApplianceResult;
+      let units = 0;
+      let pick: ApplianceUnitPick | "none" = "none";
       try {
-        const rows = await query({ sqlText: SERVICE_ORDER_APPLIANCE_SQL, binds: [so, district] }, signal);
-        const serviceUnit = rows[0] ? resolveServiceUnit(rows[0], district) : undefined;
-        if (!serviceUnit) {
+        const { rows, fallback } = await withFallbackStatement(
+          query,
+          { sqlText: SERVICE_ORDER_APPLIANCE_SQL, binds: [so, district] },
+          { sqlText: SERVICE_ORDER_APPLIANCE_FALLBACK_SQL, binds: [so, district] },
+          signal,
+          `[appliance-type] SO=${district}-${so}`,
+        );
+        const row = rows[0];
+        units = Number(row?.UNIT_COUNT) || 0;
+        const picked = row ? pickApplianceServiceUnit(row, district) : undefined;
+        // The unordered fallback's row is arbitrary: strict rule there.
+        const chosen = picked && !(fallback && picked.pick === "recent") ? picked : undefined;
+        if (!chosen) {
           result = { status: "not_found" };
         } else {
-          const product = text(rows[0].PRODUCT);
+          pick = chosen.pick;
+          const product = text(row.PRODUCT);
           const applianceType = divisionFromServiceOrderProduct(product);
           result = {
             status: "found",
             ...(applianceType ? { applianceType } : {}),
             ...(product ? { product } : {}),
-            serviceUnit,
+            serviceUnit: chosen.serviceUnit,
           };
         }
       } catch {
         result = { status: "unavailable" };
       }
-      // The SO and the division only; never HS_SP_CD's value or the unit.
+      // The SO, the unit count, the pick and the division only; never
+      // HS_SP_CD's value or the unit.
       const division = result.status === "found" ? result.applianceType ?? "unknown" : "none";
-      console.info(`[appliance-type] SO=${district}-${so} status=${result.status} division=${division}`);
+      console.info(`[appliance-type] SO=${district}-${so} status=${result.status} units=${units} pick=${pick} division=${division}`);
       return result;
     });
   };
