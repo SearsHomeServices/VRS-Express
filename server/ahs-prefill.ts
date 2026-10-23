@@ -137,7 +137,10 @@ export function withoutPrefilledFields<T extends PrefillableDetails>(details: T)
 }
 
 // Fills only blank AHS_PREFILL_FIELDS; a value the tech entered always wins.
-// prefilledFields lists exactly the fields filled here (omitted when none).
+// prefilledFields lists the fields filled here, plus fields whose submitted
+// value already equals the service-order value (the tech form fills brand,
+// model and serial from GET /api/tech/ahs-prefill, so they arrive non-blank);
+// omitted when none.
 // purchaseYear is passed through only when the tech left the appliance age
 // blank; no age is ever derived from it.
 function applyPrefillValues<T extends PrefillableDetails>(details: T, values: AhsPrefillValues): T {
@@ -145,8 +148,11 @@ function applyPrefillValues<T extends PrefillableDetails>(details: T, values: Ah
   const filled: AhsPrefillField[] = [];
   for (const field of AHS_PREFILL_FIELDS) {
     const value = values[field];
-    if (value && !next[field]?.trim()) {
+    const current = next[field]?.trim();
+    if (value && !current) {
       next[field] = value;
+      filled.push(field);
+    } else if (value && current && current.toLowerCase() === value.toLowerCase()) {
       filled.push(field);
     }
   }
@@ -212,11 +218,11 @@ export function keepPrefilledFromPrevious<T extends PrefillableDetails>(
   return merged.length ? { ...details, prefilledFields: merged } : withoutPrefilledFields(details);
 }
 
-// Customer PII the server filled from HSSOM never goes back to a
-// technician's browser, not even on their own ticket. Technician-facing
+// Customer PII and the AHS dispatch number the server filled never go back
+// to a technician's browser, not even on their own ticket. Technician-facing
 // submission responses drop these keys from the stored ahs_details JSON when
 // prefilledFields lists them; values the tech typed are left alone.
-const SERVER_ONLY_CUSTOMER_FIELDS = ["customerName", "customerAddress"] as const;
+const SERVER_ONLY_CUSTOMER_FIELDS = ["contractNumber", "customerName", "customerAddress"] as const;
 
 export function redactServerPrefilledCustomer(raw: string | null | undefined): string | null | undefined {
   if (!raw) return raw;
@@ -235,9 +241,10 @@ export function redactServerPrefilledCustomer(raw: string | null | undefined): s
   return JSON.stringify(details);
 }
 
-// A resubmission comes back with the redacted customer fields blank. When the
-// fresh lookup didn't refill them, carry the previous ticket's server-filled
-// values forward so keepPrefilledFromPrevious keeps their provenance.
+// A resubmission comes back with the redacted fields blank (and without
+// purchaseYear, which is server-only). When the fresh lookup didn't refill
+// them, carry the previous ticket's server-filled values forward so
+// keepPrefilledFromPrevious keeps their provenance.
 export function restoreRedactedCustomerFromPrevious<T extends PrefillableDetails>(
   details: T,
   previous: PrefillableDetails | null | undefined,
@@ -249,7 +256,10 @@ export function restoreRedactedCustomerFromPrevious<T extends PrefillableDetails
       restored[field] = prior;
     }
   }
-  return Object.keys(restored).length ? { ...details, ...restored } : details;
+  const keepYear =
+    details.applianceAge == null && details.purchaseYear === undefined && previous?.purchaseYear !== undefined;
+  if (!Object.keys(restored).length && !keepYear) return details;
+  return { ...details, ...restored, ...(keepYear ? { purchaseYear: previous!.purchaseYear } : {}) };
 }
 
 // GET /api/tech/ahs-prefill needs the ProcID derivation only when HSSOM found

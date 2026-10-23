@@ -1218,7 +1218,9 @@ export async function registerRoutes(
       // appliance type decides the agent division, so every downstream use
       // of applianceType (routing, broadcasts, SMS) stays consistent.
       // prefilledFields and purchaseYear are server-only (set by the prefill below).
-      let ahsDetails = parsed.data.requestType === "authorization" && parsed.data.ahsDetails
+      // Ignored entirely while VRS_AI_APP_ENROLL_ENABLED is off (a client with
+      // a stale /api/config could still send them).
+      let ahsDetails = isVrsAiAppEnrollEnabled() && parsed.data.requestType === "authorization" && parsed.data.ahsDetails
         ? withoutServerOnlyFields(parsed.data.ahsDetails)
         : undefined;
       if (ahsDetails) {
@@ -2616,7 +2618,7 @@ export async function registerRoutes(
         console.error(`[add-photos] broadcast failed for submission ${id}:`, broadcastErr);
       }
 
-      return res.status(200).json({ submission: updated, added: totalAdded });
+      return res.status(200).json({ submission: redactSubmissionForRole(user.role, updated), added: totalAdded });
     } catch (error) {
       console.error("Add photos error:", error);
       return res.status(500).json({ error: "Failed to add photos" });

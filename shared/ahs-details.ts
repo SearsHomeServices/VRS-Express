@@ -95,6 +95,8 @@ const moneyNumber = (label: string) =>
     .max(1_000_000, `${label} is too large`)
     .multipleOf(0.01, `${label} can have at most 2 decimal places`);
 
+const AHS_MAX_AMOUNT = 1_000_000;
+
 const money = (label: string) => numberFrom(moneyNumber(label));
 
 const enumOf = <T extends readonly { value: string }[]>(options: T, message: string) =>
@@ -167,7 +169,27 @@ export const ahsDetailsSchema = z.object({
   parts: z
     .array(ahsPartSchema, { required_error: "Add at least one part" })
     .min(1, "Add at least one part")
-    .max(10, "No more than 10 parts"),
+    .max(10, "No more than 10 parts")
+    // VRS AI caps each line total (sell_price) and the parts total
+    // (part_price) at 1,000,000; reject here so the tech sees it instead of
+    // the ticket silently skipping VRS AI enrollment.
+    .superRefine((parts, context) => {
+      let total = 0;
+      parts.forEach((part, index) => {
+        const line = part.quantity * part.unitPrice;
+        total += line;
+        if (line > AHS_MAX_AMOUNT) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, "unitPrice"],
+            message: "Quantity × price must be $1,000,000 or less",
+          });
+        }
+      });
+      if (total > AHS_MAX_AMOUNT) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "Parts total must be $1,000,000 or less" });
+      }
+    }),
   // Which fields the server filled from the service order (Snowflake). Set
   // only by the server at submit; any client-sent value is discarded.
   prefilledFields: z.array(z.enum(AHS_PREFILL_FIELDS)).optional(),

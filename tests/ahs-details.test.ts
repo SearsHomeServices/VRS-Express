@@ -500,3 +500,14 @@ describe("AHS service-order prefill", () => {
     ]);
   });
 });
+
+describe("VRS AI amount limits", () => {
+  const base = ahsDetailsSchema.parse(formValues);
+  it("rejects a part line or parts total over $1,000,000", () => {
+    const tooBig = { ...base, parts: [{ ...base.parts[0], quantity: 99, unitPrice: 20_000 }] };
+    const result = ahsDetailsSchema.safeParse(tooBig);
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.issues)).toContain("$1,000,000 or less");
+    expect(ahsDetailsSchema.safeParse(base).success).toBe(true);
+  });
+});

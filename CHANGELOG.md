@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Pre-push review of the AHS tech-ticket work (2026-10-23)
+- `POST /api/submissions/:id/photos` now redacts its response like every other
+  technician-facing submission response. It was returning server-filled
+  customer details.
+- The server-filled AHS dispatch number is now also redacted from technician
+  responses, and restored on the server for resubmissions, as the design says.
+- Brand, model and serial that the tech form filled from the service order
+  now show "From service order" to the reviewer when the submitted value
+  matches the lookup. They showed "Entered by tech" before.
+- A resubmission keeps the previous ticket's server-filled purchase year
+  when HSSOM is unavailable and the age is still blank.
+- Part lines and the parts total are capped at $1,000,000 on the form, so a
+  ticket can no longer pass the form but silently fail VRS AI validation.
+- The server ignores `ahsDetails` while `VRS_AI_APP_ENROLL_ENABLED` is off.
+
 ### Fixed - HSSOM client matches the HSSOM auth and lookup specs (2026-10-22)
 - Auth (`server/services/hssom-auth.ts`):
   - rejects a token response whose `responseCode` isn't "00", reporting only the code;

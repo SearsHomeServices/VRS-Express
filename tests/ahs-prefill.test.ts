@@ -940,3 +940,40 @@ describe("server-filled customer PII never reaches a technician's browser", () =
     expect(handler.indexOf("keepPrefilledFromPrevious(ahsDetails, previousAhsDetails)")).toBeGreaterThan(0);
   });
 });
+
+describe("pre-push review fixes", () => {
+  it("marks browser-filled brand/model/serial as from the service order when they match", () => {
+    const fromBrowser = { ...details, brand: "whirlpool", modelNumber: "WTW5000DW1", serialNumber: "TYPED-BY-TECH" };
+    const next = applyAhsServiceOrderPrefill(fromBrowser, found);
+    expect(next.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber"]);
+    // A value that differs from the service order stays the tech's own.
+    expect(next.serialNumber).toBe("TYPED-BY-TECH");
+    expect(next.brand).toBe("whirlpool");
+  });
+
+  it("redacts a server-filled dispatch number from technician responses", () => {
+    const stored = JSON.stringify({ contractNumber: SECRET_CONTRACT, brand: "Whirlpool", prefilledFields: ["contractNumber"] });
+    expect(redactServerPrefilledCustomer(stored)).not.toContain(SECRET_CONTRACT);
+    const typed = JSON.stringify({ contractNumber: "TECH-123", prefilledFields: [] });
+    expect(redactServerPrefilledCustomer(typed)).toBe(typed);
+  });
+
+  it("restores a redacted dispatch number and the previous purchase year on resubmission", () => {
+    const previous = { ...details, contractNumber: SECRET_CONTRACT, applianceAge: undefined, purchaseYear: 2019, prefilledFields: ["contractNumber"] } as any;
+    const resent = { ...details, contractNumber: "", applianceAge: undefined } as any;
+    const restored = restoreRedactedCustomerFromPrevious(resent, previous);
+    expect(restored.contractNumber).toBe(SECRET_CONTRACT);
+    expect(restored.purchaseYear).toBe(2019);
+    // Not when the tech now gave an age.
+    expect(restoreRedactedCustomerFromPrevious({ ...resent, applianceAge: 3 }, previous).purchaseYear).toBeUndefined();
+  });
+
+  it("redacts the add-photos response and ignores AHS details while enrollment is off", () => {
+    const routes = fs.readFileSync("server/routes.ts", "utf8");
+    expect(routes).toContain("json({ submission: redactSubmissionForRole(user.role, updated), added: totalAdded })");
+    const photos = routes.slice(routes.indexOf('app.post("/api/submissions/:id/photos"'));
+    const handler = photos.slice(0, photos.indexOf("\n  app.", 1));
+    expect(handler).not.toMatch(/json\(\{ submission: updated\b/);
+    expect(routes).toContain('let ahsDetails = isVrsAiAppEnrollEnabled() && parsed.data.requestType === "authorization"');
+  });
+});
