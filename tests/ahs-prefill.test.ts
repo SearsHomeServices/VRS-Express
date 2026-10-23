@@ -13,6 +13,7 @@ import {
 import {
   applyAhsServiceOrderPrefill,
   applyAhsSubmitPrefill,
+  applyTechApplianceDetails,
   boundedAhsPrefillLookup,
   draftFromPrevious,
   fillAhsDraft,
@@ -29,6 +30,7 @@ import {
 import { lookupHssomOrder, type HssomOrderLookupResult } from "../server/services/hssom-order-lookup";
 import { isAhsServiceOrderPrefillEnabled } from "../server/featureFlags";
 import { AHS_PREFILL_FIELDS } from "../shared/ahs-prefill";
+import type { TechApplianceDetails } from "../shared/tech-appliance-details";
 import {
   ahsDetailsDraftSchema,
   ahsDetailsSchema,
@@ -735,6 +737,128 @@ describe("AHS draft built at submit", () => {
     expect(draft.laborAmount).toBe(details.laborAmount);
     expect(draft.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
     expect(draftFromPrevious(null)).toEqual({});
+  });
+});
+
+describe("Tech appliance details on the AHS draft (applyTechApplianceDetails)", () => {
+  const tech: TechApplianceDetails = {
+    applianceGrade: "medium",
+    applianceColor: "Black Stainless Steel",
+    partFunction: "Controls wash cycle timing",
+  };
+  const foundWithParts: AhsPrefillLookupResult = {
+    ...found,
+    parts: [
+      { partNumber: "WPW10503278", description: "Electronic control board", quantity: 1, unitPrice: 245 },
+      { partNumber: "W10820048", quantity: 2 },
+    ],
+  };
+
+  it("maps the grade, sets the color and part 1's function on an empty draft", () => {
+    for (const [grade, ahsGrade] of [["low", "entry"], ["medium", "mid"], ["high", "top"]] as const) {
+      expect(applyTechApplianceDetails({}, { ...tech, applianceGrade: grade }).applianceGrade).toBe(ahsGrade);
+    }
+    // Lookups off or failed: the draft still gets the three values, part 1 partial.
+    const empty = applyAhsSubmitPrefill({}, sources({ status: "unavailable" }, { status: "unavailable" }), ahsWarranty);
+    const draft = applyTechApplianceDetails(empty, tech);
+    expect(draft).toEqual({
+      applianceGrade: "mid",
+      applianceColor: "Black Stainless Steel",
+      parts: [{ partFunction: "Controls wash cycle timing" }],
+    });
+    // The partial part is a valid stored draft; not yet complete details.
+    expect(parseStoredAhsDetailsDraft(JSON.stringify(draft))).toEqual(draft);
+    expect(parseStoredAhsDetails(JSON.stringify(draft))).toBeNull();
+  });
+
+  it("sets part 1's function on the parts the lookup filled, never in prefilledFields", () => {
+    const prefilled = applyAhsSubmitPrefill({}, sources(foundWithParts, hssomFound), ahsWarranty);
+    const draft = applyTechApplianceDetails(prefilled, tech);
+    expect(draft.parts).toEqual([
+      { ...foundWithParts.parts![0], partFunction: "Controls wash cycle timing" },
+      foundWithParts.parts![1],
+    ]);
+    expect(draft.applianceGrade).toBe("mid");
+    expect(draft.applianceColor).toBe("Black Stainless Steel");
+    expect(draft.prefilledFields).toEqual(prefilled.prefilledFields);
+    for (const field of ["applianceGrade", "applianceColor", "partFunction"]) {
+      expect(draft.prefilledFields).not.toContain(field);
+      expect(prefilledFieldNames(draft)).not.toContain(field);
+    }
+    expect(parseStoredAhsDetailsDraft(JSON.stringify(draft))).toEqual(draft);
+    // Doesn't mutate its input.
+    expect(prefilled.parts![0]).not.toHaveProperty("partFunction");
+  });
+
+  it("sets part 1's function only when blank", () => {
+    const typed: AhsDetailsDraft = { parts: [{ partNumber: "P1", partFunction: "Typed by manager" }] };
+    expect(applyTechApplianceDetails(typed, tech).parts).toEqual(typed.parts);
+    const blank: AhsDetailsDraft = { parts: [{ partNumber: "P1", partFunction: "  " }] };
+    expect(applyTechApplianceDetails(blank, tech).parts).toEqual([{ partNumber: "P1", partFunction: tech.partFunction }]);
+  });
+
+  it("on a resubmission keeps the previous ticket's values unless the tech changed them", () => {
+    const previousDraft: AhsDetailsDraft = {
+      applianceGrade: "top", // the VRS manager corrected it
+      applianceColor: "White",
+      parts: [{ partNumber: "P1", partFunction: "Corrected function" }],
+    };
+    expect(applyTechApplianceDetails(previousDraft, tech, tech)).toEqual(previousDraft);
+    const changed = applyTechApplianceDetails(previousDraft, { ...tech, applianceColor: "Bisque" }, tech);
+    expect(changed).toEqual({ ...previousDraft, applianceColor: "Bisque" });
+    // Grade and part function changed; the color is what the tech sent last time.
+    const twoChanged = applyTechApplianceDetails(previousDraft, tech, {
+      applianceGrade: "high",
+      applianceColor: "Black Stainless Steel",
+      partFunction: "Old",
+    });
+    expect(twoChanged).toEqual({
+      applianceGrade: "mid",
+      applianceColor: "White",
+      parts: [{ partNumber: "P1", partFunction: tech.partFunction }],
+    });
+  });
+
+  it("refresh fills parts around the tech's partial part 1 and keeps the tech's values", () => {
+    const stored = applyTechApplianceDetails({}, tech);
+    const refreshed = applyAhsSubmitPrefill(stored, sources(foundWithParts, hssomFound), ahsWarranty);
+    expect(refreshed.applianceGrade).toBe("mid");
+    expect(refreshed.applianceColor).toBe("Black Stainless Steel");
+    expect(refreshed.parts).toEqual([
+      { ...foundWithParts.parts![0], partFunction: "Controls wash cycle timing" },
+      foundWithParts.parts![1],
+    ]);
+    expect(refreshed.prefilledFields).toContain("parts");
+    for (const field of ["applianceGrade", "applianceColor", "partFunction"]) {
+      expect(refreshed.prefilledFields).not.toContain(field);
+    }
+    // Refreshing again changes nothing; a real part 1 is never replaced.
+    expect(applyAhsSubmitPrefill(refreshed, sources(foundWithParts, hssomFound), ahsWarranty)).toEqual(refreshed);
+    // A tech value already in the draft is never overwritten, whatever the lookups return.
+    const withTyped = { ...stored, parts: [{ partNumber: "TYPED", partFunction: "Mine" }] };
+    expect(fillAhsDraft(withTyped, { parts: [{ partNumber: "SO", quantity: 1 }] }).parts).toEqual(withTyped.parts);
+  });
+
+  it("a Stage 1 save keeps the tech values the manager left unchanged", () => {
+    const drafted = applyTechApplianceDetails(
+      applyAhsSubmitPrefill({}, sources(foundWithParts, hssomFound), ahsWarranty),
+      tech,
+    );
+    const saved: AhsDetails = {
+      ...details,
+      applianceGrade: drafted.applianceGrade,
+      applianceColor: drafted.applianceColor,
+      parts: [{ ...details.parts[0], partFunction: drafted.parts![0].partFunction }],
+    };
+    const merged = mergeSavedAhsProvenance(saved, drafted);
+    expect(merged).toMatchObject({
+      applianceGrade: "mid",
+      applianceColor: "Black Stainless Steel",
+      parts: [{ partFunction: "Controls wash cycle timing" }],
+    });
+    for (const field of ["applianceGrade", "applianceColor", "partFunction"]) {
+      expect(merged.prefilledFields ?? []).not.toContain(field);
+    }
   });
 });
 

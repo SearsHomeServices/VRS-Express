@@ -12,6 +12,7 @@ import {
   type AhsPrefillField,
 } from "@shared/ahs-prefill";
 import type { AhsDetails, AhsDetailsDraft, AhsPartDraft } from "@shared/ahs-details";
+import { ahsGradeFromTechGrade, type TechApplianceDetails } from "@shared/tech-appliance-details";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import type { AhsPrefillLookupResult, AhsServiceOrderPart } from "./services/snowflake-lookup";
 import type { HssomOrderLookupResult } from "./services/hssom-order-lookup";
@@ -151,12 +152,24 @@ export function withoutPrefilledFields<T extends PrefillableDetails>(details: T)
 const sameText = (a: string | null | undefined, b: string | null | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
+// A part line holding only what the technician entered (part function, from
+// applyTechApplianceDetails): no part number, description, quantity or price.
+function isTechOnlyPart(part: AhsPartDraft): boolean {
+  return (
+    !part.partNumber?.trim() &&
+    !part.description?.trim() &&
+    part.quantity === undefined &&
+    part.unitPrice === undefined
+  );
+}
+
 // Fills only blank fields of the draft; a value already there always wins.
 // The draft's own prefilledFields are kept (they only ever name values the
 // server filled), plus the fields filled here and fields whose value already
 // equals the service-order value; omitted when none. Parts are filled only
-// when the draft has none. purchaseYear is set only while the appliance age
-// is blank; no age is ever derived from it.
+// when the draft has none, or only the technician's partial part 1 (its part
+// function is kept on the filled part 1). purchaseYear is set only while the
+// appliance age is blank; no age is ever derived from it.
 export function fillAhsDraft(draft: AhsDetailsDraft, values: AhsPrefillValues): AhsDetailsDraft {
   const next: AhsDetailsDraft = { ...draft };
   const marked = new Set<AhsPrefillField>(draft.prefilledFields ?? []);
@@ -170,8 +183,9 @@ export function fillAhsDraft(draft: AhsDetailsDraft, values: AhsPrefillValues): 
       marked.add(field);
     }
   }
-  if (values.parts?.length && !next.parts?.length) {
-    next.parts = values.parts.map((part) => ({ ...part }));
+  if (values.parts?.length && (next.parts ?? []).every(isTechOnlyPart)) {
+    const techLines = next.parts ?? [];
+    next.parts = values.parts.map((part, index) => ({ ...techLines[index], ...part }));
     marked.add("parts");
   }
   if (values.purchaseYear !== undefined && next.applianceAge == null && next.purchaseYear === undefined) {
@@ -211,6 +225,35 @@ export function applyAhsSubmitPrefill(
     warranty.derivedWarrantyType === "american_home_shield",
   );
   return outcome.status === "found" ? fillAhsDraft(draft, outcome.values) : draft;
+}
+
+// The appliance details the technician entered (shared/tech-appliance-details.ts)
+// on the AHS draft: grade (Low/Medium/High → entry/mid/top), color and part
+// 1's function, as a partial part 1 when the draft has no parts (the VRS
+// manager completes it; a later refresh may still fill the parts around it).
+// Tech-entered, so never named in prefilledFields. A value already in the
+// draft wins (a resubmission carries the previous ticket's details, possibly
+// corrected by the VRS manager) unless the technician changed it from what
+// they sent on that previous ticket (previous).
+export function applyTechApplianceDetails(
+  draft: AhsDetailsDraft,
+  tech: TechApplianceDetails,
+  previous?: TechApplianceDetails | null,
+): AhsDetailsDraft {
+  const changed = (field: keyof TechApplianceDetails) => !!previous && !sameText(previous[field], tech[field]);
+  const next: AhsDetailsDraft = { ...draft };
+  if (!next.applianceGrade || changed("applianceGrade")) {
+    next.applianceGrade = ahsGradeFromTechGrade(tech.applianceGrade);
+  }
+  if (!next.applianceColor?.trim() || changed("applianceColor")) {
+    next.applianceColor = tech.applianceColor;
+  }
+  const parts = next.parts?.length ? next.parts.map((part) => ({ ...part })) : [{}];
+  if (!parts[0].partFunction?.trim() || changed("partFunction")) {
+    parts[0].partFunction = tech.partFunction;
+  }
+  next.parts = parts;
+  return next;
 }
 
 // Names (never values) of what the server filled, for logging.
