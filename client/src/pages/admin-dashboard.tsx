@@ -1,3 +1,4 @@
+import { applianceLabel } from "@shared/appliance-types";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
@@ -757,7 +758,7 @@ export function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: numb
                   </div>
                   <div className="rounded-lg border p-3">
                     <p className="text-xs text-muted-foreground">Division</p>
-                    <p className="text-sm font-medium">{DIVISION_LABELS[sub.applianceType] || sub.applianceType}</p>
+                    <p className="text-sm font-medium">{applianceLabel(sub)}</p>
                   </div>
                   {(() => {
                     const product = parseServiceOrderProduct(sub.serviceOrderProduct);
@@ -2376,7 +2377,7 @@ function TicketOverviewSection({ scope = "all" }: { scope?: "all" | "vrs-ai-pilo
                           <div className="text-xs text-muted-foreground">{ticket.technicianLdapId || ""}</div>
                         </TableCell>
                         <TableCell className="text-sm">
-                          {DIVISION_LABELS[ticket.applianceType] || ticket.applianceType}
+                          {applianceLabel(ticket)}
                         </TableCell>
                         <TableCell className="text-sm">
                           {ticket.warrantyType === "sears_protect" ? "Sears Protect" :

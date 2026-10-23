@@ -344,6 +344,7 @@ describe("tech-submit page", () => {
         serviceOrder: "8175-12345678",
         phone: "5555550147",
         applianceType: "laundry",
+        applianceKind: "washer",
         requestType: "authorization",
         issueDescription: "Washer will not drain; pump hums but does not turn.",
         ...formValues,
@@ -405,6 +406,7 @@ describe("tech-resubmit page", () => {
       serviceOrder: "8175-12345678",
       phone: "5555550147",
       applianceType: "laundry",
+      applianceKind: "washer",
       requestType: "authorization",
       warrantyType: "american_home_shield",
       warrantyProvider: "American Home Shield",
@@ -440,6 +442,8 @@ describe("tech-resubmit page", () => {
     const body = fixtures.apiRequestWithRetry.mock.calls[0][2];
     expect(body.techApplianceDetails).toEqual(DETAILS);
     expect(body.resubmissionOf).toBe(5);
+    expect(body.applianceKind).toBe("washer");
+    expect(body.applianceType).toBe("laundry");
     expect(body).not.toHaveProperty("ahsDetails");
   });
 

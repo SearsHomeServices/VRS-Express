@@ -1,3 +1,4 @@
+import { applianceLabel } from "@shared/appliance-types";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { formatDateShort } from "@/lib/utils";
@@ -48,7 +49,7 @@ export default function TechHistoryPage() {
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground capitalize">
-                        {sub.applianceType.replace("_", " ")}
+                        {applianceLabel(sub)}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {formatDateShort(sub.createdAt)}

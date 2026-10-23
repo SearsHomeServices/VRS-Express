@@ -1,3 +1,4 @@
+import { applianceLabel } from "@shared/appliance-types";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -2544,7 +2545,7 @@ export default function AgentDashboard() {
                                 {sub.technicianName}
                               </span>
                               <Badge variant="outline" className="text-xs" data-testid={`badge-type-${sub.id}`}>
-                                {APPLIANCE_LABELS[sub.applianceType] || sub.applianceType}
+                                {applianceLabel(sub)}
                               </Badge>
                             </div>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -2832,7 +2833,7 @@ export default function AgentDashboard() {
                             <p className="text-xs text-muted-foreground">Appliance Type</p>
                             <div className="flex items-center gap-2">
                               <p className="text-sm font-medium" data-testid="text-detail-appliance">
-                                {APPLIANCE_LABELS[selectedSubmission.applianceType] || selectedSubmission.applianceType}
+                                {applianceLabel(selectedSubmission)}
                               </p>
                               {isTicketWorkView && selectedSubmission.ticketStatus === "pending" && selectedSubmission.assignedTo === user?.id && (
                                 <Select

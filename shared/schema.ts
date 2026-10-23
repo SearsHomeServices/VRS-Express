@@ -126,6 +126,7 @@ export const submissions = pgTable("submissions", {
   serviceOrder: varchar("service_order", { length: 13 }).notNull(),
   districtCode: varchar("district_code", { length: 4 }),
   applianceType: text("appliance_type").notNull(), // 'cooking', 'dishwasher', 'microwave', 'laundry', 'refrigeration', 'hvac', 'all_other'
+  applianceKind: text("appliance_kind"), // Detailed choice; applianceType remains the routing division.
   requestType: text("request_type").notNull(), // 'authorization', 'infestation_non_accessible', 'parts_nla'
   warrantyType: text("warranty_type").notNull().default("sears_protect"), // 'sears_protect', 'b2b'
   warrantyProvider: varchar("warranty_provider", { length: 100 }),
@@ -280,7 +281,7 @@ export type Submission = typeof submissions.$inferSelect;
 // roughly 5-10x without changing schema or removing data.
 export type SubmissionListItem = Pick<Submission,
   | "id" | "technicianId" | "racId" | "serviceOrder" | "districtCode" | "phone"
-  | "applianceType" | "requestType" | "warrantyType" | "warrantyProvider"
+  | "applianceType" | "applianceKind" | "requestType" | "warrantyType" | "warrantyProvider"
   | "aiEnhanced" | "estimateAmount"
   | "ticketStatus" | "stage1Status" | "stage2Status"
   | "stage1ReviewedAt" | "stage1ReviewedBy"
