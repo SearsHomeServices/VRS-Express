@@ -1,3 +1,21 @@
+## 2026-10-23 — The VRS manager completes the AHS details at Stage 1
+
+The tech form no longer has an AHS section. Submit stores a server-built draft
+in `submissions.ahs_details` (no new column). The manager saves the full
+details through `PATCH /api/submissions/:id/ahs-details`
+(server/ahs-review-api.ts), and only that save enrolls the ticket in VRS AI.
+- **Parts provenance:** `"parts"` was added to `AHS_PREFILL_FIELDS`, rather than
+  a separate `prefilledParts` flag, so the reviewer reads one list. Server
+  loops over single-value fields use `AHS_PREFILL_TEXT_FIELDS`.
+- **Replacing the bridge payload:** the store's only supersede helper retires
+  closed tickets' rows, and `getBySubmissionId` has no ordering, so a second
+  row per ticket would be ambiguous. Added `replaceUndispatchedAppIntake` to
+  vrs-sasha-store.ts instead. It is an in-place UPDATE conditional on
+  pending_review/dispatch_failed, no provider call id and app origin, so it
+  races `markDispatching` safely.
+- **Resubmission:** the new draft starts from the previous ticket's stored
+  details, and the lookups fill only blanks.
+
 ## 2026-10-22 — Customer name/address from HSSOM, never shown to the tech
 
 **HSSOM Order Lookup is the only confirmed source.** ai-agent-mcp reads it with

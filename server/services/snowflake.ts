@@ -2,7 +2,7 @@ import { createPrivateKey } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
 import { createAhsPrefillLookup, createProcLookup } from "./snowflake-lookup";
-export type { AhsPrefillLookupResult, AhsServiceOrderPrefill, ProcIdResult } from "./snowflake-lookup";
+export type { AhsPrefillLookupResult, AhsServiceOrderPart, AhsServiceOrderPrefill, ProcIdResult } from "./snowflake-lookup";
 
 // tsx runs this file as ESM; the production bundle runs as CJS. Resolve from
 // the current module in either runtime, not the process working directory.
@@ -337,17 +337,35 @@ export const fetchProcIdForServiceOrder = createProcLookup(async (key, signal) =
 // keyed by district + 8-digit SO. Both statements share one connection; the
 // lookup's deadline (5s) aborts them, and the abort destroys the connection
 // on every exit. Callers decide whether the order is AHS (server/ahs-prefill.ts).
+// A statement with its own timeoutMs (the parts statement) is cancelled and
+// rejected on its own, so it can never hold the other statements past the
+// lookup's deadline.
 export const fetchAhsServiceOrderPrefill = createAhsPrefillLookup(async (statements, signal) => {
   const connection = await getConnection(signal);
   if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
-  return Promise.allSettled(statements.map(({ sqlText, binds }) => new Promise<any[]>((resolve, reject) => {
+  return Promise.allSettled(statements.map(({ sqlText, binds, timeoutMs }) => new Promise<any[]>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const statement = connection.execute({
       sqlText,
       binds,
-      complete: (err, _stmt, rows) => err ? reject(err) : resolve(rows || []),
+      complete: (err, _stmt, rows) => {
+        clearTimeout(timer);
+        if (err) reject(err);
+        else resolve(rows || []);
+      },
     });
-    signal.addEventListener("abort", () => {
+    const cancel = () => {
       try { statement.cancel(() => {}); } catch {}
+    };
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        cancel();
+        reject(new Error(`statement timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      cancel();
     }, { once: true });
   })));
 }, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 5000)) });

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   APP_ORIGIN_VRS_COMMENT,
   buildAppVrsAuthorizePayload,
-  enrollAppSubmissionInVrsAi,
+  isUndispatchedVrsBridgeRecord,
+  saveAppSubmissionVrsAiIntake,
   toE164UsPhone,
   type AppVrsAiEnrollSubmission,
 } from "../server/vrs-app-enroll";
@@ -69,6 +70,8 @@ const appTicket: AppVrsAiEnrollSubmission = {
   requestType: "authorization",
   warrantyType: "american_home_shield",
   ticketStatus: "queued",
+  stage1Status: "pending",
+  submissionApproved: false,
   issueDescription: "Washer will not spin; control board failed diagnostic.",
   phone: "(214) 555-0199",
   phoneOverride: null,
@@ -122,6 +125,20 @@ function dispatchStore(requestPayload: unknown, callbackUrl: string) {
     markDispatching: vi.fn().mockResolvedValue(true),
     markAccepted: vi.fn().mockResolvedValue(undefined),
     markDispatchFailed: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+// The bridge store the Stage 1 save uses; no row for the ticket by default.
+function saveStore(overrides: Partial<{
+  createIntake: ReturnType<typeof vi.fn>;
+  getBySubmissionId: ReturnType<typeof vi.fn>;
+  replaceUndispatchedAppIntake: ReturnType<typeof vi.fn>;
+}> = {}) {
+  return {
+    createIntake: vi.fn().mockResolvedValue(createdIntake()),
+    getBySubmissionId: vi.fn().mockResolvedValue(undefined),
+    replaceUndispatchedAppIntake: vi.fn().mockResolvedValue(true),
+    ...overrides,
   };
 }
 
@@ -213,30 +230,46 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
     ["Sears Protect", { warrantyType: "sears_protect" }],
     ["First American", { warrantyType: "first_american" }],
     ["NLA parts", { requestType: "parts_nla" }],
-    ["already claimed", { ticketStatus: "pending" }],
+    ["completed", { ticketStatus: "completed" }],
+    ["rejected", { ticketStatus: "rejected" }],
+    ["Stage 1 approved", { submissionApproved: true, stage1Status: "approved" }],
+    ["Stage 1 rejected", { stage1Status: "rejected" }],
   ])("skips %s tickets without touching the store", async (_label, override) => {
-    const store = { createIntake: vi.fn() };
-    const result = await enrollAppSubmissionInVrsAi(
+    const store = saveStore();
+    const result = await saveAppSubmissionVrsAiIntake(
       { store, generateCallId: () => "vrs_call_x" },
       { ...appTicket, ...override },
       technician,
     );
     expect(result.kind).toBe("skipped");
     expect(store.createIntake).not.toHaveBeenCalled();
+    expect(store.getBySubmissionId).not.toHaveBeenCalled();
+  });
+
+  it("enrolls a ticket the VRS manager has claimed (pending) at Stage 1", async () => {
+    const store = saveStore();
+    const result = await saveAppSubmissionVrsAiIntake(
+      { store, generateCallId: () => "vrs_call_app_1" },
+      { ...appTicket, ticketStatus: "pending" },
+      technician,
+    );
+    expect(result).toEqual({ kind: "enrolled", callId: "vrs_call_app_1" });
   });
 
   it.each([
     ["missing", null],
     ["unreadable", "{not json"],
     ["incomplete", JSON.stringify({ ...ahsDetails, applianceLocation: "" })],
+    ["an empty draft", "{}"],
+    ["a draft", JSON.stringify({ brand: "Whirlpool", prefilledFields: ["brand"] })],
   ])("never enrolls an AHS ticket whose details are %s", async (_label, stored) => {
-    const store = { createIntake: vi.fn() };
-    const result = await enrollAppSubmissionInVrsAi(
+    const store = saveStore();
+    const result = await saveAppSubmissionVrsAiIntake(
       { store, generateCallId: () => "vrs_call_x" },
       { ...appTicket, ahsDetails: stored },
       technician,
     );
-    expect(result).toEqual({ kind: "skipped", reason: "AHS details were not entered" });
+    expect(result).toEqual({ kind: "skipped", reason: "AHS details are not complete" });
     expect(store.createIntake).not.toHaveBeenCalled();
   });
 
@@ -263,8 +296,8 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
   });
 
   it("stores an app-origin row with no upstream callback and supersedes closed undispatched rows", async () => {
-    const store = { createIntake: vi.fn().mockResolvedValue(createdIntake()) };
-    const result = await enrollAppSubmissionInVrsAi(
+    const store = saveStore();
+    const result = await saveAppSubmissionVrsAiIntake(
       { store, generateCallId: () => "vrs_call_app_1" },
       appTicket,
       technician,
@@ -286,14 +319,14 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
   });
 
   it("reports an active bridge call for the same order as a duplicate", async () => {
-    const store = {
+    const store = saveStore({
       createIntake: vi.fn().mockResolvedValue({
         kind: "duplicate",
         record: { callId: "vrs_call_sasha", state: "queued" },
       }),
-    };
+    });
     expect(
-      await enrollAppSubmissionInVrsAi(
+      await saveAppSubmissionVrsAiIntake(
         { store, generateCallId: () => "vrs_call_app_2" },
         appTicket,
         technician,
@@ -302,14 +335,69 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
   });
 
   it("never throws when the store fails", async () => {
-    const store = { createIntake: vi.fn().mockRejectedValue(new Error("db down")) };
+    const store = saveStore({ createIntake: vi.fn().mockRejectedValue(new Error("db down")) });
     expect(
-      await enrollAppSubmissionInVrsAi(
+      await saveAppSubmissionVrsAiIntake(
         { store, generateCallId: () => "vrs_call_app_3" },
         appTicket,
         technician,
       ),
     ).toEqual({ kind: "failed", message: "db down" });
+  });
+
+  it("replaces the payload of the ticket's undispatched app-origin row in place", async () => {
+    const existing = { id: 77, submissionId: 501, callId: "vrs_call_app_1", state: "pending_review", callbackUrl: "", providerCallId: null };
+    const store = saveStore({ getBySubmissionId: vi.fn().mockResolvedValue(existing) });
+    const edited = { ...appTicket, ahsDetails: JSON.stringify({ ...ahsDetails, laborAmount: 150 }) };
+    const result = await saveAppSubmissionVrsAiIntake({ store, generateCallId: () => "unused" }, edited, technician);
+    expect(result).toEqual({ kind: "replaced", callId: "vrs_call_app_1" });
+    expect(store.createIntake).not.toHaveBeenCalled();
+    const [id, replacement] = store.replaceUndispatchedAppIntake.mock.calls[0];
+    expect(id).toBe(77);
+    expect(replacement).toMatchObject({ techId: "crivera", techName: "Carlos Rivera" });
+    expect(replacement.requestPayload).toMatchObject({ labor_amount: 150, callback_url: "" });
+    expect(safeParseVrsAppOriginOutboundRequest({ ...replacement.requestPayload, callback_url: EXPRESS_WEBHOOK, callback_secret: "express-ai-webhook-secret" }))
+      .toMatchObject({ success: true, version: "v9" });
+  });
+
+  it("never touches a dispatched, dispatching or SASHA-origin row", async () => {
+    for (const existing of [
+      { id: 1, callId: "c1", state: "queued", callbackUrl: "", providerCallId: "vrs_ai_1" },
+      { id: 2, callId: "c2", state: "dispatching", callbackUrl: "", providerCallId: null },
+      { id: 3, callId: "c3", state: "pending_review", callbackUrl: SASHA_WEBHOOK, providerCallId: null },
+    ]) {
+      const store = saveStore({ getBySubmissionId: vi.fn().mockResolvedValue(existing) });
+      const result = await saveAppSubmissionVrsAiIntake({ store, generateCallId: () => "x" }, appTicket, technician);
+      expect(["duplicate", "skipped"]).toContain(result.kind);
+      expect(store.replaceUndispatchedAppIntake).not.toHaveBeenCalled();
+      expect(store.createIntake).not.toHaveBeenCalled();
+    }
+    // Lost the race with markDispatching.
+    const racing = saveStore({
+      getBySubmissionId: vi.fn().mockResolvedValue({ id: 4, callId: "c4", state: "pending_review", callbackUrl: "", providerCallId: null }),
+      replaceUndispatchedAppIntake: vi.fn().mockResolvedValue(false),
+    });
+    expect(await saveAppSubmissionVrsAiIntake({ store: racing, generateCallId: () => "x" }, appTicket, technician))
+      .toEqual({ kind: "duplicate", existingCallId: "c4", state: "dispatching" });
+  });
+
+  it("treats only pending_review / dispatch_failed rows VRS AI never received as undispatched", () => {
+    expect(isUndispatchedVrsBridgeRecord({ state: "pending_review", providerCallId: null })).toBe(true);
+    expect(isUndispatchedVrsBridgeRecord({ state: "dispatch_failed", providerCallId: null })).toBe(true);
+    expect(isUndispatchedVrsBridgeRecord({ state: "dispatch_failed", providerCallId: "vrs_ai_1" })).toBe(false);
+    for (const state of ["dispatching", "queued", "approved", "failed", "superseded"]) {
+      expect(isUndispatchedVrsBridgeRecord({ state, providerCallId: null })).toBe(false);
+    }
+  });
+
+  it("the store's replace is conditional on an undispatched app-origin row", () => {
+    const source = require("node:fs").readFileSync("server/vrs-sasha-store.ts", "utf8") as string;
+    const method = source.slice(source.indexOf("async replaceUndispatchedAppIntake("));
+    const body = method.slice(0, method.indexOf("\n  }\n"));
+    expect(body).toContain('inArray(vrsAiCalls.state, ["pending_review", "dispatch_failed"])');
+    expect(body).toContain("isNull(vrsAiCalls.providerCallId)");
+    expect(body).toContain("eq(vrsAiCalls.callbackUrl, VRS_APP_ORIGIN_CALLBACK_URL)");
+    expect(body).toContain("return rows.length === 1;");
   });
 
   it("dispatches an app-origin row with the Express callback and signed technician photos", async () => {

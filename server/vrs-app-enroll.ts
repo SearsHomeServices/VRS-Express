@@ -3,16 +3,17 @@
 // SASHA-originated AHS calls get a vrs_ai_calls row at intake
 // (vrs-sasha-intake.ts), which is what routes Stage 1 approval through
 // "Approve & Send to VRS AI". Technicians also post AHS calls straight into
-// VRS Express (POST /api/submissions); those tickets never touched SASHA and
-// previously had no bridge row, so they could never reach VRS AI. This
-// module gives them the same durable row at creation.
+// VRS Express (POST /api/submissions); those tickets never touched SASHA.
+// This module gives them the same durable row once the VRS manager has
+// completed the AHS details at Stage 1 (PATCH /api/submissions/:id/ahs-details,
+// shared/ahs-review.ts); at submit the ticket only gets a draft.
 //
 // Nothing is sent to VRS AI here. Dispatch still happens only when a human
 // agent approves Stage 1, exactly like a SASHA ticket.
 //
-// The payload is built from the AHS details the technician entered on the
-// form (submissions.ahs_details, shared/ahs-details.ts). A ticket without
-// them is not enrolled and keeps the manual Stage 1 flow. Part quantity and
+// The payload is built from the stored AHS details (submissions.ahs_details,
+// shared/ahs-details.ts). A ticket whose details are still an incomplete
+// draft is not enrolled and keeps the manual Stage 1 flow. Part quantity and
 // failure reason have no contract field: quantity goes into the part
 // description (with the price multiplied out) and failure reasons into the
 // technician comments. Photos are attached at dispatch by the existing
@@ -36,6 +37,8 @@ import {
 } from "./vrs-sasha-contract";
 import {
   VRS_APP_ORIGIN_CALLBACK_URL,
+  isAppOriginVrsBridgeRecord,
+  type VrsBridgeRecord,
   type VrsStoredAuthorizeRequest,
 } from "./vrs-sasha-queue";
 import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
@@ -63,6 +66,8 @@ export type AppVrsAiEnrollSubmission = Pick<
   | "technicianLdapId"
   | "ahsDetails"
   | "createdAt"
+  | "stage1Status"
+  | "submissionApproved"
 >;
 
 export interface AppVrsAiEnrollTechnician {
@@ -79,13 +84,30 @@ export function toE164UsPhone(value: string | null | undefined): string | null {
   return null;
 }
 
+// An open AHS authorization ticket whose Stage 1 is not decided yet: queued,
+// or claimed by the VRS manager completing its details.
 export function isAppVrsAiEnrollEligible(
-  submission: Pick<AppVrsAiEnrollSubmission, "warrantyType" | "requestType" | "ticketStatus">,
+  submission: Pick<
+    AppVrsAiEnrollSubmission,
+    "warrantyType" | "requestType" | "ticketStatus" | "stage1Status" | "submissionApproved"
+  >,
 ): boolean {
   return (
     submission.warrantyType === "american_home_shield" &&
     submission.requestType === "authorization" &&
-    submission.ticketStatus === "queued"
+    (submission.ticketStatus === "queued" || submission.ticketStatus === "pending") &&
+    submission.stage1Status === "pending" &&
+    !submission.submissionApproved
+  );
+}
+
+// A bridge row VRS AI never received and no dispatch is working on.
+export function isUndispatchedVrsBridgeRecord(
+  record: Pick<VrsBridgeRecord, "state" | "providerCallId">,
+): boolean {
+  return (
+    !record.providerCallId &&
+    (record.state === "pending_review" || record.state === "dispatch_failed")
   );
 }
 
@@ -114,7 +136,7 @@ export function buildAppVrsAuthorizePayload(
   }
   const details = parseStoredAhsDetails(submission.ahsDetails);
   if (!details) {
-    return { ok: false, reason: "AHS details were not entered" };
+    return { ok: false, reason: "AHS details are not complete" };
   }
 
   const techName = (technician.name ?? "").trim().slice(0, 255);
@@ -221,6 +243,8 @@ export function buildAppVrsAuthorizePayload(
 
 export type AppVrsAiEnrollResult =
   | { kind: "enrolled"; callId: string }
+  // An undispatched app-origin row for the ticket now carries the new payload.
+  | { kind: "replaced"; callId: string }
   | { kind: "skipped"; reason: string }
   | { kind: "duplicate"; existingCallId: string; state: string }
   | { kind: "failed"; message: string };
@@ -230,45 +254,86 @@ export interface AppVrsAiEnrollDeps {
   generateCallId(): string;
 }
 
-// Never throws: enrollment must not fail ticket creation. A ticket that
-// isn't enrolled simply keeps the legacy manual Stage 1 flow.
-export async function enrollAppSubmissionInVrsAi(
+// A new pending_review row for the ticket; an active row for the same order
+// (another ticket's, or a SASHA call) comes back as a duplicate.
+async function createAppIntake(
   deps: AppVrsAiEnrollDeps,
+  submission: AppVrsAiEnrollSubmission,
+  built: Extract<AppVrsAiPayloadResult, { ok: true }>,
+): Promise<AppVrsAiEnrollResult> {
+  const intake: NewVrsBridgeIntake = {
+    submissionId: submission.id,
+    callId: deps.generateCallId(),
+    serviceOrder: built.serviceOrder,
+    techId: built.techId,
+    techPhone: built.techPhone,
+    techName: built.techName,
+    requestPayload: built.payload,
+    callbackUrl: VRS_APP_ORIGIN_CALLBACK_URL,
+    callbackSecretCipher: "",
+    callbackSecretIv: "",
+    callbackSecretAuthTag: "",
+    callbackSecretSalt: "",
+  };
+  const stored = await deps.store.createIntake(intake, {
+    supersedeClosedUndispatched: true,
+  });
+  if (stored.kind === "duplicate") {
+    return {
+      kind: "duplicate",
+      existingCallId: stored.record.callId,
+      state: stored.record.state,
+    };
+  }
+  return { kind: "enrolled", callId: stored.record.callId };
+}
+
+export type AppVrsAiIntakeReplacement = Pick<
+  NewVrsBridgeIntake,
+  "requestPayload" | "techId" | "techPhone" | "techName"
+>;
+
+export interface AppVrsAiIntakeSaveDeps extends AppVrsAiEnrollDeps {
+  store: AppVrsAiEnrollDeps["store"] & {
+    getBySubmissionId(submissionId: number): Promise<VrsBridgeRecord | undefined>;
+    // Conditional on the row still being undispatched; false otherwise.
+    replaceUndispatchedAppIntake(id: number, replacement: AppVrsAiIntakeReplacement): Promise<boolean>;
+  };
+}
+
+// Stage 1 save of the AHS details (PATCH /api/submissions/:id/ahs-details):
+// creates the ticket's bridge row, or replaces the payload of its existing
+// app-origin row while VRS AI has not received it. A SASHA-origin row and a
+// row already dispatched are never touched. Never throws.
+export async function saveAppSubmissionVrsAiIntake(
+  deps: AppVrsAiIntakeSaveDeps,
   submission: AppVrsAiEnrollSubmission,
   technician: AppVrsAiEnrollTechnician,
 ): Promise<AppVrsAiEnrollResult> {
   try {
     if (!isAppVrsAiEnrollEligible(submission)) {
-      return { kind: "skipped", reason: "not a queued AHS authorization ticket" };
+      return { kind: "skipped", reason: "not an open AHS authorization ticket awaiting Stage 1" };
     }
     const built = buildAppVrsAuthorizePayload(submission, technician);
     if (!built.ok) return { kind: "skipped", reason: built.reason };
 
-    const intake: NewVrsBridgeIntake = {
-      submissionId: submission.id,
-      callId: deps.generateCallId(),
-      serviceOrder: built.serviceOrder,
+    const existing = await deps.store.getBySubmissionId(submission.id);
+    if (!existing) return await createAppIntake(deps, submission, built);
+    if (!isAppOriginVrsBridgeRecord(existing)) {
+      return { kind: "skipped", reason: "the ticket's VRS AI request came from SASHA" };
+    }
+    if (!isUndispatchedVrsBridgeRecord(existing)) {
+      return { kind: "duplicate", existingCallId: existing.callId, state: existing.state };
+    }
+    const replaced = await deps.store.replaceUndispatchedAppIntake(existing.id, {
+      requestPayload: built.payload,
       techId: built.techId,
       techPhone: built.techPhone,
       techName: built.techName,
-      requestPayload: built.payload,
-      callbackUrl: VRS_APP_ORIGIN_CALLBACK_URL,
-      callbackSecretCipher: "",
-      callbackSecretIv: "",
-      callbackSecretAuthTag: "",
-      callbackSecretSalt: "",
-    };
-    const stored = await deps.store.createIntake(intake, {
-      supersedeClosedUndispatched: true,
     });
-    if (stored.kind === "duplicate") {
-      return {
-        kind: "duplicate",
-        existingCallId: stored.record.callId,
-        state: stored.record.state,
-      };
-    }
-    return { kind: "enrolled", callId: stored.record.callId };
+    return replaced
+      ? { kind: "replaced", callId: existing.callId }
+      : { kind: "duplicate", existingCallId: existing.callId, state: "dispatching" };
   } catch (error) {
     return {
       kind: "failed",

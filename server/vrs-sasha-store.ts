@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, lt, gt, ne, isNull, or, sql } from "drizzle-orm
 import { submissions, vrsAiCallEvents, vrsAiCalls } from "@shared/schema";
 import { db, pool } from "./storage";
 import {
+  VRS_APP_ORIGIN_CALLBACK_URL,
   isAppOriginVrsBridgeRecord,
   projectVrsBridgeReviewContext,
   type VrsBridgeRecord,
@@ -401,6 +402,36 @@ export class DrizzleVrsBridgeStore
         createdAt: created.createdAt,
       };
     });
+  }
+
+  // Stage 1 AHS review (server/vrs-app-enroll.ts saveAppSubmissionVrsAiIntake):
+  // the VRS manager saved the AHS details again before dispatch. Replaces the
+  // stored request of an app-origin row VRS AI never received, in place, so
+  // the ticket keeps one row. The predicate races markDispatching safely:
+  // false once a dispatch has started or VRS AI has the call.
+  async replaceUndispatchedAppIntake(
+    id: number,
+    replacement: Pick<NewVrsBridgeIntake, "requestPayload" | "techId" | "techPhone" | "techName">,
+  ): Promise<boolean> {
+    const rows = await db
+      .update(vrsAiCalls)
+      .set({
+        requestPayload: replacement.requestPayload as Record<string, unknown>,
+        techId: replacement.techId,
+        techPhone: replacement.techPhone,
+        techName: replacement.techName,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(vrsAiCalls.id, id),
+          inArray(vrsAiCalls.state, ["pending_review", "dispatch_failed"]),
+          isNull(vrsAiCalls.providerCallId),
+          eq(vrsAiCalls.callbackUrl, VRS_APP_ORIGIN_CALLBACK_URL),
+        ),
+      )
+      .returning({ id: vrsAiCalls.id });
+    return rows.length === 1;
   }
 
   async getBySubmissionId(

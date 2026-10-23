@@ -1,23 +1,30 @@
-// AHS service-order prefill (shared/ahs-prefill.ts): pure helpers shared by
-// GET /api/tech/ahs-prefill and POST /api/submissions. The lookups
-// themselves are fetchAhsServiceOrderPrefill in server/services/snowflake.ts
-// (appliance + dispatch number) and lookupHssomOrder in
-// server/services/hssom-order-lookup.ts (customer name and address, plus
-// appliance fields Snowflake may lack).
+// AHS service-order prefill (shared/ahs-prefill.ts): pure helpers for the
+// AHS draft (shared/ahs-review.ts). POST /api/submissions builds the draft
+// the VRS manager completes at Stage 1; PATCH /api/submissions/:id/ahs-details
+// and its refresh route (server/ahs-review-api.ts) merge provenance and refill
+// blanks. The lookups themselves are fetchAhsServiceOrderPrefill in
+// server/services/snowflake.ts (appliance, dispatch number and the parts on
+// the order) and lookupHssomOrder in server/services/hssom-order-lookup.ts
+// (customer name and address, plus appliance fields Snowflake may lack).
 import {
   AHS_PREFILL_FIELDS,
   dispatchNumberFromServiceContractId,
   type AhsPrefillField,
-  type AhsPrefillResponse,
 } from "@shared/ahs-prefill";
+import type { AhsDetails, AhsDetailsDraft, AhsPartDraft } from "@shared/ahs-details";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
-import type { AhsPrefillLookupResult, ProcIdResult } from "./services/snowflake-lookup";
+import type { AhsPrefillLookupResult, AhsServiceOrderPart } from "./services/snowflake-lookup";
 import type { HssomOrderLookupResult } from "./services/hssom-order-lookup";
 
+// The single-value fields; "parts" marks the whole parts list.
+type AhsPrefillTextField = Exclude<AhsPrefillField, "parts">;
+export const AHS_PREFILL_TEXT_FIELDS = AHS_PREFILL_FIELDS.filter(
+  (field): field is AhsPrefillTextField => field !== "parts",
+);
+
 // ahsDetailsSchema's max length per field. A longer value is left for the
-// tech: storing it would make the whole stored details fail
-// parseStoredAhsDetails later.
-const AHS_PREFILL_MAX_LENGTH: Record<AhsPrefillField, number> = {
+// VRS manager: storing it would make the whole stored draft fail to parse.
+const AHS_PREFILL_MAX_LENGTH: Record<AhsPrefillTextField, number> = {
   contractNumber: 100,
   brand: 100,
   modelNumber: 100,
@@ -35,15 +42,18 @@ export const AHS_PREFILL_SUBMIT_TIMEOUT_MS = 5000;
 const UNAVAILABLE = { status: "unavailable" } as const;
 const NOT_FOUND = { status: "not_found" } as const;
 
-// Works with today's optional fields ("" / undefined) and the older required ones.
-type PrefillableDetails = { [K in AhsPrefillField]?: string | null } & {
+// Works with drafts, complete details and the older stored shapes.
+type PrefillableDetails = { [K in AhsPrefillTextField]?: string | null } & {
   prefilledFields?: AhsPrefillField[];
   applianceAge?: number | null;
   purchaseYear?: number;
 };
 
 // What the two sources may fill, already trimmed and within the schema limits.
-export type AhsPrefillValues = Partial<Record<AhsPrefillField, string>> & { purchaseYear?: number };
+export type AhsPrefillValues = Partial<Record<AhsPrefillTextField, string>> & {
+  purchaseYear?: number;
+  parts?: AhsServiceOrderPart[];
+};
 
 export interface AhsPrefillSources {
   snowflake: AhsPrefillLookupResult;
@@ -52,7 +62,7 @@ export interface AhsPrefillSources {
 
 type PrefillOutcome = { status: "found"; values: AhsPrefillValues } | typeof NOT_FOUND | typeof UNAVAILABLE;
 
-function usable(field: AhsPrefillField, value: string | undefined): string | undefined {
+function usable(field: AhsPrefillTextField, value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length <= AHS_PREFILL_MAX_LENGTH[field] ? trimmed : undefined;
 }
@@ -67,8 +77,8 @@ function purchaseYearFrom(raw: string | undefined, now: Date): number | undefine
 
 // Merges the two lookups field by field. Snowflake wins for the dispatch
 // number and the appliance fields; HSSOM fills only what Snowflake lacks.
-// Customer name and address come from HSSOM only. Does not decide whether
-// the order is AHS (see applyAhsSubmitPrefill / toAhsPrefillResponse).
+// Customer name and address come from HSSOM only, the parts from Snowflake
+// only. Does not decide whether the order is AHS (see applyAhsSubmitPrefill).
 export function mergeAhsPrefillSources(
   snowflake: AhsPrefillLookupResult,
   hssom: HssomOrderLookupResult,
@@ -76,7 +86,7 @@ export function mergeAhsPrefillSources(
 ): AhsPrefillValues {
   const sf = snowflake.status === "found" ? snowflake : undefined;
   const hs = hssom.status === "found" ? hssom : undefined;
-  const either = (field: AhsPrefillField, a: string | undefined, b: string | undefined) =>
+  const either = (field: AhsPrefillTextField, a: string | undefined, b: string | undefined) =>
     usable(field, a) ?? usable(field, b);
   const values: AhsPrefillValues = {
     contractNumber: either(
@@ -90,6 +100,7 @@ export function mergeAhsPrefillSources(
     customerName: usable("customerName", hs?.customerName),
     customerAddress: usable("customerAddress", hs?.customerAddress),
     purchaseYear: purchaseYearFrom(hs?.purchaseDate, now),
+    parts: sf?.parts?.length ? sf.parts.map((part) => ({ ...part })) : undefined,
   };
   for (const key of Object.keys(values) as (keyof AhsPrefillValues)[]) {
     if (values[key] === undefined) delete values[key];
@@ -123,8 +134,9 @@ function prefillOutcome(
   return snowflake.status === "unavailable" ? UNAVAILABLE : NOT_FOUND;
 }
 
-// Server-only fields; drop whatever a client sent. purchaseYear is set only
-// from HSSOM (applyAhsSubmitPrefill) and read by server/vrs-app-enroll.ts.
+// Server-only fields; drop whatever a client sent. prefilledFields and
+// purchaseYear are set only by the server (fillAhsDraft, mergeSavedAhsProvenance)
+// and purchaseYear is read by server/vrs-app-enroll.ts.
 export function withoutServerOnlyFields<T extends PrefillableDetails>(details: T): T {
   const { purchaseYear: _ignored, ...rest } = withoutPrefilledFields(details);
   return rest as T;
@@ -136,60 +148,69 @@ export function withoutPrefilledFields<T extends PrefillableDetails>(details: T)
   return rest as T;
 }
 
-// Fills only blank AHS_PREFILL_FIELDS; a value the tech entered always wins.
-// prefilledFields lists the fields filled here, plus fields whose submitted
-// value already equals the service-order value (the tech form fills brand,
-// model and serial from GET /api/tech/ahs-prefill, so they arrive non-blank);
-// omitted when none.
-// purchaseYear is passed through only when the tech left the appliance age
-// blank; no age is ever derived from it.
-function applyPrefillValues<T extends PrefillableDetails>(details: T, values: AhsPrefillValues): T {
-  const next: PrefillableDetails = withoutPrefilledFields(details);
-  const filled: AhsPrefillField[] = [];
-  for (const field of AHS_PREFILL_FIELDS) {
+const sameText = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+// Fills only blank fields of the draft; a value already there always wins.
+// The draft's own prefilledFields are kept (they only ever name values the
+// server filled), plus the fields filled here and fields whose value already
+// equals the service-order value; omitted when none. Parts are filled only
+// when the draft has none. purchaseYear is set only while the appliance age
+// is blank; no age is ever derived from it.
+export function fillAhsDraft(draft: AhsDetailsDraft, values: AhsPrefillValues): AhsDetailsDraft {
+  const next: AhsDetailsDraft = { ...draft };
+  const marked = new Set<AhsPrefillField>(draft.prefilledFields ?? []);
+  for (const field of AHS_PREFILL_TEXT_FIELDS) {
     const value = values[field];
-    const current = next[field]?.trim();
-    if (value && !current) {
+    if (!value) continue;
+    if (!next[field]?.trim()) {
       next[field] = value;
-      filled.push(field);
-    } else if (value && current && current.toLowerCase() === value.toLowerCase()) {
-      filled.push(field);
+      marked.add(field);
+    } else if (sameText(next[field], value)) {
+      marked.add(field);
     }
   }
-  if (filled.length) next.prefilledFields = filled;
+  if (values.parts?.length && !next.parts?.length) {
+    next.parts = values.parts.map((part) => ({ ...part }));
+    marked.add("parts");
+  }
   if (values.purchaseYear !== undefined && next.applianceAge == null && next.purchaseYear === undefined) {
     next.purchaseYear = values.purchaseYear;
   }
-  return next as T;
+  const prefilledFields = AHS_PREFILL_FIELDS.filter((field) => marked.has(field));
+  if (prefilledFields.length) next.prefilledFields = prefilledFields;
+  else delete next.prefilledFields;
+  return next;
 }
 
-// Merges both sources (mergeAhsPrefillSources) into the details. The caller
+// Merges both sources (mergeAhsPrefillSources) into the draft. The caller
 // decides the order is AHS (isAhsOrder) before calling this.
-export function applyAhsServiceOrderPrefill<T extends PrefillableDetails>(
-  details: T,
+export function applyAhsServiceOrderPrefill(
+  draft: AhsDetailsDraft,
   snowflake: AhsPrefillLookupResult,
   hssom: HssomOrderLookupResult = UNAVAILABLE,
-): T {
-  return applyPrefillValues(details, mergeAhsPrefillSources(snowflake, hssom));
+): AhsDetailsDraft {
+  return fillAhsDraft(draft, mergeAhsPrefillSources(snowflake, hssom));
 }
 
-// POST /api/submissions: fills the details only for an AHS ticket. The
-// ticket's final warranty must be AHS, and then either the Snowflake row is
-// AHS, or (no Snowflake row) the ProcID-derived warranty itself is AHS; a
-// tech-selected warranty alone never lets HSSOM fill. Otherwise the details
-// come back unchanged.
-export function applyAhsSubmitPrefill<T extends PrefillableDetails>(
-  details: T,
+// The AHS draft (POST /api/submissions, and the Stage 1 refresh): fills the
+// draft only for an AHS ticket. The ticket's final warranty must be AHS, and
+// then either the Snowflake row is AHS, or (no Snowflake row) the
+// ProcID-derived warranty itself is AHS; a tech-selected warranty alone never
+// lets HSSOM fill. Otherwise the draft comes back unchanged (an empty draft
+// stays {}).
+export function applyAhsSubmitPrefill(
+  draft: AhsDetailsDraft,
   sources: AhsPrefillSources,
   warranty: { finalWarrantyType: string | null | undefined; derivedWarrantyType: string | null | undefined },
-): T {
-  if (warranty.finalWarrantyType !== "american_home_shield") return details;
+): AhsDetailsDraft {
+  if (warranty.finalWarrantyType !== "american_home_shield") return draft;
   const outcome = prefillOutcome(
     sources.snowflake,
     sources.hssom,
     warranty.derivedWarrantyType === "american_home_shield",
   );
-  return outcome.status === "found" ? applyPrefillValues(details, outcome.values) : details;
+  return outcome.status === "found" ? fillAhsDraft(draft, outcome.values) : draft;
 }
 
 // Names (never values) of what the server filled, for logging.
@@ -200,31 +221,53 @@ export function prefilledFieldNames(details: PrefillableDetails): string[] {
   ];
 }
 
-// A resubmission carries the previous ticket's values back from the form, so
-// they are no longer blank and would lose their provenance. Keep a field
-// marked when the previous ticket had it prefilled and the value is unchanged.
-export function keepPrefilledFromPrevious<T extends PrefillableDetails>(
-  details: T,
-  previous: PrefillableDetails | null | undefined,
-): T {
-  const kept = (previous?.prefilledFields ?? []).filter((field) =>
-    AHS_PREFILL_FIELDS.includes(field) &&
-    !!details[field]?.trim() &&
-    details[field]?.trim() === previous?.[field]?.trim(),
-  );
-  const merged = AHS_PREFILL_FIELDS.filter((field) =>
-    details.prefilledFields?.includes(field) || kept.includes(field),
-  );
-  return merged.length ? { ...details, prefilledFields: merged } : withoutPrefilledFields(details);
+// The draft as the starting point for a resubmission: the previous ticket's
+// stored details (draft or complete) with the server's provenance kept.
+export function draftFromPrevious(previous: AhsDetailsDraft | null | undefined): AhsDetailsDraft {
+  return previous ? { ...previous } : {};
 }
 
-// Customer PII and the AHS dispatch number the server filled never go back
-// to a technician's browser, not even on their own ticket. Technician-facing
-// submission responses drop these keys from the stored ahs_details JSON when
-// prefilledFields lists them; values the tech typed are left alone.
-const SERVER_ONLY_CUSTOMER_FIELDS = ["contractNumber", "customerName", "customerAddress"] as const;
+function samePartsAsServer(saved: AhsPartDraft[] | undefined, server: AhsPartDraft[] | undefined): boolean {
+  if (!saved?.length || !server?.length || saved.length !== server.length) return false;
+  return server.every((filled, index) => {
+    const part = saved[index];
+    return (
+      sameText(part.partNumber, filled.partNumber) &&
+      (filled.description === undefined || sameText(part.description, filled.description)) &&
+      (filled.quantity === undefined || part.quantity === filled.quantity) &&
+      (filled.unitPrice === undefined || part.unitPrice === filled.unitPrice)
+    );
+  });
+}
 
-export function redactServerPrefilledCustomer(raw: string | null | undefined): string | null | undefined {
+// PATCH /api/submissions/:id/ahs-details: what the VRS manager saved, with
+// the draft's provenance kept only for fields whose saved value still equals
+// the value the server filled (trimmed, case-insensitive; for parts, every
+// value the server filled on every line). Client-sent prefilledFields and
+// purchaseYear are dropped; the draft's purchaseYear carries forward while
+// the appliance age is still blank.
+export function mergeSavedAhsProvenance(saved: AhsDetails, draft: AhsDetailsDraft | null | undefined): AhsDetails {
+  const next = withoutServerOnlyFields(saved);
+  const kept = (draft?.prefilledFields ?? []).filter((field) => {
+    if (field === "parts") return samePartsAsServer(next.parts, draft?.parts);
+    if (!AHS_PREFILL_TEXT_FIELDS.includes(field)) return false;
+    return !!next[field]?.trim() && sameText(next[field], draft?.[field]);
+  });
+  const prefilledFields = AHS_PREFILL_FIELDS.filter((field) => kept.includes(field));
+  if (prefilledFields.length) next.prefilledFields = prefilledFields;
+  if (next.applianceAge === undefined && draft?.purchaseYear !== undefined) {
+    next.purchaseYear = draft.purchaseYear;
+  }
+  return next;
+}
+
+// Customer PII and the AHS dispatch number never go back to a technician's
+// browser, not even on their own ticket: the server fills them and the VRS
+// manager completes them at Stage 1. Technician-facing submission responses
+// drop these keys from the stored ahs_details JSON, whoever entered them.
+const TECHNICIAN_HIDDEN_AHS_FIELDS = ["contractNumber", "customerName", "customerAddress"] as const;
+
+export function redactAhsCustomerForTechnician(raw: string | null | undefined): string | null | undefined {
   if (!raw) return raw;
   let parsed: unknown;
   try {
@@ -232,64 +275,12 @@ export function redactServerPrefilledCustomer(raw: string | null | undefined): s
   } catch {
     return raw;
   }
-  if (!parsed || typeof parsed !== "object") return raw;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
   const details = parsed as Record<string, unknown>;
-  const prefilled = Array.isArray(details.prefilledFields) ? details.prefilledFields : [];
-  const redact = SERVER_ONLY_CUSTOMER_FIELDS.filter((field) => prefilled.includes(field));
+  const redact = TECHNICIAN_HIDDEN_AHS_FIELDS.filter((field) => field in details);
   if (!redact.length) return raw;
   for (const field of redact) delete details[field];
   return JSON.stringify(details);
-}
-
-// A resubmission comes back with the redacted fields blank (and without
-// purchaseYear, which is server-only). When the fresh lookup didn't refill
-// them, carry the previous ticket's server-filled values forward so
-// keepPrefilledFromPrevious keeps their provenance.
-export function restoreRedactedCustomerFromPrevious<T extends PrefillableDetails>(
-  details: T,
-  previous: PrefillableDetails | null | undefined,
-): T {
-  const restored: Record<string, string> = {};
-  for (const field of SERVER_ONLY_CUSTOMER_FIELDS) {
-    const prior = previous?.[field]?.trim();
-    if (!details[field]?.trim() && prior && previous?.prefilledFields?.includes(field)) {
-      restored[field] = prior;
-    }
-  }
-  const keepYear =
-    details.applianceAge == null && details.purchaseYear === undefined && previous?.purchaseYear !== undefined;
-  if (!Object.keys(restored).length && !keepYear) return details;
-  return { ...details, ...restored, ...(keepYear ? { purchaseYear: previous!.purchaseYear } : {}) };
-}
-
-// GET /api/tech/ahs-prefill needs the ProcID derivation only when HSSOM found
-// the order and Snowflake has no row to decide AHS by.
-export function needsServerDerivedAhs(sources: AhsPrefillSources): boolean {
-  return sources.snowflake.status !== "found" && sources.hssom.status === "found";
-}
-
-// What the browser may see: non-PII appliance fields (either source,
-// Snowflake first), whether a dispatch number exists and whether the server
-// will fill customer name and address. Never the contract/dispatch value,
-// the customer's name or address, partner or client name.
-export function toAhsPrefillResponse(
-  snowflake: AhsPrefillLookupResult,
-  hssom: HssomOrderLookupResult = UNAVAILABLE,
-  hssomOnlyAhs?: boolean,
-): AhsPrefillResponse {
-  const outcome = prefillOutcome(snowflake, hssom, hssomOnlyAhs);
-  if (outcome.status !== "found") return outcome;
-  const { values } = outcome;
-  const appliance: { brand?: string; modelNumber?: string; serialNumber?: string } = {};
-  if (values.brand) appliance.brand = values.brand;
-  if (values.modelNumber) appliance.modelNumber = values.modelNumber;
-  if (values.serialNumber) appliance.serialNumber = values.serialNumber;
-  return {
-    status: "found",
-    appliance,
-    hasDispatchNumber: !!values.contractNumber,
-    hasCustomer: !!(values.customerName && values.customerAddress),
-  };
 }
 
 // Resolves with work's result, or fallback on rejection or after timeoutMs.
@@ -302,8 +293,8 @@ function settleWithin<T>(work: () => Promise<T>, fallback: T, timeoutMs: number)
   return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Lookup for a "DDDD-SSSSSSSS" service order (endpoint and submit path), for
-// either source. Never rejects and settles within timeoutMs, so it can never
+// Lookup for a "DDDD-SSSSSSSS" service order (submit path and the Stage 1
+// refresh), for either source. Never rejects and settles within timeoutMs, so it can never
 // block or fail a submission.
 export function boundedAhsPrefillLookup<T extends AhsPrefillLookupResult | HssomOrderLookupResult>(
   serviceOrder: string,
@@ -332,18 +323,4 @@ export async function lookupAhsPrefillSources(
     boundedAhsPrefillLookup(serviceOrder, lookups.hssom, timeoutMs),
   ]);
   return { snowflake, hssom };
-}
-
-// The submit path's ProcID warranty derivation for GET /api/tech/ahs-prefill:
-// true/false when known, undefined when the lookup is unavailable or slow.
-export function boundedServerDerivedAhs(
-  serviceOrder: string,
-  fetchProcId: (serviceOrder: string) => Promise<ProcIdResult>,
-  timeoutMs = AHS_PREFILL_SUBMIT_TIMEOUT_MS,
-): Promise<boolean | undefined> {
-  return settleWithin(async () => {
-    const result = await fetchProcId(serviceOrder);
-    if (result.status === "LOOKUP_UNAVAILABLE") return undefined;
-    return deriveWarrantyFromProcId(result.procId, result.clientNm)?.warrantyType === "american_home_shield";
-  }, undefined, timeoutMs);
 }
