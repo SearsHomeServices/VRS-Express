@@ -1,4 +1,5 @@
 import { retryVrsApprovalNotification } from "./vrs-notification-retry";
+import { matchesTicketSearch, ticketAgentIds } from "@shared/ticket-search";
 import { releaseProcessedTicketAgent } from "./agent-availability";
 import { PostgresDirectResultReceipts } from "./vrs-direct-result-store";
 import { automatedCallbackContexts, validateAutomatedApproval, VrsCallbackError } from "./vrs-callback-safety";
@@ -2136,22 +2137,11 @@ export async function registerRoutes(
         // drills via GET /api/submissions/:id for full-row data.
         let result = await storage.getSubmissionsListView(filters, completedToday);
 
-        // 2026-07-08 (Tyler): search matches the same fields the admin
-        // Ticket Overview's client-side filter uses (SO, tech name/ldap,
-        // assigned agent), so an all-time server search returns everything
-        // the user expects — the dashboard sends ?search without a
-        // createdAfter window to find tickets older than the default 30d view.
+        // Shared search includes recorded reviewers after assignment clears.
+        // The dashboard supplies the selected created-date lower bound.
         const search = req.query.search as string | undefined;
         if (search && result.length > 0) {
-          const searchTerm = search.toLowerCase();
-          result = result.filter(sub =>
-            sub.serviceOrder.toLowerCase().includes(searchTerm) ||
-            sub.serviceOrder.replace(/^(\d{4})-/, '').includes(searchTerm) ||
-            sub.racId.toLowerCase().includes(searchTerm) ||
-            (sub.technicianLdapId || "").toLowerCase().includes(searchTerm) ||
-            (sub.technicianName || "").toLowerCase().includes(searchTerm) ||
-            (sub.assignedAgentName || "").toLowerCase().includes(searchTerm)
-          );
+          result = result.filter(sub => matchesTicketSearch(sub, search));
         }
 
         const body = JSON.stringify({ submissions: result });
@@ -7059,6 +7049,7 @@ export async function registerRoutes(
       { vrsAiOnly },
     );
     const allUsers = await storage.getUsers();
+    const usersById = new Map(allUsers.map(u => [u.id, u]));
     const userName: Record<number, string> = {};
     for (const u of allUsers) userName[u.id] = u.name || "";
 
@@ -7088,12 +7079,14 @@ export async function registerRoutes(
     else if (pdc === "failed") rows = rows.filter(s => s.techPdcStatus === "failed");
     else if (pdc === "missing_notes") rows = rows.filter(s => !(s.coachingNotes || "").trim());
     if (search) {
-      rows = rows.filter(s =>
-        s.serviceOrder?.toLowerCase().includes(search) ||
-        s.technicianLdapId?.toLowerCase().includes(search) ||
-        (userName[s.technicianId] || "").toLowerCase().includes(search) ||
-        (s.reviewedBy ? (userName[s.reviewedBy] || "").toLowerCase() : "").includes(search)
-      );
+      rows = rows.filter(s => matchesTicketSearch({
+        ...s,
+        technicianName: userName[s.technicianId],
+        workedAgentSearchTerms: ticketAgentIds(s).flatMap(id => {
+          const agent = usersById.get(id);
+          return agent ? [agent.name, agent.racId ?? ""] : [];
+        }),
+      }, search));
     }
     return { rows, userName };
   };

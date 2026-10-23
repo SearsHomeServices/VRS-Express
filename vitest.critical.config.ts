@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     ...base.test,
     include: [
+      "tests/ticket-search.test.ts",
       "client/src/lib/agent-status-filter.test.ts",
       "tests/agent-availability.test.ts",
       "tests/tech-warranty-lookup.test.ts",

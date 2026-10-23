@@ -327,6 +327,7 @@ export type SubmissionListItemWithTech = SubmissionListItem & {
   technicianName: string;
   technicianPhone: string | null;
   assignedAgentName: string | null;
+  workedAgentSearchTerms?: string[];
   intakeFormCompletedAt: Date | null;
   /** Present only when the row is linked to a VRS AI bridge call. */
   vrsAi?: SubmissionListVrsAiStatus | null;
