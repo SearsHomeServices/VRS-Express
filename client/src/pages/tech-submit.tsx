@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Control, type FieldErrors, type FieldPath, type FieldValues, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { useAuth, getToken } from "@/lib/auth";
 import { TechPhotoPreview, MediaVideo, MediaAudio } from "@/components/media";
 import { MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
+import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,14 @@ import {
   type DraftEnvelope,
 } from "@/lib/draft-identity";
 import { getEtDateString } from "@shared/business-hours";
+import {
+  TECH_APPLIANCE_COLORS,
+  TECH_APPLIANCE_GRADES,
+  techApplianceDetailsApply,
+  techApplianceDetailsSchema,
+  techApplianceGradeLabel,
+  type TechApplianceDetails,
+} from "@shared/tech-appliance-details";
 
 // Tyler 2026-06-30 — one-day holiday closure notice shown on the tech submit
 // form. Gated to the Eastern-Time calendar date so it appears only on July 4,
@@ -90,6 +99,195 @@ const REQUEST_TYPE_WARRANTY_MATRIX: Record<RequestTypeValue, WarrantyValue[]> = 
   parts_nla: ["sears_protect"],
 };
 
+// ---------------------------------------------------------------------------
+// Tech appliance details (2026-10-23): Appliance Grade, Appliance Color and
+// Part Function on American Home Shield and First American authorization
+// tickets, behind TECH_APPLIANCE_DETAILS_ENABLED. The contract lives in
+// shared/tech-appliance-details.ts; tech-resubmit.tsx reuses these helpers.
+// ---------------------------------------------------------------------------
+export const techApplianceDetailsFormSchema = z
+  .object({
+    applianceGrade: z.string().optional(),
+    applianceColor: z.string().optional(),
+    partFunction: z.string().optional(),
+  })
+  .optional()
+  .catch(undefined);
+
+export type TechApplianceDetailsFormValues = {
+  applianceGrade?: string;
+  applianceColor?: string;
+  partFunction?: string;
+};
+
+export const EMPTY_TECH_APPLIANCE_DETAILS: TechApplianceDetailsFormValues = {
+  applianceGrade: undefined,
+  applianceColor: undefined,
+  partFunction: "",
+};
+
+// The single gate for showing, validating and sending the three fields.
+export function showTechApplianceDetails(
+  enabled: boolean,
+  warrantyType: string | null | undefined,
+  requestType: string | null | undefined,
+): boolean {
+  return enabled && techApplianceDetailsApply(warrantyType, requestType);
+}
+
+// Lenient read of stored values (a draft's object, or the server's JSON
+// string column). Keeps each field only when it is still a valid choice, so
+// junk never reaches the controls; never throws.
+export function techApplianceDetailsFormValues(raw: unknown): TechApplianceDetailsFormValues {
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      value = null;
+    }
+  }
+  const obj = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const grade = obj.applianceGrade;
+  const color = obj.applianceColor;
+  return {
+    applianceGrade:
+      typeof grade === "string" && TECH_APPLIANCE_GRADES.some((option) => option.value === grade) ? grade : undefined,
+    applianceColor:
+      typeof color === "string" && (TECH_APPLIANCE_COLORS as readonly string[]).includes(color) ? color : undefined,
+    partFunction: typeof obj.partFunction === "string" ? obj.partFunction : "",
+  };
+}
+
+type TechApplianceDetailsGateValues = {
+  warrantyType?: string | null;
+  requestType?: string | null;
+  techApplianceDetails?: unknown;
+};
+
+// The POST body value: the shared schema's parsed details when the section
+// is shown, otherwise null (the caller then leaves the key out).
+export function techApplianceDetailsForPayload(
+  values: TechApplianceDetailsGateValues,
+  enabled: boolean,
+): TechApplianceDetails | null {
+  if (!showTechApplianceDetails(enabled, values.warrantyType, values.requestType)) return null;
+  const parsed = techApplianceDetailsSchema.safeParse(values.techApplianceDetails ?? {});
+  return parsed.success ? parsed.data : null;
+}
+
+// Wraps the page's zod resolver: when the section is shown, the three
+// fields are validated with the shared techApplianceDetailsSchema and their
+// errors merged with the form's own. (A superRefine on the form schema would
+// not run while another field is missing, so the tech would only see these
+// errors on a second tap of Submit.)
+export function techApplianceDetailsResolver<T extends FieldValues>(
+  base: Resolver<T>,
+  isEnabled: () => boolean,
+): Resolver<T> {
+  return async (values, context, options) => {
+    const result = await base(values, context, options);
+    const gate = values as TechApplianceDetailsGateValues;
+    if (!showTechApplianceDetails(isEnabled(), gate.warrantyType, gate.requestType)) return result;
+    const parsed = techApplianceDetailsSchema.safeParse(gate.techApplianceDetails ?? {});
+    if (parsed.success) {
+      if (Object.keys(result.errors).length > 0) return result;
+      return { values: { ...result.values, techApplianceDetails: parsed.data } as T, errors: {} };
+    }
+    const detailErrors: Record<string, { type: string; message: string }> = {};
+    for (const issue of parsed.error.issues) {
+      const key = String(issue.path[0] ?? "");
+      if (key && !detailErrors[key]) detailErrors[key] = { type: issue.code, message: issue.message };
+    }
+    return {
+      values: {},
+      errors: { ...result.errors, techApplianceDetails: detailErrors } as unknown as FieldErrors<T>,
+    };
+  };
+}
+
+// Appliance Grade, Appliance Color, Part Function, in that order, with the
+// form's standard controls. Rendered only when showTechApplianceDetails().
+export function TechApplianceDetailsFields<T extends FieldValues>({
+  control,
+  testIdSuffix = "",
+}: {
+  control: Control<T>;
+  testIdSuffix?: string;
+}) {
+  return (
+    <div className="space-y-4" data-testid={`section-tech-appliance-details${testIdSuffix}`}>
+      <FormField
+        control={control}
+        name={"techApplianceDetails.applianceGrade" as FieldPath<T>}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Appliance Grade *</FormLabel>
+            <Select onValueChange={field.onChange} value={field.value}>
+              <FormControl>
+                <SelectTrigger data-testid={`select-appliance-grade${testIdSuffix}`}>
+                  <SelectValue placeholder="Select appliance grade" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {TECH_APPLIANCE_GRADES.map((grade) => (
+                  <SelectItem key={grade.value} value={grade.value} data-testid={`option-appliance-grade-${grade.value}`}>
+                    {grade.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={control}
+        name={"techApplianceDetails.applianceColor" as FieldPath<T>}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Appliance Color *</FormLabel>
+            <Select onValueChange={field.onChange} value={field.value}>
+              <FormControl>
+                <SelectTrigger data-testid={`select-appliance-color${testIdSuffix}`}>
+                  <SelectValue placeholder="Select appliance color" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {TECH_APPLIANCE_COLORS.map((color) => (
+                  <SelectItem key={color} value={color} data-testid={`option-appliance-color-${color.toLowerCase().replace(/\s+/g, "-")}`}>
+                    {color}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={control}
+        name={"techApplianceDetails.partFunction" as FieldPath<T>}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Part Function *</FormLabel>
+            <FormControl>
+              <Input
+                placeholder="What does the part do?"
+                maxLength={200}
+                {...field}
+                value={field.value ?? ""}
+                data-testid={`input-part-function${testIdSuffix}`}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    </div>
+  );
+}
+
 const submissionFormSchema = z.object({
   serviceOrder: z.string().regex(/^\d{4}-\d{8}$/, "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)"),
   phone: z.string().min(7, "Valid phone number is required"),
@@ -101,6 +299,11 @@ const submissionFormSchema = z.object({
   warrantyProvider: z.string().optional(),
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
   partNumbers: z.array(z.string()).optional(),
+  // Appliance grade / color / part function (AHS and First American
+  // authorization only). Loose here so a hidden, half-filled section never
+  // blocks submit; techApplianceDetailsResolver applies the shared schema
+  // when the section is shown.
+  techApplianceDetails: techApplianceDetailsFormSchema,
 });
 
 type SubmissionFormData = z.infer<typeof submissionFormSchema>;
@@ -110,8 +313,14 @@ type SubmissionFormData = z.infer<typeof submissionFormSchema>;
 // section was removed 2026-10: the server drafts AHS details and the VRS
 // manager completes them at Stage 1), so those are dropped on restore and save.
 const SUBMISSION_FORM_FIELDS: readonly string[] = Object.keys(submissionFormSchema.shape);
+// techApplianceDetails is kept (grade, color and part function are not PII),
+// normalized so a stale or hand-edited draft cannot put junk in the controls.
 function pickSubmissionFormFields(values: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(values).filter(([key]) => SUBMISSION_FORM_FIELDS.includes(key)));
+  const picked = Object.fromEntries(Object.entries(values).filter(([key]) => SUBMISSION_FORM_FIELDS.includes(key)));
+  if ("techApplianceDetails" in picked) {
+    picked.techApplianceDetails = techApplianceDetailsFormValues(picked.techApplianceDetails);
+  }
+  return picked;
 }
 
 export default function TechSubmitPage() {
@@ -810,8 +1019,16 @@ export default function TechSubmitPage() {
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
+  const { techApplianceDetailsEnabled } = useFeatureFlags();
+  // Read at validation time, so the resolver always sees the current flag.
+  const techApplianceDetailsEnabledRef = useRef(techApplianceDetailsEnabled);
+  techApplianceDetailsEnabledRef.current = techApplianceDetailsEnabled;
+
   const form = useForm<SubmissionFormData>({
-    resolver: zodResolver(submissionFormSchema),
+    resolver: techApplianceDetailsResolver(
+      zodResolver(submissionFormSchema),
+      () => techApplianceDetailsEnabledRef.current,
+    ),
     defaultValues: {
       serviceOrder: "",
       phone: user?.phone || "",
@@ -820,6 +1037,7 @@ export default function TechSubmitPage() {
       warrantyType: "sears_protect",
       warrantyProvider: "Sears Protect / Sears PA / Sears Home Warranty (Cinch)",
       issueDescription: "",
+      techApplianceDetails: { ...EMPTY_TECH_APPLIANCE_DETAILS },
     },
   });
 
@@ -955,6 +1173,11 @@ export default function TechSubmitPage() {
     }
     const payload: any = { ...data };
     delete payload.partNumbers;
+    // Sent only when the section is shown (AHS / First American +
+    // Authorization, flag on); otherwise the key is left out entirely.
+    delete payload.techApplianceDetails;
+    const techApplianceDetails = techApplianceDetailsForPayload(data, techApplianceDetailsEnabled);
+    if (techApplianceDetails) payload.techApplianceDetails = techApplianceDetails;
     if (aiUsed && originalBeforeAi) {
       payload.originalDescription = originalBeforeAi;
       payload.aiEnhanced = true;
@@ -1051,6 +1274,11 @@ export default function TechSubmitPage() {
     }
   }, [watchedRequestType, watchedApplianceType, form]);
   const watchedValues = form.watch();
+  const techApplianceDetailsShown = showTechApplianceDetails(
+    techApplianceDetailsEnabled,
+    watchedValues.warrantyType,
+    watchedRequestType,
+  );
   const descriptionLength = watchedValues.issueDescription?.length || 0;
   const aiButtonDisabled = descriptionLength < 20 || aiEnhanceMutation.isPending;
 
@@ -1235,6 +1463,7 @@ export default function TechSubmitPage() {
       warrantyType: "sears_protect",
       warrantyProvider: "Sears Protect / Sears PA / Sears Home Warranty (Cinch)",
       issueDescription: "",
+      techApplianceDetails: { ...EMPTY_TECH_APPLIANCE_DETAILS },
     });
     setEstimatePhotoUrls([]);
     setIssuePhotoUrls([]);
@@ -1712,6 +1941,10 @@ export default function TechSubmitPage() {
                   </div>
                 </div>
                 )}
+                {/* Appliance Grade / Color / Part Function: AHS and First
+                    American authorization tickets only (flag
+                    techApplianceDetailsEnabled). */}
+                {techApplianceDetailsShown && <TechApplianceDetailsFields control={form.control} />}
               </CardContent>
             </Card>
 
@@ -2367,6 +2600,22 @@ export default function TechSubmitPage() {
                     <span className="text-muted-foreground">Request Type</span>
                     <span className="font-medium text-right" data-testid="review-request-type">{formatRequestTypeLabel(pendingData.requestType)}</span>
                   </div>
+                  {pendingPayload?.techApplianceDetails && (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Appliance Grade</span>
+                        <span className="font-medium text-right" data-testid="review-appliance-grade">{techApplianceGradeLabel(pendingPayload.techApplianceDetails.applianceGrade)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Appliance Color</span>
+                        <span className="font-medium text-right" data-testid="review-appliance-color">{pendingPayload.techApplianceDetails.applianceColor}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Part Function</span>
+                        <span className="font-medium text-right break-words" data-testid="review-part-function">{pendingPayload.techApplianceDetails.partFunction}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="rounded-md border p-3 text-sm">

@@ -10,6 +10,16 @@ import { useAuth, getToken } from "@/lib/auth";
 import { MediaImage, MediaVideo } from "@/components/media";
 import { parseVideoUrls, MAX_VIDEOS_PER_TICKET } from "@/lib/videoUrls";
 import { useToast } from "@/hooks/use-toast";
+import { useFeatureFlags } from "@/hooks/use-feature-flags";
+import {
+  EMPTY_TECH_APPLIANCE_DETAILS,
+  TechApplianceDetailsFields,
+  showTechApplianceDetails,
+  techApplianceDetailsForPayload,
+  techApplianceDetailsFormSchema,
+  techApplianceDetailsFormValues,
+  techApplianceDetailsResolver,
+} from "@/pages/tech-submit";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +68,8 @@ const resubmitFormSchema = z.object({
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
   appealNotes: z.string().max(2000, "Appeal notes must be 2000 characters or less").optional(),
   partNumbers: z.array(z.string()).optional(),
+  // Appliance grade / color / part function, same rules as tech-submit.
+  techApplianceDetails: techApplianceDetailsFormSchema,
 });
 
 type ResubmitFormData = z.infer<typeof resubmitFormSchema>;
@@ -96,8 +108,16 @@ export default function TechResubmitPage() {
   const estimatePhotoInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
+  const { techApplianceDetailsEnabled } = useFeatureFlags();
+  // Read at validation time, so the resolver always sees the current flag.
+  const techApplianceDetailsEnabledRef = useRef(techApplianceDetailsEnabled);
+  techApplianceDetailsEnabledRef.current = techApplianceDetailsEnabled;
+
   const form = useForm<ResubmitFormData>({
-    resolver: zodResolver(resubmitFormSchema),
+    resolver: techApplianceDetailsResolver(
+      zodResolver(resubmitFormSchema),
+      () => techApplianceDetailsEnabledRef.current,
+    ),
     defaultValues: {
       serviceOrder: "",
       phone: "",
@@ -107,10 +127,17 @@ export default function TechResubmitPage() {
       warrantyProvider: "",
       issueDescription: "",
       appealNotes: "",
+      techApplianceDetails: { ...EMPTY_TECH_APPLIANCE_DETAILS },
     },
   });
 
   const watchedRequestType = form.watch("requestType");
+  const watchedWarrantyType = form.watch("warrantyType");
+  const techApplianceDetailsShown = showTechApplianceDetails(
+    techApplianceDetailsEnabled,
+    watchedWarrantyType,
+    watchedRequestType,
+  );
   const watchedApplianceType = form.watch("applianceType");
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
@@ -145,6 +172,9 @@ export default function TechResubmitPage() {
       warrantyProvider: sub.warrantyProvider || "",
       issueDescription: sub.issueDescription,
       appealNotes: "",
+      // Prefilled from the original ticket. The server returns the column as
+      // a JSON string; junk, null or partial values leave those fields empty.
+      techApplianceDetails: techApplianceDetailsFormValues(sub.techApplianceDetails),
     });
     let rejMedia: any = null;
     try { rejMedia = sub.rejectedMedia ? JSON.parse(sub.rejectedMedia) : null; } catch {}
@@ -454,6 +484,11 @@ export default function TechResubmitPage() {
   function onSubmit(formData: ResubmitFormData) {
     const payload: any = { ...formData };
     delete payload.partNumbers;
+    // Sent only when the section is shown (AHS / First American +
+    // Authorization, flag on); otherwise the key is left out entirely.
+    delete payload.techApplianceDetails;
+    const techApplianceDetails = techApplianceDetailsForPayload(formData, techApplianceDetailsEnabled);
+    if (techApplianceDetails) payload.techApplianceDetails = techApplianceDetails;
     const phoneOverride = localStorage.getItem("vrs_phone_override");
     if (phoneOverride) payload.phoneOverride = phoneOverride;
     const photosObj: any = {};
@@ -760,6 +795,12 @@ export default function TechResubmitPage() {
                       </FormItem>
                     )}
                   />
+                  {/* Appliance Grade / Color / Part Function: AHS and First
+                      American authorization tickets only (flag
+                      techApplianceDetailsEnabled). */}
+                  {techApplianceDetailsShown && (
+                    <TechApplianceDetailsFields control={form.control} testIdSuffix="-resubmit" />
+                  )}
                 </CardContent>
               </Card>
 
