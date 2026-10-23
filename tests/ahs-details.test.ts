@@ -19,6 +19,7 @@ import {
   AhsDetailsCard,
   addAhsDetailsIssues,
   ahsCustomerFromServiceOrder,
+  ahsDraftToForm,
   ahsDetailsToForm,
   ahsPrefillUpdates,
   ahsReviewCustomer,
@@ -31,6 +32,7 @@ import {
   type AhsDetailsFormValues,
 } from "../client/src/components/ahs-details-fields";
 import { Form } from "../client/src/components/ui/form";
+import { parseAhsDetailsForReview } from "../client/src/lib/ahsReview";
 
 // What the tech form holds: every number still a typed string.
 const formValues = {
@@ -487,6 +489,53 @@ describe("AHS service-order prefill", () => {
       "Price (each) *",
       "Labor Amount *",
     ]);
+  });
+});
+
+describe("AHS draft into the Stage 1 editor", () => {
+  const draftForm = (draft: unknown) => ahsDraftToForm(parseAhsDetailsForReview(JSON.stringify(draft)));
+
+  it("opens an empty draft, or none, as the blank form", () => {
+    expect(draftForm({})).toEqual(emptyAhsDetailsForm());
+    expect(ahsDraftToForm(null)).toEqual(emptyAhsDetailsForm());
+    expect(ahsDraftToForm(parseAhsDetailsForReview("not-json"))).toEqual(emptyAhsDetailsForm());
+  });
+
+  it("keeps what a partial draft has and blanks what the editor can't show", () => {
+    const form = draftForm({
+      contractNumber: " AHS-778812 ",
+      brand: "Whirlpool",
+      applianceKind: "hvac",
+      applianceGrade: "N/A",
+      failureCause: "gremlins",
+      laborAmount: 95,
+      parts: [{ partNumber: "W10724237", unitPrice: 19.9 }],
+      prefilledFields: ["contractNumber", "brand", "parts"],
+    });
+    expect(form).toMatchObject({
+      contractNumber: "AHS-778812",
+      brand: "Whirlpool",
+      applianceKind: "",
+      applianceGrade: "",
+      failureCause: "",
+      techRecommendation: "repair",
+      laborAmount: "95.00",
+      taxAmount: "",
+    });
+    expect(form.parts).toEqual([{
+      partNumber: "W10724237",
+      quantity: "1",
+      description: "",
+      unitPrice: "19.90",
+      partFunction: "",
+      failureReason: "",
+    }]);
+  });
+
+  it("round-trips complete stored details through the editor unchanged, minus server-only keys", () => {
+    const parsed = ahsDetailsSchema.parse(formValues);
+    const stored = { ...parsed, prefilledFields: ["contractNumber"], purchaseYear: 2019 };
+    expect(ahsDetailsSchema.parse(draftForm(stored))).toEqual(parsed);
   });
 });
 

@@ -1,3 +1,19 @@
+## 2026-10-23 — The VRS manager completes AHS details in the Stage 1 card
+
+**Editor lives in `VrsAiBridgePanel`, opt-in by caller.** Only the Stage 1
+card passes `allowAhsEdit`; read-only callers (Pilot closed review) never get
+inputs. The panel still checks the flag and `isAhsDetailsEditable`, so the
+editor disappears the moment a request is dispatched or Stage 1 is decided.
+
+**Read once, keyed by ticket.** The editor reads the stored draft when it opens
+and is keyed by submission id. Background refetches (WS, polling) never reset
+what the manager typed; refresh and save update the form explicitly.
+
+**Lenient draft read.** The editor opens drafts through
+`parseAhsDetailsForReview`, not `parseStoredAhsDetailsDraft`, so one bad value
+(or an unknown provenance name like "parts") never blanks the whole editor.
+Unknown enum values open blank and fail validation visibly.
+
 ## 2026-10-22 — Customer name/address from HSSOM, never shown to the tech
 
 **HSSOM Order Lookup is the only confirmed source.** ai-agent-mcp reads it with

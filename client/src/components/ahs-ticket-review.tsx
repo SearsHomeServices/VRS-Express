@@ -1,12 +1,18 @@
-// Stage 1 reviewer view of the AHS details a technician filed in VRS Express
-// (submissions.ahs_details). Each field says where it came from: the server
-// fills some from the service order (ahs_details.prefilledFields, see
-// shared/ahs-prefill.ts: dispatch number and brand/model/serial from
-// Snowflake, customer name and address from the HSSOM Order Lookup), the
-// technician typed the rest. The model/serial and estimate screenshots and
-// the videos sit next to the appliance fields so the reviewer can check them.
-// Media goes through the existing MediaImage / MediaVideo components, so
-// every /objects/ path still gets a scoped media token.
+// Read-only Stage 1 view of a ticket's AHS details (submissions.ahs_details):
+// shown once the details can no longer change (VRS AI request dispatched,
+// Stage 1 decided, flag off) and on read-only screens. The editable version
+// is ahs-details-editor.tsx. The stored JSON may be a partial draft; blank
+// fields read "Not provided".
+//
+// Each field says where it came from: the server fills some from the service
+// order (ahs_details.prefilledFields, see shared/ahs-prefill.ts: dispatch
+// number and brand/model/serial from Snowflake, customer name and address
+// from the HSSOM Order Lookup, possibly the parts), the rest was entered in
+// VRS Express (by the VRS manager at Stage 1, or by the technician on older
+// tickets). The model/serial and estimate screenshots and the videos sit
+// next to the appliance fields so the reviewer can check them. Media goes
+// through the existing MediaImage / MediaVideo components, so every
+// /objects/ path still gets a scoped media token.
 import React, { type ReactNode } from "react";
 import { MediaImage, MediaVideo } from "@/components/media";
 import {
@@ -19,25 +25,27 @@ import {
   ahsReviewPartsTotal,
   formatAhsMoney,
   type AhsReviewDetails,
+  type AhsReviewProvenanceField,
 } from "@/lib/ahsReview";
-import type { AhsPrefillField } from "@shared/ahs-prefill";
 
 export const AHS_NOT_PROVIDED = "Not provided";
 export const AHS_SOURCE_SERVICE_ORDER = "From service order";
-export const AHS_SOURCE_TECH = "Entered by tech";
+export const AHS_SOURCE_TECH = "Entered in VRS Express";
 export const AHS_CHECK_APPLIANCE = "Brand, model and serial against the model tag photo.";
 export const AHS_CHECK_CUSTOMER =
   "Customer name and address against the service order. Confirm with the customer if unsure.";
+export const AHS_CHECK_PARTS = "Parts and prices against the estimate screenshot.";
 
-const AHS_APPLIANCE_PREFILL: readonly AhsPrefillField[] = ["brand", "modelNumber", "serialNumber"];
-const AHS_CUSTOMER_PREFILL: readonly AhsPrefillField[] = ["customerName", "customerAddress"];
+const AHS_APPLIANCE_PREFILL: readonly AhsReviewProvenanceField[] = ["brand", "modelNumber", "serialNumber"];
+const AHS_CUSTOMER_PREFILL: readonly AhsReviewProvenanceField[] = ["customerName", "customerAddress"];
 
 // What the reviewer should check before approving, for the fields the
 // server filled on this ticket.
-export function ahsPrefillChecks(prefilled: ReadonlySet<AhsPrefillField>): string[] {
+export function ahsPrefillChecks(prefilled: ReadonlySet<AhsReviewProvenanceField>): string[] {
   const checks: string[] = [];
   if (AHS_APPLIANCE_PREFILL.some((field) => prefilled.has(field))) checks.push(AHS_CHECK_APPLIANCE);
   if (AHS_CUSTOMER_PREFILL.some((field) => prefilled.has(field))) checks.push(AHS_CHECK_CUSTOMER);
+  if (prefilled.has("parts")) checks.push(AHS_CHECK_PARTS);
   return checks;
 }
 
@@ -107,7 +115,9 @@ function AhsField({
   );
 }
 
-function AhsMedia({
+// The tech's model/serial & estimate screenshots and videos. Also shown as
+// evidence beside the Stage 1 editor.
+export function AhsMedia({
   media,
   onOpenPhoto,
 }: {
@@ -193,9 +203,10 @@ export function AhsTicketReview({
   media?: AhsReviewMedia;
   onOpenPhoto?: (photos: string[], index: number) => void;
 }) {
-  const prefilled = new Set<AhsPrefillField>(details.prefilledFields);
-  const sourceOf = (field: AhsPrefillField | null): FieldSource =>
+  const prefilled = new Set<AhsReviewProvenanceField>(details.prefilledFields);
+  const sourceOf = (field: AhsReviewProvenanceField | null): FieldSource =>
     field && prefilled.has(field) ? "service_order" : "tech";
+  const partSource = sourceOf("parts");
   const checks = ahsPrefillChecks(prefilled);
   const age =
     details.applianceAge === undefined
@@ -212,7 +223,7 @@ export function AhsTicketReview({
         >
           <p>
             Fields marked “{AHS_SOURCE_SERVICE_ORDER}” were filled from the
-            service order, not typed by the technician.
+            service order lookup, not typed in VRS Express.
             {checks.length > 0 && " Before approving, check:"}
           </p>
           {checks.length > 0 && (
@@ -353,26 +364,26 @@ export function AhsTicketReview({
                   label="Part number"
                   dataField={`ahs-part-${index}-number`}
                   value={part.partNumber}
-                  source="tech"
+                  source={partSource}
                   mono
                 />
                 <AhsField
                   label="Quantity"
                   dataField={`ahs-part-${index}-quantity`}
                   value={part.quantity === undefined ? undefined : String(part.quantity)}
-                  source="tech"
+                  source={partSource}
                 />
                 <AhsField
                   label="Description"
                   dataField={`ahs-part-${index}-description`}
                   value={part.description}
-                  source="tech"
+                  source={partSource}
                 />
                 <AhsField
                   label="Unit price"
                   dataField={`ahs-part-${index}-price`}
                   value={formatAhsMoney(part.unitPrice)}
-                  source="tech"
+                  source={partSource}
                 />
                 <AhsField
                   label="Line total"
@@ -383,13 +394,13 @@ export function AhsTicketReview({
                   label="Part function"
                   dataField={`ahs-part-${index}-function`}
                   value={part.partFunction}
-                  source="tech"
+                  source={partSource}
                 />
                 <AhsField
                   label="Part failure reason"
                   dataField={`ahs-part-${index}-failure-reason`}
                   value={part.failureReason}
-                  source="tech"
+                  source={partSource}
                 />
               </div>
             ))}

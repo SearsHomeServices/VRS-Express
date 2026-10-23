@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import type { z } from "zod";
 import { Plus, Trash2 } from "lucide-react";
@@ -33,6 +33,7 @@ import {
   type AhsDetails,
 } from "@shared/ahs-details";
 import type { AhsPrefillResponse } from "@shared/ahs-prefill";
+import type { AhsReviewDetails } from "@/lib/ahsReview";
 
 // AHS authorization details on the tech submit and resubmit forms. Shown
 // only for AHS + Authorization while VRS AI enrollment is enabled.
@@ -133,6 +134,48 @@ export function ahsDetailsToForm(details: AhsDetails): AhsDetailsFormValues {
       partFunction: part.partFunction ?? "",
       failureReason: part.failureReason ?? "",
     })),
+  };
+}
+
+// A stored draft (or complete details), read leniently by
+// parseAhsDetailsForReview, → the Stage 1 editor's form strings. Blank or
+// missing values become "", so a partial draft or `{}` opens an editor with
+// the same empty inputs as a fresh form (one blank part row, repair).
+export function ahsDraftToForm(details: AhsReviewDetails | null | undefined): AhsDetailsFormValues {
+  const empty = emptyAhsDetailsForm();
+  if (!details) return empty;
+  const amount = (value: number | undefined) => (value === undefined ? "" : value.toFixed(2));
+  return {
+    contractNumber: details.contractNumber ?? "",
+    customerName: details.customerName ?? "",
+    customerAddress: details.customerAddress ?? "",
+    applianceKind: ahsApplianceKind(details.applianceKind) ? details.applianceKind! : "",
+    brand: details.brand ?? "",
+    modelNumber: details.modelNumber ?? "",
+    serialNumber: details.serialNumber ?? "",
+    applianceAge: details.applianceAge === undefined ? "" : String(details.applianceAge),
+    applianceLocation: details.applianceLocation ?? "",
+    applianceGrade: AHS_APPLIANCE_GRADES.some((grade) => grade.value === details.applianceGrade)
+      ? details.applianceGrade!
+      : "",
+    applianceColor: details.applianceColor ?? "",
+    failureCause: AHS_FAILURE_CAUSES.some((cause) => cause.value === details.failureCause)
+      ? details.failureCause!
+      : "",
+    techRecommendation: details.techRecommendation ?? empty.techRecommendation,
+    laborAmount: amount(details.laborAmount),
+    taxAmount: amount(details.taxAmount),
+    parts:
+      details.parts.length > 0
+        ? details.parts.map((part) => ({
+            partNumber: part.partNumber ?? "",
+            quantity: part.quantity === undefined ? "1" : String(part.quantity),
+            description: part.description ?? "",
+            unitPrice: amount(part.unitPrice),
+            partFunction: part.partFunction ?? "",
+            failureReason: part.failureReason ?? "",
+          }))
+        : empty.parts,
   };
 }
 
@@ -277,11 +320,33 @@ function toAmount(value: unknown): number | null {
   return String(value).trim() !== "" && Number.isFinite(n) ? n : null;
 }
 
-function money(value: number) {
+export function money(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
-function TextField({
+// Live totals from what is typed so far; a line with junk or no price is
+// null and counts as $0 in the sums.
+export function ahsFormTotals(values: Partial<AhsDetailsFormValues>): {
+  partLines: (number | null)[];
+  partCost: number;
+  total: number;
+} {
+  const partLines = (values.parts ?? []).map((part) => {
+    // Blank quantity counts as 1, the same default the schema applies.
+    const quantity = String(part?.quantity ?? "").trim() === "" ? 1 : toAmount(part?.quantity);
+    const price = toAmount(part?.unitPrice);
+    return quantity !== null && price !== null ? roundCents(quantity * price) : null;
+  });
+  const partCost = roundCents(partLines.reduce<number>((sum, line) => sum + (line ?? 0), 0));
+  const total = roundCents(
+    partCost + (toAmount(values.laborAmount) ?? 0) + (toAmount(values.taxAmount) ?? 0),
+  );
+  return { partLines, partCost, total };
+}
+
+// Shared by the tech card and the Stage 1 editor (ahs-details-editor.tsx).
+// `badge` sits next to the label (the editor's "From service order").
+export function TextField({
   form,
   name,
   label,
@@ -289,6 +354,8 @@ function TextField({
   inputMode,
   testId,
   hint,
+  badge,
+  multiline = false,
 }: {
   form: UseFormReturn<any>;
   name: string;
@@ -297,6 +364,8 @@ function TextField({
   inputMode?: "text" | "numeric" | "decimal";
   testId: string;
   hint?: string | null;
+  badge?: ReactNode;
+  multiline?: boolean;
 }) {
   return (
     <FormField
@@ -304,15 +373,32 @@ function TextField({
       name={name}
       render={({ field }) => (
         <FormItem>
-          <FormLabel>{label}</FormLabel>
+          {badge ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <FormLabel>{label}</FormLabel>
+              {badge}
+            </div>
+          ) : (
+            <FormLabel>{label}</FormLabel>
+          )}
           <FormControl>
-            <Input
-              {...field}
-              value={field.value ?? ""}
-              placeholder={placeholder}
-              inputMode={inputMode}
-              data-testid={testId}
-            />
+            {multiline ? (
+              <Textarea
+                {...field}
+                value={field.value ?? ""}
+                rows={2}
+                placeholder={placeholder}
+                data-testid={testId}
+              />
+            ) : (
+              <Input
+                {...field}
+                value={field.value ?? ""}
+                placeholder={placeholder}
+                inputMode={inputMode}
+                data-testid={testId}
+              />
+            )}
           </FormControl>
           {hint ? (
             <FormDescription className="text-xs" data-testid={`${testId}-hint`}>
@@ -326,13 +412,14 @@ function TextField({
   );
 }
 
-function SelectField({
+export function SelectField({
   form,
   name,
   label,
   placeholder,
   options,
   testId,
+  badge,
 }: {
   form: UseFormReturn<any>;
   name: string;
@@ -340,6 +427,7 @@ function SelectField({
   placeholder: string;
   options: readonly { value: string; label: string }[];
   testId: string;
+  badge?: ReactNode;
 }) {
   return (
     <FormField
@@ -347,7 +435,14 @@ function SelectField({
       name={name}
       render={({ field }) => (
         <FormItem>
-          <FormLabel>{label}</FormLabel>
+          {badge ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <FormLabel>{label}</FormLabel>
+              {badge}
+            </div>
+          ) : (
+            <FormLabel>{label}</FormLabel>
+          )}
           <Select onValueChange={field.onChange} value={field.value || undefined}>
             <FormControl>
               <SelectTrigger ref={field.ref} data-testid={testId}>
@@ -432,16 +527,7 @@ export function AhsDetailsCard({
     name: "ahsDetails.parts",
   });
   const values = (form.watch("ahsDetails") ?? {}) as Partial<AhsDetailsFormValues>;
-  const partLines = (values.parts ?? []).map((part) => {
-    // Blank quantity counts as 1, the same default the schema applies.
-    const quantity = String(part?.quantity ?? "").trim() === "" ? 1 : toAmount(part?.quantity);
-    const price = toAmount(part?.unitPrice);
-    return quantity !== null && price !== null ? roundCents(quantity * price) : null;
-  });
-  const partCost = roundCents(partLines.reduce<number>((sum, line) => sum + (line ?? 0), 0));
-  const total = roundCents(
-    partCost + (toAmount(values.laborAmount) ?? 0) + (toAmount(values.taxAmount) ?? 0),
-  );
+  const { partLines, partCost, total } = ahsFormTotals(values);
   const partsError = form.getFieldState("ahsDetails.parts", form.formState).error?.message;
   const dispatchFromServiceOrder = ahsDispatchNumberFromServiceOrder(prefill);
   const hintFor = (field: AhsPrefillApplianceField) =>

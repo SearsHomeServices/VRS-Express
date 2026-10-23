@@ -1,3 +1,17 @@
+## Open — Stage 1 AHS editor (2026-10-23)
+
+- [x] Editor, refresh and save in the agent's Stage 1 card (`feat/ahs-mgr-review`).
+- [ ] Server: add `"parts"` to `AHS_PREFILL_FIELDS`, or `ahsDetailsDraftSchema`
+      (and `parseStoredAhsDetailsDraft`) rejects a draft that names it.
+- [ ] Server: on save, keep server-only `purchaseYear` from the stored draft
+      (the client never sends it) and compute `prefilledFields` itself.
+- [ ] Server: enrollment from the PATCH must accept a claimed (`pending`)
+      ticket; `isAppVrsAiEnrollEligible` only accepts `queued`.
+- [ ] Decide whether a changed appliance kind in the editor also updates the
+      ticket's division (`applianceType`).
+- [ ] Once the tech-form removal merges, delete the now-unused tech-side parts
+      of `ahs-details-fields.tsx` (`AhsDetailsCard`, prefill helpers).
+
 ## Open — technician AHS → VRS AI enrollment (2026-10-08)
 
 - [x] Enroll new queued AHS authorization tickets from the app or external API

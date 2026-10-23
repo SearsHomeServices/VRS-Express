@@ -1,13 +1,31 @@
+// @vitest-environment jsdom
+// Static renders (renderToStaticMarkup) plus mounted DOM runs of the Stage 1
+// AHS details editor; fetch is mocked, nothing reaches a server.
 import { readFileSync } from "node:fs";
-import { createElement } from "react";
+import path from "node:path";
+import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as reviewComponents from "../client/src/components/vrs-ai-bridge-review";
 import {
   AHS_CHECK_APPLIANCE,
   AHS_CHECK_CUSTOMER,
+  AHS_CHECK_PARTS,
 } from "../client/src/components/ahs-ticket-review";
+import {
+  AHS_EDITOR_ENROLLED_TEXT,
+  AHS_EDITOR_REFRESH_LABEL,
+  AHS_EDITOR_SAVE_LABEL,
+  AHS_EDITOR_SKIPPED_TEXT,
+  AHS_EDITOR_TITLE,
+} from "../client/src/components/ahs-details-editor";
+import {
+  ahsIssueFieldName,
+  groupAhsIssues,
+  isAhsDetailsEditable,
+} from "../client/src/lib/ahsReview";
 import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
@@ -388,7 +406,7 @@ describe("VRS AI bridge review rendering", () => {
 
   it("passes dashboard bridge state to the runtime-tested panel and keeps manual wording", () => {
     const dashboardSource = readFileSync(
-      new URL("../client/src/pages/agent-dashboard.tsx", import.meta.url),
+      path.resolve(process.cwd(), "client/src/pages/agent-dashboard.tsx"),
       "utf8",
     ).replace(/\r\n/g, "\n");
     const componentUse = dashboardSource.indexOf(
@@ -398,6 +416,8 @@ describe("VRS AI bridge review rendering", () => {
     );
 
     expect(componentUse).toBeGreaterThan(-1);
+    // The Stage 1 card is the one place the AHS details are editable.
+    expect(dashboardSource.slice(componentUse, componentUse + 400)).toContain("allowAhsEdit");
     expect(dashboardSource).toContain(
       "Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket.",
     );
@@ -520,7 +540,7 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     },
   );
 
-  it("marks prefilled fields as from the service order and everything else as entered by tech", () => {
+  it("marks prefilled fields as from the service order and everything else as entered in VRS Express", () => {
     const html = renderAhsPanel({
       bridge: appOriginBridge,
       submission: { ahsDetails: JSON.stringify(prefilledAhsDetails), ...ticketMedia },
@@ -551,7 +571,8 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     // Calculated totals are neither typed nor prefilled.
     expect(fieldSource(html, "ahs-parts-total")).toBeNull();
     expect(html).toContain("From service order");
-    expect(html).toContain("Entered by tech");
+    expect(html).toContain("Entered in VRS Express");
+    expect(html).not.toContain("Entered by tech");
     expect(html).toContain('data-testid="ahs-prefill-hint"');
     expect(html).toContain("model tag photo");
     expect(prefillHint(html)).toContain(AHS_CHECK_APPLIANCE);
@@ -737,5 +758,608 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     expect(renderAhsPanel({ bridge: null, submission: { ahsDetails: "not-json" } })).toBe("");
     expect(renderAhsPanel({ bridge: null, submission: { ahsDetails: "[]" } })).toBe("");
     expect(renderAhsPanel({ bridge: undefined, submission: null })).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 1 editor: the VRS manager completes the server's AHS draft
+// ---------------------------------------------------------------------------
+
+// What GET /api/submissions/:id returns for an AHS authorization ticket the
+// manager has claimed and not yet decided.
+const editableTicket = {
+  id: 44,
+  requestType: "authorization",
+  warrantyType: "american_home_shield",
+  ticketStatus: "pending",
+  stage1Status: "pending",
+  submissionApproved: false,
+  issueDescription: "evidence-desc: washer stops mid-cycle with F7E1",
+  ...ticketMedia,
+};
+
+// A draft the lookups filled part of.
+const partialDraft = {
+  contractNumber: "ahs-dispatch-77001",
+  customerName: "so-customer-Maria",
+  brand: "brand-from-so-Whirlpool",
+  modelNumber: "model-typed-WTW5000",
+  parts: [{ partNumber: "so-part-W10724237", description: "so-part-drum-roller", unitPrice: 19.99 }],
+  prefilledFields: ["contractNumber", "customerName", "brand", "parts"],
+};
+
+// A draft that already passes ahsDetailsSchema, as the server may store it
+// after a previous save (purchaseYear and prefilledFields are server-only).
+const completeDraft = {
+  contractNumber: "ahs-dispatch-77001",
+  customerName: "so-customer-Maria",
+  customerAddress: "so-address-742-Evergreen",
+  applianceKind: "washer",
+  brand: "brand-from-so-Whirlpool",
+  modelNumber: "model-from-so-WTW5000",
+  serialNumber: "serial-from-so-C3129",
+  applianceAge: 7,
+  applianceLocation: "Laundry room",
+  applianceGrade: "mid",
+  applianceColor: "White",
+  failureCause: "normal-wear",
+  techRecommendation: "replace",
+  laborAmount: 120,
+  taxAmount: 8.5,
+  parts: [{
+    partNumber: "part-WPW10503278",
+    quantity: 2,
+    description: "part-desc-control-board",
+    unitPrice: 50.25,
+    partFunction: "Controls the cycle",
+    failureReason: "Shorted",
+  }],
+  prefilledFields: ["contractNumber", "brand", "modelNumber", "serialNumber", "customerName", "customerAddress"],
+  purchaseYear: 2019,
+};
+
+type EditorPanelProps = PanelProps & {
+  allowAhsEdit?: boolean;
+  onOpenPhoto?: (photos: string[], index: number) => void;
+  submission?: (PanelProps["submission"] & Record<string, unknown>) | null;
+};
+
+function editorClient(flag: boolean): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  queryClient.setQueryData(["/api/config"], {
+    portal1099Enabled: false,
+    techHubPhotosEnabled: false,
+    vrsBridgePhotoProxyEnabled: false,
+    vrsAiAppEnrollEnabled: flag,
+  });
+  return queryClient;
+}
+
+function renderEditorPanel(props: EditorPanelProps, flag = true): string {
+  return renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client: editorClient(flag) },
+      createElement(reviewComponents.VrsAiBridgePanel, props as never),
+    ),
+  );
+}
+
+function stageOneTicket(draft: unknown, overrides: Record<string, unknown> = {}) {
+  return { ...editableTicket, ahsDetails: draft === null ? null : JSON.stringify(draft), ...overrides };
+}
+
+function requiredLabels(html: string): string[] {
+  return [...html.matchAll(/<label[^>]*>([^<]*\*)<\/label>/g)].map((match) => match[1]);
+}
+
+describe("Stage 1 AHS editor: when it shows", () => {
+  it("decides editability from the ticket and the bridge row", () => {
+    const ticket = stageOneTicket({});
+    expect(isAhsDetailsEditable(ticket, null)).toBe(true);
+    expect(isAhsDetailsEditable(ticket, { state: "pending_review", providerCallId: null, dispatchedAt: null })).toBe(true);
+    expect(isAhsDetailsEditable(ticket, { state: "dispatch_failed", providerCallId: null, dispatchedAt: null })).toBe(true);
+    // Dispatched or VRS AI already working on it.
+    expect(isAhsDetailsEditable(ticket, { state: "dispatching", providerCallId: null, dispatchedAt: null })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, { state: "queued", providerCallId: "p-1", dispatchedAt: "2026-10-23T12:00:00Z" })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, { state: "pending_review", providerCallId: "p-1", dispatchedAt: null })).toBe(false);
+    // Stage 1 decided, or not an AHS authorization ticket.
+    expect(isAhsDetailsEditable({ ...ticket, stage1Status: "approved", submissionApproved: true }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, stage1Status: "rejected" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, ticketStatus: "completed" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, ticketStatus: "queued" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, warrantyType: "sears_protect" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, warrantyType: "first_american" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, requestType: "parts_nla" }, null)).toBe(false);
+    expect(isAhsDetailsEditable(null, null)).toBe(false);
+  });
+
+  it("shows the editor in the Stage 1 card while the flag is on, with the new not-enrolled copy", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket({}), allowAhsEdit: true });
+    expect(html).toContain('data-testid="ahs-details-editor"');
+    expect(html).toContain(AHS_EDITOR_TITLE);
+    expect(html).toContain(AHS_EDITOR_SAVE_LABEL.replace("&", "&amp;"));
+    expect(html).toContain(AHS_EDITOR_REFRESH_LABEL);
+    expect(html).not.toContain('data-testid="ahs-ticket-review"');
+    expect(html).toMatch(
+      /data-testid="vrs-ai-bridge-source"[^>]*>Source: Submitted by technician in VRS Express</,
+    );
+    expect(html).toContain("Complete the AHS details below and save them to send it to VRS AI.");
+    expect(html).not.toContain("use the manual authorization flow");
+  });
+
+  it("opens the editor for a ticket with no stored draft at all", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket(null), allowAhsEdit: true });
+    expect(html).toContain('data-testid="ahs-details-editor"');
+  });
+
+  it("waits for the detail fetch before opening the editor", () => {
+    const { ahsDetails: _missing, ...slimRow } = stageOneTicket({});
+    const html = renderEditorPanel({ bridge: null, submission: slimRow, allowAhsEdit: true });
+    expect(html).toContain('data-testid="ahs-details-editor-loading"');
+    expect(html).not.toContain('data-testid="ahs-details-editor"');
+  });
+
+  it("keeps the editor next to the bridge row until the request is dispatched", () => {
+    const html = renderEditorPanel({
+      bridge: appOriginBridge,
+      submission: stageOneTicket(completeDraft),
+      allowAhsEdit: true,
+    });
+    expect(html).toContain('data-testid="vrs-ai-bridge-status"');
+    expect(html).toContain('data-testid="ahs-details-editor"');
+    expect(html).toContain("Review the VRS AI request built from these details");
+  });
+
+  it.each([
+    ["the flag is off", { bridge: null, submission: stageOneTicket(partialDraft), allowAhsEdit: true }, false],
+    ["the caller is read-only", { bridge: null, submission: stageOneTicket(partialDraft) }, true],
+    [
+      "Stage 1 was decided",
+      { bridge: null, submission: stageOneTicket(partialDraft, { stage1Status: "approved", submissionApproved: true }), allowAhsEdit: true },
+      true,
+    ],
+    [
+      "the request was dispatched",
+      {
+        bridge: { ...appOriginBridge, state: "queued", providerCallId: "provider-1", dispatchedAt: "2026-10-23T12:00:00Z" },
+        submission: stageOneTicket(partialDraft),
+        allowAhsEdit: true,
+      },
+      true,
+    ],
+  ] as const)("shows the read-only AHS view when %s", (_label, props, flag) => {
+    const html = renderEditorPanel(props as EditorPanelProps, flag);
+    expect(html).not.toContain('data-testid="ahs-details-editor"');
+    expect(html).toContain('data-testid="ahs-ticket-review"');
+    // A draft reads "Not provided" for what nobody filled in.
+    expectField(html, "ahs-appliance-location", "Not provided");
+    expectField(html, "ahs-labor", "Not provided");
+    expectField(html, "ahs-brand", "brand-from-so-Whirlpool");
+    expect(fieldSource(html, "ahs-part-0-number")).toBe("service_order");
+    expect(prefillHint(html)).toContain(AHS_CHECK_PARTS);
+  });
+
+  it("tells the reader the manager can still complete the details when the view is read-only and nothing was sent", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket(partialDraft) });
+    expect(html).toContain('data-testid="ahs-details-no-bridge"');
+    expect(html).toContain("The VRS manager can complete the AHS details at Stage 1 to send it to VRS AI");
+    expect(html).toContain("not enrolled in VRS AI");
+  });
+});
+
+describe("Stage 1 AHS editor: rendering", () => {
+  it("renders from an empty draft: blank inputs, no badges, required fields marked as the schema requires", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket({}), allowAhsEdit: true });
+    expect(html).not.toContain('data-testid="badge-ahs-from-so-');
+    for (const testId of [
+      "input-ahs-contract-number",
+      "input-ahs-customer-name",
+      "input-ahs-customer-address",
+      "select-ahs-appliance-kind",
+      "input-ahs-brand",
+      "input-ahs-model",
+      "input-ahs-serial",
+      "input-ahs-age",
+      "select-ahs-location",
+      "select-ahs-grade",
+      "input-ahs-color",
+      "select-ahs-failure-cause",
+      "select-ahs-recommendation",
+      "input-ahs-labor",
+      "input-ahs-tax",
+      "input-ahs-part-0-number",
+      "input-ahs-part-0-quantity",
+      "input-ahs-part-0-description",
+      "input-ahs-part-0-price",
+      "input-ahs-part-0-function",
+      "input-ahs-part-0-failure-reason",
+      "button-add-ahs-part",
+    ]) {
+      expect(html, testId).toContain(`data-testid="${testId}"`);
+    }
+    expect(html).toMatch(/data-testid="input-ahs-brand"[^>]*value=""|value=""[^>]*data-testid="input-ahs-brand"/);
+    expect(requiredLabels(html)).toEqual([
+      "Appliance Type *",
+      "Appliance Location *",
+      "Failure Cause *",
+      "Part Number *",
+      "Description *",
+      "Price (each) *",
+      "Labor Amount *",
+    ]);
+    expect(html).toContain(">Parts *<");
+  });
+
+  it("renders a partial draft with a \"From service order\" badge on each prefilled field, parts included", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket(partialDraft), allowAhsEdit: true });
+    for (const field of ["contractNumber", "customerName", "brand", "parts"]) {
+      expect(html, field).toContain(`data-testid="badge-ahs-from-so-${field}"`);
+    }
+    // Filled but not by the lookup, or not filled at all: no badge.
+    for (const field of ["modelNumber", "serialNumber", "customerAddress", "laborAmount"]) {
+      expect(html, field).not.toContain(`data-testid="badge-ahs-from-so-${field}"`);
+    }
+    for (const value of [
+      "ahs-dispatch-77001",
+      "so-customer-Maria",
+      "brand-from-so-Whirlpool",
+      "model-typed-WTW5000",
+      "so-part-W10724237",
+      "so-part-drum-roller",
+      "19.99",
+    ]) {
+      expect(html).toContain(`value="${value}"`);
+    }
+    expect(html).toContain('data-testid="text-ahs-part-cost">$19.99<');
+  });
+
+  it("shows the tech's description, screenshots and videos beside the editor through the media-token components", () => {
+    const html = renderEditorPanel({ bridge: null, submission: stageOneTicket(partialDraft), allowAhsEdit: true });
+    const evidence = html.slice(html.indexOf('data-testid="ahs-editor-evidence"'), html.indexOf('data-testid="form-ahs-details"'));
+    expect(evidence).toContain("evidence-desc: washer stops mid-cycle with F7E1");
+    expect(evidence).toContain("Model, serial &amp; estimate screenshots (2)");
+    expect(evidence).toContain('data-testid="ahs-review-estimate-photo-1"');
+    expect(evidence).toContain("Videos (3)");
+    expect(evidence).toContain('data-testid="ahs-review-video-2"');
+    expect(html).not.toMatch(/src="\/objects\//);
+  });
+});
+
+describe("AHS issue mapping", () => {
+  it("maps client and server zod paths onto the editor's inputs", () => {
+    expect(ahsIssueFieldName(["brand"])).toBe("ahsDetails.brand");
+    expect(ahsIssueFieldName(["ahsDetails", "laborAmount"])).toBe("ahsDetails.laborAmount");
+    expect(ahsIssueFieldName(["parts", 1, "unitPrice"])).toBe("ahsDetails.parts.1.unitPrice");
+    expect(ahsIssueFieldName(["ahsDetails", "parts", "0", "partNumber"])).toBe("ahsDetails.parts.0.partNumber");
+    expect(ahsIssueFieldName(["parts"])).toBe("ahsDetails.parts.root");
+    expect(ahsIssueFieldName([])).toBeNull();
+    expect(ahsIssueFieldName(["purchaseYear"])).toBeNull();
+    expect(ahsIssueFieldName(["prefilledFields", 0])).toBeNull();
+    expect(ahsIssueFieldName(["parts", 0, "sku"])).toBeNull();
+    expect(groupAhsIssues([
+      { path: ["brand"], message: "Brand too long" },
+      { path: ["brand"], message: "second brand message" },
+      { path: [], message: "Ticket already dispatched" },
+      { path: ["purchaseYear"], message: "Ticket already dispatched" },
+    ])).toEqual({
+      fields: { "ahsDetails.brand": "Brand too long" },
+      general: ["Ticket already dispatched"],
+    });
+    expect(groupAhsIssues(undefined)).toEqual({ fields: {}, general: [] });
+  });
+});
+
+describe("VRS AI payload review tolerates missing values", () => {
+  it('shows "Not provided" instead of crashing on a sparse review context', () => {
+    const sparse = {
+      ...v9Bridge,
+      origin: "app" as const,
+      reviewContext: {
+        ...v9Bridge.reviewContext!,
+        contract_number: undefined,
+        cta_no: undefined,
+        appliance_color: undefined,
+        purchase_year: undefined,
+        labor_amount: undefined as unknown as number,
+        part_price: undefined as unknown as number,
+        parts: undefined as unknown as [],
+      },
+    };
+    const html = renderReview(sparse);
+    expectField(html, "contract-number", "Not provided");
+    expectField(html, "cta-number", "Not provided");
+    expectField(html, "appliance-color", "Not provided");
+    expectField(html, "purchase-year", "Not provided");
+    expectField(html, "labor", "Not provided");
+    expectField(html, "parts-total", "Not provided");
+    expectField(html, "total", "Not provided");
+    expectField(html, "parts", "Not provided");
+    expectField(html, "tax", "$6.78");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mounted editor (jsdom): validation, save, server issues, refresh
+// ---------------------------------------------------------------------------
+
+type FetchCall = { url: string; method: string; body: unknown };
+
+let mountedRoot: Root | null = null;
+let mountedContainer: HTMLDivElement | null = null;
+
+afterEach(async () => {
+  if (mountedRoot) await act(async () => mountedRoot!.unmount());
+  mountedContainer?.remove();
+  mountedRoot = null;
+  mountedContainer = null;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+function jsonResponse(status: number, body: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: String(status),
+    url: "",
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+// Answers PATCH /ahs-details and POST /ahs-details/refresh; anything else
+// fails the test.
+function mockFetch(routes: { save?: () => ReturnType<typeof jsonResponse>; refresh?: () => ReturnType<typeof jsonResponse> }) {
+  const calls: FetchCall[] = [];
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (method === "PATCH" && url === "/api/submissions/44/ahs-details" && routes.save) return routes.save();
+    if (method === "POST" && url === "/api/submissions/44/ahs-details/refresh" && routes.refresh) return routes.refresh();
+    throw new Error(`Unexpected fetch: ${method} ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { calls, fetchMock };
+}
+
+async function mountEditor(draft: unknown, extra: Partial<EditorPanelProps> = {}) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const queryClient = editorClient(true);
+  const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+  mountedContainer = document.createElement("div");
+  document.body.append(mountedContainer);
+  mountedRoot = createRoot(mountedContainer);
+  await act(async () =>
+    mountedRoot!.render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(reviewComponents.VrsAiBridgePanel, {
+          bridge: null,
+          submission: stageOneTicket(draft),
+          allowAhsEdit: true,
+          ...extra,
+        } as never),
+      ),
+    ),
+  );
+  return { queryClient, invalidate };
+}
+
+function byTestId<T extends HTMLElement = HTMLElement>(testId: string): T {
+  const element = mountedContainer!.querySelector<T>(`[data-testid="${testId}"]`);
+  expect(element, `missing ${testId}`).not.toBeNull();
+  return element!;
+}
+
+function queryTestId(testId: string): HTMLElement | null {
+  return mountedContainer!.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+}
+
+async function typeInto(testId: string, value: string) {
+  const element = byTestId<HTMLInputElement | HTMLTextAreaElement>(testId);
+  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function flush(times = 10) {
+  for (let i = 0; i < times; i += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+async function clickTestId(testId: string) {
+  await act(async () => byTestId(testId).click());
+  await flush();
+}
+
+// The message FormMessage renders under one input.
+function fieldMessage(testId: string): string | null {
+  const item = byTestId(testId).closest(".space-y-2") as HTMLElement | null;
+  return item?.querySelector('[id$="-form-item-message"]')?.textContent ?? null;
+}
+
+describe("Stage 1 AHS editor: mounted", () => {
+  it("validates required fields on the client and sends nothing", async () => {
+    const { fetchMock } = mockFetch({});
+    await mountEditor({});
+    await clickTestId("button-ahs-save");
+
+    const text = mountedContainer!.textContent ?? "";
+    for (const message of [
+      "Select an appliance type",
+      "Appliance location is required",
+      "Select the failure cause",
+      "Labor amount is required",
+      "Part number is required",
+      "Part description is required",
+      "Part price is required",
+    ]) {
+      expect(text, message).toContain(message);
+    }
+    expect(fieldMessage("input-ahs-labor")).toBe("Labor amount is required");
+    expect(fieldMessage("input-ahs-part-0-number")).toBe("Part number is required");
+    // Optional fields carry no message.
+    expect(fieldMessage("input-ahs-brand")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("PATCHes the parsed details, invalidates the ticket queries and says VRS AI is ready", async () => {
+    const saved = { ...completeDraft, brand: "brand-corrected", prefilledFields: ["contractNumber"] };
+    const { calls } = mockFetch({ save: () => jsonResponse(200, { ok: true, ahsDetails: saved, enrolled: true }) });
+    const { invalidate } = await mountEditor(completeDraft);
+
+    expect(queryTestId("badge-ahs-from-so-brand")).not.toBeNull();
+    await typeInto("input-ahs-brand", "brand-corrected");
+    // A changed value is no longer the service order's.
+    expect(queryTestId("badge-ahs-from-so-brand")).toBeNull();
+    await clickTestId("button-ahs-save");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      url: "/api/submissions/44/ahs-details",
+      method: "PATCH",
+      body: {
+        ahsDetails: {
+          contractNumber: "ahs-dispatch-77001",
+          customerName: "so-customer-Maria",
+          customerAddress: "so-address-742-Evergreen",
+          applianceKind: "washer",
+          brand: "brand-corrected",
+          modelNumber: "model-from-so-WTW5000",
+          serialNumber: "serial-from-so-C3129",
+          applianceAge: 7,
+          applianceLocation: "Laundry room",
+          applianceGrade: "mid",
+          applianceColor: "White",
+          failureCause: "normal-wear",
+          techRecommendation: "replace",
+          laborAmount: 120,
+          taxAmount: 8.5,
+          parts: [{
+            partNumber: "part-WPW10503278",
+            quantity: 2,
+            description: "part-desc-control-board",
+            unitPrice: 50.25,
+            partFunction: "Controls the cycle",
+            failureReason: "Shorted",
+          }],
+        },
+      },
+    });
+    // Server-only keys never go up.
+    expect(JSON.stringify(calls[0].body)).not.toContain("prefilledFields");
+    expect(JSON.stringify(calls[0].body)).not.toContain("purchaseYear");
+
+    const predicate = invalidate.mock.calls[0]?.[0]?.predicate as ((query: { queryKey: unknown[] }) => boolean) | undefined;
+    expect(predicate).toBeTypeOf("function");
+    expect(predicate!({ queryKey: ["/api/submissions", 44] })).toBe(true);
+    expect(predicate!({ queryKey: ["/api/agent/stats"] })).toBe(false);
+
+    expect(byTestId("text-ahs-enrolled").textContent).toBe(AHS_EDITOR_ENROLLED_TEXT);
+    expect(queryTestId("text-ahs-enroll-skipped")).toBeNull();
+    // The saved provenance now drives the badges.
+    expect(queryTestId("badge-ahs-from-so-contractNumber")).not.toBeNull();
+    expect(queryTestId("badge-ahs-from-so-modelNumber")).toBeNull();
+  });
+
+  it("shows why the ticket was not enrolled", async () => {
+    mockFetch({
+      save: () => jsonResponse(200, {
+        ok: true,
+        ahsDetails: completeDraft,
+        enrolled: false,
+        enrollSkipReason: "skip-reason: technician phone missing",
+      }),
+    });
+    await mountEditor(completeDraft);
+    await clickTestId("button-ahs-save");
+    expect(byTestId("text-ahs-enroll-skipped").textContent).toBe(
+      `${AHS_EDITOR_SKIPPED_TEXT} skip-reason: technician phone missing`,
+    );
+    expect(queryTestId("text-ahs-enrolled")).toBeNull();
+  });
+
+  it("maps the server's zod issues to their fields and lists the rest", async () => {
+    mockFetch({
+      save: () => jsonResponse(400, {
+        ok: false,
+        error: "server-error: invalid AHS details",
+        issues: [
+          { path: ["ahsDetails", "modelNumber"], message: "server-issue: model unknown" },
+          { path: ["parts", 0, "unitPrice"], message: "server-issue: price too low" },
+          { path: ["parts", 3, "partNumber"], message: "server-issue: missing row" },
+          { path: ["purchaseYear"], message: "server-issue: purchase year" },
+        ],
+      }),
+    });
+    await mountEditor(completeDraft);
+    await clickTestId("button-ahs-save");
+
+    expect(fieldMessage("input-ahs-model")).toBe("server-issue: model unknown");
+    expect(fieldMessage("input-ahs-part-0-price")).toBe("server-issue: price too low");
+    const general = byTestId("ahs-editor-errors").textContent ?? "";
+    expect(general).toContain("server-error: invalid AHS details");
+    expect(general).toContain("server-issue: missing row");
+    expect(general).toContain("server-issue: purchase year");
+    expect(queryTestId("text-ahs-enrolled")).toBeNull();
+  });
+
+  it("refreshes from the service order and fills only blank fields", async () => {
+    const { calls } = mockFetch({
+      refresh: () => jsonResponse(200, {
+        ok: true,
+        ahsDetails: {
+          ...partialDraft,
+          brand: "brand-from-refresh",
+          serialNumber: "serial-from-refresh",
+          prefilledFields: ["contractNumber", "customerName", "brand", "serialNumber", "parts"],
+        },
+        snowflake: "found",
+        hssom: "not_found",
+      }),
+    });
+    await mountEditor(partialDraft);
+    await typeInto("input-ahs-brand", "brand-typed-by-manager");
+    await clickTestId("button-ahs-refresh");
+
+    expect(calls).toEqual([{ url: "/api/submissions/44/ahs-details/refresh", method: "POST", body: undefined }]);
+    expect(byTestId<HTMLInputElement>("input-ahs-brand").value).toBe("brand-typed-by-manager");
+    expect(byTestId<HTMLInputElement>("input-ahs-serial").value).toBe("serial-from-refresh");
+    expect(queryTestId("badge-ahs-from-so-serialNumber")).not.toBeNull();
+    expect(queryTestId("badge-ahs-from-so-brand")).toBeNull();
+    const note = byTestId("text-ahs-refresh-note").textContent ?? "";
+    expect(note).toContain("Service order lookup: found.");
+    expect(note).toContain("HSSOM lookup: not found.");
+    expect(note).toContain("Filled 1 blank field.");
+  });
+
+  it("enlarges a screenshot through the dashboard's lightbox callback", async () => {
+    mockFetch({});
+    const onOpenPhoto = vi.fn();
+    await mountEditor(partialDraft, { onOpenPhoto });
+    expect(byTestId("text-ahs-evidence-description").textContent).toBe(
+      "evidence-desc: washer stops mid-cycle with F7E1",
+    );
+    await clickTestId("ahs-review-estimate-photo-1");
+    expect(onOpenPhoto).toHaveBeenCalledWith(["/objects/model-tag.jpg", "/objects/estimate.jpg"], 1);
+    expect(mountedContainer!.querySelectorAll('[data-testid^="ahs-review-video-"]')).toHaveLength(3);
+  });
+
+  it("adds and removes part rows", async () => {
+    mockFetch({});
+    await mountEditor({});
+    await clickTestId("button-add-ahs-part");
+    expect(queryTestId("ahs-part-1")).not.toBeNull();
+    await clickTestId("button-remove-ahs-part-1");
+    expect(queryTestId("ahs-part-1")).toBeNull();
   });
 });

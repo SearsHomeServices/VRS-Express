@@ -1,5 +1,5 @@
 # Session Context
-> Last updated: 2026-10-22
+> Last updated: 2026-10-23
 
 ## Current State
 - Platform is deployed on Replit with PostgreSQL (Neon)
@@ -10,6 +10,11 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **Stage 1 AHS editor for the VRS manager** (2026-10-23, branch `feat/ahs-mgr-review`, not pushed). The tech form no longer has AHS fields; the server stores a lookup-filled draft and the manager completes it in the Stage 1 card.
+  - **Client:** `client/src/components/ahs-details-editor.tsx` (form, evidence, refresh, save), wired through `VrsAiBridgePanel`'s new `allowAhsEdit` prop (only the Stage 1 card passes it). `isAhsDetailsEditable` in `client/src/lib/ahsReview.ts` decides editor vs read-only: AHS (`warrantyType === "american_home_shield"`) authorization, `ticketStatus` pending, Stage 1 undecided, and no bridge row or an undispatched one (`pending_review` / `dispatch_failed`, no provider call id).
+  - **Contract:** `shared/ahs-review.ts`; issue paths map to inputs via `ahsIssueFieldName` (with or without a leading `ahsDetails`).
+  - **Provenance:** the client accepts `"parts"` in `prefilledFields`; a badge shows while the field still holds the stored value.
+  - **Tests:** `tests/vrs-ai-bridge-ui.test.ts` now runs under jsdom (static renders + mounted editor with mocked fetch).
 - **HSSOM spec review** (2026-10-22): auth responseCode check, TTL cap, secret-aware token cache, userid always sent, local token-grant helpers. Order Lookup now sends `clientid` (`HSSOM_LOOKUP_CLIENT_ID`, default TABS), `servicename: IHSOLookup` and `serviceversion: 1.0`, as fixed in the scheduling optimizer's commit 39047f9. The prod lookup URL is confirmed from optimizer-upstream `.env.example:44`. The Send Message docx embeds the Postman collection the handoff called missing: its path is `POST {base}/services/domi/orders/{orderId}/message`, not the bare URL the handoff uses.
 - **HSSOM customer prefill** (2026-10-22, same branch `feat/ahs-tech-form-few`).
   - **What it does:** `lookupHssomOrder` (server/services/hssom-order-lookup.ts) fills customer name and address. `mergeAhsPrefillSources` / `applyAhsSubmitPrefill` in server/ahs-prefill.ts merge it with Snowflake.
