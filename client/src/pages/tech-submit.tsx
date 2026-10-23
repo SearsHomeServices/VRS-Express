@@ -1057,6 +1057,7 @@ export default function TechSubmitPage() {
     serviceOrder: string;
     // The warranty fields are absent when only the appliance type is known.
     derived: (Partial<DerivedWarranty> & DerivedServiceOrderAppliance) | null;
+    applianceType?: DerivedServiceOrderAppliance["applianceType"];
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
     queryFn: async () => {
@@ -1084,7 +1085,10 @@ export default function TechSubmitPage() {
   const [autoApplianceType, setAutoApplianceType] = useState<{ value: ApplianceTypeValue; serviceOrder: string } | null>(null);
   const autoApplianceTypeRef = useRef(autoApplianceType);
   autoApplianceTypeRef.current = autoApplianceType;
-  const derivedApplianceType = lookupApplianceType(lookupDerived);
+  // The server returns the type at the top level (always, when known) and
+  // inside `derived` only when the warranty is known; read either.
+  const derivedApplianceType =
+    lookupApplianceType(warrantyLookup.data ?? null) ?? lookupApplianceType(lookupDerived);
   const applianceLookupSettled = isValidSo && !isProvider1099 && !warrantyLookup.isFetching && (warrantyLookup.isSuccess || warrantyLookup.isError);
   useEffect(() => {
     if (!applianceLookupSettled) return;

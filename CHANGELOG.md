@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Appliance type detected from the service order; service unit fix (2026-10-23)
+- The tech form now preselects the Appliance Type from the service order.
+  The value comes from Snowflake `HS_SP_CD`, mapped by
+  `shared/appliance-division.ts`, and the form shows "Auto-detected from
+  service order".
+  - The field stays editable, and a type the tech picked is never
+    overwritten.
+  - `GET /api/tech/lookup-warranty` returns `applianceType` at the top level,
+    and inside `derived` when the warranty is known. It runs as a separate
+    statement, so warranty detection is unaffected if it fails.
+- Service-order lookups (AHS prefill core, appliance, parts, and HSSOM) now
+  match on `SO_NO` and resolve the order's real service unit. They prefer the
+  unit matching the typed district, otherwise use the only unit. If several
+  units match and none is the typed district, the lookup returns `not_found`.
+  - Before this change, an order whose unit differed from the tech's district
+    (e.g. district 7995, unit 0008366) was missed.
+  - Parts and HSSOM now use the resolved unit.
+
 ### Added - Technician appliance grade, color and part function (2026-10-23)
 - When `TECH_APPLIANCE_DETAILS_ENABLED` is on (DEV only), the tech submit and
   resubmit forms ask for three required fields on American Home Shield and

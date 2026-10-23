@@ -30,7 +30,16 @@ vi.mock("@/lib/queryClient", async (importOriginal) => ({
     fixtures.lookupCalls.push(so);
     const derived = so in fixtures.lookups ? fixtures.lookups[so] : null;
     if (derived === "error") throw new Error("503: Snowflake unavailable");
-    return { json: async () => ({ serviceOrder: so, derived }) };
+    // Mirror the server: `derived` only when the warranty is known; the
+    // appliance type always at the top level (and inside `derived` too).
+    const entry = derived as any;
+    return {
+      json: async () => ({
+        serviceOrder: so,
+        derived: entry?.warrantyType ? entry : null,
+        ...(entry?.applianceType !== undefined ? { applianceType: entry.applianceType } : {}),
+      }),
+    };
   }),
   apiRequestWithRetry: vi.fn(),
 }));
@@ -132,6 +141,8 @@ describe("lookupApplianceType", () => {
   it.each(["refrigeration", "laundry", "cooking", "dishwasher", "microwave", "hvac", "all_other"])("accepts %s", (value) => {
     expect(lookupApplianceType({ applianceType: value })).toBe(value);
     expect(lookupApplianceType({ ...AHS, applianceType: value })).toBe(value);
+    // Server shape when the warranty is unknown: derived null, type at the top level.
+    expect(lookupApplianceType({ serviceOrder: "7995-11075199", derived: null, applianceType: value })).toBe(value);
   });
 
   it.each([null, undefined, {}, AHS, { applianceType: "toaster" }, { applianceType: "" }, { applianceType: 3 }, { applianceType: "Laundry" }, "laundry"])(
