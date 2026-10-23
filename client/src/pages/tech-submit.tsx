@@ -1,3 +1,4 @@
+import { APPLIANCE_CHOICES, applianceChoice, applianceKindSchema, applianceLabel, unambiguousApplianceKind } from "@shared/appliance-types";
 import { useState, useRef, useEffect } from "react";
 import { useForm, type Control, type FieldErrors, type FieldPath, type FieldValues, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -202,7 +203,7 @@ export function techApplianceDetailsResolver<T extends FieldValues>(
     const parsed = techApplianceDetailsSchema.safeParse(gate.techApplianceDetails ?? {});
     if (parsed.success) {
       if (Object.keys(result.errors).length > 0) return result;
-      return { values: { ...result.values, techApplianceDetails: parsed.data } as T, errors: {} };
+      return { values: { ...result.values, techApplianceDetails: parsed.data } as unknown as T, errors: {} };
     }
     const detailErrors: Record<string, { type: string; message: string }> = {};
     for (const issue of parsed.error.issues) {
@@ -304,6 +305,7 @@ const submissionFormSchema = z.object({
   applianceType: z.enum(["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other"], {
     required_error: "Select an appliance type",
   }),
+  applianceKind: applianceKindSchema,
   requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
   warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
   warrantyProvider: z.string().optional(),
@@ -329,6 +331,12 @@ function pickSubmissionFormFields(values: Record<string, unknown>): Record<strin
   const picked = Object.fromEntries(Object.entries(values).filter(([key]) => SUBMISSION_FORM_FIELDS.includes(key)));
   if ("techApplianceDetails" in picked) {
     picked.techApplianceDetails = techApplianceDetailsFormValues(picked.techApplianceDetails);
+  }
+  const choice = applianceChoice(picked.applianceKind);
+  if (choice) {
+    picked.applianceType = choice.division;
+  } else {
+    delete picked.applianceKind;
   }
   return picked;
 }
@@ -1099,11 +1107,13 @@ export default function TechSubmitPage() {
     if (derivedApplianceType) {
       if (current !== derivedApplianceType) {
         form.setValue("applianceType", derivedApplianceType, { shouldDirty: false, shouldValidate: form.formState.isSubmitted });
+        form.setValue("applianceKind", unambiguousApplianceKind(derivedApplianceType) as any, { shouldValidate: false });
       }
       setAutoApplianceType({ value: derivedApplianceType, serviceOrder: watchedServiceOrder });
     } else if (setByLookup && auto!.serviceOrder !== watchedServiceOrder) {
       // Set from another service order; this one has no known type.
       form.setValue("applianceType", undefined as any, { shouldDirty: false, shouldValidate: false });
+      form.setValue("applianceKind", undefined as any, { shouldValidate: false });
       setAutoApplianceType(null);
     }
   }, [applianceLookupSettled, derivedApplianceType, watchedServiceOrder]);
@@ -1319,6 +1329,7 @@ export default function TechSubmitPage() {
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
       form.setValue("applianceType", undefined as any, { shouldValidate: false });
+      form.setValue("applianceKind", undefined as any, { shouldValidate: false });
     }
   }, [watchedRequestType, watchedApplianceType, form]);
   const watchedValues = form.watch();
@@ -1508,6 +1519,7 @@ export default function TechSubmitPage() {
       serviceOrder: "",
       phone: user?.phone || "",
       applianceType: undefined as any,
+      applianceKind: undefined,
       requestType: "authorization",
       warrantyType: "sears_protect",
       warrantyProvider: "Sears Protect / Sears PA / Sears Home Warranty (Cinch)",
@@ -1843,17 +1855,20 @@ export default function TechSubmitPage() {
                 />
                 <FormField
                   control={form.control}
-                  name="applianceType"
+                  name="applianceKind"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Appliance Type *</FormLabel>
                       <Select
                         onValueChange={(v) => {
+                          const choice = applianceChoice(v);
+                          if (!choice) return;
                           field.onChange(v);
+                          form.setValue("applianceType", choice.division, { shouldValidate: true });
                           // The tech picked a type: it is theirs now.
-                          if (v && v !== autoApplianceTypeRef.current?.value) setAutoApplianceType(null);
+                          setAutoApplianceType(null);
                         }}
-                        value={field.value}
+                        value={field.value ?? ""}
                       >
                         <FormControl>
                           <SelectTrigger data-testid="select-appliance-type">
@@ -1861,7 +1876,7 @@ export default function TechSubmitPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {APPLIANCE_TYPES.filter(
+                          {APPLIANCE_CHOICES.filter(
                             (type) => !(watchedRequestType === "parts_nla" && type.value === "hvac")
                           ).map((type) => (
                             <SelectItem key={type.value} value={type.value} data-testid={`option-${type.value}`}>
@@ -1871,11 +1886,11 @@ export default function TechSubmitPage() {
                         </SelectContent>
                       </Select>
                       {autoApplianceType &&
-                        autoApplianceType.value === field.value &&
+                        autoApplianceType.value === watchedApplianceType &&
                         autoApplianceType.serviceOrder === watchedServiceOrder && (
                           <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-appliance-type-auto-note">
                             <Info className="w-3 h-3" />
-                            Auto-detected from service order
+                            {field.value ? "Auto-detected from service order" : `${formatApplianceLabel(watchedApplianceType)} category detected — select the specific appliance`}
                           </p>
                         )}
                       <FormMessage />
@@ -2650,7 +2665,7 @@ export default function TechSubmitPage() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Appliance</span>
-                    <span className="font-medium text-right" data-testid="review-appliance">{formatApplianceLabel(pendingData.applianceType)}</span>
+                    <span className="font-medium text-right" data-testid="review-appliance">{applianceLabel(pendingData)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Warranty</span>

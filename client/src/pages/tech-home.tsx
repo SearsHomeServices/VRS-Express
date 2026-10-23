@@ -1,3 +1,4 @@
+import { applianceLabel } from "@shared/appliance-types";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
@@ -150,7 +151,7 @@ export default function TechHomePage() {
                             SO #{sub.serviceOrder}
                           </p>
                           <p className="text-xs text-muted-foreground capitalize">
-                            {sub.applianceType.replace("_", " ")} - {sub.requestType.replace("_", " ")}
+                            {applianceLabel(sub)} - {sub.requestType.replace("_", " ")}
                           </p>
                         </div>
                         <StatusBadge status={sub.ticketStatus || sub.stage1Status} />

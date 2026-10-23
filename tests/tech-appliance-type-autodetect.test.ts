@@ -154,6 +154,20 @@ describe("lookupApplianceType", () => {
 });
 
 describe("tech-submit Appliance Type auto-detection", () => {
+  it("clears HVAC without resurrecting a prior selection when switching to Parts NLA", async () => {
+    await mount();
+    await pickApplianceType("washer");
+    await pickApplianceType("dryer");
+    await pickApplianceType("hvac");
+    expect(applianceTypeText()).toBe("HVAC");
+    await act(async () => byTestId("tab-parts-nla")!.click());
+    await flush(10);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect([...applianceSelect().options].some(o => o.value === "hvac")).toBe(false);
+    await pickApplianceType("washer");
+    expect(applianceTypeText()).toBe("Washer");
+  });
+
   it("fills the type from the lookup, shows the note, and keeps the dropdown editable", async () => {
     fixtures.lookups[SO_A] = { applianceType: "laundry" };
     await mount();
@@ -162,10 +176,10 @@ describe("tech-submit Appliance Type auto-detection", () => {
 
     await enterServiceOrder(SO_A);
     expect(fixtures.lookupCalls).toEqual([SO_A]);
-    expect(applianceTypeText()).toBe("Laundry");
-    expect(applianceSelect().value).toBe("laundry");
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId("select-appliance-type")!.hasAttribute("data-placeholder")).toBe(true);
     const note = byTestId(NOTE)!;
-    expect(note.textContent).toBe("Auto-detected from service order");
+    expect(note.textContent).toBe("Laundry category detected — select the specific appliance");
     // Under the dropdown, styled like the warranty's lock note.
     expect(note.className).toBe("mt-1 text-xs text-muted-foreground flex items-center gap-1");
     expect(byTestId("select-appliance-type")!.closest("div")!.contains(note)).toBe(true);
@@ -180,20 +194,20 @@ describe("tech-submit Appliance Type auto-detection", () => {
     await enterServiceOrder(SO_A);
     expect(byTestId(NOTE)).not.toBeNull();
 
-    await pickApplianceType("cooking");
-    expect(applianceTypeText()).toBe("Cooking");
+    await pickApplianceType("cooktop");
+    expect(applianceTypeText()).toBe("Cooktop");
     expect(byTestId(NOTE)).toBeNull();
 
     // Picking the detected value back is still the tech's choice: no note.
-    await pickApplianceType("laundry");
-    expect(applianceTypeText()).toBe("Laundry");
+    await pickApplianceType("washer");
+    expect(applianceTypeText()).toBe("Washer");
     expect(byTestId(NOTE)).toBeNull();
   });
 
   it("never overwrites a type the tech chose before the lookup", async () => {
     fixtures.lookups[SO_A] = { applianceType: "laundry" };
     await mount();
-    await pickApplianceType("refrigeration");
+    await pickApplianceType("refrigerator");
     await enterServiceOrder(SO_A);
     expect(fixtures.lookupCalls).toEqual([SO_A]);
     expect(applianceTypeText()).toBe("Refrigerator");
@@ -217,11 +231,13 @@ describe("tech-submit Appliance Type auto-detection", () => {
     fixtures.lookups[SO_B] = { ...AHS, applianceType: "dishwasher" };
     await mount();
     await enterServiceOrder(SO_A);
-    expect(applianceTypeText()).toBe("Laundry");
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toContain("Laundry category detected");
 
     await type("input-service-order", SO_B.split("-")[1]);
     expect(fixtures.lookupCalls).toEqual([SO_A, SO_B]);
-    expect(applianceTypeText()).toBe("Dishwasher / Compactor");
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toContain("Dishwasher / Compactor category detected");
     expect(byTestId(NOTE)).not.toBeNull();
   });
 
@@ -230,7 +246,7 @@ describe("tech-submit Appliance Type auto-detection", () => {
     fixtures.lookups[SO_B] = AHS;
     await mount();
     await enterServiceOrder(SO_A);
-    expect(applianceTypeText()).toBe("Laundry");
+    expect(applianceTypeText()).toBe("Select appliance type");
 
     await type("input-service-order", SO_B.split("-")[1]);
     expect(applianceTypeText()).toBe("Select appliance type");
@@ -258,12 +274,12 @@ describe("tech-submit Appliance Type auto-detection", () => {
     await enterServiceOrder(SO_A);
     expect(fixtures.lookupCalls).toEqual([SO_A]);
     expect(applianceTypeText()).toBe("Select appliance type");
-    expect(applianceSelect().value).toBe("");
+    expect(byTestId("select-appliance-type")!.hasAttribute("data-placeholder")).toBe(true);
     expect(byTestId(NOTE)).toBeNull();
 
     // The tech picks the type by hand, as before.
-    await pickApplianceType("cooking");
-    expect(applianceTypeText()).toBe("Cooking");
+    await pickApplianceType("cooktop");
+    expect(applianceTypeText()).toBe("Cooktop");
     expect(byTestId(NOTE)).toBeNull();
   });
 });
@@ -281,14 +297,16 @@ describe("tech-submit warranty auto-detection still holds", () => {
     await act(async () => { byTestId("provider-sears_protect")!.click(); });
     await flush();
     expect(byTestId("provider-american_home_shield")!.className).toContain("border-primary");
-    expect(applianceTypeText()).toBe("Refrigerator");
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toContain("Refrigerator category detected");
   });
 
   it("does not lock the warranty when the lookup knows only the appliance type", async () => {
     fixtures.lookups[SO_A] = { applianceType: "cooking" };
     await mount();
     await enterServiceOrder(SO_A);
-    expect(applianceTypeText()).toBe("Cooking");
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toContain("Cooking category detected");
     expect(byTestId("text-warranty-locked-note")).toBeNull();
     expect(byTestId("text-warranty-autodetect-note")!.textContent).toBe("Could not auto-detect — please select the warranty provider.");
     expect(byTestId("badge-locked-sears_protect")).toBeNull();

@@ -1315,6 +1315,7 @@ export class DatabaseStorage implements IStorage {
           districtCode: submissions.districtCode,
           phone: submissions.phone,
           applianceType: submissions.applianceType,
+          applianceKind: submissions.applianceKind,
           requestType: submissions.requestType,
           warrantyType: submissions.warrantyType,
           warrantyProvider: submissions.warrantyProvider,

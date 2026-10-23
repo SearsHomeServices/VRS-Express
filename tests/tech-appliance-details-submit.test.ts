@@ -154,6 +154,27 @@ afterAll(() => {
 });
 
 describe("POST /api/submissions — techApplianceDetails", () => {
+  it("stores the exact appliance separately from its unchanged routing division", async () => {
+    const res = await submit(body({ applianceKind: "washer" }));
+    expect(res.status).toBe(201);
+    expect(inserted().applianceType).toBe("laundry");
+    expect(inserted().applianceKind).toBe("washer");
+    expect(res.body.submission.applianceKind).toBe("washer");
+  });
+
+  it("rejects a detailed appliance paired with the wrong routing division", async () => {
+    const res = await submit(body({ applianceKind: "cooktop" }));
+    expect(res.status).toBe(400);
+    expect(mocks.createSubmissionWithIdempotency).not.toHaveBeenCalled();
+  });
+
+  it("keeps older clients compatible without inventing a specific appliance", async () => {
+    const res = await submit(body());
+    expect(res.status).toBe(201);
+    expect(inserted().applianceType).toBe("laundry");
+    expect(inserted().applianceKind).toBeNull();
+  });
+
   it("stores it for an AHS authorization ticket and returns it to the technician", async () => {
     const res = await submit(body());
     expect(res.status).toBe(201);

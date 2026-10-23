@@ -1,3 +1,4 @@
+import { applianceLabel } from "@shared/appliance-types";
 import { useState, useEffect, useRef } from "react";
 import imageCompression from "browser-image-compression";
 import { useQuery } from "@tanstack/react-query";
@@ -690,7 +691,7 @@ export default function SubmissionDetailPage() {
         <Card>
           <CardContent className="p-4 space-y-3">
             <DetailRow label="Service Order" value={`#${sub.serviceOrder}`} testId="text-detail-so" />
-            <DetailRow label="Appliance" value={sub.applianceType.charAt(0).toUpperCase() + sub.applianceType.slice(1)} testId="text-detail-appliance" />
+            <DetailRow label="Appliance" value={applianceLabel(sub)} testId="text-detail-appliance" />
             <DetailRow label="Request Type" value={sub.requestType === "authorization" ? "Authorization" : sub.requestType === "parts_nla" ? "Parts — No Longer Available (NLA)" : "Infestation / Non-Accessible"} testId="text-detail-request-type" />
             {sub.warrantyType && !isProvider1099 && (
               <DetailRow label="Warranty" value={sub.warrantyType === "sears_protect" ? "Sears Protect" : sub.warrantyType === "home_warranty" ? "Sears Home Warranty" : sub.warrantyType.charAt(0).toUpperCase() + sub.warrantyType.slice(1)} testId="text-detail-warranty" />

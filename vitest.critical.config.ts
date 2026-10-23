@@ -39,6 +39,7 @@ export default defineConfig({
       "tests/ticket-media-metadata.test.ts",
       "tests/pilot-queue-audio.test.ts",
       "tests/pilot-queue-alert.test.ts",
+      "tests/appliance-types.test.ts",
     ],
     maxWorkers: 2,
   },

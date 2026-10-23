@@ -1,3 +1,4 @@
+import { APPLIANCE_CHOICES, applianceChoice, applianceKindSchema, applianceLabel } from "@shared/appliance-types";
 import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -46,22 +47,13 @@ import { Camera, Send, X, AlertTriangle, ArrowLeft, Lock, Video, Upload, Info, P
 import HelpTooltip from "@/components/help-tooltip";
 import type { Submission } from "@shared/schema";
 
-const APPLIANCE_TYPES = [
-  { value: "refrigeration", label: "Refrigerator" },
-  { value: "laundry", label: "Laundry" },
-  { value: "cooking", label: "Cooking" },
-  { value: "dishwasher", label: "Dishwasher" },
-  { value: "microwave", label: "Microwave" },
-  { value: "hvac", label: "HVAC" },
-  { value: "all_other", label: "All Other" },
-];
-
 const resubmitFormSchema = z.object({
   serviceOrder: z.string(),
   phone: z.string().min(7, "Valid phone number is required"),
   applianceType: z.enum(["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other"], {
     required_error: "Select an appliance type",
   }),
+  applianceKind: applianceKindSchema.optional(),
   requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
   warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
   warrantyProvider: z.string().optional(),
@@ -142,6 +134,7 @@ export default function TechResubmitPage() {
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
       form.setValue("applianceType", undefined as any, { shouldValidate: false });
+      form.setValue("applianceKind", undefined, { shouldValidate: false });
     }
   }, [watchedRequestType, watchedApplianceType, form]);
 
@@ -167,6 +160,8 @@ export default function TechResubmitPage() {
       serviceOrder: sub.serviceOrder,
       phone: sub.phone,
       applianceType: sub.applianceType as any,
+      applianceKind: applianceChoice(sub.applianceKind)?.division === sub.applianceType
+        ? applianceChoice(sub.applianceKind)?.value : undefined,
       requestType: sub.requestType as any,
       warrantyType: sub.warrantyType as any,
       warrantyProvider: sub.warrantyProvider || "",
@@ -748,18 +743,25 @@ export default function TechResubmitPage() {
 
                   <FormField
                     control={form.control}
-                    name="applianceType"
+                    name="applianceKind"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Appliance Type *</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
+                        <Select onValueChange={(value) => {
+                          const choice = applianceChoice(value);
+                          if (!choice) return;
+                          field.onChange(value);
+                          form.setValue("applianceType", choice.division, { shouldValidate: true });
+                        }} value={field.value ?? ""}>
                           <FormControl>
                             <SelectTrigger data-testid="select-appliance-type-resubmit">
-                              <SelectValue placeholder="Select appliance type" />
+                              <SelectValue placeholder={watchedApplianceType
+                                ? `${applianceLabel({ applianceType: watchedApplianceType })} (existing ticket)`
+                                : "Select appliance type"} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {APPLIANCE_TYPES.filter(
+                            {APPLIANCE_CHOICES.filter(
                               (type) => !(watchedRequestType === "parts_nla" && type.value === "hvac")
                             ).map((type) => (
                               <SelectItem key={type.value} value={type.value}>

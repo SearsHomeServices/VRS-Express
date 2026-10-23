@@ -1,3 +1,4 @@
+import { applianceKindSchema, applianceSelectionMatches } from "@shared/appliance-types";
 import { retryVrsApprovalNotification } from "./vrs-notification-retry";
 import { matchesTicketSearch, ticketAgentIds } from "@shared/ticket-search";
 import { releaseProcessedTicketAgent } from "./agent-availability";
@@ -1116,6 +1117,7 @@ export async function registerRoutes(
   const createSubmissionSchema = z.object({
     serviceOrder: z.string().regex(/^\d{4}-\d{8}$/, "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)"),
     applianceType: z.enum(["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other"]),
+    applianceKind: applianceKindSchema.nullish(),
     requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
     warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
     warrantyProvider: z.string().optional(),
@@ -1179,6 +1181,9 @@ export async function registerRoutes(
     // TECH_APPLIANCE_DETAILS_ENABLED is on and the server-derived warranty
     // and request type call for it; otherwise dropped silently.
     techApplianceDetails: techApplianceDetailsSchema.nullish(),
+  }).refine(applianceSelectionMatches, {
+    message: "Appliance selection does not match its routing category",
+    path: ["applianceKind"],
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -1634,6 +1639,7 @@ export async function registerRoutes(
         serviceOrder: parsed.data.serviceOrder,
         districtCode: parsed.data.serviceOrder.split("-")[0],
         applianceType: parsed.data.applianceType,
+        applianceKind: parsed.data.applianceKind ?? null,
         requestType: parsed.data.requestType,
         warrantyType: finalWarrantyType,
         warrantyProvider: finalWarrantyProvider,
@@ -5327,6 +5333,7 @@ export async function registerRoutes(
       const nlaUpdate: Partial<typeof submissions.$inferInsert> = {
         requestType: "parts_nla",
         applianceType: targetDivision,
+        ...(targetDivision !== submission.applianceType ? { applianceKind: null } : {}),
         ticketStatus: "queued",
         assignedTo: null,
         reassignmentNotes: parsed.data.notes || `Sent to NLA queue by ${actor.name}`,
@@ -5444,6 +5451,7 @@ export async function registerRoutes(
       const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
         requestType: "authorization",
         applianceType: targetDivision,
+        ...(targetDivision !== submission.applianceType ? { applianceKind: null } : {}),
         ticketStatus: "queued",
         assignedTo: null,
         // Clear NLA-only state: an escalated NLA ticket carries
@@ -5683,6 +5691,7 @@ export async function registerRoutes(
       if (agentHasNewDivision) {
         const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
           applianceType: newDivision,
+          applianceKind: null,
           agentNotes: existingNotes,
           updatedAt: new Date(),
         } as any, expectAssignee);
@@ -5696,6 +5705,7 @@ export async function registerRoutes(
       } else {
         const updated = await storage.updateSubmissionIfStatus(id, ["pending"], {
           applianceType: newDivision,
+          applianceKind: null,
           ticketStatus: "queued",
           statusChangedAt: new Date(),
           assignedTo: null,
