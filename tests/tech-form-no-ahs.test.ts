@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest";
 // details section, not even optional fields. The server looks the service
 // order up and drafts the AHS details; the VRS manager completes them at
 // Stage 1. These checks keep the tech forms back on the pre-AHS fields.
+//
+// 2026-10-23: the one exception is the three tech appliance details
+// (Appliance Grade, Appliance Color, Part Function) on AHS and First
+// American authorization tickets, sent as `techApplianceDetails` and behind
+// techApplianceDetailsEnabled. They are not an AHS details section; see
+// tests/tech-appliance-details-form.test.ts.
 
 const pages = {
   "tech-submit": readFileSync(new URL("../client/src/pages/tech-submit.tsx", import.meta.url), "utf8"),
@@ -25,7 +31,13 @@ describe.each(Object.entries(pages))("%s has no AHS details section", (_name, sr
     expect(src).not.toMatch(/from "@\/components\/ahs-details-fields"/);
     expect(src).not.toMatch(/from "@shared\/ahs-details"/);
     expect(src).not.toMatch(/from "@\/hooks\/use-ahs-prefill"/);
-    expect(src).not.toMatch(/from "@\/hooks\/use-feature-flags"/);
+    // The feature-flag hook is allowed for techApplianceDetailsEnabled only.
+    expect(src.match(/import .* from "@\/hooks\/use-feature-flags";/g)).toEqual([
+      'import { useFeatureFlags } from "@/hooks/use-feature-flags";',
+    ]);
+    expect(src.match(/const \{ (\w+) \} = useFeatureFlags\(\);/g)).toEqual([
+      "const { techApplianceDetailsEnabled } = useFeatureFlags();",
+    ]);
     for (const id of [
       "AhsDetailsCard",
       "AhsApplianceKindField",
@@ -43,6 +55,15 @@ describe.each(Object.entries(pages))("%s has no AHS details section", (_name, sr
     // payload spread from it) cannot carry them.
     expect(src).not.toContain("ahsDetails");
     expect(src).not.toContain("ahsRequired");
+    expect(src).not.toMatch(/payload\.ahs/i);
+  });
+
+  it("sends the three tech appliance details only as techApplianceDetails", () => {
+    expect(src).toContain("payload.techApplianceDetails = techApplianceDetails;");
+    // Every payload key it sets is a known one: no AHS-shaped key sneaks in.
+    const keys = new Set(Array.from(src.matchAll(/payload\.(\w+) =/g), (m) => m[1]));
+    for (const key of keys) expect(key).not.toMatch(/^ahs/i);
+    expect(keys.has("techApplianceDetails")).toBe(true);
   });
 
   it("uses the standard appliance type dropdown for every warranty, American Home Shield included", () => {
