@@ -61,8 +61,9 @@ const SECRET_CONTRACT = "AHS-DISPATCH-551200";
 const SECRET_PARTNER = "AHS-PARTNER-77";
 const SECRET_CLIENT = "American Home Shield";
 
-const coreRow = { BRAND: " Whirlpool ", PARTNER_ID: SECRET_PARTNER, CLIENT_NAME: SECRET_CLIENT };
+const coreRow = { SERVICE_UNIT: "0008175", UNIT_COUNT: 1, BRAND: " Whirlpool ", PARTNER_ID: SECRET_PARTNER, CLIENT_NAME: SECRET_CLIENT };
 const applianceRow = {
+  SERVICE_UNIT: "0008175",
   SERVICE_CONTRACT_ID: ` ${SECRET_CONTRACT}/0003 `,
   MODEL_NUMBER: "WTW5000DW1",
   SERIAL_NUMBER: " C31290822 ",
@@ -72,8 +73,8 @@ const ok = (rows: any[]): PromiseSettledResult<any[]> => ({ status: "fulfilled",
 const failed = (message: string): PromiseSettledResult<any[]> => ({ status: "rejected", reason: new Error(message) });
 
 const partRows = [
-  { PART_NUMBER: " WPW10503278 ", DESCRIPTION: " Electronic control board ", QUANTITY: 1, ORDERED_QUANTITY: 1, UNIT_PRICE: "245.00", STATUS: "I" },
-  { PART_NUMBER: "W10820048", DESCRIPTION: "Drain pump clip", QUANTITY: 0, ORDERED_QUANTITY: 2, UNIT_PRICE: 4.255, STATUS: "O" },
+  { SERVICE_UNIT: "0008175", PART_NUMBER: " WPW10503278 ", DESCRIPTION: " Electronic control board ", QUANTITY: 1, ORDERED_QUANTITY: 1, UNIT_PRICE: "245.00", STATUS: "I" },
+  { SERVICE_UNIT: "0008175", PART_NUMBER: "W10820048", DESCRIPTION: "Drain pump clip", QUANTITY: 0, ORDERED_QUANTITY: 2, UNIT_PRICE: 4.255, STATUS: "O" },
 ];
 
 function mockQuery(results: PromiseSettledResult<any[]>[] = [ok([coreRow]), ok([applianceRow]), ok([])]) {
@@ -116,15 +117,21 @@ const details: AhsDetails = {
 };
 
 describe("Snowflake AHS service-order lookup", () => {
-  it("filters on the padded unit and the service order in every statement", async () => {
+  it("matches on the service order and prefers the padded district's row in every statement", async () => {
     const query = mockQuery();
     const lookup = createAhsPrefillLookup(query);
     await lookup("8175", "12345678");
     const [statements] = query.mock.calls[0];
-    expect(statements.map((s) => s.binds)).toEqual([["8175", "12345678"], ["8175", "12345678"], ["8175", "12345678"]]);
+    expect(statements.map((s) => s.binds)).toEqual([
+      ["12345678", "8175"],
+      ["12345678", "8175"],
+      ["12345678", "12345678", "8175"],
+    ]);
     for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL]) {
       expect(sql).toContain("FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL");
-      expect(sql).toContain("WHERE SVC_UN_NO = LPAD(?, 7, '0') AND SO_NO = ? LIMIT 1");
+      expect(sql).toContain("WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1");
+      expect(sql).toContain("SVC_UN_NO AS SERVICE_UNIT");
+      expect(sql).not.toContain("WHERE SVC_UN_NO = LPAD");
     }
     expect(statements.map((s) => s.sqlText)).toEqual([AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL, AHS_PREFILL_PARTS_SQL]);
     // Only the parts statement carries its own (shorter) timeout.
@@ -136,12 +143,15 @@ describe("Snowflake AHS service-order lookup", () => {
 
   it("keeps the unverified columns out of the confirmed statement", () => {
     expect(AHS_PREFILL_CORE_SQL).toBe(
-      "SELECT MFG_BND_NM AS BRAND, CMB_THD_PTY_ID AS PARTNER_ID, CLIENT_NM AS CLIENT_NAME " +
-      "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SVC_UN_NO = LPAD(?, 7, '0') AND SO_NO = ? LIMIT 1",
+      "SELECT SVC_UN_NO AS SERVICE_UNIT, COUNT(DISTINCT SVC_UN_NO) OVER () AS UNIT_COUNT, " +
+      "MFG_BND_NM AS BRAND, CMB_THD_PTY_ID AS PARTNER_ID, CLIENT_NM AS CLIENT_NAME " +
+      "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL " +
+      "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1",
     );
     expect(AHS_PREFILL_APPLIANCE_SQL).toBe(
-      "SELECT CTA_NO AS SERVICE_CONTRACT_ID, PSV_ITM_MDL_NO AS MODEL_NUMBER, PSV_MDS_SRL_NO AS SERIAL_NUMBER " +
-      "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SVC_UN_NO = LPAD(?, 7, '0') AND SO_NO = ? LIMIT 1",
+      "SELECT SVC_UN_NO AS SERVICE_UNIT, CTA_NO AS SERVICE_CONTRACT_ID, PSV_ITM_MDL_NO AS MODEL_NUMBER, PSV_MDS_SRL_NO AS SERIAL_NUMBER " +
+      "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL " +
+      "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1",
     );
   });
 
@@ -162,6 +172,7 @@ describe("Snowflake AHS service-order lookup", () => {
       serialNumber: undefined,
       partnerId: SECRET_PARTNER,
       clientName: undefined,
+      serviceUnit: "0008175",
     });
   });
 
@@ -216,7 +227,7 @@ describe("Snowflake AHS service-order lookup", () => {
       "22222222": [ok([]), ok([])],
       "33333333": [failed("warehouse down"), failed("warehouse down")],
     };
-    const query = vi.fn<AhsPrefillQuery>(async (statements) => byKey[statements[0].binds[1]]);
+    const query = vi.fn<AhsPrefillQuery>(async (statements) => byKey[statements[0].binds[0]]);
     const lookup = createAhsPrefillLookup(query);
     const calls = async (so: string) => { await lookup("8175", so); return query.mock.calls.length; };
     for (const so of Object.keys(byKey)) await lookup("8175", so);
@@ -589,11 +600,14 @@ describe("HSSOM lookup bounds", () => {
 
 
 describe("Snowflake parts on the order (NPSXTPN)", () => {
-  it("queries the DB2 parts table by padded unit and order, in sequence", () => {
+  it("queries the DB2 parts table by the resolved unit and order, in sequence", () => {
     expect(AHS_PREFILL_PARTS_SQL).toBe(
-      "SELECT SVC_PRT_NO AS PART_NUMBER, PRT_DS AS DESCRIPTION, SVC_PRT_QT AS QUANTITY, PRT_ORD_QT AS ORDERED_QUANTITY, " +
-      "PRT_SEL_PRC_AM AS UNIT_PRICE, SVC_PRT_STS_CD AS STATUS " +
-      "FROM PRD_DB2.HS_DW_TBLS.NPSXTPN WHERE SVC_UN_NO = LPAD(?,7,'0') AND SO_NO = ? ORDER BY PRT_SEQ_NO LIMIT 50",
+      "SELECT SVC_UN_NO AS SERVICE_UNIT, SVC_PRT_NO AS PART_NUMBER, PRT_DS AS DESCRIPTION, SVC_PRT_QT AS QUANTITY, " +
+      "PRT_ORD_QT AS ORDERED_QUANTITY, PRT_SEL_PRC_AM AS UNIT_PRICE, SVC_PRT_STS_CD AS STATUS " +
+      "FROM PRD_DB2.HS_DW_TBLS.NPSXTPN WHERE SO_NO = ? AND SVC_UN_NO = " +
+      "(SELECT SVC_UN_NO FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL " +
+      "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1) " +
+      "ORDER BY PRT_SEQ_NO LIMIT 50",
     );
   });
 
