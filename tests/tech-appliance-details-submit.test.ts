@@ -1,7 +1,8 @@
 // POST /api/submissions with the technician's appliance details
 // (shared/tech-appliance-details.ts), run through the real route
 // registration with hermetic storage, ProcID / service-order lookup, SMS and
-// WebSocket doubles.
+// WebSocket doubles. Also the service order's product (WOM Product Category,
+// else Snowflake HS_SP_CD) the server stores at submit.
 import { createServer } from "node:http";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -16,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   fetchProcIdForServiceOrder: vi.fn(),
   fetchAhsServiceOrderPrefill: vi.fn(),
   lookupHssomOrder: vi.fn(),
+  fetchServiceOrderApplianceType: vi.fn(),
+  lookupWomProductCategory: vi.fn(),
+  updateSubmission: vi.fn(),
 }));
 
 vi.mock("../server/storage", () => ({
@@ -28,6 +32,7 @@ vi.mock("../server/storage", () => ({
     getSubmission: mocks.getSubmission,
     getResubmissionChain: vi.fn(async () => []),
     createSubmissionWithIdempotency: mocks.createSubmissionWithIdempotency,
+    updateSubmission: mocks.updateSubmission,
     getOnlineAgentCount: vi.fn(async () => 0),
     getQueuedCountAll: vi.fn(async () => 0),
   },
@@ -40,6 +45,12 @@ vi.mock("../server/services/snowflake", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../server/services/snowflake")>()),
   fetchProcIdForServiceOrder: mocks.fetchProcIdForServiceOrder,
   fetchAhsServiceOrderPrefill: mocks.fetchAhsServiceOrderPrefill,
+  fetchServiceOrderApplianceType: mocks.fetchServiceOrderApplianceType,
+}));
+
+vi.mock("../server/services/wom-work-order", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server/services/wom-work-order")>()),
+  lookupWomProductCategory: mocks.lookupWomProductCategory,
 }));
 
 vi.mock("../server/services/hssom-order-lookup", async (importOriginal) => ({
@@ -140,6 +151,9 @@ beforeEach(() => {
   mocks.fetchProcIdForServiceOrder.mockResolvedValue({ status: "FOUND", ...PROC.american_home_shield });
   mocks.fetchAhsServiceOrderPrefill.mockResolvedValue({ status: "unavailable" });
   mocks.lookupHssomOrder.mockResolvedValue({ status: "unavailable" });
+  mocks.fetchServiceOrderApplianceType.mockResolvedValue({ status: "not_found" });
+  mocks.lookupWomProductCategory.mockResolvedValue({ status: "unavailable" });
+  mocks.updateSubmission.mockResolvedValue(undefined);
   mocks.createSubmissionWithIdempotency.mockImplementation(async (row: Record<string, unknown>) => ({
     submission: { id: 900, ...row },
     wasDuplicate: false,
@@ -300,5 +314,70 @@ describe("POST /api/submissions — AHS draft gets the tech values", () => {
       applianceColor: "Bisque", // the tech changed it
       parts: [{ partFunction: "Pump" }],
     });
+  });
+});
+
+describe("POST /api/submissions — the service order's product", () => {
+  const WOM_TEXT = "WASHERDD - WASHER, DIRECT DRIVE";
+  const stored = () => inserted().serviceOrderProduct;
+
+  it("stores the WOM Product Category, looked up by the server, and returns it to the technician", async () => {
+    mocks.lookupWomProductCategory.mockResolvedValue({ status: "found", productCategory: WOM_TEXT });
+    mocks.fetchServiceOrderApplianceType.mockResolvedValue({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0008175" });
+    const res = await submit(body());
+    expect(res.status).toBe(201);
+    expect(mocks.lookupWomProductCategory).toHaveBeenCalledWith("8175", "13538277");
+    expect(JSON.parse(stored())).toEqual({ text: WOM_TEXT, source: "wom" });
+    // Not PII: the technician's own response carries it.
+    expect(JSON.parse(res.body.submission.serviceOrderProduct)).toEqual({ text: WOM_TEXT, source: "wom" });
+    expect(mocks.updateSubmission).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Snowflake HS_SP_CD when WOM is unavailable", async () => {
+    mocks.fetchServiceOrderApplianceType.mockResolvedValue({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0008175" });
+    await submit(body());
+    expect(JSON.parse(stored())).toEqual({ text: "Washer", source: "snowflake" });
+  });
+
+  it("never trusts a product the client sends", async () => {
+    const res = await submit(body({ serviceOrderProduct: { text: "FORGED", source: "wom" } }));
+    expect(res.status).toBe(201);
+    expect(stored()).toBeNull();
+  });
+
+  it("stores nothing, and still submits, when neither source knows it or both fail", async () => {
+    let res = await submit(body());
+    expect(res.status).toBe(201);
+    expect(stored()).toBeNull();
+    mocks.lookupWomProductCategory.mockRejectedValue(new Error("wom down"));
+    mocks.fetchServiceOrderApplianceType.mockRejectedValue(new Error("snowflake down"));
+    res = await submit(body());
+    expect(res.status).toBe(201);
+    expect(stored()).toBeNull();
+    expect(mocks.updateSubmission).not.toHaveBeenCalled();
+  });
+
+  it("never blocks the submit: a slow lookup is stored on the row once it settles", async () => {
+    let answer!: (value: unknown) => void;
+    mocks.lookupWomProductCategory.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const res = await submit(body());
+    expect(res.status).toBe(201);
+    expect(stored()).toBeNull();
+    expect(mocks.updateSubmission).not.toHaveBeenCalled();
+    answer({ status: "found", productCategory: WOM_TEXT });
+    await vi.waitFor(() => expect(mocks.updateSubmission).toHaveBeenCalledTimes(1));
+    expect(mocks.updateSubmission).toHaveBeenCalledWith(900, {
+      serviceOrderProduct: JSON.stringify({ text: WOM_TEXT, source: "wom" }),
+    });
+  });
+
+  it("a failing late store never surfaces", async () => {
+    let answer!: (value: unknown) => void;
+    mocks.lookupWomProductCategory.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    mocks.updateSubmission.mockRejectedValue(new Error("db down"));
+    const res = await submit(body());
+    expect(res.status).toBe(201);
+    answer({ status: "found", productCategory: WOM_TEXT });
+    await vi.waitFor(() => expect(mocks.updateSubmission).toHaveBeenCalledTimes(1));
   });
 });

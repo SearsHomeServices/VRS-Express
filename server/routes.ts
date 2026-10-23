@@ -69,7 +69,7 @@ import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
-import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { deriveWarrantyFromProcId, type WarrantyLookupResponse } from "@shared/warranty";
 import {
   parseStoredAhsDetailsDraft,
   type AhsDetailsDraft,
@@ -126,6 +126,7 @@ import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder, fetchServiceOrderApplianceType } from "./services/snowflake";
+import { lookupWomProductCategory, resolveServiceOrderProduct, type ResolvedServiceOrderProduct } from "./services/wom-work-order";
 import {
   applyAhsSubmitPrefill,
   applyTechApplianceDetails,
@@ -191,6 +192,10 @@ const execFileAsync = promisify(execFile);
 const WARRANTY_LOOKUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const WARRANTY_LOOKUP_MAX_PER_WINDOW = 20;
 const warrantyLookupLog = new Map<number, number[]>(); // userId -> timestamps
+
+// POST /api/submissions waits at most this long, at the insert, for the
+// service order's product lookup it started alongside the ProcID lookup.
+const SERVICE_ORDER_PRODUCT_SUBMIT_GRACE_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Video conversion helpers (Task: fix admin video playback for failed iPhone
@@ -1547,6 +1552,26 @@ export async function registerRoutes(
         ? startAhsPrefillLookup()
         : null;
 
+      // The service order's product (WOM Product Category, else Snowflake
+      // HS_SP_CD; resolveServiceOrderProduct), looked up here on the server:
+      // nothing the client sends is used. Started alongside the ProcID lookup
+      // and given at most SERVICE_ORDER_PRODUCT_SUBMIT_GRACE_MS more at the
+      // insert (after a form lookup every source is cached, so it is already
+      // there): settled, it is stored with the row; still pending, the row is
+      // patched once it settles. It never rejects (the catch is a backstop),
+      // so it cannot block or fail a submit.
+      let settledServiceOrderProduct: ResolvedServiceOrderProduct | undefined;
+      const serviceOrderProductLookup = Promise.resolve()
+        .then(() => resolveServiceOrderProduct(parsed.data.serviceOrder, {
+          snowflake: fetchServiceOrderApplianceType,
+          wom: lookupWomProductCategory,
+        }))
+        .catch((): ResolvedServiceOrderProduct => ({}))
+        .then((value) => {
+          settledServiceOrderProduct = value;
+          return value;
+        });
+
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
       if (procIdResult.status === "LOOKUP_UNAVAILABLE") {
         return res.status(503).set("Retry-After", "5").json({
@@ -1625,6 +1650,14 @@ export async function registerRoutes(
       // commits. On race-hit, returns the existing row; we then short-circuit
       // SMS / broadcast / Smartsheet so the duplicate-text incident cannot
       // recur from concurrency either.
+      if (settledServiceOrderProduct === undefined) {
+        let graceTimer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          serviceOrderProductLookup,
+          new Promise<void>((resolve) => { graceTimer = setTimeout(resolve, SERVICE_ORDER_PRODUCT_SUBMIT_GRACE_MS); }),
+        ]);
+        clearTimeout(graceTimer);
+      }
       const idempResult = await storage.createSubmissionWithIdempotency({
         technicianId: user.id,
         racId: user.racId || "",
@@ -1646,6 +1679,9 @@ export async function registerRoutes(
         partNumbers: parsed.data.partNumbers || null,
         ahsDetails: ahsDraft ? JSON.stringify(ahsDraft) : null,
         techApplianceDetails: techApplianceDetails ? JSON.stringify(techApplianceDetails) : null,
+        serviceOrderProduct: settledServiceOrderProduct?.serviceOrderProduct
+          ? JSON.stringify(settledServiceOrderProduct.serviceOrderProduct)
+          : null,
         photos: parsed.data.photos || null,
         photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent
@@ -1726,6 +1762,19 @@ export async function registerRoutes(
           `for tech=${user.id} SO=${parsed.data.serviceOrder}. Skipping SMS / broadcast / Smartsheet.`
         );
         return res.status(200).json({ submission: redactSubmissionForRole(user.role, submission) });
+      }
+
+      // Still looking the product up at insert: store it when it settles.
+      // Logs the ticket ID and the error message only.
+      if (settledServiceOrderProduct === undefined) {
+        const submissionId = submission.id;
+        void serviceOrderProductLookup
+          .then(({ serviceOrderProduct }) => serviceOrderProduct
+            ? storage.updateSubmission(submissionId, { serviceOrderProduct: JSON.stringify(serviceOrderProduct) })
+            : undefined)
+          .catch((err) => {
+            console.warn(`[service-order-product] submission=${submissionId} late store failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
       }
 
       // No VRS AI bridge row at submit: a technician-posted AHS ticket is
@@ -7571,18 +7620,24 @@ export async function registerRoutes(
     //
     // Response scoping: procId and clientNm (third-party Snowflake identifiers)
     // are never returned to the client; only the derived warranty classification
-    // is returned, plus the appliance type (a division, never the raw HS_SP_CD
-    // product code) so the form can preselect it.
+    // is returned, plus the service order's product category (non-PII) and the
+    // appliance type mapped from it, so the form can preselect the type and
+    // show where it came from.
     //
-    // Response: { serviceOrder, derived, applianceType? }
+    // Response (shared/warranty.ts WarrantyLookupResponse):
+    //   { serviceOrder, derived, applianceType?, serviceOrderProduct? }
     //   derived: (DerivedWarranty & DerivedServiceOrderAppliance) | null.
     //     Stays null whenever the warranty is unknown: older open forms read
     //     any non-null derived as a locked warranty (derived.warrantyType).
     //   applianceType (top level, DerivedServiceOrderAppliance): whenever the
     //     appliance type is known, including when the warranty is unknown.
-    //   Both are absent when unknown. The appliance lookup is its own bounded
-    //   statement (fetchServiceOrderApplianceType); its failure or timeout only
-    //   drops applianceType and never changes the warranty answer.
+    //   serviceOrderProduct: { text, source }: the WOM Product Category, else
+    //     the Snowflake HS_SP_CD. applianceType is mapped from that same text.
+    //   Both are absent when unknown. The product lookup
+    //   (resolveServiceOrderProduct: WOM bounded by WOM_TIMEOUT_MS, ~4s, and
+    //   the Snowflake appliance statement, 5s) runs in parallel with the
+    //   ProcID lookup; its failure or timeout only drops these fields and
+    //   never changes the warranty answer.
     try {
       const authReq = req as AuthenticatedRequest;
       const caller = authReq.user;
@@ -7610,10 +7665,13 @@ export async function registerRoutes(
 
       console.info(`[lookup-warranty] allowed: user=${callerIdentity} (${callerUserId}) so=${so}`);
 
-      // In parallel; the appliance lookup never rejects (the catch is a backstop).
-      const appliancePromise = Promise.resolve()
-        .then(() => fetchServiceOrderApplianceType(so))
-        .catch(() => ({ status: "unavailable" as const }));
+      // In parallel; the product lookup never rejects (the catch is a backstop).
+      const productPromise = Promise.resolve()
+        .then(() => resolveServiceOrderProduct(so, {
+          snowflake: fetchServiceOrderApplianceType,
+          wom: lookupWomProductCategory,
+        }))
+        .catch(() => ({} as Awaited<ReturnType<typeof resolveServiceOrderProduct>>));
       const result = await fetchProcIdForServiceOrder(so);
       if (result.status === "LOOKUP_UNAVAILABLE") {
         return res.status(503).set("Retry-After", "5").json({
@@ -7622,15 +7680,16 @@ export async function registerRoutes(
         });
       }
       const derived = deriveWarrantyFromProcId(result.procId, result.clientNm);
-      const appliance = await appliancePromise;
-      const applianceType = appliance.status === "found" ? appliance.applianceType : undefined;
+      const { applianceType, serviceOrderProduct } = await productPromise;
 
-      // Only the derived classification — not procId, clientNm or HS_SP_CD.
-      res.json({
+      // Only the derived classification and the product: not procId or clientNm.
+      const body: WarrantyLookupResponse = {
         serviceOrder: so,
         derived: derived ? { ...derived, ...(applianceType ? { applianceType } : {}) } : null,
         ...(applianceType ? { applianceType } : {}),
-      });
+        ...(serviceOrderProduct ? { serviceOrderProduct } : {}),
+      };
+      res.json(body);
     } catch (err) {
       console.error("lookup-warranty error:", err);
       res.status(500).json({ error: "Lookup failed" });

@@ -339,7 +339,9 @@ export const fetchProcIdForServiceOrder = createProcLookup(async (key, signal) =
   });
 }, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 60000)) });
 
-// Appliance type (HS_SP_CD -> division) for GET /api/tech/lookup-warranty.
+// Appliance type (HS_SP_CD -> division, plus the raw HS_SP_CD and the
+// resolved unit) for GET /api/tech/lookup-warranty and submit, the fallback
+// when WOM has no product category (server/services/wom-work-order.ts).
 // Its own connection and statement, separate from the ProcID lookup above,
 // so a failure here never affects warranty detection; bounded by its own 5s
 // deadline, which aborts the statement and destroys the connection.
