@@ -13,6 +13,11 @@
 // next to the appliance fields so the reviewer can check them. Media goes
 // through the existing MediaImage / MediaVideo components, so every
 // /objects/ path still gets a scoped media token.
+//
+// Appliance grade, color and part 1's function may come from the technician
+// (submissions.tech_appliance_details, shared/tech-appliance-details.ts; the
+// server copies them into the AHS draft). While a field still holds the
+// tech's value it is marked "From technician", never "From service order".
 import React, { type ReactNode } from "react";
 import { MediaImage, MediaVideo } from "@/components/media";
 import {
@@ -24,13 +29,34 @@ import {
   ahsReviewPartLineTotal,
   ahsReviewPartsTotal,
   formatAhsMoney,
+  holdsTechValue,
+  techSuppliedAhsValues,
   type AhsReviewDetails,
   type AhsReviewProvenanceField,
 } from "@/lib/ahsReview";
+import {
+  techApplianceGradeLabel,
+  type TechApplianceDetails,
+} from "@shared/tech-appliance-details";
 
 export const AHS_NOT_PROVIDED = "Not provided";
 export const AHS_SOURCE_SERVICE_ORDER = "From service order";
 export const AHS_SOURCE_TECH = "Entered in VRS Express";
+export const AHS_SOURCE_TECHNICIAN = "From technician";
+export const TECH_APPLIANCE_DETAILS_TITLE = "Technician appliance details";
+
+const TECHNICIAN_BADGE_CLASS =
+  "inline-flex items-center whitespace-nowrap rounded border border-slate-300 bg-slate-50 px-1.5 py-px text-[10px] font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300";
+
+// A value the technician entered (tech_appliance_details). Neutral on
+// purpose: it is neither a lookup to verify nor the manager's own entry.
+export function AhsFromTechnicianBadge({ testId, className = "" }: { testId?: string; className?: string }) {
+  return (
+    <span data-testid={testId} data-source="technician" className={`${TECHNICIAN_BADGE_CLASS} ${className}`.trim()}>
+      {AHS_SOURCE_TECHNICIAN}
+    </span>
+  );
+}
 export const AHS_CHECK_APPLIANCE = "Brand, model and serial against the model tag photo.";
 export const AHS_CHECK_CUSTOMER =
   "Customer name and address against the service order. Confirm with the customer if unsure.";
@@ -58,9 +84,10 @@ export interface AhsReviewMedia {
   videos: string[];
 }
 
-type FieldSource = "service_order" | "tech";
+type FieldSource = "service_order" | "tech" | "technician";
 
 function SourceBadge({ source }: { source: FieldSource }) {
+  if (source === "technician") return <AhsFromTechnicianBadge className="ml-1.5" />;
   return source === "service_order" ? (
     <span
       data-source="service_order"
@@ -194,19 +221,55 @@ export function AhsMedia({
   );
 }
 
+// Read-only summary of what the technician entered, for AHS and First
+// American tickets (First American has no VRS AI editor, so this is the
+// agent's only view of these values). Renders nothing without details.
+export function TechApplianceDetailsBlock({ details }: { details: TechApplianceDetails | null | undefined }) {
+  if (!details) return null;
+  const rows: { label: string; field: string; value: string }[] = [
+    { label: "Grade", field: "tech-appliance-grade", value: techApplianceGradeLabel(details.applianceGrade) ?? details.applianceGrade },
+    { label: "Color", field: "tech-appliance-color", value: details.applianceColor },
+    { label: "Part function", field: "tech-part-function", value: details.partFunction },
+  ];
+  return (
+    <div className="rounded-md border bg-muted/30 p-2.5" data-testid="tech-appliance-details">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+        <p className="text-xs font-medium">{TECH_APPLIANCE_DETAILS_TITLE}</p>
+        <AhsFromTechnicianBadge />
+      </div>
+      <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
+        {rows.map((row) => (
+          <div key={row.field}>
+            <dt className="text-xs text-muted-foreground">{row.label}</dt>
+            <dd className="whitespace-pre-wrap break-words font-medium" data-testid={`text-${row.field}`}>
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 export function AhsTicketReview({
   details,
   media,
   onOpenPhoto,
+  techDetails,
 }: {
   details: AhsReviewDetails;
   media?: AhsReviewMedia;
   onOpenPhoto?: (photos: string[], index: number) => void;
+  // submissions.tech_appliance_details, parsed: which values the tech supplied.
+  techDetails?: TechApplianceDetails | null;
 }) {
   const prefilled = new Set<AhsReviewProvenanceField>(details.prefilledFields);
   const sourceOf = (field: AhsReviewProvenanceField | null): FieldSource =>
     field && prefilled.has(field) ? "service_order" : "tech";
   const partSource = sourceOf("parts");
+  const tech = techSuppliedAhsValues(techDetails);
+  const techOr = (current: string | undefined, techValue: string | undefined, fallback: FieldSource): FieldSource =>
+    holdsTechValue(current, techValue) ? "technician" : fallback;
   const checks = ahsPrefillChecks(prefilled);
   const age =
     details.applianceAge === undefined
@@ -303,13 +366,13 @@ export function AhsTicketReview({
           label="Appliance grade"
           dataField="ahs-appliance-grade"
           value={ahsGradeLabel(details.applianceGrade)}
-          source="tech"
+          source={techOr(details.applianceGrade, tech.applianceGrade, "tech")}
         />
         <AhsField
           label="Color"
           dataField="ahs-appliance-color"
           value={details.applianceColor}
-          source="tech"
+          source={techOr(details.applianceColor, tech.applianceColor, "tech")}
         />
         <AhsField
           label="Failure cause"
@@ -394,7 +457,7 @@ export function AhsTicketReview({
                   label="Part function"
                   dataField={`ahs-part-${index}-function`}
                   value={part.partFunction}
-                  source={partSource}
+                  source={index === 0 ? techOr(part.partFunction, tech.partFunction, partSource) : partSource}
                 />
                 <AhsField
                   label="Part failure reason"

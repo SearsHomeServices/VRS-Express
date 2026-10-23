@@ -170,6 +170,8 @@ import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc
 import { matchesTicketSearch } from "@shared/ticket-search";
 import { filterVrsAiPilotRows } from "@shared/vrs-ai-pilot";
 import { PilotQueueAlert } from "@/components/pilot-queue-alert";
+import { TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
+import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 
 interface AnalyticsData {
   submissionsToday: number;
@@ -821,6 +823,11 @@ export function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: numb
                   <p className="text-xs text-muted-foreground mb-1">Issue Description</p>
                   <p className="text-sm">{sub.issueDescription || "—"}</p>
                 </div>
+
+                {(() => {
+                  const techDetails = techApplianceDetailsForTicket(sub);
+                  return techDetails ? <TechApplianceDetailsBlock details={techDetails} /> : null;
+                })()}
 
                 {sub.authCode && (
                   <div className="rounded-lg border p-3 bg-green-50 dark:bg-green-950/20">

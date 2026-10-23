@@ -13,6 +13,10 @@ import {
   AHS_CHECK_APPLIANCE,
   AHS_CHECK_CUSTOMER,
   AHS_CHECK_PARTS,
+  AHS_SOURCE_SERVICE_ORDER,
+  AHS_SOURCE_TECHNICIAN,
+  TECH_APPLIANCE_DETAILS_TITLE,
+  TechApplianceDetailsBlock,
 } from "../client/src/components/ahs-ticket-review";
 import {
   AHS_EDITOR_ENROLLED_TEXT,
@@ -22,10 +26,16 @@ import {
   AHS_EDITOR_TITLE,
 } from "../client/src/components/ahs-details-editor";
 import {
+  AHS_GRADE_OPTIONS,
+  ahsGradeLabel,
   ahsIssueFieldName,
   groupAhsIssues,
+  holdsTechValue,
   isAhsDetailsEditable,
+  techApplianceDetailsForTicket,
+  techSuppliedAhsValues,
 } from "../client/src/lib/ahsReview";
+import { techApplianceGradeLabel } from "../shared/tech-appliance-details";
 import {
   getVrsAiApprovalCopy,
   type VrsAiBridgeStatus,
@@ -1361,5 +1371,220 @@ describe("Stage 1 AHS editor: mounted", () => {
     expect(queryTestId("ahs-part-1")).not.toBeNull();
     await clickTestId("button-remove-ahs-part-1");
     expect(queryTestId("ahs-part-1")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Technician appliance details (submissions.tech_appliance_details): grade,
+// color and part function the tech entered on AHS and First American tickets
+// ---------------------------------------------------------------------------
+
+const techDetails = { applianceGrade: "low", applianceColor: "Black Stainless Steel", partFunction: "tech-fn: pumps water out" };
+const techDetailsJson = JSON.stringify(techDetails);
+
+// What the server stores for an AHS ticket once it copied the tech's values
+// into the draft (grade low → entry, part 1's function), next to parts and a
+// dispatch number from the service order.
+const draftWithTechValues = {
+  contractNumber: "ahs-dispatch-77001",
+  applianceGrade: "entry",
+  applianceColor: "Black Stainless Steel",
+  parts: [{ partNumber: "so-part-W10724237", description: "so-part-drain-pump", unitPrice: 42.5, partFunction: "tech-fn: pumps water out" }],
+  prefilledFields: ["contractNumber", "parts"],
+};
+
+function renderTechBlock(ticket: { warrantyType?: string | null; techApplianceDetails?: unknown }): string {
+  return renderToStaticMarkup(
+    createElement(TechApplianceDetailsBlock, { details: techApplianceDetailsForTicket(ticket) }),
+  );
+}
+
+function textOf(html: string, testId: string): string | null {
+  const match = new RegExp(`data-testid="${testId}"[^>]*>([^<]*)<`).exec(html);
+  return match ? match[1] : null;
+}
+
+describe("Technician appliance details: parsing and labels", () => {
+  it("maps the AHS grades to the tech's Low/Medium/High without changing the stored values", () => {
+    expect(AHS_GRADE_OPTIONS).toEqual([
+      { value: "entry", label: "Low (entry)" },
+      { value: "mid", label: "Medium (mid)" },
+      { value: "top", label: "High (top)" },
+    ]);
+    expect(ahsGradeLabel("entry")).toBe("Low (entry)");
+    expect(ahsGradeLabel("mid")).toBe("Medium (mid)");
+    expect(ahsGradeLabel("top")).toBe("High (top)");
+    expect(ahsGradeLabel("unknown-grade")).toBe("unknown-grade");
+    expect(ahsGradeLabel(undefined)).toBeUndefined();
+    expect(techApplianceGradeLabel("low")).toBe("Low");
+    expect(techApplianceGradeLabel("medium")).toBe("Medium");
+    expect(techApplianceGradeLabel("high")).toBe("High");
+    expect(techSuppliedAhsValues({ ...techDetails, applianceGrade: "low" }).applianceGrade).toBe("entry");
+    expect(techSuppliedAhsValues({ ...techDetails, applianceGrade: "medium" }).applianceGrade).toBe("mid");
+    expect(techSuppliedAhsValues({ ...techDetails, applianceGrade: "high" }).applianceGrade).toBe("top");
+    expect(techSuppliedAhsValues(null)).toEqual({});
+  });
+
+  it("reads the stored JSON defensively and only for AHS and First American", () => {
+    expect(techApplianceDetailsForTicket({ warrantyType: "first_american", techApplianceDetails: techDetailsJson })).toEqual(techDetails);
+    expect(techApplianceDetailsForTicket({ warrantyType: "american_home_shield", techApplianceDetails: techDetailsJson })).toEqual(techDetails);
+    expect(techApplianceDetailsForTicket({ warrantyType: "sears_protect", techApplianceDetails: techDetailsJson })).toBeNull();
+    for (const raw of [null, undefined, "", "not-json", "[]", "{}", JSON.stringify({ ...techDetails, applianceGrade: "entry" }), techDetails]) {
+      expect(techApplianceDetailsForTicket({ warrantyType: "first_american", techApplianceDetails: raw }), String(raw)).toBeNull();
+    }
+    expect(techApplianceDetailsForTicket(null)).toBeNull();
+  });
+
+  it("treats a field as the tech's only while it still holds the tech's value", () => {
+    expect(holdsTechValue("entry", "entry")).toBe(true);
+    expect(holdsTechValue(" entry ", "entry")).toBe(true);
+    expect(holdsTechValue("mid", "entry")).toBe(false);
+    expect(holdsTechValue("", "entry")).toBe(false);
+    expect(holdsTechValue("entry", undefined)).toBe(false);
+  });
+});
+
+describe("Technician appliance details: read-only block", () => {
+  it.each(["first_american", "american_home_shield"])("shows grade, color and part function for %s", (warrantyType) => {
+    const html = renderTechBlock({ warrantyType, techApplianceDetails: techDetailsJson });
+    expect(html).toContain('data-testid="tech-appliance-details"');
+    expect(html).toContain(TECH_APPLIANCE_DETAILS_TITLE);
+    expect(textOf(html, "text-tech-appliance-grade")).toBe("Low");
+    expect(textOf(html, "text-tech-appliance-color")).toBe("Black Stainless Steel");
+    expect(textOf(html, "text-tech-part-function")).toBe("tech-fn: pumps water out");
+    expect(html).toContain(AHS_SOURCE_TECHNICIAN);
+    expect(html).not.toContain(AHS_SOURCE_SERVICE_ORDER);
+  });
+
+  it("shows the Medium and High labels", () => {
+    expect(textOf(renderTechBlock({ warrantyType: "first_american", techApplianceDetails: JSON.stringify({ ...techDetails, applianceGrade: "medium" }) }), "text-tech-appliance-grade")).toBe("Medium");
+    expect(textOf(renderTechBlock({ warrantyType: "first_american", techApplianceDetails: JSON.stringify({ ...techDetails, applianceGrade: "high" }) }), "text-tech-appliance-grade")).toBe("High");
+  });
+
+  it("is hidden when the details are absent or unreadable", () => {
+    for (const raw of [null, undefined, "", "not-json", "{}"]) {
+      expect(renderTechBlock({ warrantyType: "first_american", techApplianceDetails: raw }), String(raw)).toBe("");
+    }
+    expect(renderTechBlock({ warrantyType: "sears_protect", techApplianceDetails: techDetailsJson })).toBe("");
+  });
+});
+
+describe("Technician appliance details: AHS read-only review", () => {
+  it('marks grade, color and part 1\'s function "From technician", never "From service order"', () => {
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: { warrantyType: "american_home_shield", ahsDetails: JSON.stringify(draftWithTechValues), techApplianceDetails: techDetailsJson } as PanelProps["submission"],
+    });
+    expect(fieldSource(html, "ahs-appliance-grade")).toBe("technician");
+    expect(fieldSource(html, "ahs-appliance-color")).toBe("technician");
+    expect(fieldSource(html, "ahs-part-0-function")).toBe("technician");
+    // The rest of the service-order part keeps its badge.
+    expect(fieldSource(html, "ahs-part-0-number")).toBe("service_order");
+    expect(html).toContain(">Low (entry)<");
+  });
+
+  it("drops the mark for values the manager changed, and without tech details", () => {
+    const changed = {
+      ...draftWithTechValues,
+      applianceGrade: "top",
+      applianceColor: "White",
+      parts: [{ ...draftWithTechValues.parts[0], partFunction: "manager-fn" }],
+    };
+    const html = renderAhsPanel({
+      bridge: null,
+      submission: { warrantyType: "american_home_shield", ahsDetails: JSON.stringify(changed), techApplianceDetails: techDetailsJson } as PanelProps["submission"],
+    });
+    expect(fieldSource(html, "ahs-appliance-grade")).toBe("tech");
+    expect(fieldSource(html, "ahs-appliance-color")).toBe("tech");
+    expect(fieldSource(html, "ahs-part-0-function")).toBe("service_order");
+    expect(html).toContain(">High (top)<");
+
+    const without = renderAhsPanel({ bridge: null, submission: { warrantyType: "american_home_shield", ahsDetails: JSON.stringify(draftWithTechValues) } as PanelProps["submission"] });
+    expect(fieldSource(without, "ahs-appliance-grade")).toBe("tech");
+    expect(fieldSource(without, "ahs-appliance-color")).toBe("tech");
+    expect(without).not.toContain(AHS_SOURCE_TECHNICIAN);
+  });
+});
+
+// The hidden native <select> Radix keeps in sync with a form Select.
+function nativeSelect(testId: string): HTMLSelectElement {
+  const select = byTestId(testId).closest(".space-y-2")?.querySelector("select");
+  expect(select, `missing native select for ${testId}`).toBeTruthy();
+  return select as HTMLSelectElement;
+}
+
+async function chooseOption(testId: string, value: string) {
+  const select = nativeSelect(testId);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+describe("Technician appliance details: AHS editor", () => {
+  const techTicket = (draft: unknown, tech: string | null = techDetailsJson) =>
+    stageOneTicket(draft, { techApplianceDetails: tech });
+
+  it('shows "From technician" on grade, color and part 1\'s function, and no "From service order" on them', () => {
+    const html = renderEditorPanel({ bridge: null, submission: techTicket(draftWithTechValues), allowAhsEdit: true });
+    expect(html).toContain('data-testid="ahs-details-editor"');
+    expect(html).toContain('data-testid="badge-ahs-from-tech-applianceGrade"');
+    expect(html).toContain('data-testid="badge-ahs-from-tech-applianceColor"');
+    expect(html).toContain('data-testid="badge-ahs-from-tech-part-0-function"');
+    expect(html).not.toContain('data-testid="badge-ahs-from-so-applianceGrade"');
+    expect(html).not.toContain('data-testid="badge-ahs-from-so-applianceColor"');
+    // Service-order badges elsewhere are untouched.
+    expect(html).toContain('data-testid="badge-ahs-from-so-contractNumber"');
+  });
+
+  it("shows no technician badge without tech details or when the draft holds other values", () => {
+    const none = renderEditorPanel({ bridge: null, submission: techTicket(draftWithTechValues, null), allowAhsEdit: true });
+    expect(none).not.toContain("badge-ahs-from-tech-");
+    const other = renderEditorPanel({
+      bridge: null,
+      submission: techTicket({ ...draftWithTechValues, applianceGrade: "mid", applianceColor: "White", parts: [{ partNumber: "p-1", partFunction: "other" }] }),
+      allowAhsEdit: true,
+    });
+    expect(other).not.toContain("badge-ahs-from-tech-");
+  });
+
+  it("labels the grade options Low (entry), Medium (mid) and High (top), keeping entry/mid/top as values", async () => {
+    mockFetch({});
+    await mountEditor(draftWithTechValues, { submission: techTicket(draftWithTechValues) } as Partial<EditorPanelProps>);
+    const options = Array.from(nativeSelect("select-ahs-grade").options)
+      .filter((option) => option.value !== "")
+      .map((option) => [option.value, option.textContent]);
+    expect(options).toEqual([
+      ["entry", "Low (entry)"],
+      ["mid", "Medium (mid)"],
+      ["top", "High (top)"],
+    ]);
+    expect(byTestId("select-ahs-grade").textContent).toContain("Low (entry)");
+  });
+
+  it("removes each mark once the manager changes that value", async () => {
+    const { calls } = mockFetch({});
+    await mountEditor(draftWithTechValues, { submission: techTicket(draftWithTechValues) } as Partial<EditorPanelProps>);
+    expect(queryTestId("badge-ahs-from-tech-applianceGrade")?.textContent).toBe(AHS_SOURCE_TECHNICIAN);
+    expect(queryTestId("badge-ahs-from-tech-applianceColor")).not.toBeNull();
+    expect(queryTestId("badge-ahs-from-tech-part-0-function")).not.toBeNull();
+
+    await chooseOption("select-ahs-grade", "top");
+    expect(queryTestId("badge-ahs-from-tech-applianceGrade")).toBeNull();
+    expect(byTestId("select-ahs-grade").textContent).toContain("High (top)");
+    expect(queryTestId("badge-ahs-from-tech-applianceColor")).not.toBeNull();
+
+    await typeInto("input-ahs-color", "White");
+    expect(queryTestId("badge-ahs-from-tech-applianceColor")).toBeNull();
+    expect(queryTestId("badge-ahs-from-tech-part-0-function")).not.toBeNull();
+
+    await typeInto("input-ahs-part-0-function", "manager-fn: drains the tub");
+    expect(queryTestId("badge-ahs-from-tech-part-0-function")).toBeNull();
+
+    // Never a service-order badge on these fields, before or after.
+    for (const field of ["applianceGrade", "applianceColor"]) {
+      expect(queryTestId(`badge-ahs-from-so-${field}`)).toBeNull();
+    }
+    expect(calls).toEqual([]);
   });
 });

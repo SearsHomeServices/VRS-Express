@@ -16,6 +16,14 @@ import {
   roundCents,
 } from "@shared/ahs-details";
 import { AHS_PREFILL_FIELDS, type AhsPrefillField } from "@shared/ahs-prefill";
+import {
+  TECH_APPLIANCE_DETAILS_WARRANTIES,
+  TECH_APPLIANCE_GRADES,
+  ahsGradeFromTechGrade,
+  parseStoredTechApplianceDetails,
+  type TechApplianceDetails,
+} from "@shared/tech-appliance-details";
+import type { WarrantyType } from "@shared/warranty";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
 
 export type AhsTechRecommendation = "repair" | "replace";
@@ -134,9 +142,63 @@ export function ahsApplianceKindLabel(value: string | undefined): string | undef
   return ahsApplianceKind(value)?.label ?? value;
 }
 
+// The AHS grade (entry/mid/top) as the technician's Low/Medium/High pick,
+// e.g. "Low (entry)". Stored values stay entry/mid/top.
+function ahsGradeDisplayLabel(grade: (typeof AHS_APPLIANCE_GRADES)[number]): string {
+  const tech = TECH_APPLIANCE_GRADES.find((option) => option.ahsGrade === grade.value);
+  return tech ? `${tech.label} (${grade.value})` : grade.label;
+}
+
+// Options for the editor's grade dropdown: AHS values, tech-facing labels.
+export const AHS_GRADE_OPTIONS: readonly { value: string; label: string }[] = AHS_APPLIANCE_GRADES.map(
+  (grade) => ({ value: grade.value, label: ahsGradeDisplayLabel(grade) }),
+);
+
 export function ahsGradeLabel(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  return AHS_APPLIANCE_GRADES.find((grade) => grade.value === value)?.label ?? value;
+  return AHS_GRADE_OPTIONS.find((grade) => grade.value === value)?.label ?? value;
+}
+
+// ---------------------------------------------------------------------------
+// Technician appliance details (submissions.tech_appliance_details,
+// shared/tech-appliance-details.ts): grade, color and part function the tech
+// entered on AHS and First American authorization tickets. Not from the
+// service order.
+// ---------------------------------------------------------------------------
+
+// The stored JSON (string, null, junk) → the details, or null. Only for the
+// warranties the tech form asks on.
+export function techApplianceDetailsForTicket(
+  ticket: { warrantyType?: string | null; techApplianceDetails?: unknown } | null | undefined,
+): TechApplianceDetails | null {
+  if (!ticket) return null;
+  if (!TECH_APPLIANCE_DETAILS_WARRANTIES.includes(ticket.warrantyType as WarrantyType)) return null;
+  const raw = ticket.techApplianceDetails;
+  return parseStoredTechApplianceDetails(typeof raw === "string" ? raw : null);
+}
+
+// The values the tech supplied, in the AHS details' terms (grade as
+// entry/mid/top, part function as part 1's).
+export interface TechSuppliedAhsValues {
+  applianceGrade?: string;
+  applianceColor?: string;
+  partFunction?: string;
+}
+
+export function techSuppliedAhsValues(details: TechApplianceDetails | null | undefined): TechSuppliedAhsValues {
+  if (!details) return {};
+  return {
+    applianceGrade: ahsGradeFromTechGrade(details.applianceGrade),
+    applianceColor: details.applianceColor.trim(),
+    partFunction: details.partFunction.trim(),
+  };
+}
+
+// Whether a field still holds what the tech entered. False once the
+// manager changes it.
+export function holdsTechValue(current: unknown, techValue: string | undefined): boolean {
+  if (!techValue) return false;
+  return typeof current === "string" && current.trim() !== "" && current.trim() === techValue;
 }
 
 export function ahsFailureCauseLabel(value: string | undefined): string | undefined {
