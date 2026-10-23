@@ -191,7 +191,12 @@ const execFileAsync = promisify(execFile);
 // Keyed by user ID; tracks timestamps of lookups within the rolling window.
 // ---------------------------------------------------------------------------
 const WARRANTY_LOOKUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const WARRANTY_LOOKUP_MAX_PER_WINDOW = 20;
+// Per technician per rolling hour. TECH_LOOKUP_RATE_LIMIT_PER_HOUR overrides
+// it (DEV sets it higher for testing); invalid values keep the default.
+const WARRANTY_LOOKUP_MAX_PER_WINDOW = (() => {
+  const configured = Number(process.env.TECH_LOOKUP_RATE_LIMIT_PER_HOUR);
+  return Number.isInteger(configured) && configured > 0 ? configured : 20;
+})();
 const warrantyLookupLog = new Map<number, number[]>(); // userId -> timestamps
 
 // POST /api/submissions waits at most this long, at the insert, for the

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - Service order lookup limit is configurable (2026-10-23)
+- `GET /api/tech/lookup-warranty` allows `TECH_LOOKUP_RATE_LIMIT_PER_HOUR`
+  lookups per technician per rolling hour (default 20). DEV sets 200 in
+  `.replit` for testing.
+- The tech form now says "Too many service order lookups this hour" on a 429
+  instead of "Warranty lookup is unavailable".
+
 ### Fixed - Snowflake product codes map exactly (2026-10-23)
 - Snowflake `HS_SP_CD` holds product-line codes such as DISH, WASHER and
   REFRIGERATION, not descriptions. All 23 codes seen in the last 12 months

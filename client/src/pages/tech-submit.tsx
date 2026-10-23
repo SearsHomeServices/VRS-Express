@@ -2007,7 +2007,9 @@ export default function TechSubmitPage() {
                     </p>
                   ) : warrantyLookup.isError ? (
                     <p className="mt-1 text-xs text-destructive" role="status" data-testid="text-warranty-lookup-unavailable">
-                      Warranty lookup is unavailable. Please try again before submitting.{" "}
+                      {(warrantyLookup.error as { status?: number } | null)?.status === 429
+                        ? "Too many service order lookups this hour. Please wait a few minutes, then retry."
+                        : "Warranty lookup is unavailable. Please try again before submitting."}{" "}
                       <button type="button" className="underline" onClick={() => warrantyLookup.refetch()}>
                         Retry lookup
                       </button>

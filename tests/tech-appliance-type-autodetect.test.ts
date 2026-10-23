@@ -41,6 +41,9 @@ vi.mock("@/lib/queryClient", async (importOriginal) => ({
     if (fixtures.gates[so]) await fixtures.gates[so];
     const derived = so in fixtures.lookups ? fixtures.lookups[so] : null;
     if (derived === "error") throw new Error("503: Snowflake unavailable");
+    if (derived === "rate-limited") {
+      throw Object.assign(new Error("429: Too many warranty lookups. Please try again later."), { status: 429 });
+    }
     // Mirror the server: `derived` only when the warranty is known; the
     // appliance type always at the top level (and inside `derived` too).
     const { serviceOrderProduct, ...entry } = (derived ?? {}) as any;
@@ -376,6 +379,15 @@ describe("tech-submit warranty auto-detection still holds", () => {
     await enterServiceOrder(SO_A);
     expect(byTestId("text-warranty-lookup-unavailable")).not.toBeNull();
     expect(byTestId("text-warranty-locked-note")).toBeNull();
+  });
+
+  it("says too many lookups (not unavailable) when the per-hour limit is hit", async () => {
+    fixtures.lookups[SO_A] = "rate-limited";
+    await mount();
+    await enterServiceOrder(SO_A);
+    const text = byTestId("text-warranty-lookup-unavailable").textContent ?? "";
+    expect(text).toContain("Too many service order lookups this hour");
+    expect(text).not.toContain("Warranty lookup is unavailable");
   });
 });
 
