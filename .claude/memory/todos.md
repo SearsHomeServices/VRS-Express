@@ -14,6 +14,12 @@
 
 ## Open — technician AHS → VRS AI enrollment (2026-10-08)
 
+- [ ] `TECH_APPLIANCE_DETAILS_ENABLED` is on in DEV only. Turn it on in
+      production deliberately when the tech form change is approved.
+- [ ] Tech appliance details reach the AHS draft only while
+      `VRS_AI_APP_ENROLL_ENABLED` is on; otherwise they are only stored and
+      shown. Revisit if production enables the fields before enrollment.
+
 - [x] Move AHS details to the VRS manager at Stage 1: server draft at submit,
       PATCH save + enroll, refresh (2026-10-23, branch `feat/ahs-mgr-server`).
 - [ ] Before enabling the prefill flag, confirm NPSXTPN parts on a real AHS order:

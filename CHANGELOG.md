@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Technician appliance grade, color and part function (2026-10-23)
+- When `TECH_APPLIANCE_DETAILS_ENABLED` is on (DEV only), the tech submit and
+  resubmit forms ask for three required fields on American Home Shield and
+  First American authorization tickets:
+  - Appliance Grade (Low / Medium / High)
+  - Appliance Color (Black, White, Black Stainless Steel, Stainless Steel,
+    Bisque)
+  - Part Function (text)
+- They are stored in the new `submissions.tech_appliance_details`, which is
+  added idempotently at boot. Agents and admins see them in a "Technician
+  appliance details" block.
+- For AHS tickets they also go into the VRS manager's draft: the grade
+  becomes entry/mid/top, plus the color and part 1's function. There they are
+  badged "From technician", never "From service order", and refresh never
+  overwrites them.
+- The tech form still has no AHS section; these three fields are the only
+  additions.
+
 ### Added - VRS manager completes the AHS details at Stage 1 (2026-10-23)
 - New "AHS details for VRS AI" editor in the agent's Stage 1 card
   (`client/src/components/ahs-details-editor.tsx`), for AHS authorization
