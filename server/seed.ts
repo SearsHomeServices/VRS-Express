@@ -101,6 +101,7 @@ export async function seedDatabase() {
   // schema, so it must exist BEFORE the first submissions query too.
   await ensureAhsDetailsColumn();
   await ensureTechApplianceDetailsColumn();
+  await ensureServiceOrderProductColumn();
   await ensureWeeklyReportsTable();
   // Must precede scheduler startup and any report-delivery query on a fresh
   // dev/prod database.  This table is an audit ledger, not seed data.
@@ -449,6 +450,20 @@ async function ensureTechApplianceDetailsColumn() {
     console.log("[tech-appliance-details] submissions.tech_appliance_details ensured (nullable)");
   } catch (err: any) {
     console.warn(`[tech-appliance-details] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// 2026-10-23 — the service order's WOM product category (JSON text), stored
+// at submit. Same idempotent pattern; safe to re-run.
+async function ensureServiceOrderProductColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS service_order_product TEXT
+    `));
+    console.log("[service-order-product] submissions.service_order_product ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[service-order-product] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

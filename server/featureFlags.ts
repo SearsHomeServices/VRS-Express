@@ -69,3 +69,9 @@ export function isAhsHssomCustomerPrefillEnabled(): boolean {
 export function isTechApplianceDetailsEnabled(): boolean {
   return process.env.TECH_APPLIANCE_DETAILS_ENABLED === "true";
 }
+
+// Product category from the WOM (ServicePower) work order API through the
+// HSSOM gateway, for the tech form's Appliance Type (server/services/wom-work-order.ts).
+export function isWomProductLookupEnabled(): boolean {
+  return process.env.WOM_PRODUCT_LOOKUP_ENABLED === "true";
+}

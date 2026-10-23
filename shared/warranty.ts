@@ -20,6 +20,26 @@ export interface DerivedServiceOrderAppliance {
   applianceType?: import("./appliance-division").ApplianceDivision;
 }
 
+// The service order's product category exactly as the source shows it
+// (WOM / ServicePower "Product Category", e.g. "WASHERDD - WASHER, DIRECT
+// DRIVE"; Snowflake HS_SP_CD only when WOM is unavailable). The tech form
+// shows it under Appliance Type so the tech sees where the type came from;
+// stored on the ticket as submissions.service_order_product. Non-PII.
+export interface ServiceOrderProduct {
+  text: string;
+  source: "wom" | "snowflake";
+}
+
+// GET /api/tech/lookup-warranty response.
+export interface WarrantyLookupResponse {
+  serviceOrder: string;
+  // Null when the warranty is unknown (older clients lock on non-null).
+  derived: (DerivedWarranty & DerivedServiceOrderAppliance) | null;
+  // Top level whenever known, whatever the warranty.
+  applianceType?: import("./appliance-division").ApplianceDivision;
+  serviceOrderProduct?: ServiceOrderProduct;
+}
+
 function norm(s: string | null | undefined): string {
   return (s || "").toString().trim().toLowerCase();
 }

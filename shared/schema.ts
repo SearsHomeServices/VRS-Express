@@ -210,6 +210,11 @@ export const submissions = pgTable("submissions", {
   // shared/tech-appliance-details.ts; null for every other ticket.
   // Migrated idempotently in seed.ts (ensureTechApplianceDetailsColumn).
   techApplianceDetails: text("tech_appliance_details"),
+  // 2026-10-23 — the service order's product category as WOM shows it (JSON
+  // shared/warranty.ts ServiceOrderProduct: { text, source }), looked up by
+  // the server at submit. Null when unknown. Migrated idempotently in seed.ts
+  // (ensureServiceOrderProductColumn).
+  serviceOrderProduct: text("service_order_product"),
   // Tyler 2026-05-20 (afternoon) — Replacement Review outcome. Set true when
   // a standard /process action of `approve_replacement_review` is used so VRS
   // can flag tickets where the warranty company is taking over replacement.
