@@ -76,6 +76,12 @@ import {
 } from "@shared/ahs-details";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import {
+  parseStoredTechApplianceDetails,
+  techApplianceDetailsApply,
+  techApplianceDetailsSchema,
+  type TechApplianceDetails,
+} from "@shared/tech-appliance-details";
+import {
   is1099PortalEnabled,
   isTechHubPhotosEnabled,
   isVrsBridgePhotoProxyEnabled,
@@ -122,6 +128,7 @@ import { Readable } from "stream";
 import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder } from "./services/snowflake";
 import {
   applyAhsSubmitPrefill,
+  applyTechApplianceDetails,
   draftFromPrevious,
   redactAhsCustomerForTechnician,
   lookupAhsPrefillSources,
@@ -547,6 +554,8 @@ function redactWarrantyForProvider<T extends Record<string, any>>(role: string, 
 // Technician-facing submission payloads: warranty redaction for 1099
 // providers, plus the AHS customer PII and dispatch number stripped for every
 // technician role (server/ahs-prefill.ts redactAhsCustomerForTechnician).
+// techApplianceDetails (grade, color, part function) is not PII and passes
+// through untouched.
 function redactSubmissionForRole<T extends Record<string, any>>(role: string, payload: T): T {
   const redacted = redactWarrantyForProvider(role, payload);
   if (!["technician", "flexed_technician", "provider_1099"].includes(role) || redacted == null) return redacted;
@@ -1163,6 +1172,13 @@ export async function registerRoutes(
     // can neither fail the submission nor be stored. The server builds the
     // draft itself (below) and the VRS manager completes it at Stage 1
     // (server/ahs-review-api.ts).
+    // Appliance grade, color and part function (shared/tech-appliance-details.ts),
+    // sent by the tech form on AHS / First American authorization tickets.
+    // Optional here (older cached clients don't send it; the form enforces
+    // it); null counts as absent. Kept below only while
+    // TECH_APPLIANCE_DETAILS_ENABLED is on and the server-derived warranty
+    // and request type call for it; otherwise dropped silently.
+    techApplianceDetails: techApplianceDetailsSchema.nullish(),
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -1505,11 +1521,13 @@ export async function registerRoutes(
       let originalAgent: number | null = null; // assignment intentionally disabled
       let priorReviewer: number | null = null; // for informational notification only
       let previousAhsDraft: AhsDetailsDraft | null = null;
+      let previousTechApplianceDetails: TechApplianceDetails | null = null;
       if (parsed.data.resubmissionOf) {
         const origSub = await storage.getSubmission(parsed.data.resubmissionOf);
         if (origSub) {
           priorReviewer = origSub.reviewedBy || origSub.stage1ReviewedBy || null;
           previousAhsDraft = parseStoredAhsDetailsDraft(origSub.ahsDetails);
+          previousTechApplianceDetails = parseStoredTechApplianceDetails(origSub.techApplianceDetails);
         }
       }
 
@@ -1556,11 +1574,28 @@ export async function registerRoutes(
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
       }
 
+      // Tech appliance details: kept only for the server-derived warranty.
+      const sentTechApplianceDetails = parsed.data.techApplianceDetails ?? null;
+      const techApplianceDetails =
+        sentTechApplianceDetails &&
+        isTechApplianceDetailsEnabled() &&
+        techApplianceDetailsApply(finalWarrantyType, parsed.data.requestType)
+          ? sentTechApplianceDetails
+          : null;
+      if (sentTechApplianceDetails && !techApplianceDetails) {
+        console.log(
+          `[tech-appliance-details] SO=${parsed.data.serviceOrder} dropped ` +
+          `(enabled=${isTechApplianceDetailsEnabled()} warranty=${finalWarrantyType} request=${parsed.data.requestType})`,
+        );
+      }
+
       // The draft: dispatch number, brand / model / serial, customer name and
       // address, the parts on the order (and purchaseYear when the age is
       // blank). A resubmission starts from the previous ticket's details;
-      // lookups fill only blanks. Stored even when nothing was found ({}), so
-      // the VRS manager gets the editor. Logs field names, never values.
+      // lookups fill only blanks. Then the tech's appliance grade, color and
+      // part 1's function (whatever the lookups returned). Stored even when
+      // nothing was found ({}), so the VRS manager gets the editor. Logs
+      // field names, never values.
       let ahsDraft: AhsDetailsDraft | null = null;
       if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {
         const sources = await (earlyAhsPrefillLookup ?? startAhsPrefillLookup());
@@ -1568,9 +1603,13 @@ export async function registerRoutes(
           finalWarrantyType,
           derivedWarrantyType: derivedWarranty?.warrantyType,
         });
+        if (techApplianceDetails) {
+          ahsDraft = applyTechApplianceDetails(ahsDraft, techApplianceDetails, previousTechApplianceDetails);
+        }
         console.log(
           `[ahs-prefill] submit SO=${parsed.data.serviceOrder} snowflake=${sources.snowflake.status} ` +
-          `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDraft).join(",") || "none"}`,
+          `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDraft).join(",") || "none"} ` +
+          `tech=${techApplianceDetails ? "applianceGrade,applianceColor,partFunction" : "none"}`,
         );
       }
 
@@ -1604,6 +1643,7 @@ export async function registerRoutes(
         estimateAmount: parsed.data.estimateAmount || null,
         partNumbers: parsed.data.partNumbers || null,
         ahsDetails: ahsDraft ? JSON.stringify(ahsDraft) : null,
+        techApplianceDetails: techApplianceDetails ? JSON.stringify(techApplianceDetails) : null,
         photos: parsed.data.photos || null,
         photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent

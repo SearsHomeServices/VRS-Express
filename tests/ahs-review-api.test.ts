@@ -431,3 +431,76 @@ describe("POST /api/submissions/:id/ahs-details/refresh", () => {
     expect(store.replaceUndispatchedAppIntake.mock.calls[0][1].requestPayload).toMatchObject({ serial_number: "SO-SERIAL" });
   });
 });
+
+describe("Tech appliance details on the draft (grade, color, part 1's function)", () => {
+  const sources: AhsPrefillSources = {
+    snowflake: {
+      status: "found",
+      partnerId: "AHS123",
+      clientName: "American Home Shield",
+      brand: "Maytag",
+      parts: [{ partNumber: "SO-PART", description: "Pump", quantity: 1 }],
+    },
+    hssom: { status: "unavailable" },
+  };
+  // What POST /api/submissions stored when the lookups failed: the tech's values only.
+  const techDraft: AhsDetailsDraft = {
+    applianceGrade: "mid",
+    applianceColor: "Stainless Steel",
+    parts: [{ partFunction: "Drains the tub" }],
+  };
+  const TECH_FIELDS = ["applianceGrade", "applianceColor", "partFunction"];
+
+  it("refresh fills the blanks around the tech values and never overwrites them", async () => {
+    quietLogs();
+    const { app, rows } = harness({ sources, submission: ticket({ ahsDetails: JSON.stringify(techDraft) }) });
+    const res = await refresh(app, AGENT);
+    expect(res.status).toBe(200);
+    expect(res.body.ahsDetails).toEqual({
+      applianceGrade: "mid",
+      applianceColor: "Stainless Steel",
+      brand: "Maytag",
+      parts: [{ partNumber: "SO-PART", description: "Pump", quantity: 1, partFunction: "Drains the tub" }],
+      prefilledFields: ["brand", "parts"],
+    });
+    for (const field of TECH_FIELDS) expect(res.body.ahsDetails.prefilledFields).not.toContain(field);
+    expect(JSON.parse(rows.get(501).ahsDetails)).toEqual(res.body.ahsDetails);
+
+    // A draft whose part 1 already has a part number keeps it all.
+    const withPart: AhsDetailsDraft = { ...techDraft, parts: [{ partNumber: "TECH-1", partFunction: "Drains the tub" }] };
+    const kept = await refresh(harness({ sources, submission: ticket({ ahsDetails: JSON.stringify(withPart) }) }).app, AGENT);
+    expect(kept.body.ahsDetails).toMatchObject({ applianceGrade: "mid", applianceColor: "Stainless Steel", parts: withPart.parts });
+  });
+
+  it("a PATCH save keeps the tech values the manager left unchanged, without provenance", async () => {
+    quietLogs();
+    const stored: AhsDetailsDraft = {
+      ...draft,
+      applianceGrade: "mid",
+      applianceColor: "Stainless Steel",
+      parts: [{ ...draft.parts![0], partFunction: "Drains the tub" }],
+    };
+    const { app, deps, store } = harness({ submission: ticket({ ahsDetails: JSON.stringify(stored) }) });
+    const res = await save(app, AGENT, {
+      ahsDetails: {
+        ...completed,
+        applianceGrade: "mid",
+        applianceColor: "Stainless Steel",
+        parts: [{ ...completed.parts[0], partFunction: "Drains the tub" }],
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ahsDetails).toMatchObject({
+      applianceGrade: "mid",
+      applianceColor: "Stainless Steel",
+      parts: [{ partNumber: "WPW10503278", partFunction: "Drains the tub" }],
+    });
+    for (const field of TECH_FIELDS) expect(res.body.ahsDetails.prefilledFields).not.toContain(field);
+    expect(res.body.ahsDetails.prefilledFields).toContain("parts");
+    expect(JSON.parse(deps.updateSubmissionIfStatus.mock.calls[0][2].ahsDetails)).toEqual(res.body.ahsDetails);
+    expect(store.createIntake.mock.calls[0][0].requestPayload).toMatchObject({
+      appliance_grade: "mid",
+      appliance_color: "Stainless Steel",
+    });
+  });
+});
