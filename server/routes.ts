@@ -43,7 +43,7 @@ import {
   type VrsAiCallResultCandidate,
 } from "./vrs-ai-call-result";
 import { vrsBridgeStore } from "./vrs-sasha-store";
-import { enrollAppSubmissionInVrsAi } from "./vrs-app-enroll";
+import { registerAhsReviewApi } from "./ahs-review-api";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
@@ -71,11 +71,8 @@ import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import {
-  ahsDetailsSchema,
-  ahsDivisionFor,
-  ahsGrandTotal,
-  parseStoredAhsDetails,
-  type AhsDetails,
+  parseStoredAhsDetailsDraft,
+  type AhsDetailsDraft,
 } from "@shared/ahs-details";
 import { isValidProvider1099Company } from "@shared/provider1099";
 import {
@@ -124,15 +121,10 @@ import { Readable } from "stream";
 import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder } from "./services/snowflake";
 import {
   applyAhsSubmitPrefill,
-  boundedServerDerivedAhs,
-  keepPrefilledFromPrevious,
-  redactServerPrefilledCustomer,
-  restoreRedactedCustomerFromPrevious,
+  draftFromPrevious,
+  redactAhsCustomerForTechnician,
   lookupAhsPrefillSources,
-  needsServerDerivedAhs,
   prefilledFieldNames,
-  toAhsPrefillResponse,
-  withoutServerOnlyFields,
 } from "./ahs-prefill";
 import { lookupHssomOrder } from "./services/hssom-order-lookup";
 import { applyProcIdRepair } from "./services/snowflake-lookup";
@@ -191,12 +183,6 @@ const execFileAsync = promisify(execFile);
 const WARRANTY_LOOKUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const WARRANTY_LOOKUP_MAX_PER_WINDOW = 20;
 const warrantyLookupLog = new Map<number, number[]>(); // userId -> timestamps
-
-// Same per-user cap for GET /api/tech/ahs-prefill, tracked separately so the
-// two lookups never eat each other's budget.
-const AHS_PREFILL_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const AHS_PREFILL_MAX_PER_WINDOW = 20;
-const ahsPrefillLookupLog = new Map<number, number[]>(); // userId -> timestamps
 
 // ---------------------------------------------------------------------------
 // Video conversion helpers (Task: fix admin video playback for failed iPhone
@@ -558,14 +544,14 @@ function redactWarrantyForProvider<T extends Record<string, any>>(role: string, 
 }
 
 // Technician-facing submission payloads: warranty redaction for 1099
-// providers, plus server-filled AHS customer PII stripped for every
-// technician role (server/ahs-prefill.ts redactServerPrefilledCustomer).
+// providers, plus the AHS customer PII and dispatch number stripped for every
+// technician role (server/ahs-prefill.ts redactAhsCustomerForTechnician).
 function redactSubmissionForRole<T extends Record<string, any>>(role: string, payload: T): T {
   const redacted = redactWarrantyForProvider(role, payload);
   if (!["technician", "flexed_technician", "provider_1099"].includes(role) || redacted == null) return redacted;
   const strip = (row: any) =>
     row && typeof row === "object" && typeof row.ahsDetails === "string"
-      ? { ...row, ahsDetails: redactServerPrefilledCustomer(row.ahsDetails) }
+      ? { ...row, ahsDetails: redactAhsCustomerForTechnician(row.ahsDetails) }
       : row;
   return (Array.isArray(redacted) ? redacted.map(strip) : strip(redacted)) as T;
 }
@@ -1170,11 +1156,11 @@ export async function registerRoutes(
     // is currently ACTIVE and never overrides the permanent rejected_closed
     // block. Transient request flag only — not persisted as a column.
     additionalRequest: z.boolean().optional(),
-    // AHS authorization details for VRS AI (shared/ahs-details.ts). Kept for
-    // authorization requests only; never required here, so older clients
-    // and other warranties are unaffected. Tickets without it are simply
-    // not enrolled in the VRS AI bridge.
-    ahsDetails: ahsDetailsSchema.optional(),
+    // No ahsDetails: the technician no longer enters AHS details. An older
+    // cached client may still send them; zod strips the unknown key, so they
+    // can neither fail the submission nor be stored. The server builds the
+    // draft itself (below) and the VRS manager completes it at Stage 1
+    // (server/ahs-review-api.ts).
   });
 
   // 2026-05-11 — Field tech (Mike, AHS, SO 8420-13676372) reported a
@@ -1215,18 +1201,15 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
-      // AHS details only apply to authorization requests. Their detailed
-      // appliance type decides the agent division, so every downstream use
-      // of applianceType (routing, broadcasts, SMS) stays consistent.
-      // prefilledFields and purchaseYear are server-only (set by the prefill below).
-      // Ignored entirely while VRS_AI_APP_ENROLL_ENABLED is off (a client with
-      // a stale /api/config could still send them).
-      let ahsDetails = isVrsAiAppEnrollEnabled() && parsed.data.requestType === "authorization" && parsed.data.ahsDetails
-        ? withoutServerOnlyFields(parsed.data.ahsDetails)
-        : undefined;
-      if (ahsDetails) {
-        parsed.data.applianceType = ahsDivisionFor(ahsDetails.applianceKind);
-      }
+      // AHS draft (shared/ahs-review.ts): for an authorization ticket whose
+      // final warranty is AHS, the server stores what the service-order
+      // lookups found and the VRS manager completes it at Stage 1. Only while
+      // VRS_AI_APP_ENROLL_ENABLED is on; SASHA intake brings its own VRS AI
+      // request. applianceType (the division) stays the tech's choice.
+      const wantsAhsDraft =
+        isVrsAiAppEnrollEnabled() &&
+        parsed.data.requestType === "authorization" &&
+        !internalOptions?.skipAppVrsAiEnroll;
 
       const user = await storage.getUser(authReq.user!.id);
       if (!user) {
@@ -1519,25 +1502,27 @@ export async function registerRoutes(
       // tech resubmitted" in their UI) but the ticket itself is unassigned.
       let originalAgent: number | null = null; // assignment intentionally disabled
       let priorReviewer: number | null = null; // for informational notification only
-      let previousAhsDetails: AhsDetails | null = null;
+      let previousAhsDraft: AhsDetailsDraft | null = null;
       if (parsed.data.resubmissionOf) {
         const origSub = await storage.getSubmission(parsed.data.resubmissionOf);
         if (origSub) {
           priorReviewer = origSub.reviewedBy || origSub.stage1ReviewedBy || null;
-          previousAhsDetails = parseStoredAhsDetails(origSub.ahsDetails);
+          previousAhsDraft = parseStoredAhsDetailsDraft(origSub.ahsDetails);
         }
       }
 
       // AHS service-order prefill (server/ahs-prefill.ts): Snowflake and the
-      // HSSOM Order Lookup run in parallel alongside the ProcID lookup. Each
-      // settles within ~5s and never rejects, so they can never block or fail
-      // the submission. lookupHssomOrder answers unavailable while its own
-      // flag is off.
-      const ahsPrefillLookup = ahsDetails
-        ? lookupAhsPrefillSources(parsed.data.serviceOrder, {
-          snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
-          hssom: lookupHssomOrder,
-        })
+      // HSSOM Order Lookup. Each settles within ~5s and never rejects, so they
+      // can never block or fail the submission. lookupHssomOrder answers
+      // unavailable while its own flag is off. Started alongside the ProcID
+      // lookup when the tech picked AHS; otherwise only once the ProcID
+      // derivation says AHS (below).
+      const startAhsPrefillLookup = () => lookupAhsPrefillSources(parsed.data.serviceOrder, {
+        snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
+        hssom: lookupHssomOrder,
+      });
+      const earlyAhsPrefillLookup = wantsAhsDraft && parsed.data.warrantyType === "american_home_shield"
+        ? startAhsPrefillLookup()
         : null;
 
       const procIdResult = await fetchProcIdForServiceOrder(parsed.data.serviceOrder);
@@ -1569,24 +1554,22 @@ export async function registerRoutes(
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
       }
 
-      // Fill blank dispatch number / brand / model / serial / customer name and
-      // address (and purchaseYear when the age is blank) before the details
-      // are stored and before VRS AI enrollment reads them. AHS tickets only;
-      // tech values win. Logs field names, never values.
-      if (ahsDetails && ahsPrefillLookup) {
-        const sources = await ahsPrefillLookup;
-        ahsDetails = applyAhsSubmitPrefill(ahsDetails, sources, {
+      // The draft: dispatch number, brand / model / serial, customer name and
+      // address, the parts on the order (and purchaseYear when the age is
+      // blank). A resubmission starts from the previous ticket's details;
+      // lookups fill only blanks. Stored even when nothing was found ({}), so
+      // the VRS manager gets the editor. Logs field names, never values.
+      let ahsDraft: AhsDetailsDraft | null = null;
+      if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {
+        const sources = await (earlyAhsPrefillLookup ?? startAhsPrefillLookup());
+        ahsDraft = applyAhsSubmitPrefill(draftFromPrevious(previousAhsDraft), sources, {
           finalWarrantyType,
           derivedWarrantyType: derivedWarranty?.warrantyType,
         });
         console.log(
           `[ahs-prefill] submit SO=${parsed.data.serviceOrder} snowflake=${sources.snowflake.status} ` +
-          `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDetails).join(",") || "none"}`,
+          `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDraft).join(",") || "none"}`,
         );
-      }
-      if (ahsDetails && previousAhsDetails) {
-        ahsDetails = restoreRedactedCustomerFromPrevious(ahsDetails, previousAhsDetails);
-        ahsDetails = keepPrefilledFromPrevious(ahsDetails, previousAhsDetails);
       }
 
       // Architect-flagged race-window close. The pre-handler call to
@@ -1614,13 +1597,11 @@ export async function registerRoutes(
         issueDescription: parsed.data.issueDescription,
         originalDescription: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? parsed.data.originalDescription : null,
         aiEnhanced: (parsed.data.aiEnhanced && parsed.data.originalDescription) ? true : false,
-        // AHS tickets fill these from their details, like SASHA tickets do,
-        // so agents see the total and part numbers in the usual places.
-        estimateAmount: parsed.data.estimateAmount ||
-          (ahsDetails ? ahsGrandTotal(ahsDetails).toFixed(2) : null),
-        partNumbers: parsed.data.partNumbers ||
-          (ahsDetails ? JSON.stringify(ahsDetails.parts.map((part) => part.partNumber)) : null),
-        ahsDetails: ahsDetails ? JSON.stringify(ahsDetails) : null,
+        // AHS tickets fill these from their details once the VRS manager
+        // saves them at Stage 1 (server/ahs-review-api.ts).
+        estimateAmount: parsed.data.estimateAmount || null,
+        partNumbers: parsed.data.partNumbers || null,
+        ahsDetails: ahsDraft ? JSON.stringify(ahsDraft) : null,
         photos: parsed.data.photos || null,
         photoThumbnails: parsed.data.photoThumbnails || null,
         // Tyler 2026-04-30: multi-video serialization. If the client sent
@@ -1703,29 +1684,9 @@ export async function registerRoutes(
         return res.status(200).json({ submission: redactSubmissionForRole(user.role, submission) });
       }
 
-      // Technician-posted AHS authorization tickets get the same VRS AI
-      // bridge row a SASHA call gets, before any broadcast, so the ticket
-      // lands in the Pilot view and Stage 1 approval sends it to VRS AI.
-      // Failure is logged and leaves the ticket on the legacy manual flow.
-      if (!internalOptions?.skipAppVrsAiEnroll && isVrsAiAppEnrollEnabled()) {
-        const enrollment = await enrollAppSubmissionInVrsAi(
-          {
-            store: vrsBridgeStore,
-            generateCallId: () => `vrs_call_${randomUUID()}`,
-          },
-          submission,
-          user,
-        );
-        if (enrollment.kind === "enrolled") {
-          console.log(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} call=${enrollment.callId}`);
-        } else if (enrollment.kind === "duplicate") {
-          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} not enrolled: active bridge call ${enrollment.existingCallId} (${enrollment.state})`);
-        } else if (enrollment.kind === "failed") {
-          console.error(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} enrollment failed: ${enrollment.message}`);
-        } else if (submission.warrantyType === "american_home_shield") {
-          console.warn(`[vrs-app-enroll] submission=${submission.id} SO=${submission.serviceOrder} skipped: ${enrollment.reason}`);
-        }
-      }
+      // No VRS AI bridge row at submit: a technician-posted AHS ticket is
+      // enrolled once the VRS manager saves the completed AHS details at
+      // Stage 1 (PATCH /api/submissions/:id/ahs-details).
 
       const submissionReceivedPhone = submission.phoneOverride || submission.phone;
       if (submissionReceivedPhone) {
@@ -3553,6 +3514,32 @@ export async function registerRoutes(
   };
 
   app.patch("/api/submissions/:id/process", authenticateToken, requireRole("vrs_agent", "admin"), processSubmissionHandler);
+
+  // Stage 1 AHS review: the VRS manager completes the AHS draft and the save
+  // enrolls the ticket in VRS AI (shared/ahs-review.ts).
+  registerAhsReviewApi(app, {
+    authenticateToken,
+    requireRole,
+    getSubmission: (id) => storage.getSubmission(id),
+    updateSubmissionIfStatus: (id, statuses, data, expectedAssignedTo) =>
+      storage.updateSubmissionIfStatus(id, statuses, data as any, expectedAssignedTo),
+    getUser: (id) => storage.getUser(id),
+    bridge: {
+      store: vrsBridgeStore,
+      generateCallId: () => `vrs_call_${randomUUID()}`,
+    },
+    isEnrollEnabled: isVrsAiAppEnrollEnabled,
+    lookupSources: (serviceOrder) => lookupAhsPrefillSources(serviceOrder, {
+      snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
+      hssom: lookupHssomOrder,
+    }),
+    createNote: (note) => storage.createSubmissionNote(note),
+    broadcastTicketUpdated: (submission) =>
+      broadcastToAdmins({
+        type: "ticket_updated",
+        payload: { submissionId: submission.id, ticketStatus: submission.ticketStatus },
+      }),
+  });
 
   // VRS AI calls back into Express, not directly to SASHA. Express applies
   // terminal outcomes through the same ticket handler used by agents (which
@@ -7520,69 +7507,6 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Snowflake sync error:", error);
       return res.status(500).json({ error: `Sync failed: ${error.message || "Unknown error"}` });
-    }
-  });
-
-  app.get("/api/tech/ahs-prefill", authenticateToken, requireRole("technician", "flexed_technician"), async (req, res) => {
-    // AHS service-order prefill for the tech form (shared/ahs-prefill.ts).
-    // Same gates as lookup-warranty below: role gate, no prior-submission
-    // requirement, and its own per-user rate limit.
-    //
-    // Sources: Snowflake (behind isAhsServiceOrderPrefillEnabled) and the
-    // HSSOM Order Lookup (behind its own flag inside lookupHssomOrder), in
-    // parallel and bounded at ~5s each.
-    //
-    // Response scoping: only brand / model / serial and whether a dispatch
-    // number and the customer name + address exist. Those values are filled
-    // server-side at submit; they, the partner ID and the client name never
-    // reach the browser. Non-AHS orders answer not_found. Every outcome is 200
-    // so the form falls back to manual entry without error handling.
-    res.set("Cache-Control", "no-store");
-    try {
-      const authReq = req as AuthenticatedRequest;
-      const caller = authReq.user;
-      if (!caller) {
-        return res.status(401).json({ error: "No user found" });
-      }
-      const callerUserId = caller.id;
-      const callerIdentity = caller.ldapId ?? caller.email;
-
-      const district = String(req.query.district || "").trim();
-      const serviceOrder = String(req.query.serviceOrder || "").trim();
-      if (!/^\d{4}$/.test(district) || !/^\d{8}$/.test(serviceOrder)) {
-        return res.status(400).json({ error: "Invalid district or service order format" });
-      }
-      const so = `${district}-${serviceOrder}`;
-
-      const now = Date.now();
-      const cutoff = now - AHS_PREFILL_WINDOW_MS;
-      const recentTimestamps = (ahsPrefillLookupLog.get(callerUserId) ?? []).filter(ts => ts > cutoff);
-      if (recentTimestamps.length >= AHS_PREFILL_MAX_PER_WINDOW) {
-        console.warn(`[ahs-prefill] rate-limit exceeded: user=${callerIdentity} (${callerUserId}) so=${so} count=${recentTimestamps.length}`);
-        return res.status(429).json({ error: "Too many service order lookups. Please try again later." });
-      }
-      recentTimestamps.push(now);
-      ahsPrefillLookupLog.set(callerUserId, recentTimestamps);
-
-      // Bounded at ~5s; never logs the returned values. HSSOM has no warranty
-      // data: without a Snowflake row the order counts as AHS only by the
-      // ProcID derivation submit uses (cached, also bounded).
-      const sources = await lookupAhsPrefillSources(so, {
-        snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
-        hssom: lookupHssomOrder,
-      });
-      const serverDerivedAhs = needsServerDerivedAhs(sources)
-        ? await boundedServerDerivedAhs(so, fetchProcIdForServiceOrder)
-        : undefined;
-      const response = toAhsPrefillResponse(sources.snowflake, sources.hssom, serverDerivedAhs);
-      console.info(
-        `[ahs-prefill] lookup: user=${callerIdentity} (${callerUserId}) so=${so} status=${response.status} ` +
-        `snowflake=${sources.snowflake.status} hssom=${sources.hssom.status}`,
-      );
-      res.json(response);
-    } catch (err) {
-      console.error("ahs-prefill error:", err instanceof Error ? err.message : String(err));
-      res.json({ status: "unavailable" });
     }
   });
 

@@ -20,6 +20,9 @@ export const AHS_PREFILL_FIELDS = [
   // Customer PII: filled on the server only, never returned to the browser.
   "customerName",
   "customerAddress",
+  // The parts on the order (Snowflake NPSXTPN, server/services/snowflake-lookup.ts).
+  // Marks the whole parts list, filled only when the draft had none.
+  "parts",
 ] as const;
 
 export type AhsPrefillField = (typeof AHS_PREFILL_FIELDS)[number];

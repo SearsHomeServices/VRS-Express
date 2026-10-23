@@ -26,6 +26,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The no-bridge fallback now says the VRS manager can complete the AHS details
   to send the ticket to VRS AI.
 
+### Changed - AHS details move from the technician to the VRS manager (server, 2026-10-23)
+- `POST /api/submissions` no longer accepts `ahsDetails`; an old client's value
+  is dropped. For an authorization ticket whose final warranty is AHS (while
+  `VRS_AI_APP_ENROLL_ENABLED` is on) the server stores a draft built from the
+  Snowflake and HSSOM lookups, `{}` when nothing was found. No VRS AI bridge
+  row is created at submit, and the tech's division is no longer overridden.
+- New `PATCH /api/submissions/:id/ahs-details` (assigned vrs_agent, admin,
+  super_admin): validates the full AHS schema, keeps provenance only for
+  unchanged server-filled values, updates estimate and part numbers, and
+  creates the bridge row or replaces the payload of an undispatched one.
+- New `POST /api/submissions/:id/ahs-details/refresh`: re-runs the lookups and
+  fills only blank draft fields.
+- Snowflake prefill now also reads the parts on the order
+  (`PRD_DB2.HS_DW_TBLS.NPSXTPN`), as its own statement with its own 2.5s
+  timeout; `"parts"` joins `AHS_PREFILL_FIELDS`.
+- Technician responses now always drop the AHS dispatch number and customer
+  name and address, whoever entered them.
+- Removed `GET /api/tech/ahs-prefill`.
+
 ### Fixed - Pre-push review of the AHS tech-ticket work (2026-10-23)
 - `POST /api/submissions/:id/photos` now redacts its response like every other
   technician-facing submission response. It was returning server-filled

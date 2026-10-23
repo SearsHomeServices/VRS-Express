@@ -15,6 +15,8 @@
   - **Contract:** `shared/ahs-review.ts`; issue paths map to inputs via `ahsIssueFieldName` (with or without a leading `ahsDetails`).
   - **Provenance:** the client accepts `"parts"` in `prefilledFields`; a badge shows while the field still holds the stored value.
   - **Tests:** `tests/vrs-ai-bridge-ui.test.ts` now runs under jsdom (static renders + mounted editor with mocked fetch).
+
+- **AHS details at Stage 1, server side** (2026-10-23, branch `feat/ahs-mgr-server`). Submit stores a lookup-built draft (`applyAhsSubmitPrefill` on `{}` or the previous ticket's details). There is no bridge row at submit. `server/ahs-review-api.ts` serves PATCH `/api/submissions/:id/ahs-details` (save, which enrolls via `saveAppSubmissionVrsAiIntake`) and POST `.../refresh`. NPSXTPN parts prefill lives in `createAhsPrefillLookup`. `GET /api/tech/ahs-prefill` was removed.
 - **HSSOM spec review** (2026-10-22): auth responseCode check, TTL cap, secret-aware token cache, userid always sent, local token-grant helpers. Order Lookup now sends `clientid` (`HSSOM_LOOKUP_CLIENT_ID`, default TABS), `servicename: IHSOLookup` and `serviceversion: 1.0`, as fixed in the scheduling optimizer's commit 39047f9. The prod lookup URL is confirmed from optimizer-upstream `.env.example:44`. The Send Message docx embeds the Postman collection the handoff called missing: its path is `POST {base}/services/domi/orders/{orderId}/message`, not the bare URL the handoff uses.
 - **HSSOM customer prefill** (2026-10-22, same branch `feat/ahs-tech-form-few`).
   - **What it does:** `lookupHssomOrder` (server/services/hssom-order-lookup.ts) fills customer name and address. `mergeAhsPrefillSources` / `applyAhsSubmitPrefill` in server/ahs-prefill.ts merge it with Snowflake.

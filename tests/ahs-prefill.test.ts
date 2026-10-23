@@ -1,37 +1,42 @@
 import fs from "node:fs";
-import ts from "typescript";
-import express from "express";
-import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AHS_PREFILL_APPLIANCE_SQL,
   AHS_PREFILL_CORE_SQL,
+  AHS_PREFILL_PARTS_SQL,
+  AHS_PREFILL_PARTS_TIMEOUT_MS,
   createAhsPrefillLookup,
+  mapAhsServiceOrderParts,
   type AhsPrefillLookupResult,
   type AhsPrefillQuery,
-  type ProcIdResult,
 } from "../server/services/snowflake-lookup";
 import {
   applyAhsServiceOrderPrefill,
   applyAhsSubmitPrefill,
   boundedAhsPrefillLookup,
-  boundedServerDerivedAhs,
+  draftFromPrevious,
+  fillAhsDraft,
   isAhsOrder,
-  keepPrefilledFromPrevious,
   lookupAhsPrefillSources,
   mergeAhsPrefillSources,
-  needsServerDerivedAhs,
+  mergeSavedAhsProvenance,
   prefilledFieldNames,
-  redactServerPrefilledCustomer,
-  restoreRedactedCustomerFromPrevious,
-  toAhsPrefillResponse,
+  redactAhsCustomerForTechnician,
   withoutPrefilledFields,
   withoutServerOnlyFields,
   type AhsPrefillSources,
 } from "../server/ahs-prefill";
 import { lookupHssomOrder, type HssomOrderLookupResult } from "../server/services/hssom-order-lookup";
 import { isAhsServiceOrderPrefillEnabled } from "../server/featureFlags";
-import { ahsDetailsSchema, parseStoredAhsDetails, type AhsDetails } from "../shared/ahs-details";
+import { AHS_PREFILL_FIELDS } from "../shared/ahs-prefill";
+import {
+  ahsDetailsDraftSchema,
+  ahsDetailsSchema,
+  parseStoredAhsDetails,
+  parseStoredAhsDetailsDraft,
+  type AhsDetails,
+  type AhsDetailsDraft,
+} from "../shared/ahs-details";
 
 vi.mock("../server/services/hssom-order-lookup", () => ({
   lookupHssomOrder: vi.fn(),
@@ -64,7 +69,12 @@ const applianceRow = {
 const ok = (rows: any[]): PromiseSettledResult<any[]> => ({ status: "fulfilled", value: rows });
 const failed = (message: string): PromiseSettledResult<any[]> => ({ status: "rejected", reason: new Error(message) });
 
-function mockQuery(results: PromiseSettledResult<any[]>[] = [ok([coreRow]), ok([applianceRow])]) {
+const partRows = [
+  { PART_NUMBER: " WPW10503278 ", DESCRIPTION: " Electronic control board ", QUANTITY: 1, ORDERED_QUANTITY: 1, UNIT_PRICE: "245.00", STATUS: "I" },
+  { PART_NUMBER: "W10820048", DESCRIPTION: "Drain pump clip", QUANTITY: 0, ORDERED_QUANTITY: 2, UNIT_PRICE: 4.255, STATUS: "O" },
+];
+
+function mockQuery(results: PromiseSettledResult<any[]>[] = [ok([coreRow]), ok([applianceRow]), ok([])]) {
   return vi.fn<AhsPrefillQuery>(async () => results);
 }
 
@@ -104,17 +114,20 @@ const details: AhsDetails = {
 };
 
 describe("Snowflake AHS service-order lookup", () => {
-  it("filters on the padded unit and the service order in both statements", async () => {
+  it("filters on the padded unit and the service order in every statement", async () => {
     const query = mockQuery();
     const lookup = createAhsPrefillLookup(query);
     await lookup("8175", "12345678");
     const [statements] = query.mock.calls[0];
-    expect(statements.map((s) => s.binds)).toEqual([["8175", "12345678"], ["8175", "12345678"]]);
+    expect(statements.map((s) => s.binds)).toEqual([["8175", "12345678"], ["8175", "12345678"], ["8175", "12345678"]]);
     for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL]) {
       expect(sql).toContain("FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL");
       expect(sql).toContain("WHERE SVC_UN_NO = LPAD(?, 7, '0') AND SO_NO = ? LIMIT 1");
     }
-    expect(statements.map((s) => s.sqlText)).toEqual([AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL]);
+    expect(statements.map((s) => s.sqlText)).toEqual([AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL, AHS_PREFILL_PARTS_SQL]);
+    // Only the parts statement carries its own (shorter) timeout.
+    expect(statements.map((s) => s.timeoutMs)).toEqual([undefined, undefined, AHS_PREFILL_PARTS_TIMEOUT_MS]);
+    expect(AHS_PREFILL_PARTS_TIMEOUT_MS).toBeLessThan(5000);
     // LPAD(?, 7, '0') turns district 8175 into unit 0008175.
     expect("8175".padStart(7, "0")).toBe("0008175");
   });
@@ -265,14 +278,18 @@ describe("AHS prefill rules", () => {
     expect(next).toEqual({ contractNumber: undefined, brand: "GE", modelNumber: "M1", prefilledFields: ["brand"] });
   });
 
-  it("lists only fields actually filled and drops client-sent prefilledFields", () => {
-    const forged = { ...details, brand: "Tech brand", prefilledFields: ["brand", "modelNumber"] as AhsDetails["prefilledFields"] };
-    const brandOnly = applyAhsServiceOrderPrefill(forged, { status: "found", brand: "Whirlpool" });
-    expect(brandOnly.brand).toBe("Tech brand");
+  it("lists the fields filled and keeps the draft's own server provenance", () => {
+    const typed = { ...details, brand: "Typed brand" };
+    const brandOnly = applyAhsServiceOrderPrefill(typed, { status: "found", brand: "Whirlpool" });
+    expect(brandOnly.brand).toBe("Typed brand");
     expect(brandOnly).not.toHaveProperty("prefilledFields");
-    expect(applyAhsServiceOrderPrefill(forged, { status: "not_found" })).not.toHaveProperty("prefilledFields");
-    expect(applyAhsServiceOrderPrefill(forged, { status: "unavailable" })).toEqual(withoutPrefilledFields(forged));
-    expect(withoutPrefilledFields(forged)).not.toHaveProperty("prefilledFields");
+    // A stored draft's provenance only ever names server-filled values, so a
+    // refresh keeps it (and adds what it fills).
+    const stored = { ...details, modelNumber: "M1", prefilledFields: ["modelNumber"] as AhsDetails["prefilledFields"] };
+    expect(applyAhsServiceOrderPrefill(stored, { status: "found", brand: "Whirlpool" }).prefilledFields)
+      .toEqual(["brand", "modelNumber"]);
+    expect(applyAhsServiceOrderPrefill(stored, { status: "unavailable" })).toEqual(stored);
+    expect(withoutPrefilledFields(stored)).not.toHaveProperty("prefilledFields");
   });
 
   it("skips a contract ID with no dispatch part and values the schema would reject", () => {
@@ -285,14 +302,6 @@ describe("AHS prefill rules", () => {
     expect(ahsDetailsSchema.safeParse({ ...next, contractNumber: "X", brand: "B", serialNumber: "S" }).success).toBe(true);
   });
 
-  it("keeps provenance for unchanged previously prefilled values on resubmit", () => {
-    const previous = applyAhsServiceOrderPrefill(details, found);
-    const resent = { ...withoutPrefilledFields(previous), modelNumber: "CHANGED-BY-TECH" };
-    expect(keepPrefilledFromPrevious(resent, previous).prefilledFields).toEqual(["contractNumber", "brand", "serialNumber"]);
-    expect(keepPrefilledFromPrevious(resent, { ...previous, prefilledFields: undefined })).not.toHaveProperty("prefilledFields");
-    expect(keepPrefilledFromPrevious({ ...resent, prefilledFields: ["modelNumber"] }, null).prefilledFields).toEqual(["modelNumber"]);
-  });
-
   it("recognizes AHS orders with the shared warranty derivation", () => {
     expect(isAhsOrder(found)).toBe(true);
     expect(isAhsOrder({ status: "found", partnerId: "AHS123" })).toBe(true);
@@ -300,23 +309,6 @@ describe("AHS prefill rules", () => {
     expect(isAhsOrder({ status: "found", brand: "Whirlpool" })).toBe(false);
     expect(isAhsOrder({ status: "not_found" })).toBe(false);
     expect(isAhsOrder(null)).toBe(false);
-  });
-
-  it("builds a browser response without contract, partner or client values", () => {
-    const response = toAhsPrefillResponse(found);
-    expect(response).toEqual({
-      status: "found",
-      appliance: { brand: "Whirlpool", modelNumber: "WTW5000DW1", serialNumber: "C31290822" },
-      hasDispatchNumber: true,
-      hasCustomer: false,
-    });
-    const json = JSON.stringify(response);
-    for (const value of [SECRET_CONTRACT, SECRET_PARTNER, SECRET_CLIENT, "0003"]) expect(json).not.toContain(value);
-    expect(toAhsPrefillResponse({ status: "found", partnerId: "AHS1", brand: "GE" }))
-      .toEqual({ status: "found", appliance: { brand: "GE" }, hasDispatchNumber: false, hasCustomer: false });
-    expect(toAhsPrefillResponse({ ...found, partnerId: "SPHW1", clientName: "Sears Protect" })).toEqual({ status: "not_found" });
-    expect(toAhsPrefillResponse({ status: "not_found" })).toEqual({ status: "not_found" });
-    expect(toAhsPrefillResponse({ status: "unavailable" })).toEqual({ status: "unavailable" });
   });
 
   it("bounds the submit-path lookup and never rejects", async () => {
@@ -542,14 +534,6 @@ describe("HSSOM customer prefill merge", () => {
     expect(ahsDetailsSchema.safeParse({ ...details, purchaseYear: 1800 }).success).toBe(false);
   });
 
-  it("keeps customer-field provenance on resubmit when unchanged", () => {
-    const previous = applyAhsSubmitPrefill(blankDetails, sources(found, hssomFound), ahsWarranty);
-    const resent = { ...withoutServerOnlyFields(previous), customerAddress: "Changed by tech" };
-    expect(keepPrefilledFromPrevious(resent, previous).prefilledFields).toEqual([
-      "contractNumber", "brand", "modelNumber", "serialNumber", "customerName",
-    ]);
-  });
-
   it("logs field names only", () => {
     const next = applyAhsSubmitPrefill(blankDetails, sources(found, hssomFound), ahsWarranty);
     const names = prefilledFieldNames(next);
@@ -594,386 +578,320 @@ describe("HSSOM lookup bounds", () => {
     expect(next.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
   });
 
-  it("derives AHS from the ProcID lookup, unknown when unavailable or slow", async () => {
-    const procId = (result: ProcIdResult) => async () => result;
-    expect(await boundedServerDerivedAhs("8175-12345678", procId({ status: "FOUND", procId: "AHS1", clientNm: SECRET_CLIENT }))).toBe(true);
-    expect(await boundedServerDerivedAhs("8175-12345678", procId({ status: "FOUND", procId: "SPHW1", clientNm: "Sears Home Warranty" }))).toBe(false);
-    expect(await boundedServerDerivedAhs("8175-12345678", procId({ status: "NOT_FOUND", procId: "Not Found", clientNm: "Not Found" }))).toBe(false);
-    expect(await boundedServerDerivedAhs("8175-12345678", procId({ status: "LOOKUP_UNAVAILABLE", retryable: true }))).toBeUndefined();
-    expect(await boundedServerDerivedAhs("8175-12345678", async () => { throw new Error("boom"); })).toBeUndefined();
-    vi.useFakeTimers();
-    const hung = boundedServerDerivedAhs("8175-12345678", () => new Promise(() => {}));
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(await hung).toBeUndefined();
-  });
-
-  it("needs the ProcID derivation only for an HSSOM-only find", () => {
-    expect(needsServerDerivedAhs(sources({ status: "unavailable" }, hssomFound))).toBe(true);
-    expect(needsServerDerivedAhs(sources({ status: "not_found" }, hssomFound))).toBe(true);
-    expect(needsServerDerivedAhs(sources(found, hssomFound))).toBe(false);
-    expect(needsServerDerivedAhs(sources({ status: "unavailable" }, { status: "not_found" }))).toBe(false);
-  });
 });
 
-describe("AHS prefill browser response with HSSOM", () => {
-  it("sets hasCustomer only when HSSOM found both a name and an address", () => {
-    expect(toAhsPrefillResponse(found, hssomFound)).toMatchObject({ status: "found", hasCustomer: true });
-    for (const hssom of [
-      { status: "found", customerName: SECRET_NAME },
-      { status: "found", customerAddress: SECRET_ADDRESS },
-      { status: "found", customerName: "   ", customerAddress: SECRET_ADDRESS },
-      { status: "found", customerName: "N".repeat(256), customerAddress: SECRET_ADDRESS },
-      { status: "not_found" },
-      { status: "unavailable" },
-    ] as HssomOrderLookupResult[]) {
-      expect(toAhsPrefillResponse(found, hssom)).toMatchObject({ status: "found", hasCustomer: false });
-    }
+
+
+
+
+
+
+describe("Snowflake parts on the order (NPSXTPN)", () => {
+  it("queries the DB2 parts table by padded unit and order, in sequence", () => {
+    expect(AHS_PREFILL_PARTS_SQL).toBe(
+      "SELECT SVC_PRT_NO AS PART_NUMBER, PRT_DS AS DESCRIPTION, SVC_PRT_QT AS QUANTITY, PRT_ORD_QT AS ORDERED_QUANTITY, " +
+      "PRT_SEL_PRC_AM AS UNIT_PRICE, SVC_PRT_STS_CD AS STATUS " +
+      "FROM PRD_DB2.HS_DW_TBLS.NPSXTPN WHERE SVC_UN_NO = LPAD(?,7,'0') AND SO_NO = ? ORDER BY PRT_SEQ_NO LIMIT 50",
+    );
   });
 
-  it("takes appliance fields from either source, Snowflake first", () => {
-    expect(toAhsPrefillResponse({ status: "found", partnerId: "AHS1", brand: "GE" }, hssomFound)).toEqual({
+  it("maps part number, description, quantity and unit price", async () => {
+    const query = mockQuery([ok([coreRow]), ok([applianceRow]), ok(partRows)]);
+    const result = await createAhsPrefillLookup(query)("8175", "12345678");
+    expect(result).toMatchObject({
       status: "found",
-      appliance: { brand: "GE", modelNumber: "MVW6230HW", serialNumber: "HS-SERIAL-1" },
-      hasDispatchNumber: true,
-      hasCustomer: true,
+      brand: "Whirlpool",
+      parts: [
+        { partNumber: "WPW10503278", description: "Electronic control board", quantity: 1, unitPrice: 245 },
+        // SVC_PRT_QT 0 falls back to the ordered quantity; price rounded to cents.
+        { partNumber: "W10820048", description: "Drain pump clip", quantity: 2, unitPrice: 4.26 },
+      ],
     });
   });
 
-  it("decides an HSSOM-only find by the server's derivation", () => {
-    for (const snowflake of [{ status: "unavailable" }, { status: "not_found" }] as AhsPrefillLookupResult[]) {
-      expect(toAhsPrefillResponse(snowflake, hssomFound, true)).toMatchObject({
-        status: "found", appliance: { brand: "Maytag" }, hasDispatchNumber: true, hasCustomer: true,
-      });
-      expect(toAhsPrefillResponse(snowflake, hssomFound, false)).toEqual({ status: "not_found" });
-      expect(toAhsPrefillResponse(snowflake, hssomFound, undefined)).toEqual({ status: "unavailable" });
-    }
-    const sears = { ...found, partnerId: "SPHW1", clientName: "Sears Home Warranty" };
-    expect(toAhsPrefillResponse(sears, hssomFound, true)).toEqual({ status: "not_found" });
-    expect(toAhsPrefillResponse({ status: "unavailable" }, { status: "not_found" })).toEqual({ status: "unavailable" });
-    expect(toAhsPrefillResponse({ status: "not_found" }, { status: "unavailable" })).toEqual({ status: "not_found" });
+  it("drops cancelled, voided and numberless lines, caps at 10, quantity at least 1", () => {
+    const rows = [
+      { PART_NUMBER: "X1", STATUS: "X" },
+      { PART_NUMBER: "V1", STATUS: "v" },
+      { PART_NUMBER: "  ", STATUS: "I" },
+      { PART_NUMBER: "P".repeat(101) },
+      { PART_NUMBER: "NOPRICE", QUANTITY: null, ORDERED_QUANTITY: null, UNIT_PRICE: null, DESCRIPTION: " " },
+      { PART_NUMBER: "BADPRICE", QUANTITY: "3", UNIT_PRICE: "n/a" },
+      { PART_NUMBER: "NEGATIVE", UNIT_PRICE: -5, QUANTITY: 500 },
+      ...Array.from({ length: 12 }, (_, index) => ({ PART_NUMBER: `P${index}`, QUANTITY: 1, UNIT_PRICE: 10 })),
+    ];
+    const parts = mapAhsServiceOrderParts(rows);
+    expect(parts).toHaveLength(10);
+    expect(parts.slice(0, 3)).toEqual([
+      { partNumber: "NOPRICE", quantity: 1 },
+      { partNumber: "BADPRICE", quantity: 3 },
+      { partNumber: "NEGATIVE", quantity: 99 },
+    ]);
+    expect(parts.map((part) => part.partNumber)).not.toContain("X1");
+    expect(parts.map((part) => part.partNumber)).not.toContain("V1");
+    // Every mapped part fits the draft schema.
+    expect(ahsDetailsDraftSchema.safeParse({ parts }).success).toBe(true);
   });
 
-  it("never includes customer, contract or dispatch values", () => {
-    for (const response of [
-      toAhsPrefillResponse(found, hssomFound),
-      toAhsPrefillResponse({ status: "unavailable" }, hssomFound, true),
-    ]) {
-      const json = JSON.stringify(response);
-      for (const value of [SECRET_NAME, SECRET_ADDRESS, SECRET_CONTRACT, SECRET_HSSOM_CONTRACT, "/0003", "/0007", "2019", SECRET_PARTNER, SECRET_CLIENT]) {
-        expect(json).not.toContain(value);
-      }
-    }
+  it("keeps every other value when the parts statement fails or times out", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await createAhsPrefillLookup(
+      mockQuery([ok([coreRow]), ok([applianceRow]), failed("statement timed out after 2500ms")]),
+    )("8175", "12345678");
+    expect(result).toMatchObject({
+      status: "found",
+      brand: "Whirlpool",
+      modelNumber: "WTW5000DW1",
+      serviceContractId: `${SECRET_CONTRACT}/0003`,
+    });
+    expect(result).not.toHaveProperty("parts");
+    expect(warn.mock.calls.flat().join(" ")).toContain("parts statement failed");
+    // No live parts is just no parts.
+    const none = await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), ok([{ PART_NUMBER: "X", STATUS: "X" }])]))(
+      "8175", "12345679",
+    );
+    expect(none).toMatchObject({ status: "found" });
+    expect(none).not.toHaveProperty("parts");
+  });
+
+  it("never logs part values", async () => {
+    const spies = (["log", "info", "warn", "error"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
+    await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), ok(partRows)]))("8175", "12345678");
+    await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), failed("invalid identifier 'PRT_DS'")]))("8175", "12345679");
+    const logged = spies.flatMap((spy) => spy.mock.calls.flat()).join(" ");
+    for (const value of ["WPW10503278", "Electronic control board", "245", "W10820048"]) expect(logged).not.toContain(value);
+  });
+
+  it("the real driver cancels a slow parts statement on its own timer", () => {
+    const source = fs.readFileSync("server/services/snowflake.ts", "utf8");
+    const driver = source.slice(source.indexOf("export const fetchAhsServiceOrderPrefill"));
+    expect(driver).toContain("statements.map(({ sqlText, binds, timeoutMs })");
+    expect(driver).toMatch(/if \(timeoutMs\) \{\s+timer = setTimeout\(\(\) => \{\s+cancel\(\);\s+reject\(/);
+    expect(driver).toContain("Promise.allSettled(");
   });
 });
 
-// Execute the real route registration with hermetic auth/Snowflake/HSSOM
-// doubles, like tests/tech-warranty-lookup.test.ts.
-const routes = fs.readFileSync("server/routes.ts", "utf8");
-const start = routes.indexOf('  app.get("/api/tech/ahs-prefill"');
-const end = routes.indexOf('  app.get(["/api/tech/lookup-warranty"', start);
-if (start < 0 || end < 0) throw new Error("AHS prefill route boundaries not found");
-const routeJs = ts.transpileModule(routes.slice(start, end), {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-}).outputText;
-
-function harness(options: {
-  enabled?: boolean;
-  result?: AhsPrefillLookupResult | Error;
-  hssom?: HssomOrderLookupResult;
-  procId?: ProcIdResult;
-} = {}) {
-  const {
-    enabled = true,
-    result = found,
-    hssom = { status: "unavailable" },
-    procId = { status: "FOUND", procId: SECRET_PARTNER, clientNm: SECRET_CLIENT },
-  } = options;
-  const lookup = vi.fn(async () => {
-    if (result instanceof Error) throw result;
-    return result;
-  });
-  hssomLookup.mockResolvedValue(hssom);
-  const fetchProcId = vi.fn(async () => procId);
-  const app = express();
-  const authenticateToken = (req: any, res: any, next: any) => {
-    if (!req.headers["x-test-role"]) return res.status(401).json({ error: "Unauthorized" });
-    req.user = { id: 1, ldapId: "fixture", role: req.headers["x-test-role"] };
-    next();
+describe("AHS draft built at submit", () => {
+  const foundWithParts: AhsPrefillLookupResult = {
+    ...found,
+    parts: [
+      { partNumber: "WPW10503278", description: "Electronic control board", quantity: 1, unitPrice: 245 },
+      { partNumber: "W10820048", quantity: 2 },
+    ],
   };
-  const requireRole = (...roles: string[]) => (req: any, res: any, next: any) =>
-    roles.includes(req.user.role) ? next() : res.status(403).json({ error: "Forbidden" });
-  new Function(
-    "app", "authenticateToken", "requireRole", "isAhsServiceOrderPrefillEnabled",
-    "ahsPrefillLookupLog", "AHS_PREFILL_WINDOW_MS", "AHS_PREFILL_MAX_PER_WINDOW",
-    "toAhsPrefillResponse", "lookupAhsPrefillSources", "needsServerDerivedAhs", "boundedServerDerivedAhs",
-    "fetchAhsServiceOrderPrefill", "lookupHssomOrder", "fetchProcIdForServiceOrder", routeJs,
-  )(app, authenticateToken, requireRole, () => enabled, new Map(), 3600000, 2,
-    toAhsPrefillResponse, lookupAhsPrefillSources, needsServerDerivedAhs, boundedServerDerivedAhs,
-    lookup, lookupHssomOrder, fetchProcId);
-  return { app, lookup, fetchProcId };
-}
 
-const url = "/api/tech/ahs-prefill?district=8175&serviceOrder=12345678";
-
-describe("GET /api/tech/ahs-prefill", () => {
-  it.each(["technician", "flexed_technician"])("returns only appliance fields to %s", async (role) => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const { app, lookup } = harness();
-    const res = await request(app).get(url).set("x-test-role", role);
-    expect(res.status).toBe(200);
-    expect(res.headers["cache-control"]).toBe("no-store");
-    expect(lookup).toHaveBeenCalledWith("8175", "12345678");
-    expect(hssomLookup).toHaveBeenCalledWith("8175", "12345678");
-    expect(res.body).toEqual({
-      status: "found",
-      appliance: { brand: "Whirlpool", modelNumber: "WTW5000DW1", serialNumber: "C31290822" },
-      hasDispatchNumber: true,
-      hasCustomer: false,
-    });
-    for (const value of [SECRET_CONTRACT, SECRET_PARTNER, SECRET_CLIENT]) expect(res.text).not.toContain(value);
+  it("names parts in the shared provenance list", () => {
+    expect(AHS_PREFILL_FIELDS).toContain("parts");
+    expect(ahsDetailsSchema.shape.prefilledFields.safeParse(["parts"]).success).toBe(true);
   });
 
-  it("never returns customer, contract or dispatch values and logs none", async () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const { app, fetchProcId } = harness({ hssom: hssomFound });
-    const res = await request(app).get(url).set("x-test-role", "technician");
-    expect(res.body).toEqual({
-      status: "found",
-      appliance: { brand: "Whirlpool", modelNumber: "WTW5000DW1", serialNumber: "C31290822" },
-      hasDispatchNumber: true,
-      hasCustomer: true,
+  it("fills an empty draft and names exactly what was filled", () => {
+    const draft = applyAhsSubmitPrefill({}, sources(foundWithParts, hssomFound), ahsWarranty);
+    expect(draft).toEqual({
+      contractNumber: SECRET_CONTRACT,
+      brand: "Whirlpool",
+      modelNumber: "WTW5000DW1",
+      serialNumber: "C31290822",
+      customerName: SECRET_NAME,
+      customerAddress: SECRET_ADDRESS,
+      parts: foundWithParts.parts,
+      purchaseYear: 2019,
+      prefilledFields: [
+        "contractNumber", "brand", "modelNumber", "serialNumber", "customerName", "customerAddress", "parts",
+      ],
     });
-    expect(fetchProcId).not.toHaveBeenCalled(); // the Snowflake row decided AHS
-    const serialized = JSON.stringify(res.body) + res.text + JSON.stringify(res.headers) + info.mock.calls.flat().join(" ");
-    for (const value of [
-      SECRET_NAME, SECRET_ADDRESS, "Quillfeather", "Featherstonehaugh",
-      SECRET_CONTRACT, SECRET_HSSOM_CONTRACT, "/0003", "/0007", SECRET_PARTNER, SECRET_CLIENT,
+    // Stored JSON reads back as a draft, not as complete details.
+    expect(parseStoredAhsDetailsDraft(JSON.stringify(draft))).toEqual(draft);
+    expect(parseStoredAhsDetails(JSON.stringify(draft))).toBeNull();
+  });
+
+  it("is an empty draft when the lookups found nothing or failed", () => {
+    for (const lookups of [
+      sources({ status: "unavailable" }, { status: "unavailable" }),
+      sources({ status: "not_found" }, { status: "not_found" }),
     ]) {
-      expect(serialized).not.toContain(value);
+      const draft = applyAhsSubmitPrefill({}, lookups, ahsWarranty);
+      expect(draft).toEqual({});
+      expect(parseStoredAhsDetailsDraft(JSON.stringify(draft))).toEqual({});
     }
   });
 
-  it("answers found with hasCustomer false when HSSOM is unavailable", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const { app } = harness({ hssom: { status: "unavailable" } });
-    const res = await request(app).get(url).set("x-test-role", "technician");
-    expect(res.body).toMatchObject({ status: "found", hasDispatchNumber: true, hasCustomer: false });
+  it("fills parts only when the draft has none", () => {
+    const withParts: AhsDetailsDraft = { parts: [{ partNumber: "TYPED-1", quantity: 1 }] };
+    const kept = fillAhsDraft(withParts, { parts: [{ partNumber: "SO-1", quantity: 2 }] });
+    expect(kept.parts).toEqual([{ partNumber: "TYPED-1", quantity: 1 }]);
+    expect(kept).not.toHaveProperty("prefilledFields");
+    const filled = fillAhsDraft({ parts: [] }, { parts: [{ partNumber: "SO-1", quantity: 2 }] });
+    expect(filled).toEqual({ parts: [{ partNumber: "SO-1", quantity: 2 }], prefilledFields: ["parts"] });
   });
 
-  it("uses the ProcID derivation when HSSOM found the order and Snowflake is unavailable", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const ahs = harness({ result: { status: "unavailable" }, hssom: hssomFound });
-    const res = await request(ahs.app).get(url).set("x-test-role", "technician");
-    expect(ahs.fetchProcId).toHaveBeenCalledWith("8175-12345678");
-    expect(res.body).toEqual({
-      status: "found",
-      appliance: { brand: "Maytag", modelNumber: "MVW6230HW", serialNumber: "HS-SERIAL-1" },
-      hasDispatchNumber: true,
-      hasCustomer: true,
-    });
-    for (const value of [SECRET_NAME, SECRET_ADDRESS, SECRET_HSSOM_CONTRACT]) expect(res.text).not.toContain(value);
-
-    const sears = harness({
-      result: { status: "unavailable" },
-      hssom: hssomFound,
-      procId: { status: "FOUND", procId: "SPHW1", clientNm: "Sears Home Warranty" },
-    });
-    expect((await request(sears.app).get(url).set("x-test-role", "technician")).body).toEqual({ status: "not_found" });
-
-    const down = harness({ result: { status: "unavailable" }, hssom: hssomFound, procId: { status: "LOOKUP_UNAVAILABLE", retryable: true } });
-    expect((await request(down.app).get(url).set("x-test-role", "technician")).body).toEqual({ status: "unavailable" });
-  });
-
-  it("answers not_found for an order that is not AHS", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const { app, fetchProcId } = harness({
-      result: { ...found, partnerId: "SPHW1", clientName: "Sears Home Warranty" },
-      hssom: hssomFound,
-    });
-    const res = await request(app).get(url).set("x-test-role", "technician");
-    expect(res.body).toEqual({ status: "not_found" });
-    expect(fetchProcId).not.toHaveBeenCalled();
-  });
-
-  it("skips the Snowflake prefill when its flag is off", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const { app, lookup } = harness({ enabled: false });
-    const res = await request(app).get(url).set("x-test-role", "technician");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "unavailable" });
-    expect(lookup).not.toHaveBeenCalled();
-
-    // HSSOM still answers behind its own flag, with AHS from the ProcID derivation.
-    const hssomOnly = harness({ enabled: false, hssom: hssomFound });
-    const found2 = await request(hssomOnly.app).get(url).set("x-test-role", "technician");
-    expect(found2.body).toMatchObject({ status: "found", hasCustomer: true });
-    expect(hssomOnly.lookup).not.toHaveBeenCalled();
-  });
-
-  it.each(["", "admin", "vrs_agent", "provider_1099"])("rejects role %j before Snowflake", async (role) => {
-    const { app, lookup } = harness();
-    const req = request(app).get(url);
-    const res = await (role ? req.set("x-test-role", role) : req);
-    expect(res.status).toBe(role ? 403 : 401);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(hssomLookup).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "district=817&serviceOrder=12345678",
-    "district=8175&serviceOrder=1234567",
-    "district=8175&serviceOrder=8175-12345678",
-    "serviceOrder=12345678",
-  ])("rejects malformed input %s before Snowflake", async (query) => {
-    const { app, lookup } = harness();
-    const res = await request(app).get(`/api/tech/ahs-prefill?${query}`).set("x-test-role", "technician");
-    expect(res.status).toBe(400);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(hssomLookup).not.toHaveBeenCalled();
-  });
-
-  it("rate-limits per user", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { app, lookup } = harness();
-    await request(app).get(url).set("x-test-role", "technician");
-    await request(app).get(url).set("x-test-role", "technician");
-    expect((await request(app).get(url).set("x-test-role", "technician")).status).toBe(429);
-    expect(lookup).toHaveBeenCalledTimes(2);
-    expect(hssomLookup).toHaveBeenCalledTimes(2);
-  });
-
-  it("degrades to unavailable on outages and unexpected errors", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    for (const result of [{ status: "unavailable" } as const, new Error("internal detail")]) {
-      const { app } = harness({ result });
-      const res = await request(app).get(url).set("x-test-role", "technician");
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ status: "unavailable" });
-    }
-    const { app } = harness();
-    hssomLookup.mockRejectedValue(new Error("HSSOM down"));
-    const res = await request(app).get(url).set("x-test-role", "technician");
-    expect(res.body).toMatchObject({ status: "found", hasCustomer: false });
+  it("starts a resubmission from the previous ticket's details", () => {
+    const previous = mergeSavedAhsProvenance(
+      { ...details, brand: "Whirlpool" },
+      { brand: "Whirlpool", prefilledFields: ["brand"] },
+    );
+    const draft = applyAhsSubmitPrefill(draftFromPrevious(previous), sources(foundWithParts, { status: "unavailable" }), ahsWarranty);
+    expect(draft.parts).toEqual(details.parts); // the previous parts win
+    expect(draft.laborAmount).toBe(details.laborAmount);
+    expect(draft.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
+    expect(draftFromPrevious(null)).toEqual({});
   });
 });
 
-describe("POST /api/submissions prefill wiring", () => {
+describe("Stage 1 save provenance (mergeSavedAhsProvenance)", () => {
+  const draft: AhsDetailsDraft = {
+    contractNumber: SECRET_CONTRACT,
+    brand: "Whirlpool",
+    modelNumber: "WTW5000DW1",
+    customerName: SECRET_NAME,
+    parts: [{ partNumber: "WPW10503278", description: "Electronic control board", quantity: 1 }],
+    purchaseYear: 2019,
+    prefilledFields: ["contractNumber", "brand", "modelNumber", "customerName", "parts"],
+  };
+  const saved: AhsDetails = {
+    ...details,
+    contractNumber: ` ${SECRET_CONTRACT.toLowerCase()} `,
+    brand: "WHIRLPOOL",
+    modelNumber: "CHANGED-MODEL",
+    customerName: "",
+    applianceAge: undefined,
+    parts: [{ partNumber: "wpw10503278", description: "Electronic control board", quantity: 1, unitPrice: 245 }],
+  };
+
+  it("keeps a field only while the saved value equals the server's (trimmed, any case)", () => {
+    const merged = mergeSavedAhsProvenance(saved, draft);
+    // modelNumber changed, customerName cleared; parts kept: the manager only
+    // added the price the order didn't have.
+    expect(merged.prefilledFields).toEqual(["contractNumber", "brand", "parts"]);
+  });
+
+  it("drops parts provenance once a server-filled part value changes", () => {
+    const changedQty = { ...saved, parts: [{ ...saved.parts[0], quantity: 2 }] };
+    expect(mergeSavedAhsProvenance(changedQty, draft).prefilledFields).not.toContain("parts");
+    const extraLine = { ...saved, parts: [...saved.parts, { partNumber: "NEW", quantity: 1, description: "New", unitPrice: 1 }] };
+    expect(mergeSavedAhsProvenance(extraLine, draft).prefilledFields).not.toContain("parts");
+  });
+
+  it("strips client-sent provenance and purchaseYear; carries the draft's year while the age is blank", () => {
+    const forged = { ...saved, prefilledFields: ["serialNumber"], purchaseYear: 1999 } as AhsDetails;
+    const merged = mergeSavedAhsProvenance(forged, draft);
+    expect(merged.prefilledFields).not.toContain("serialNumber");
+    expect(merged.purchaseYear).toBe(2019);
+    expect(mergeSavedAhsProvenance({ ...forged, applianceAge: 3 }, draft)).not.toHaveProperty("purchaseYear");
+    const noDraft = mergeSavedAhsProvenance(forged, null);
+    expect(noDraft).not.toHaveProperty("prefilledFields");
+    expect(noDraft).not.toHaveProperty("purchaseYear");
+    // The stored result still parses as complete details.
+    expect(parseStoredAhsDetails(JSON.stringify(merged))).toMatchObject({ prefilledFields: merged.prefilledFields });
+  });
+});
+
+describe("AHS customer PII never reaches a technician's browser", () => {
+  it("drops the dispatch number, customer name and address whoever entered them", () => {
+    const stored = JSON.stringify({
+      contractNumber: SECRET_CONTRACT,
+      customerName: SECRET_NAME,
+      customerAddress: SECRET_ADDRESS,
+      brand: "Whirlpool",
+      prefilledFields: ["brand"],
+    });
+    const redacted = JSON.parse(redactAhsCustomerForTechnician(stored)!);
+    expect(redacted).toEqual({ brand: "Whirlpool", prefilledFields: ["brand"] });
+    const nothing = JSON.stringify({ brand: "Whirlpool" });
+    expect(redactAhsCustomerForTechnician(nothing)).toBe(nothing);
+    expect(redactAhsCustomerForTechnician("{}")).toBe("{}");
+    expect(redactAhsCustomerForTechnician(null)).toBeNull();
+    expect(redactAhsCustomerForTechnician("not json")).toBe("not json");
+  });
+
+  it("every technician-facing submission response goes through redactSubmissionForRole", () => {
+    expect(routes).not.toMatch(/json\([^)]*redactWarrantyForProvider\(/);
+    expect(routes.match(/redactSubmissionForRole\(user\.role,/g)?.length).toBeGreaterThanOrEqual(6);
+    const helper = routes.slice(routes.indexOf("function redactSubmissionForRole"));
+    expect(helper).toContain('["technician", "flexed_technician", "provider_1099"]');
+    expect(helper).toContain("redactAhsCustomerForTechnician(row.ahsDetails)");
+    expect(routes).toContain("json({ submission: redactSubmissionForRole(user.role, updated), added: totalAdded })");
+  });
+});
+
+const routes = fs.readFileSync("server/routes.ts", "utf8");
+
+describe("POST /api/submissions stores a draft", () => {
   const handler = routes.slice(
     routes.indexOf("const createSubmissionHandler = async"),
-    routes.indexOf("const submission = idempResult.submission!;"),
+    routes.indexOf('  app.post(\n    "/api/submissions",'),
+  );
+  const schema = routes.slice(
+    routes.indexOf("const createSubmissionSchema = z.object({"),
+    routes.indexOf("const createSubmissionHandler = async"),
   );
 
-  it("discards client server-only fields and applies the prefill before the details are stored", () => {
-    expect(handler).toContain("withoutServerOnlyFields(parsed.data.ahsDetails)");
-    const lookupAt = handler.indexOf("lookupAhsPrefillSources(parsed.data.serviceOrder, {");
-    const applyAt = handler.indexOf("applyAhsSubmitPrefill(ahsDetails, sources, {");
-    const storeAt = handler.indexOf("ahsDetails: ahsDetails ? JSON.stringify(ahsDetails) : null");
-    expect(lookupAt).toBeGreaterThan(0);
-    expect(lookupAt).toBeLessThan(handler.indexOf("await fetchProcIdForServiceOrder(parsed.data.serviceOrder)"));
-    expect(applyAt).toBeGreaterThan(lookupAt);
-    expect(storeAt).toBeGreaterThan(applyAt);
+  it("ignores a client-sent ahsDetails and keeps the tech's division", () => {
+    expect(schema).not.toMatch(/^\s+ahsDetails:/m);
+    expect(handler).not.toContain("parsed.data.ahsDetails");
+    expect(handler).not.toContain("ahsDivisionFor");
+    expect(handler).not.toMatch(/parsed\.data\.applianceType\s*=/);
+    expect(handler).toContain("applianceType: parsed.data.applianceType,");
+  });
+
+  it("builds the draft from the lookups for AHS authorization tickets while enrollment is on", () => {
+    expect(handler).toMatch(
+      /const wantsAhsDraft =\s+isVrsAiAppEnrollEnabled\(\) &&\s+parsed\.data\.requestType === "authorization" &&\s+!internalOptions\?\.skipAppVrsAiEnroll;/,
+    );
     expect(handler).toContain("snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null");
     expect(handler).toContain("hssom: lookupHssomOrder");
+    const earlyAt = handler.indexOf("const earlyAhsPrefillLookup = wantsAhsDraft");
+    const procAt = handler.indexOf("await fetchProcIdForServiceOrder(parsed.data.serviceOrder)");
+    const draftAt = handler.indexOf('if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {');
+    const applyAt = handler.indexOf("applyAhsSubmitPrefill(draftFromPrevious(previousAhsDraft), sources, {");
+    const storeAt = handler.indexOf("ahsDetails: ahsDraft ? JSON.stringify(ahsDraft) : null,");
+    expect(earlyAt).toBeGreaterThan(0);
+    expect(earlyAt).toBeLessThan(procAt);
+    expect(draftAt).toBeGreaterThan(procAt);
+    expect(applyAt).toBeGreaterThan(draftAt);
+    expect(storeAt).toBeGreaterThan(applyAt);
+    expect(handler.slice(draftAt, applyAt)).toContain("await (earlyAhsPrefillLookup ?? startAhsPrefillLookup())");
     expect(handler).toMatch(/finalWarrantyType,\s+derivedWarrantyType: derivedWarranty\?\.warrantyType/);
-    const keepAt = handler.indexOf("keepPrefilledFromPrevious(ahsDetails, previousAhsDetails)");
-    expect(keepAt).toBeGreaterThan(applyAt);
-    expect(keepAt).toBeLessThan(storeAt);
+  });
+
+  it("stores the draft whatever the lookups returned (they never reject)", () => {
+    // The draft is assigned unconditionally inside the AHS branch: an empty
+    // lookup leaves {} (see "is an empty draft when the lookups found nothing").
+    const branch = handler.slice(handler.indexOf('if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {'));
+    expect(branch.slice(0, branch.indexOf("console.log("))).not.toMatch(/if \(sources\./);
+  });
+
+  it("creates no VRS AI bridge row at submit", () => {
+    expect(handler).not.toContain("enrollAppSubmissionInVrsAi");
+    expect(handler).not.toContain("saveAppSubmissionVrsAiIntake");
+    expect(handler).not.toContain("createIntake");
+    expect(routes).not.toContain("enrollAppSubmissionInVrsAi");
+    // SASHA intake still opts out of the app path and creates its own row.
+    expect(routes).toMatch(/await createSubmissionHandler\(internalRequest, capturedRes, \{\s+\.\.\.internalOptions,\s+skipAppVrsAiEnroll: true,/);
   });
 
   it("logs source statuses and field names, never values", () => {
     const logAt = handler.indexOf("`[ahs-prefill] submit SO=");
     const log = handler.slice(logAt, handler.indexOf(");", logAt));
-    expect(log).toContain("prefilledFieldNames(ahsDetails)");
-    expect(log).not.toMatch(/ahsDetails\.(customerName|customerAddress|contractNumber|brand|modelNumber|serialNumber|purchaseYear)/);
+    expect(log).toContain("prefilledFieldNames(ahsDraft)");
+    expect(log).not.toMatch(/ahsDraft\.(customerName|customerAddress|contractNumber|brand|modelNumber|serialNumber|purchaseYear|parts)/);
     expect(log).not.toMatch(/sources\.(snowflake|hssom)\.(?!status)/);
   });
-});
 
-describe("server-filled customer PII never reaches a technician's browser", () => {
-  const stored = JSON.stringify({
-    customerName: "Maria Gonzalez",
-    customerAddress: "742 Evergreen Terrace, Hagerstown, MD 21740",
-    brand: "Whirlpool",
-    prefilledFields: ["brand", "customerName", "customerAddress"],
+  it("removes the technician prefill endpoint and keeps the config flags", () => {
+    expect(routes).not.toContain('"/api/tech/ahs-prefill"');
+    expect(routes).not.toContain("ahsPrefillLookupLog");
+    expect(routes).toContain("ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),");
+    expect(routes).toContain("ahsHssomCustomerPrefill: isAhsHssomCustomerPrefillEnabled(),");
   });
 
-  it("drops customer fields the server filled, keeps everything else", () => {
-    const redacted = JSON.parse(redactServerPrefilledCustomer(stored)!);
-    expect(redacted).not.toHaveProperty("customerName");
-    expect(redacted).not.toHaveProperty("customerAddress");
-    expect(redacted.brand).toBe("Whirlpool");
-    expect(redacted.prefilledFields).toEqual(["brand", "customerName", "customerAddress"]);
-  });
-
-  it("leaves customer values the tech typed, and passes through junk unchanged", () => {
-    const typed = JSON.stringify({ customerName: "Typed By Tech", prefilledFields: ["brand"] });
-    expect(redactServerPrefilledCustomer(typed)).toBe(typed);
-    expect(redactServerPrefilledCustomer(null)).toBeNull();
-    expect(redactServerPrefilledCustomer("not json")).toBe("not json");
-  });
-
-  it("restores the previous server-filled values on a resubmission that came back blank", () => {
-    const previous = JSON.parse(stored);
-    const resent = { brand: "Whirlpool" } as Record<string, any>;
-    const restored = restoreRedactedCustomerFromPrevious(resent, previous);
-    expect(restored.customerName).toBe("Maria Gonzalez");
-    expect(restored.customerAddress).toBe("742 Evergreen Terrace, Hagerstown, MD 21740");
-    expect(keepPrefilledFromPrevious(restored as any, previous).prefilledFields).toEqual(
-      expect.arrayContaining(["customerName", "customerAddress"]),
-    );
-    // A tech-typed replacement wins and is not overwritten.
-    expect(restoreRedactedCustomerFromPrevious({ customerName: "New" } as any, previous).customerName).toBe("New");
-    // Nothing is restored from fields the tech originally typed.
-    expect(restoreRedactedCustomerFromPrevious({} as any, { customerName: "X" } as any)).toEqual({});
-  });
-
-  it("every technician-facing submission response goes through redactSubmissionForRole", () => {
-    const routes = fs.readFileSync("server/routes.ts", "utf8");
-    expect(routes).not.toMatch(/json\([^)]*redactWarrantyForProvider\(/);
-    expect(routes.match(/redactSubmissionForRole\(user\.role,/g)?.length).toBeGreaterThanOrEqual(6);
-    const helper = routes.slice(routes.indexOf("function redactSubmissionForRole"));
-    expect(helper).toContain('["technician", "flexed_technician", "provider_1099"]');
-    expect(helper).toContain("redactServerPrefilledCustomer(row.ahsDetails)");
-    const handler = routes.slice(routes.indexOf("restoreRedactedCustomerFromPrevious(ahsDetails, previousAhsDetails)"));
-    expect(handler.indexOf("keepPrefilledFromPrevious(ahsDetails, previousAhsDetails)")).toBeGreaterThan(0);
-  });
-});
-
-describe("pre-push review fixes", () => {
-  it("marks browser-filled brand/model/serial as from the service order when they match", () => {
-    const fromBrowser = { ...details, brand: "whirlpool", modelNumber: "WTW5000DW1", serialNumber: "TYPED-BY-TECH" };
-    const next = applyAhsServiceOrderPrefill(fromBrowser, found);
-    expect(next.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber"]);
-    // A value that differs from the service order stays the tech's own.
-    expect(next.serialNumber).toBe("TYPED-BY-TECH");
-    expect(next.brand).toBe("whirlpool");
-  });
-
-  it("redacts a server-filled dispatch number from technician responses", () => {
-    const stored = JSON.stringify({ contractNumber: SECRET_CONTRACT, brand: "Whirlpool", prefilledFields: ["contractNumber"] });
-    expect(redactServerPrefilledCustomer(stored)).not.toContain(SECRET_CONTRACT);
-    const typed = JSON.stringify({ contractNumber: "TECH-123", prefilledFields: [] });
-    expect(redactServerPrefilledCustomer(typed)).toBe(typed);
-  });
-
-  it("restores a redacted dispatch number and the previous purchase year on resubmission", () => {
-    const previous = { ...details, contractNumber: SECRET_CONTRACT, applianceAge: undefined, purchaseYear: 2019, prefilledFields: ["contractNumber"] } as any;
-    const resent = { ...details, contractNumber: "", applianceAge: undefined } as any;
-    const restored = restoreRedactedCustomerFromPrevious(resent, previous);
-    expect(restored.contractNumber).toBe(SECRET_CONTRACT);
-    expect(restored.purchaseYear).toBe(2019);
-    // Not when the tech now gave an age.
-    expect(restoreRedactedCustomerFromPrevious({ ...resent, applianceAge: 3 }, previous).purchaseYear).toBeUndefined();
-  });
-
-  it("redacts the add-photos response and ignores AHS details while enrollment is off", () => {
-    const routes = fs.readFileSync("server/routes.ts", "utf8");
-    expect(routes).toContain("json({ submission: redactSubmissionForRole(user.role, updated), added: totalAdded })");
-    const photos = routes.slice(routes.indexOf('app.post("/api/submissions/:id/photos"'));
-    const handler = photos.slice(0, photos.indexOf("\n  app.", 1));
-    expect(handler).not.toMatch(/json\(\{ submission: updated\b/);
-    expect(routes).toContain('let ahsDetails = isVrsAiAppEnrollEnabled() && parsed.data.requestType === "authorization"');
+  it("registers the Stage 1 review API with the submit path's lookups", () => {
+    const wiring = routes.slice(routes.indexOf("registerAhsReviewApi(app, {"));
+    const block = wiring.slice(0, wiring.indexOf("\n  });\n"));
+    expect(block).toContain("isEnrollEnabled: isVrsAiAppEnrollEnabled,");
+    expect(block).toContain("snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,");
+    expect(block).toContain("store: vrsBridgeStore,");
+    expect(block).toContain("broadcastToAdmins({");
+    expect(block).not.toContain("broadcastToTechnicians");
   });
 });

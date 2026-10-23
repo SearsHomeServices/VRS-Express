@@ -14,6 +14,13 @@
 
 ## Open — technician AHS → VRS AI enrollment (2026-10-08)
 
+- [x] Move AHS details to the VRS manager at Stage 1: server draft at submit,
+      PATCH save + enroll, refresh (2026-10-23, branch `feat/ahs-mgr-server`).
+- [ ] Before enabling the prefill flag, confirm NPSXTPN parts on a real AHS order:
+      which status codes to exclude (only X/V today), whether labor lines
+      (`SVC_PRT_TYP_CD = 'L'`) should be skipped, and that PRT_SEL_PRC_AM is the
+      price AHS expects.
+
 - [x] Enroll new queued AHS authorization tickets from the app or external API
       in the VRS AI bridge, behind `VRS_AI_APP_ENROLL_ENABLED` (default off).
 - [x] Replace the placeholder payload with real fields entered by the tech
