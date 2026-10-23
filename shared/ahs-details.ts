@@ -202,6 +202,31 @@ export const ahsDetailsSchema = z.object({
 export type AhsPart = z.infer<typeof ahsPartSchema>;
 export type AhsDetails = z.infer<typeof ahsDetailsSchema>;
 
+// Draft AHS details. The technician no longer enters AHS details; at submit
+// the server stores what the service-order lookups found (Snowflake, HSSOM)
+// as a draft in submissions.ahs_details, and the VRS manager completes it at
+// Stage 1 (PATCH /api/submissions/:id/ahs-details, see shared/ahs-review.ts).
+// Every field is optional; a draft becomes complete once
+// ahsDetailsSchema.safeParse succeeds on it.
+export const ahsPartDraftSchema = ahsPartSchema.partial();
+export const ahsDetailsDraftSchema = ahsDetailsSchema.partial().extend({
+  parts: z.array(ahsPartDraftSchema).max(10).optional(),
+});
+
+export type AhsPartDraft = z.infer<typeof ahsPartDraftSchema>;
+export type AhsDetailsDraft = z.infer<typeof ahsDetailsDraftSchema>;
+
+// Reads submissions.ahs_details as a draft (complete details parse too).
+export function parseStoredAhsDetailsDraft(raw: string | null | undefined): AhsDetailsDraft | null {
+  if (!raw) return null;
+  try {
+    const parsed = ahsDetailsDraftSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ahsApplianceKind(value: string | null | undefined) {
   return AHS_APPLIANCE_KINDS.find((kind) => kind.value === value);
 }
