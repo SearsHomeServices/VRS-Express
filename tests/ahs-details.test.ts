@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { useForm } from "react-hook-form";
@@ -280,9 +279,8 @@ describe("AHS details on the tech forms", () => {
     const { customerName: _n, customerAddress: _a, ...rest } = formValues.ahsDetails;
     expect(draft).toEqual({ ...formValues, ahsDetails: rest });
     expect(omitAhsCustomerPiiFromDraft({ serviceOrder: "x" })).toEqual({ serviceOrder: "x" });
-    // The tech-submit autosave is what calls it.
-    const page = readFileSync(new URL("../client/src/pages/tech-submit.tsx", import.meta.url), "utf8");
-    expect(page).toContain("formValues: omitAhsCustomerPiiFromDraft(formValues)");
+    // The tech forms no longer have an AHS section, so their drafts hold no
+    // AHS keys at all (tests/tech-form-no-ahs.test.ts).
   });
 
   // A resubmission loads the stored ticket, which may hold customer values
@@ -309,12 +307,6 @@ describe("AHS details on the tech forms", () => {
     const saved = JSON.stringify(omitAhsCustomerPiiFromDraft({ serviceOrder: "8175-13538277", ahsDetails: asForm }));
     expect(saved).not.toContain("so-customer-Maria");
     expect(saved).not.toContain("so-address-742-Evergreen");
-    // tech-resubmit keeps no localStorage draft today. If one is added it
-    // must go through omitAhsCustomerPiiFromDraft like tech-submit.
-    const page = readFileSync(new URL("../client/src/pages/tech-resubmit.tsx", import.meta.url), "utf8");
-    if (/(localStorage|sessionStorage)\.setItem/.test(page)) {
-      expect(page).toContain("omitAhsCustomerPiiFromDraft(");
-    }
   });
 });
 
@@ -481,9 +473,6 @@ describe("AHS service-order prefill", () => {
     expect(ahsReviewCustomer(undefined, found)).toBeUndefined();
     expect(ahsReviewCustomer(undefined, { status: "unavailable" })).toBeUndefined();
     expect(ahsReviewCustomer(undefined, null)).toBeUndefined();
-    const page = readFileSync(new URL("../client/src/pages/tech-submit.tsx", import.meta.url), "utf8");
-    expect(page).toContain("ahsReviewCustomer(ahs.customerName, ahsPrefill)");
-    expect(page).toContain('row("Customer", customer, "review-ahs-customer")');
   });
 
   it("marks only the trimmed set of inputs as required", () => {

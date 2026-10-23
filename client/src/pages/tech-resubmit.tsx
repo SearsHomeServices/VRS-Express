@@ -35,16 +35,6 @@ import imageCompression from "browser-image-compression";
 import { Camera, Send, X, AlertTriangle, ArrowLeft, Lock, Video, Upload, Info, Plus } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
 import type { Submission } from "@shared/schema";
-import { ahsDetailsSchema, parseStoredAhsDetails } from "@shared/ahs-details";
-import {
-  AhsApplianceKindField,
-  AhsDetailsCard,
-  addAhsDetailsIssues,
-  ahsDetailsToForm,
-  emptyAhsDetailsForm,
-} from "@/components/ahs-details-fields";
-import { useVrsAiAppEnrollEnabled } from "@/hooks/use-feature-flags";
-import { useAhsServiceOrderPrefill, useAhsServiceOrderPrefillEnabled } from "@/hooks/use-ahs-prefill";
 
 const APPLIANCE_TYPES = [
   { value: "refrigeration", label: "Refrigerator" },
@@ -68,10 +58,7 @@ const resubmitFormSchema = z.object({
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
   appealNotes: z.string().max(2000, "Appeal notes must be 2000 characters or less").optional(),
   partNumbers: z.array(z.string()).optional(),
-  // AHS details for VRS AI; same contract as tech-submit (ahs-details-fields.tsx).
-  ahsRequired: z.boolean().optional(),
-  ahsDetails: z.any().optional(),
-}).superRefine(addAhsDetailsIssues);
+});
 
 type ResubmitFormData = z.infer<typeof resubmitFormSchema>;
 
@@ -125,28 +112,6 @@ export default function TechResubmitPage() {
 
   const watchedRequestType = form.watch("requestType");
   const watchedApplianceType = form.watch("applianceType");
-  // AHS details for VRS AI (see tech-submit). Synced after every render so
-  // the original ticket's values loaded by form.reset keep it consistent.
-  const vrsAiAppEnrollEnabled = useVrsAiAppEnrollEnabled();
-  const ahsMode = vrsAiAppEnrollEnabled && user?.role !== "provider_1099" &&
-    form.watch("warrantyType") === "american_home_shield" &&
-    watchedRequestType === "authorization";
-  const watchedAhsDetails = form.watch("ahsDetails");
-  useEffect(() => {
-    if (Boolean(form.getValues("ahsRequired")) !== ahsMode) {
-      form.setValue("ahsRequired", ahsMode, { shouldDirty: false });
-    }
-    if (ahsMode && !form.getValues("ahsDetails")) {
-      form.setValue("ahsDetails", emptyAhsDetailsForm(), { shouldDirty: false });
-    }
-  });
-  // Same service-order prefill as tech-submit. Values loaded from the
-  // original ticket are never overwritten; only blanks are filled.
-  const ahsPrefillEnabled = useAhsServiceOrderPrefillEnabled();
-  const ahsPrefill = useAhsServiceOrderPrefill(form, {
-    enabled: ahsMode && ahsPrefillEnabled,
-    serviceOrder: form.watch("serviceOrder"),
-  });
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
       form.setValue("applianceType", undefined as any, { shouldValidate: false });
@@ -180,10 +145,6 @@ export default function TechResubmitPage() {
       warrantyProvider: sub.warrantyProvider || "",
       issueDescription: sub.issueDescription,
       appealNotes: "",
-      ahsDetails: (() => {
-        const details = parseStoredAhsDetails(sub.ahsDetails);
-        return details ? ahsDetailsToForm(details) : undefined;
-      })(),
     });
     let rejMedia: any = null;
     try { rejMedia = sub.rejectedMedia ? JSON.parse(sub.rejectedMedia) : null; } catch {}
@@ -493,10 +454,6 @@ export default function TechResubmitPage() {
   function onSubmit(formData: ResubmitFormData) {
     const payload: any = { ...formData };
     delete payload.partNumbers;
-    delete payload.ahsRequired;
-    delete payload.ahsDetails;
-    // Already validated by the form resolver; parse to send real numbers.
-    if (formData.ahsRequired) payload.ahsDetails = ahsDetailsSchema.parse(formData.ahsDetails);
     const phoneOverride = localStorage.getItem("vrs_phone_override");
     if (phoneOverride) payload.phoneOverride = phoneOverride;
     const photosObj: any = {};
@@ -754,10 +711,6 @@ export default function TechResubmitPage() {
                 <CardContent className="p-4 space-y-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Appliance Details</p>
 
-                  {ahsMode && watchedAhsDetails ? (
-                    // AHS: detailed appliance list; it also sets the division.
-                    <AhsApplianceKindField form={form} />
-                  ) : (
                   <FormField
                     control={form.control}
                     name="applianceType"
@@ -784,7 +737,6 @@ export default function TechResubmitPage() {
                       </FormItem>
                     )}
                   />
-                  )}
 
                   <FormField
                     control={form.control}
@@ -810,8 +762,6 @@ export default function TechResubmitPage() {
                   />
                 </CardContent>
               </Card>
-
-              {ahsMode && watchedAhsDetails ? <AhsDetailsCard form={form} prefill={ahsPrefill} /> : null}
 
               <Card>
                 <CardContent className="p-4 space-y-4">
