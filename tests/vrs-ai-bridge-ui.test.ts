@@ -1352,6 +1352,26 @@ describe("Stage 1 AHS editor: mounted", () => {
     expect(note).toContain("Filled 1 blank field.");
   });
 
+  it("refresh replaces a tech-only part line with service-order parts and keeps the tech's function", async () => {
+    mockFetch({
+      refresh: () => jsonResponse(200, {
+        ok: true,
+        ahsDetails: {
+          parts: [{ partNumber: "W10295370A", description: "Evaporator fan motor", quantity: 1, unitPrice: 89.99 }],
+          prefilledFields: ["parts"],
+        },
+        snowflake: "found",
+        hssom: "unavailable",
+      }),
+    });
+    await mountEditor({ parts: [{ partFunction: "Circulates air over the coils" }] });
+    await clickTestId("button-ahs-refresh");
+
+    expect(byTestId<HTMLInputElement>("input-ahs-part-0-number").value).toBe("W10295370A");
+    expect(byTestId<HTMLInputElement>("input-ahs-part-0-price").value).toBe("89.99");
+    expect(byTestId<HTMLInputElement>("input-ahs-part-0-function").value).toBe("Circulates air over the coils");
+  });
+
   it("enlarges a screenshot through the dashboard's lightbox callback", async () => {
     mockFetch({});
     const onOpenPhoto = vi.fn();

@@ -133,6 +133,13 @@ function isBlankPart(part: AhsDetailsFormValues["parts"][number]): boolean {
   );
 }
 
+// A part line that holds only the technician's part function (the server
+// drafts `parts: [{ partFunction }]` when the order has no parts yet). The
+// refresh may replace it with service-order parts, keeping that function.
+function isTechOnlyPart(part: AhsDetailsFormValues["parts"][number]): boolean {
+  return isBlankPart({ ...part, partFunction: "" });
+}
+
 function lookupLabel(value: unknown): string {
   return typeof value === "string" && value.trim() !== "" ? value.replace(/_/g, " ") : "unknown";
 }
@@ -261,10 +268,16 @@ export function AhsDetailsEditor({
           filled += 1;
         }
       }
-      const freshParts = fresh.values.parts.filter((part) => !isBlankPart(part));
-      if (freshParts.length > 0 && current.parts.every(isBlankPart)) {
-        replace(freshParts);
-        nextValues.parts = freshParts;
+      const freshParts = fresh.values.parts.filter((part) => !isTechOnlyPart(part));
+      if (freshParts.length > 0 && current.parts.every(isTechOnlyPart)) {
+        // Keep the technician's part function on part 1 when the fresh part
+        // has none, matching the server's refresh rule.
+        const techFunction = current.parts.find((part) => (part.partFunction ?? "").trim() !== "")?.partFunction;
+        const merged = freshParts.map((part, index) =>
+          index === 0 && techFunction && (part.partFunction ?? "").trim() === "" ? { ...part, partFunction: techFunction } : part,
+        );
+        replace(merged);
+        nextValues.parts = merged;
         filled += 1;
       }
       setBaseline({ values: nextValues, prefilled: fresh.prefilled });
