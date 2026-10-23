@@ -1,11 +1,14 @@
 // Stage 1 reviewer view of submissions.ahs_details (shared/ahs-details.ts).
 //
-// The reviewer must see whatever the technician sent, even when the stored
-// JSON no longer matches today's strict form schema (fields made optional,
-// new keys such as techRecommendation, older rows). So this reads the JSON
-// leniently instead of through ahsDetailsSchema: every field is optional and
-// junk values read as "not provided". Display only; nothing here is sent
-// anywhere, and nothing here logs (the JSON carries customer name/address).
+// The stored JSON is either a draft the server built from the service-order
+// lookups (AhsDetailsDraft, possibly `{}`), details the VRS manager saved at
+// Stage 1, or an older ticket the technician filled in. The reviewer must see
+// whatever is there, even when it no longer matches today's strict schema
+// (fields made optional, new keys such as techRecommendation, older rows,
+// partial drafts). So this reads the JSON leniently instead of through
+// ahsDetailsSchema: every field is optional and junk values read as "not
+// provided". Nothing here is sent anywhere, and nothing here logs (the JSON
+// carries customer name/address).
 import {
   AHS_APPLIANCE_GRADES,
   AHS_FAILURE_CAUSES,
@@ -13,8 +16,16 @@ import {
   roundCents,
 } from "@shared/ahs-details";
 import { AHS_PREFILL_FIELDS, type AhsPrefillField } from "@shared/ahs-prefill";
+import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
 
 export type AhsTechRecommendation = "repair" | "replace";
+
+// What prefilledFields may name. "parts" means the server filled the part
+// lines from the service order too.
+export type AhsReviewProvenanceField = AhsPrefillField | "parts";
+export const AHS_REVIEW_PROVENANCE_FIELDS: readonly AhsReviewProvenanceField[] = Array.from(
+  new Set<AhsReviewProvenanceField>([...AHS_PREFILL_FIELDS, "parts"]),
+);
 
 export interface AhsReviewPart {
   partNumber?: string;
@@ -42,7 +53,7 @@ export interface AhsReviewDetails {
   laborAmount?: number;
   taxAmount?: number;
   parts: AhsReviewPart[];
-  prefilledFields: AhsPrefillField[];
+  prefilledFields: AhsReviewProvenanceField[];
 }
 
 function text(value: unknown): string | undefined {
@@ -78,9 +89,9 @@ export function parseAhsDetailsForReview(
 
   const recommendation = text(parsed.techRecommendation)?.toLowerCase();
   // Known names only (AHS_PREFILL_FIELDS, which includes customerName and
-  // customerAddress); anything else is dropped.
+  // customerAddress, plus "parts"); anything else is dropped.
   const prefilled = Array.isArray(parsed.prefilledFields)
-    ? AHS_PREFILL_FIELDS.filter((field) =>
+    ? AHS_REVIEW_PROVENANCE_FIELDS.filter((field) =>
         (parsed as { prefilledFields: unknown[] }).prefilledFields.includes(field),
       )
     : [];
@@ -173,4 +184,118 @@ export function ahsReviewGrandTotal(details: AhsReviewDetails): number | undefin
     return undefined;
   }
   return roundCents(parts + details.laborAmount + details.taxAmount);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1 editor (PATCH /api/submissions/:id/ahs-details, shared/ahs-review.ts)
+// ---------------------------------------------------------------------------
+
+export interface AhsEditableTicket {
+  requestType?: string | null;
+  warrantyType?: string | null;
+  ticketStatus?: string | null;
+  stage1Status?: string | null;
+  submissionApproved?: boolean | null;
+}
+
+// Bridge states VRS AI has not received yet. The server replaces such a row
+// when the manager saves again.
+const UNDISPATCHED_BRIDGE_STATES = ["pending_review", "dispatch_failed"];
+
+// Whether the VRS manager may still complete or correct the AHS details: an
+// AHS authorization ticket, claimed and at Stage 1 (not yet decided), whose
+// VRS AI request (if one exists) was never dispatched. The server enforces
+// the same conditions; this only decides which view to show. The feature
+// flag (vrsAiAppEnrollEnabled) is checked by the caller.
+export function isAhsDetailsEditable(
+  ticket: AhsEditableTicket | null | undefined,
+  bridge: Pick<VrsAiBridgeStatus, "state" | "providerCallId" | "dispatchedAt"> | null | undefined,
+): boolean {
+  if (!ticket) return false;
+  if (ticket.requestType !== "authorization") return false;
+  if (ticket.warrantyType !== "american_home_shield") return false;
+  if (ticket.ticketStatus !== "pending") return false;
+  if ((ticket.stage1Status ?? "pending") !== "pending") return false;
+  if (ticket.submissionApproved) return false;
+  if (!bridge) return true;
+  return (
+    UNDISPATCHED_BRIDGE_STATES.includes(bridge.state) &&
+    !bridge.providerCallId &&
+    !bridge.dispatchedAt
+  );
+}
+
+// Field names of the editor's form, under its "ahsDetails" root.
+export const AHS_REVIEW_FORM_FIELDS = [
+  "contractNumber",
+  "customerName",
+  "customerAddress",
+  "applianceKind",
+  "brand",
+  "modelNumber",
+  "serialNumber",
+  "applianceAge",
+  "applianceLocation",
+  "applianceGrade",
+  "applianceColor",
+  "failureCause",
+  "techRecommendation",
+  "laborAmount",
+  "taxAmount",
+] as const;
+export type AhsReviewFormField = (typeof AHS_REVIEW_FORM_FIELDS)[number];
+
+export const AHS_REVIEW_PART_FIELDS = [
+  "partNumber",
+  "quantity",
+  "description",
+  "unitPrice",
+  "partFunction",
+  "failureReason",
+] as const;
+
+// A zod issue path (client or server; with or without the leading
+// "ahsDetails" of the request body) → the editor form field that shows it.
+// Array-level part messages ("Add at least one part", the parts total) go to
+// "ahsDetails.parts.root", like react-hook-form's resolver puts them. Null
+// when no input matches; the editor lists those messages above Save.
+export function ahsIssueFieldName(path: readonly (string | number)[]): string | null {
+  const rest = path[0] === "ahsDetails" ? path.slice(1) : path;
+  const [head, index, key] = rest;
+  if (rest.length === 1 && (AHS_REVIEW_FORM_FIELDS as readonly unknown[]).includes(head)) {
+    return `ahsDetails.${head}`;
+  }
+  if (head !== "parts") return null;
+  if (rest.length === 1) return "ahsDetails.parts.root";
+  const row = typeof index === "number" ? index : Number(index);
+  if (!Number.isInteger(row) || row < 0) return null;
+  if (rest.length === 3 && (AHS_REVIEW_PART_FIELDS as readonly unknown[]).includes(key)) {
+    return `ahsDetails.parts.${row}.${key}`;
+  }
+  return null;
+}
+
+export interface AhsIssue {
+  path: (string | number)[];
+  message: string;
+}
+
+// Splits issues into per-field messages (first message per field wins) and
+// the rest.
+export function groupAhsIssues(issues: readonly AhsIssue[] | null | undefined): {
+  fields: Record<string, string>;
+  general: string[];
+} {
+  const fields: Record<string, string> = {};
+  const general: string[] = [];
+  for (const issue of issues ?? []) {
+    if (!issue || typeof issue.message !== "string") continue;
+    const name = Array.isArray(issue.path) ? ahsIssueFieldName(issue.path) : null;
+    if (name) {
+      if (!(name in fields)) fields[name] = issue.message;
+    } else if (!general.includes(issue.message)) {
+      general.push(issue.message);
+    }
+  }
+  return { fields, general };
 }

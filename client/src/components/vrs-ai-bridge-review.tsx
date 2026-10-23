@@ -1,22 +1,51 @@
 import React, { type ReactNode } from "react";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
-import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
+import { useFeatureFlags, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { AhsTicketReview, type AhsReviewMedia } from "@/components/ahs-ticket-review";
-import { parseAhsDetailsForReview } from "@/lib/ahsReview";
+import { AhsDetailsEditor } from "@/components/ahs-details-editor";
+import { isAhsDetailsEditable, parseAhsDetailsForReview } from "@/lib/ahsReview";
 import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
 import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
 
 export const VRS_SOURCE_APP_LABEL = "Submitted by technician in VRS Express";
 export const VRS_SOURCE_SASHA_LABEL = "SASHA";
+export const AHS_NOT_ENROLLED_EDITABLE_TEXT =
+  "This ticket is not enrolled in VRS AI yet. Complete the AHS details below and save them to send it to VRS AI.";
+export const AHS_NOT_ENROLLED_TEXT =
+  "This ticket is not enrolled in VRS AI. The VRS manager can complete the AHS details at Stage 1 to send it to VRS AI; otherwise use the manual authorization flow.";
+
+// Blank values in the payload review (a field VRS AI will confirm with AHS).
+const REVIEW_NOT_PROVIDED = "Not provided";
 
 // The ticket columns the panel reads besides the bridge row. All of them are
-// already on the agent's GET /api/submissions/:id response.
+// already on the agent's GET /api/submissions/:id response. The slim queue
+// row lacks ahsDetails (undefined until the detail fetch lands).
 export interface VrsAiBridgePanelSubmission {
+  id?: number;
   ahsDetails?: string | null;
   photos?: string | null;
   photoThumbnails?: string | null;
   videoUrl?: string | null;
+  issueDescription?: string | null;
+  requestType?: string | null;
+  warrantyType?: string | null;
+  ticketStatus?: string | null;
+  stage1Status?: string | null;
+  submissionApproved?: boolean | null;
+}
+
+function reviewMoney(value: unknown): string | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : undefined;
+}
+
+function reviewSum(...values: unknown[]): number | undefined {
+  let sum = 0;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    sum += value;
+  }
+  return sum;
 }
 
 function ahsReviewMedia(submission: VrsAiBridgePanelSubmission): AhsReviewMedia {
@@ -51,14 +80,23 @@ function ReviewField({
   children: ReactNode;
   mono?: boolean;
 }) {
+  // Only a missing value reads "Not provided"; an empty string or 0 the
+  // payload really carries is shown as is.
+  const missing = children === undefined || children === null;
   return (
     <div>
       <span className="text-muted-foreground">{label}</span>
       <p
         data-field={dataField}
-        className={mono ? "font-mono font-medium" : "font-medium"}
+        className={
+          missing
+            ? "italic text-muted-foreground"
+            : mono
+              ? "font-mono font-medium"
+              : "font-medium"
+        }
       >
-        {children}
+        {missing ? REVIEW_NOT_PROVIDED : children}
       </p>
     </div>
   );
@@ -73,7 +111,8 @@ export function VrsAiBridgeReview({
   const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
   if (!context) return null;
 
-  const total = context.labor_amount + context.tax_amount + context.part_price;
+  const total = reviewSum(context.labor_amount, context.tax_amount, context.part_price);
+  const parts = Array.isArray(context.parts) ? context.parts : [];
 
   return (
     <details className="mt-3 border-t border-blue-200 pt-3 dark:border-blue-900">
@@ -176,16 +215,16 @@ export function VrsAiBridgeReview({
             </ReviewField>
           )}
           <ReviewField label="Labor" dataField="labor">
-            ${context.labor_amount.toFixed(2)}
+            {reviewMoney(context.labor_amount)}
           </ReviewField>
           <ReviewField label="Tax" dataField="tax">
-            ${context.tax_amount.toFixed(2)}
+            {reviewMoney(context.tax_amount)}
           </ReviewField>
           <ReviewField label="Parts total" dataField="parts-total">
-            ${context.part_price.toFixed(2)}
+            {reviewMoney(context.part_price)}
           </ReviewField>
           <ReviewField label="Total" dataField="total">
-            ${total.toFixed(2)}
+            {reviewMoney(total)}
           </ReviewField>
         </div>
 
@@ -199,7 +238,12 @@ export function VrsAiBridgeReview({
         <div>
           <span className="text-muted-foreground">Parts</span>
           <div className="mt-1 space-y-2">
-            {context.parts.map((part, index) => (
+            {parts.length === 0 && (
+              <p className="italic text-muted-foreground" data-field="parts">
+                {REVIEW_NOT_PROVIDED}
+              </p>
+            )}
+            {parts.map((part, index) => (
               <div
                 key={`${part.part_id}-${index}`}
                 className="grid gap-1 rounded border p-2 sm:grid-cols-2"
@@ -214,7 +258,7 @@ export function VrsAiBridgeReview({
                   {part.part_description}
                 </ReviewField>
                 <ReviewField label="Part price" dataField={`part-${index}-price`}>
-                  ${part.sell_price.toFixed(2)}
+                  {reviewMoney(part.sell_price)}
                 </ReviewField>
                 <ReviewField
                   label="Part function"
@@ -279,27 +323,58 @@ export function VrsAiBridgePanel({
   bridge,
   submission,
   onOpenPhoto,
+  allowAhsEdit = false,
 }: {
   bridge: VrsAiBridgeStatus | null | undefined;
   // Optional so read-only callers (Pilot closed review) keep the bridge-only
-  // view. When given, the AHS details the technician filed are shown too,
-  // including when the ticket has no bridge row (enrollment skipped or
-  // failed).
+  // view. When given, the ticket's AHS details are shown too, including when
+  // the ticket has no bridge row yet (details not completed, enrollment
+  // skipped or failed).
   submission?: VrsAiBridgePanelSubmission | null;
   onOpenPhoto?: (photos: string[], index: number) => void;
+  // The Stage 1 card: show the AHS details editor while the ticket is still
+  // editable (isAhsDetailsEditable) and vrsAiAppEnrollEnabled is on.
+  allowAhsEdit?: boolean;
 }) {
+  const { vrsAiAppEnrollEnabled } = useFeatureFlags();
+  const editable =
+    allowAhsEdit &&
+    vrsAiAppEnrollEnabled &&
+    typeof submission?.id === "number" &&
+    isAhsDetailsEditable(submission, bridge);
   const ahsDetails = parseAhsDetailsForReview(submission?.ahsDetails);
-  const ahsReview =
-    ahsDetails && submission ? (
+  let ahsSection: ReactNode = null;
+  if (editable && submission) {
+    // Open the editor only once the detail fetch has the stored draft, so
+    // it never starts from the slim queue row's missing value.
+    ahsSection =
+      submission.ahsDetails === undefined ? (
+        <p className="mt-3 text-xs text-muted-foreground" data-testid="ahs-details-editor-loading">
+          Loading AHS details…
+        </p>
+      ) : (
+        <AhsDetailsEditor
+          key={submission.id}
+          submissionId={submission.id!}
+          storedDetails={submission.ahsDetails}
+          issueDescription={submission.issueDescription}
+          media={ahsReviewMedia(submission)}
+          onOpenPhoto={onOpenPhoto}
+          hasBridge={!!bridge}
+        />
+      );
+  } else if (ahsDetails && submission) {
+    ahsSection = (
       <AhsTicketReview
         details={ahsDetails}
         media={ahsReviewMedia(submission)}
         onOpenPhoto={onOpenPhoto}
       />
-    ) : null;
+    );
+  }
 
   if (!bridge) {
-    if (!ahsReview) return null;
+    if (!ahsSection) return null;
     return (
       <div
         className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20"
@@ -314,11 +389,10 @@ export function VrsAiBridgePanel({
         <p className="mt-1 text-xs text-muted-foreground" data-testid="vrs-ai-bridge-source">
           Source: {VRS_SOURCE_APP_LABEL}
         </p>
-        <p className="mt-2 text-xs text-muted-foreground">
-          This ticket is not enrolled in VRS AI. Review the details below and
-          use the manual authorization flow.
+        <p className="mt-2 text-xs text-muted-foreground" data-testid="text-ahs-not-enrolled">
+          {editable ? AHS_NOT_ENROLLED_EDITABLE_TEXT : AHS_NOT_ENROLLED_TEXT}
         </p>
-        {ahsReview}
+        {ahsSection}
       </div>
     );
   }
@@ -352,7 +426,7 @@ export function VrsAiBridgePanel({
             : ""}
         </p>
       )}
-      {ahsReview}
+      {ahsSection}
       <VrsAiBridgeReview bridge={bridge} />
     </div>
   );

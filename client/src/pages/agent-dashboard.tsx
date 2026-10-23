@@ -4155,10 +4155,18 @@ export default function AgentDashboard() {
                           )}
                         </CardHeader>
                         <CardContent className="space-y-5">
+                          {/* AHS + Authorization at Stage 1: the VRS manager
+                              completes the server's draft of the AHS details
+                              here (allowAhsEdit; the panel also checks
+                              vrsAiAppEnrollEnabled and that nothing was
+                              dispatched or decided yet). Saving creates the
+                              bridge row, which turns the approve button
+                              into "Approve & Send to VRS AI". */}
                           <VrsAiBridgePanel
                             bridge={selectedSubmission.vrsAi}
                             submission={selectedSubmission}
                             onOpenPhoto={async (photos, index) => openLightbox(await buildMediaUrls(photos), index)}
+                            allowAhsEdit
                           />
                           {(
                             <>

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - VRS manager completes the AHS details at Stage 1 (2026-10-23)
+- New "AHS details for VRS AI" editor in the agent's Stage 1 card
+  (`client/src/components/ahs-details-editor.tsx`), for AHS authorization
+  tickets while `vrsAiAppEnrollEnabled` is on. It opens from the server's draft
+  (`submissions.ahs_details`, may be `{}`), marks required fields as
+  `ahsDetailsSchema` does, and badges each field the service order filled,
+  parts included. The tech's description, screenshots (lightbox) and videos
+  sit beside it.
+- "Refresh from service order" calls `POST /api/submissions/:id/ahs-details/refresh`
+  and fills only blank inputs. "Save & prepare for VRS AI" validates on the
+  client, PATCHes `/api/submissions/:id/ahs-details`, shows field-level server
+  issues, and refetches the ticket so "Approve & Send to VRS AI" appears. When
+  the server does not enroll the ticket, its `enrollSkipReason` is shown.
+- After dispatch or a Stage 1 decision the read-only AHS view shows instead.
+  It and the VRS AI payload view now read "Not provided" for blank draft
+  fields. Fields not filled by the lookups are labelled "Entered in VRS
+  Express" (was "Entered by tech").
+- The no-bridge fallback now says the VRS manager can complete the AHS details
+  to send the ticket to VRS AI.
+
 ### Fixed - Pre-push review of the AHS tech-ticket work (2026-10-23)
 - `POST /api/submissions/:id/photos` now redacts its response like every other
   technician-facing submission response. It was returning server-filled
