@@ -6,12 +6,12 @@ import {
 } from "../shared/appliance-types";
 
 describe("detailed appliance choices preserve routing", () => {
-  it("contains exactly the requested labels in order", () => {
+  it("contains exactly the requested labels in ascending alphabetical order", () => {
     expect(APPLIANCE_CHOICES.map(c => c.label)).toEqual([
-      "Cooktop", "Dishwasher", "Dryer", "Chest Freezer", "Upright Freezer",
-      "Free Standing IM", "Garbage Disposal", "Trash Compactor", "Microwave",
-      "Oven/Combo", "Range", "Range Hood", "Refrigerator", "Washer",
-      "Washer/Dryer Combo", "HVAC",
+      "Chest Freezer", "Cooktop", "Dishwasher", "Dryer",
+      "Free Standing IM", "Garbage Disposal", "HVAC", "Microwave",
+      "Oven/Combo", "Range", "Range Hood", "Refrigerator", "Trash Compactor",
+      "Upright Freezer", "Washer", "Washer/Dryer Combo",
     ]);
   });
 
