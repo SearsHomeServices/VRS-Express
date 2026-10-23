@@ -3,6 +3,8 @@
 // /api/tech/lookup-warranty (derived.applianceType, from the service order's
 // product code), with an "Auto-detected from service order" note. Unlike the
 // warranty it stays editable, and it never overwrites the tech's own choice.
+// When the lookup also returns the service order's product category
+// (serviceOrderProduct), that line replaces the generic note.
 // Mounted DOM checks with the lookup response mocked.
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -13,8 +15,11 @@ import TechSubmitPage, { lookupApplianceType } from "../client/src/pages/tech-su
 const fixtures = vi.hoisted(() => ({
   user: { id: 12, role: "technician", fullName: "Fixture Tech", racId: "RAC12", ldapId: "ldap12", phone: "5555550148" },
   // serviceOrder → `derived` of the lookup response, or "error" to fail it.
+  // `serviceOrderProduct` on an entry goes to the top level, like the server.
   lookups: {} as Record<string, unknown>,
   lookupCalls: [] as string[],
+  // serviceOrder → a promise the lookup waits on before answering.
+  gates: {} as Record<string, Promise<void>>,
 }));
 
 vi.mock("@/lib/auth", async (importOriginal) => ({
@@ -28,16 +33,18 @@ vi.mock("@/lib/queryClient", async (importOriginal) => ({
     if (!path.startsWith("/api/tech/lookup-warranty")) throw new Error(`Unexpected API request: ${path}`);
     const so = decodeURIComponent(path.split("serviceOrder=")[1] ?? "");
     fixtures.lookupCalls.push(so);
+    if (fixtures.gates[so]) await fixtures.gates[so];
     const derived = so in fixtures.lookups ? fixtures.lookups[so] : null;
     if (derived === "error") throw new Error("503: Snowflake unavailable");
     // Mirror the server: `derived` only when the warranty is known; the
     // appliance type always at the top level (and inside `derived` too).
-    const entry = derived as any;
+    const { serviceOrderProduct, ...entry } = (derived ?? {}) as any;
     return {
       json: async () => ({
         serviceOrder: so,
-        derived: entry?.warrantyType ? entry : null,
-        ...(entry?.applianceType !== undefined ? { applianceType: entry.applianceType } : {}),
+        derived: entry.warrantyType ? entry : null,
+        ...(entry.applianceType !== undefined ? { applianceType: entry.applianceType } : {}),
+        ...(serviceOrderProduct !== undefined ? { serviceOrderProduct } : {}),
       }),
     };
   }),
@@ -54,6 +61,9 @@ const SO_A = "8175-12345678";
 const SO_B = "8175-87654321";
 const AHS = { warrantyType: "american_home_shield", warrantyProvider: "American Home Shield", source: "client_nm" };
 const NOTE = "text-appliance-type-auto-note";
+const PRODUCT = "text-appliance-type-product";
+const WOM_WASHER = { text: "WASHERDD - WASHER, DIRECT DRIVE", source: "wom" };
+const SNOWFLAKE_FRIDGE = { text: "REFSBS - REFRIGERATOR, SIDE BY SIDE", source: "snowflake" };
 
 let root: Root;
 let client: QueryClient;
@@ -65,6 +75,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   fixtures.lookups = {};
   fixtures.lookupCalls = [];
+  fixtures.gates = {};
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -305,5 +316,136 @@ describe("tech-submit warranty auto-detection still holds", () => {
     await enterServiceOrder(SO_A);
     expect(byTestId("text-warranty-lookup-unavailable")).not.toBeNull();
     expect(byTestId("text-warranty-locked-note")).toBeNull();
+  });
+});
+
+describe("tech-submit service order product line", () => {
+  it("replaces the generic note with the WOM product, under the dropdown", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    await mount();
+    expect(byTestId(PRODUCT)).toBeNull();
+
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Laundry");
+    const line = byTestId(PRODUCT)!;
+    expect(line.textContent).toBe("From service order product: WASHERDD - WASHER, DIRECT DRIVE");
+    expect(line.getAttribute("data-auto-detected")).toBe("true");
+    expect(byTestId("text-appliance-type-product-text")!.textContent).toBe("WASHERDD - WASHER, DIRECT DRIVE");
+    expect(byTestId("text-service-order-product-source")).toBeNull();
+    expect(byTestId(NOTE)).toBeNull();
+    expect(byTestId("select-appliance-type")!.closest("div")!.contains(line)).toBe(true);
+  });
+
+  it("adds a muted (Snowflake) suffix for the Snowflake fallback", async () => {
+    fixtures.lookups[SO_A] = { ...AHS, applianceType: "refrigeration", serviceOrderProduct: SNOWFLAKE_FRIDGE };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Refrigerator");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: REFSBS - REFRIGERATOR, SIDE BY SIDE (Snowflake)");
+    const suffix = byTestId("text-service-order-product-source")!;
+    expect(suffix.textContent).toBe(" (Snowflake)");
+    expect(suffix.className).toContain("text-muted-foreground");
+    expect(byTestId(NOTE)).toBeNull();
+    // The warranty still locks as before.
+    expect(byTestId("text-warranty-locked-note")).not.toBeNull();
+  });
+
+  it("shows the text exactly as returned, as text, never as HTML", async () => {
+    const text = '  <b>WASHER</b> & "DRYER" <img src=x onerror=alert(1)> ';
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: { text, source: "wom" } };
+    await mount();
+    await enterServiceOrder(SO_A);
+    const value = byTestId("text-appliance-type-product-text")!;
+    expect(value.textContent).toBe(text);
+    expect(value.querySelector("b, img")).toBeNull();
+  });
+
+  it.each([
+    ["no product", undefined],
+    ["a null product", null],
+    ["a blank text", { text: "   ", source: "wom" }],
+    ["an unknown source", { text: "WASHERDD - WASHER, DIRECT DRIVE", source: "hssom" }],
+    ["a non-object", "WASHERDD - WASHER, DIRECT DRIVE"],
+  ])("keeps the generic note for %s", async (_label, serviceOrderProduct) => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Laundry");
+    expect(byTestId(PRODUCT)).toBeNull();
+    expect(byTestId(NOTE)!.textContent).toBe("Auto-detected from service order");
+  });
+
+  it("keeps the product but drops the auto-detected wording once the tech changes the type", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(byTestId(PRODUCT)!.getAttribute("data-auto-detected")).toBe("true");
+
+    await pickApplianceType("cooking");
+    expect(applianceTypeText()).toBe("Cooking");
+    const line = byTestId(PRODUCT)!;
+    expect(line.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
+    expect(line.getAttribute("data-auto-detected")).toBe("false");
+    expect(byTestId(NOTE)).toBeNull();
+
+    // Back to the detected value: still the tech's choice.
+    await pickApplianceType("laundry");
+    expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
+  });
+
+  it("shows the product without the auto-detected wording when the type was not mapped", async () => {
+    fixtures.lookups[SO_A] = { serviceOrderProduct: { text: "GENERATR - GENERATOR", source: "wom" } };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: GENERATR - GENERATOR");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+
+  it("clears the line on a service order change until the new lookup settles", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    fixtures.lookups[SO_B] = { applianceType: "refrigeration", serviceOrderProduct: SNOWFLAKE_FRIDGE };
+    let release!: () => void;
+    fixtures.gates[SO_B] = new Promise<void>((resolve) => { release = resolve; });
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(byTestId(PRODUCT)!.textContent).toContain("WASHERDD");
+
+    await type("input-service-order", SO_B.split("-")[1]);
+    expect(fixtures.lookupCalls).toEqual([SO_A, SO_B]);
+    // SO B's lookup is still in flight: nothing from SO A lingers.
+    expect(byTestId(PRODUCT)).toBeNull();
+    expect(byTestId(NOTE)).toBeNull();
+
+    release();
+    await flush(10);
+    expect(applianceTypeText()).toBe("Refrigerator");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: REFSBS - REFRIGERATOR, SIDE BY SIDE (Snowflake)");
+  });
+
+  it("clears the line when the new service order has no product", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    fixtures.lookups[SO_B] = { applianceType: "dishwasher" };
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(byTestId(PRODUCT)).not.toBeNull();
+
+    await type("input-service-order", SO_B.split("-")[1]);
+    expect(applianceTypeText()).toBe("Dishwasher / Compactor");
+    expect(byTestId(PRODUCT)).toBeNull();
+    expect(byTestId(NOTE)!.textContent).toBe("Auto-detected from service order");
+  });
+
+  it("hides the line while the service order is incomplete and on a failed lookup", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    fixtures.lookups[SO_B] = "error";
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(byTestId(PRODUCT)).not.toBeNull();
+    await type("input-service-order", "1234");
+    expect(byTestId(PRODUCT)).toBeNull();
+    await type("input-service-order", SO_B.split("-")[1]);
+    expect(byTestId("text-warranty-lookup-unavailable")).not.toBeNull();
+    expect(byTestId(PRODUCT)).toBeNull();
   });
 });

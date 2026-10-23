@@ -276,3 +276,50 @@ describe("Bridge photo component runtime safety", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:fixture-photo");
   });
 });
+describe("Admin ticket detail: service order product", () => {
+  async function renderDetails(serviceOrderProduct: unknown) {
+    client.setQueryData(["/api/config"], {
+      portal1099Enabled: false,
+      techHubPhotosEnabled: false,
+      vrsBridgePhotoProxyEnabled: false,
+    });
+    client.setQueryData(["/api/admin/submissions", 45, "audit"], {
+      submission: {
+        id: 45, serviceOrder: "fixture-order-45", stage1Status: "pending", ticketStatus: "pending",
+        applianceType: "laundry", createdAt: "2026-09-01T12:00:00Z", photos: null,
+        photoThumbnails: JSON.stringify({}), serviceOrderProduct,
+      },
+      timeline: [], userNames: {}, smsLogs: [],
+    });
+    await act(async () => root.render(
+      createElement(QueryClientProvider, { client },
+        createElement(TicketDetailDialog, { ticketId: 45, open: true, onClose: vi.fn() })),
+    ));
+  }
+
+  it("shows the WOM product on the Details tab", async () => {
+    await renderDetails(JSON.stringify({ text: "WASHERDD - WASHER, DIRECT DRIVE", source: "wom" }));
+    const row = document.querySelector('[data-testid="admin-service-order-product"]');
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toBe("Service order productWASHERDD - WASHER, DIRECT DRIVE");
+    expect(document.querySelector('[data-testid="text-service-order-product-source"]')).toBeNull();
+  });
+
+  it("adds a muted (Snowflake) suffix for the Snowflake fallback", async () => {
+    await renderDetails(JSON.stringify({ text: "DRYERELE - DRYER, ELECTRIC", source: "snowflake" }));
+    expect(document.querySelector('[data-testid="text-admin-service-order-product"]')?.textContent)
+      .toBe("DRYERELE - DRYER, ELECTRIC (Snowflake)");
+    expect(document.querySelector('[data-testid="text-service-order-product-source"]')?.className)
+      .toContain("text-muted-foreground");
+  });
+
+  it.each([null, undefined, "not-json", "{}", JSON.stringify({ text: "", source: "wom" })])(
+    "hides the row when the product is absent or unreadable: %s",
+    async (raw) => {
+      await renderDetails(raw);
+      expect(document.querySelector('[data-testid="text-audit-status"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="admin-service-order-product"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Service order product");
+    },
+  );
+});

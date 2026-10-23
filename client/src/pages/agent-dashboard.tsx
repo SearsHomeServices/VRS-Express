@@ -128,7 +128,7 @@ import {
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
-import { TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
+import { parseServiceOrderProduct, ServiceOrderProductText, TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
 import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
@@ -2857,6 +2857,19 @@ export default function AgentDashboard() {
                               )}
                             </div>
                           </div>
+                          {/* The service order's product category the
+                              appliance type came from (hidden when absent). */}
+                          {(() => {
+                            const product = parseServiceOrderProduct(selectedSubmission.serviceOrderProduct);
+                            return product ? (
+                              <div data-testid="detail-service-order-product">
+                                <p className="text-xs text-muted-foreground">Service order product</p>
+                                <p className="text-sm font-medium break-words" data-testid="text-detail-service-order-product">
+                                  <ServiceOrderProductText product={product} />
+                                </p>
+                              </div>
+                            ) : null;
+                          })()}
                           <div>
                             <p className="text-xs text-muted-foreground">Warranty Provider</p>
                             <p className="text-sm font-medium" data-testid="text-detail-warranty">

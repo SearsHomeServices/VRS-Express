@@ -170,7 +170,7 @@ import { matchesTechPdcFilter, NEGATIVE_TICKET_STATUSES } from "@shared/tech-pdc
 import { matchesTicketSearch } from "@shared/ticket-search";
 import { filterVrsAiPilotRows } from "@shared/vrs-ai-pilot";
 import { PilotQueueAlert } from "@/components/pilot-queue-alert";
-import { TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
+import { parseServiceOrderProduct, ServiceOrderProductText, TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
 import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 
 interface AnalyticsData {
@@ -759,6 +759,17 @@ export function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: numb
                     <p className="text-xs text-muted-foreground">Division</p>
                     <p className="text-sm font-medium">{DIVISION_LABELS[sub.applianceType] || sub.applianceType}</p>
                   </div>
+                  {(() => {
+                    const product = parseServiceOrderProduct(sub.serviceOrderProduct);
+                    return product ? (
+                      <div className="rounded-lg border p-3" data-testid="admin-service-order-product">
+                        <p className="text-xs text-muted-foreground">Service order product</p>
+                        <p className="text-sm font-medium break-words" data-testid="text-admin-service-order-product">
+                          <ServiceOrderProductText product={product} />
+                        </p>
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="rounded-lg border p-3">
                     <p className="text-xs text-muted-foreground">Warranty</p>
                     <p className="text-sm font-medium">
