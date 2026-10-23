@@ -12,6 +12,14 @@ export interface DerivedWarranty {
   source: "client_nm" | "proc_id";
 }
 
+// GET /api/tech/lookup-warranty also returns the appliance type derived from
+// the service order's product code (shared/appliance-division.ts), when known.
+// Separate from DerivedWarranty so submit-time warranty derivation is
+// unchanged. Non-PII.
+export interface DerivedServiceOrderAppliance {
+  applianceType?: import("./appliance-division").ApplianceDivision;
+}
+
 function norm(s: string | null | undefined): string {
   return (s || "").toString().trim().toLowerCase();
 }
