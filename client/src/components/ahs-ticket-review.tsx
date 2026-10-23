@@ -38,6 +38,7 @@ import {
   techApplianceGradeLabel,
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
+import type { ServiceOrderProduct } from "@shared/warranty";
 
 export const AHS_NOT_PROVIDED = "Not provided";
 export const AHS_SOURCE_SERVICE_ORDER = "From service order";
@@ -248,6 +249,42 @@ export function TechApplianceDetailsBlock({ details }: { details: TechApplianceD
         ))}
       </dl>
     </div>
+  );
+}
+
+// The service order's product category (shared/warranty.ts
+// ServiceOrderProduct): the lookup response's `serviceOrderProduct` object,
+// or the submissions.service_order_product JSON string. Null when absent,
+// unreadable, blank or from an unknown source. The text is kept exactly as
+// the source returned it.
+export function parseServiceOrderProduct(raw: unknown): ServiceOrderProduct | null {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { text, source } = value as { text?: unknown; source?: unknown };
+  if (typeof text !== "string" || !text.trim()) return null;
+  if (source !== "wom" && source !== "snowflake") return null;
+  return { text, source };
+}
+
+// The product text as plain (React-escaped) text, with a muted
+// "(Snowflake)" suffix when it came from the Snowflake fallback.
+export function ServiceOrderProductText({ product }: { product: ServiceOrderProduct }) {
+  return (
+    <>
+      {product.text}
+      {product.source === "snowflake" && (
+        <span className="font-normal text-muted-foreground" data-testid="text-service-order-product-source">
+          {" "}(Snowflake)
+        </span>
+      )}
+    </>
   );
 }
 

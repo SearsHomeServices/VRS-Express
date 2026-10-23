@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Mounted Agent dashboard: the read-only "Technician appliance details" block
 // in Submission Details (grade, color and part function the tech entered on
-// AHS and First American authorization tickets). Queries are seeded and
+// AHS and First American authorization tickets), and the "Service order
+// product" row (submissions.service_order_product). Queries are seeded and
 // fetch is mocked; nothing reaches a server. Harness follows
 // tests/vrs-agent-media.test.ts.
 import { act, createElement } from "react";
@@ -119,7 +120,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-function ticket(warrantyType: string, techApplianceDetails: string | null) {
+function ticket(warrantyType: string, techApplianceDetails: string | null, serviceOrderProduct: string | null = null) {
   return {
     submission: {
       id: 61, serviceOrder: "fixture-order-61", technicianId: 8,
@@ -129,7 +130,7 @@ function ticket(warrantyType: string, techApplianceDetails: string | null) {
       issueDescription: "evidence-desc: oven will not heat",
       createdAt: "2026-09-01T12:00:00Z", photos: null,
       photoThumbnails: JSON.stringify({}), ahsDetails: null,
-      techApplianceDetails,
+      techApplianceDetails, serviceOrderProduct,
     },
     vrsAi: null,
   };
@@ -142,7 +143,7 @@ async function renderDashboard(detail: ReturnType<typeof ticket>) {
   client.setQueryData(["/api/submissions", id, "intake-form-status"], { required: false, recorded: false });
   client.setQueryData(["/api/submissions", id, "techhub-photos"], { enabled: false, photos: [] });
   // The slim list row never carries the details; the detail fetch does.
-  const { techApplianceDetails: _omit, ...slim } = detail.submission;
+  const { techApplianceDetails: _omit, serviceOrderProduct: _omitProduct, ...slim } = detail.submission;
   client.setQueryData([listUrl], { submissions: [slim] });
   await act(async () => root.render(
     createElement(QueryClientProvider, { client }, createElement(AgentDashboard)),
@@ -193,5 +194,45 @@ describe("Agent dashboard: technician appliance details", () => {
   it("hides the block for other warranties", async () => {
     await renderDashboard(ticket("sears_protect", techDetailsJson));
     expect(document.querySelector('[data-testid="tech-appliance-details"]')).toBeNull();
+  });
+});
+
+describe("Agent dashboard: service order product", () => {
+  it("shows the WOM product next to the appliance type in Submission Details", async () => {
+    await renderDashboard(ticket("sears_protect", null, JSON.stringify({ text: "RANGEELE - RANGE, ELECTRIC", source: "wom" })));
+    const row = submissionDetailsCard().querySelector('[data-testid="detail-service-order-product"]');
+    expect(row, "row sits in the Submission Details card").not.toBeNull();
+    expect(row!.textContent).toBe("Service order productRANGEELE - RANGE, ELECTRIC");
+    expect(text("text-detail-service-order-product")).toBe("RANGEELE - RANGE, ELECTRIC");
+    expect(document.querySelector('[data-testid="text-service-order-product-source"]')).toBeNull();
+    // The routing group is unchanged.
+    expect(text("text-detail-appliance")).toBe("Cooking");
+  });
+
+  it("adds a muted (Snowflake) suffix for the Snowflake fallback", async () => {
+    await renderDashboard(ticket("american_home_shield", null, JSON.stringify({ text: "RANGEGAS - RANGE, GAS", source: "snowflake" })));
+    expect(text("text-detail-service-order-product")).toBe("RANGEGAS - RANGE, GAS (Snowflake)");
+    const suffix = document.querySelector('[data-testid="text-service-order-product-source"]')!;
+    expect(suffix.textContent).toBe(" (Snowflake)");
+    expect(suffix.className).toContain("text-muted-foreground");
+  });
+
+  it("renders the text as text, never as HTML", async () => {
+    const raw = '<img src=x onerror=alert(1)> & "OVEN"';
+    await renderDashboard(ticket("sears_protect", null, JSON.stringify({ text: raw, source: "wom" })));
+    const value = document.querySelector('[data-testid="text-detail-service-order-product"]')!;
+    expect(value.textContent).toBe(raw);
+    expect(value.querySelector("img")).toBeNull();
+  });
+
+  it.each([
+    null, "", "not-json", "null", "[]", "{}", '"RANGEELE"',
+    JSON.stringify({ text: "  ", source: "wom" }),
+    JSON.stringify({ text: "RANGEELE - RANGE, ELECTRIC", source: "other" }),
+    JSON.stringify({ text: 42, source: "wom" }),
+  ])("hides the row when the product is absent or unreadable: %s", async (raw) => {
+    await renderDashboard(ticket("sears_protect", null, raw));
+    expect(document.querySelector('[data-testid="detail-service-order-product"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Service order product");
   });
 });

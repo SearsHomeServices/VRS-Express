@@ -51,7 +51,8 @@ import {
   type DraftEnvelope,
 } from "@/lib/draft-identity";
 import { getEtDateString } from "@shared/business-hours";
-import type { DerivedServiceOrderAppliance, DerivedWarranty } from "@shared/warranty";
+import type { DerivedServiceOrderAppliance, DerivedWarranty, ServiceOrderProduct } from "@shared/warranty";
+import { parseServiceOrderProduct, ServiceOrderProductText } from "@/components/ahs-ticket-review";
 import {
   TECH_APPLIANCE_COLORS,
   TECH_APPLIANCE_GRADES,
@@ -1058,6 +1059,8 @@ export default function TechSubmitPage() {
     // The warranty fields are absent when only the appliance type is known.
     derived: (Partial<DerivedWarranty> & DerivedServiceOrderAppliance) | null;
     applianceType?: DerivedServiceOrderAppliance["applianceType"];
+    // The product category the type came from, when known (top level).
+    serviceOrderProduct?: ServiceOrderProduct;
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
     queryFn: async () => {
@@ -1090,6 +1093,14 @@ export default function TechSubmitPage() {
   const derivedApplianceType =
     lookupApplianceType(warrantyLookup.data ?? null) ?? lookupApplianceType(lookupDerived);
   const applianceLookupSettled = isValidSo && !isProvider1099 && !warrantyLookup.isFetching && (warrantyLookup.isSuccess || warrantyLookup.isError);
+  // Shown under Appliance Type so the tech sees where the type came from.
+  // Only the current service order's lookup result: the query is keyed by
+  // the service order, so on a change it is empty until the new lookup
+  // lands, and nothing shows while the order is incomplete.
+  const serviceOrderProduct =
+    isValidSo && !isProvider1099 && warrantyLookup.isSuccess
+      ? parseServiceOrderProduct(warrantyLookup.data?.serviceOrderProduct)
+      : null;
   useEffect(() => {
     if (!applianceLookupSettled) return;
     const auto = autoApplianceTypeRef.current;
@@ -1870,14 +1881,37 @@ export default function TechSubmitPage() {
                           ))}
                         </SelectContent>
                       </Select>
-                      {autoApplianceType &&
-                        autoApplianceType.value === field.value &&
-                        autoApplianceType.serviceOrder === watchedServiceOrder && (
+                      {(() => {
+                        const autoDetected =
+                          !!autoApplianceType &&
+                          autoApplianceType.value === field.value &&
+                          autoApplianceType.serviceOrder === watchedServiceOrder;
+                        // The product line replaces the generic note; once
+                        // the type is the tech's own it drops "From".
+                        if (serviceOrderProduct) {
+                          return (
+                            <p
+                              className="mt-1 text-xs text-muted-foreground flex items-start gap-1"
+                              data-testid="text-appliance-type-product"
+                              data-auto-detected={autoDetected ? "true" : "false"}
+                            >
+                              <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                              <span className="break-words">
+                                {autoDetected ? "From service order product: " : "Service order product: "}
+                                <span className="font-medium text-foreground" data-testid="text-appliance-type-product-text">
+                                  <ServiceOrderProductText product={serviceOrderProduct} />
+                                </span>
+                              </span>
+                            </p>
+                          );
+                        }
+                        return autoDetected ? (
                           <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-appliance-type-auto-note">
                             <Info className="w-3 h-3" />
                             Auto-detected from service order
                           </p>
-                        )}
+                        ) : null;
+                      })()}
                       <FormMessage />
                     </FormItem>
                   )}
