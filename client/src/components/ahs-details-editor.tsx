@@ -9,6 +9,11 @@
 // (shared/ahs-review.ts). The server then creates the VRS AI bridge row, which
 // is what makes "Approve & Send to VRS AI" appear.
 //
+// Appliance grade, color and part 1's function may hold what the technician
+// entered (submissions.tech_appliance_details; the server copies them into
+// the draft). Those carry "From technician", never "From service order",
+// until the manager changes them.
+//
 // Agent-only. The details carry customer name and address: nothing here is
 // logged, and nothing is kept in localStorage or sessionStorage.
 import { useState } from "react";
@@ -20,7 +25,6 @@ import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import {
-  AHS_APPLIANCE_GRADES,
   AHS_APPLIANCE_KINDS,
   AHS_APPLIANCE_LOCATIONS,
   AHS_FAILURE_CAUSES,
@@ -37,11 +41,20 @@ import {
   money,
   type AhsDetailsFormValues,
 } from "@/components/ahs-details-fields";
-import { AhsMedia, AHS_SOURCE_SERVICE_ORDER, type AhsReviewMedia } from "@/components/ahs-ticket-review";
 import {
+  AhsFromTechnicianBadge,
+  AhsMedia,
+  AHS_SOURCE_SERVICE_ORDER,
+  type AhsReviewMedia,
+} from "@/components/ahs-ticket-review";
+import type { TechApplianceDetails } from "@shared/tech-appliance-details";
+import {
+  AHS_GRADE_OPTIONS,
   AHS_REVIEW_FORM_FIELDS,
   groupAhsIssues,
+  holdsTechValue,
   parseAhsDetailsForReview,
+  techSuppliedAhsValues,
   type AhsIssue,
   type AhsReviewFormField,
   type AhsReviewProvenanceField,
@@ -143,6 +156,7 @@ export function AhsDetailsEditor({
   media,
   onOpenPhoto,
   hasBridge = false,
+  techDetails,
 }: {
   submissionId: number;
   // submissions.ahs_details as the detail endpoint returns it. Read once when
@@ -154,6 +168,8 @@ export function AhsDetailsEditor({
   onOpenPhoto?: (photos: string[], index: number) => void;
   // A VRS AI bridge row already exists (an earlier save).
   hasBridge?: boolean;
+  // submissions.tech_appliance_details, parsed: which values the tech supplied.
+  techDetails?: TechApplianceDetails | null;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -280,8 +296,18 @@ export function AhsDetailsEditor({
     | undefined;
   const partsError = partsErrors?.root?.message ?? partsErrors?.message;
 
+  // A tech-supplied field keeps "From technician" while it still holds the
+  // tech's value; it never shows "From service order".
+  const tech = techSuppliedAhsValues(techDetails);
+  const fromTechnician = (field: "applianceGrade" | "applianceColor") =>
+    holdsTechValue(values[field], tech[field]);
+  const techBadge = (field: "applianceGrade" | "applianceColor") =>
+    fromTechnician(field) ? <AhsFromTechnicianBadge testId={`badge-ahs-from-tech-${field}`} /> : null;
+  const partFunctionFromTechnician = holdsTechValue(values.parts?.[0]?.partFunction, tech.partFunction);
+
   // A prefilled field keeps its badge while it still holds the stored value.
   const fromServiceOrder = (field: AhsReviewFormField) => {
+    if ((field === "applianceGrade" || field === "applianceColor") && fromTechnician(field)) return null;
     if (!baseline.prefilled.includes(field as AhsReviewProvenanceField)) return null;
     const value = String(values[field] ?? "").trim();
     if (value === "" || value !== baseline.values[field].trim()) return null;
@@ -442,9 +468,9 @@ export function AhsDetailsEditor({
                 name="ahsDetails.applianceGrade"
                 label="Appliance Grade"
                 placeholder="Select grade"
-                options={AHS_APPLIANCE_GRADES}
+                options={AHS_GRADE_OPTIONS}
                 testId="select-ahs-grade"
-                badge={fromServiceOrder("applianceGrade")}
+                badge={techBadge("applianceGrade") ?? fromServiceOrder("applianceGrade")}
               />
               <TextField
                 form={form}
@@ -452,7 +478,7 @@ export function AhsDetailsEditor({
                 label="Appliance Color"
                 placeholder="e.g., White, Stainless"
                 testId="input-ahs-color"
-                badge={fromServiceOrder("applianceColor")}
+                badge={techBadge("applianceColor") ?? fromServiceOrder("applianceColor")}
               />
               <SelectField
                 form={form}
@@ -539,6 +565,11 @@ export function AhsDetailsEditor({
                     label="Part Function"
                     placeholder="What the part does"
                     testId={`input-ahs-part-${index}-function`}
+                    badge={
+                      index === 0 && partFunctionFromTechnician ? (
+                        <AhsFromTechnicianBadge testId="badge-ahs-from-tech-part-0-function" />
+                      ) : null
+                    }
                   />
                   <TextField
                     form={form}

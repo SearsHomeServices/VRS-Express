@@ -128,6 +128,8 @@ import {
   type VrsAiBridgeStatus,
 } from "@/lib/vrsAiBridge";
 import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
+import { TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
+import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
@@ -2932,6 +2934,16 @@ export default function AgentDashboard() {
                               )}
                             </div>
                           )}
+                          {/* AHS / First American: grade, color and part
+                              function the tech entered (hidden when absent). */}
+                          {(() => {
+                            const techDetails = techApplianceDetailsForTicket(selectedSubmission);
+                            return techDetails ? (
+                              <div className="mt-3">
+                                <TechApplianceDetailsBlock details={techDetails} />
+                              </div>
+                            ) : null;
+                          })()}
                           {priorRejection?.issueDescription && (
                             <div className="mt-3 p-2.5 rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/30">
                               <div className="flex items-center gap-1.5 mb-1">

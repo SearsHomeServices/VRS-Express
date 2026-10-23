@@ -4,7 +4,7 @@ import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useFeatureFlags, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { AhsTicketReview, type AhsReviewMedia } from "@/components/ahs-ticket-review";
 import { AhsDetailsEditor } from "@/components/ahs-details-editor";
-import { isAhsDetailsEditable, parseAhsDetailsForReview } from "@/lib/ahsReview";
+import { isAhsDetailsEditable, parseAhsDetailsForReview, techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
 import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
 
@@ -24,6 +24,9 @@ const REVIEW_NOT_PROVIDED = "Not provided";
 export interface VrsAiBridgePanelSubmission {
   id?: number;
   ahsDetails?: string | null;
+  // JSON (shared/tech-appliance-details.ts): grade, color and part function
+  // the technician entered, so the AHS views can mark them "From technician".
+  techApplianceDetails?: string | null;
   photos?: string | null;
   photoThumbnails?: string | null;
   videoUrl?: string | null;
@@ -343,6 +346,7 @@ export function VrsAiBridgePanel({
     typeof submission?.id === "number" &&
     isAhsDetailsEditable(submission, bridge);
   const ahsDetails = parseAhsDetailsForReview(submission?.ahsDetails);
+  const techDetails = techApplianceDetailsForTicket(submission);
   let ahsSection: ReactNode = null;
   if (editable && submission) {
     // Open the editor only once the detail fetch has the stored draft, so
@@ -361,6 +365,7 @@ export function VrsAiBridgePanel({
           media={ahsReviewMedia(submission)}
           onOpenPhoto={onOpenPhoto}
           hasBridge={!!bridge}
+          techDetails={techDetails}
         />
       );
   } else if (ahsDetails && submission) {
@@ -369,6 +374,7 @@ export function VrsAiBridgePanel({
         details={ahsDetails}
         media={ahsReviewMedia(submission)}
         onOpenPhoto={onOpenPhoto}
+        techDetails={techDetails}
       />
     );
   }
