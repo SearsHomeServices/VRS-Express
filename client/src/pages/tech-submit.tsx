@@ -345,11 +345,16 @@ function pickSubmissionFormFields(values: Record<string, unknown>): Record<strin
   if ("techApplianceDetails" in picked) {
     picked.techApplianceDetails = techApplianceDetailsFormValues(picked.techApplianceDetails);
   }
+  // The division always comes from the kind the tech sees in the dropdown.
+  // Without a valid kind (a draft saved before the 16 choices, or after a
+  // category-only lookup) both are cleared: a hidden division would block
+  // the lookup's auto-fill, and the lookup re-derives it on restore.
   const choice = applianceChoice(picked.applianceKind);
   if (choice) {
     picked.applianceType = choice.division;
   } else {
-    delete picked.applianceKind;
+    picked.applianceType = undefined;
+    picked.applianceKind = undefined;
   }
   return picked;
 }
@@ -1091,7 +1096,13 @@ export default function TechSubmitPage() {
       return res.json();
     },
     enabled: isValidSo && !isProvider1099,
-    staleTime: 5 * 60 * 1000,
+    // A result with no appliance type is not kept fresh, so coming back to
+    // the service order (or remounting) looks it up again; a result with a
+    // type stays cached for 5 minutes.
+    staleTime: (query) => {
+      const data = query.state.data;
+      return lookupApplianceType(data ?? null) ?? lookupApplianceType(data?.derived ?? null) ? 5 * 60 * 1000 : 0;
+    },
   });
   const lookupDerived = warrantyLookup.data?.derived ?? null;
   // Locks the warranty only when the lookup identified it; `derived` may
@@ -1130,7 +1141,10 @@ export default function TechSubmitPage() {
     const auto = autoApplianceTypeRef.current;
     const current = form.getValues("applianceType");
     const setByLookup = !!current && !!auto && current === auto.value;
-    if (current && !setByLookup) return; // the tech's choice
+    // The tech's choice is the kind they see in the dropdown. A division
+    // with no kind (e.g. restored from a draft) is not a choice, so the
+    // lookup still fills it.
+    if (form.getValues("applianceKind") && !setByLookup) return;
     if (derivedApplianceType) {
       if (current !== derivedApplianceType) {
         form.setValue("applianceType", derivedApplianceType, { shouldDirty: false, shouldValidate: form.formState.isSubmitted });
