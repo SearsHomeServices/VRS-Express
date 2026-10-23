@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Appliance Type not auto-filling (2026-10-23)
+- The appliance-type lookup no longer gives up when an 8-digit SO number
+  exists under several service units. It prefers the tech's district, then
+  the only unit, then the most recently created order (`SO_CRT_DT`).
+  - Before, district 7995 for an order under 0008366 returned nothing.
+  - The AHS prefill keeps its strict rule.
+- The appliance lookup gets the same deadline as the warranty (ProcID) lookup
+  (`SNOWFLAKE_OP_TIMEOUT_MS`, 15 s by default) instead of 5 s.
+- The warranty (ProcID) lookup now prefers the tech's district, then the most
+  recent order, instead of an arbitrary row. If the ordered statement fails,
+  it falls back to the old statement.
+- A draft restored with a routing category but no specific appliance no
+  longer blocks the auto-fill.
+- A lookup that found no appliance type is retried when the SO is re-entered,
+  instead of being cached for 5 minutes.
+
 ### Changed - WOM product category selects the specific appliance (2026-10-23)
 - Merged the Replit workspace's 16 detailed appliance choices
   (`shared/appliance-types.ts`; routing stays on the 7 divisions).
