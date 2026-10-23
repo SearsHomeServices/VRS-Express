@@ -51,6 +51,7 @@ import {
   type DraftEnvelope,
 } from "@/lib/draft-identity";
 import { getEtDateString } from "@shared/business-hours";
+import type { DerivedServiceOrderAppliance, DerivedWarranty } from "@shared/warranty";
 import {
   TECH_APPLIANCE_COLORS,
   TECH_APPLIANCE_GRADES,
@@ -73,7 +74,16 @@ const APPLIANCE_TYPES = [
   { value: "microwave", label: "Microwave" },
   { value: "hvac", label: "HVAC" },
   { value: "all_other", label: "All Other" },
-];
+] as const;
+type ApplianceTypeValue = (typeof APPLIANCE_TYPES)[number]["value"];
+
+// The appliance type GET /api/tech/lookup-warranty derived from the service
+// order's product code (derived.applianceType), when it is one of the
+// dropdown values; null otherwise (missing, unknown or no lookup).
+export function lookupApplianceType(derived: unknown): ApplianceTypeValue | null {
+  const value = derived && typeof derived === "object" ? (derived as { applianceType?: unknown }).applianceType : undefined;
+  return APPLIANCE_TYPES.some((type) => type.value === value) ? (value as ApplianceTypeValue) : null;
+}
 
 const WARRANTY_PROVIDERS = [
   { value: "sears_protect", label: "Sears Protect / Sears PA / Sears Home Warranty (Cinch)", available: true },
@@ -1045,7 +1055,8 @@ export default function TechSubmitPage() {
   const isValidSo = /^\d{4}-\d{8}$/.test(watchedServiceOrder || "");
   const warrantyLookup = useQuery<{
     serviceOrder: string;
-    derived: { warrantyType: "sears_protect" | "american_home_shield" | "first_american"; warrantyProvider: string; source: "client_nm" | "proc_id" } | null;
+    // The warranty fields are absent when only the appliance type is known.
+    derived: (Partial<DerivedWarranty> & DerivedServiceOrderAppliance) | null;
   }>({
     queryKey: ["/api/tech/lookup-warranty", watchedServiceOrder],
     queryFn: async () => {
@@ -1058,7 +1069,40 @@ export default function TechSubmitPage() {
     enabled: isValidSo && !isProvider1099,
     staleTime: 5 * 60 * 1000,
   });
-  const derivedWarranty = warrantyLookup.data?.derived || null;
+  const lookupDerived = warrantyLookup.data?.derived ?? null;
+  // Locks the warranty only when the lookup identified it; `derived` may
+  // carry just the appliance type.
+  const derivedWarranty: DerivedWarranty | null =
+    lookupDerived?.warrantyType && lookupDerived.warrantyProvider ? (lookupDerived as DerivedWarranty) : null;
+
+  // Appliance Type is preselected from the same lookup, but stays editable
+  // (the product-code mapping is a heuristic). `autoApplianceType` records
+  // the value the lookup set and for which service order; it is cleared as
+  // soon as the tech picks a type, so a tech-chosen value is never
+  // overwritten. A lookup-set value follows the service order: replaced by
+  // the new order's type, or cleared when the new order has none.
+  const [autoApplianceType, setAutoApplianceType] = useState<{ value: ApplianceTypeValue; serviceOrder: string } | null>(null);
+  const autoApplianceTypeRef = useRef(autoApplianceType);
+  autoApplianceTypeRef.current = autoApplianceType;
+  const derivedApplianceType = lookupApplianceType(lookupDerived);
+  const applianceLookupSettled = isValidSo && !isProvider1099 && !warrantyLookup.isFetching && (warrantyLookup.isSuccess || warrantyLookup.isError);
+  useEffect(() => {
+    if (!applianceLookupSettled) return;
+    const auto = autoApplianceTypeRef.current;
+    const current = form.getValues("applianceType");
+    const setByLookup = !!current && !!auto && current === auto.value;
+    if (current && !setByLookup) return; // the tech's choice
+    if (derivedApplianceType) {
+      if (current !== derivedApplianceType) {
+        form.setValue("applianceType", derivedApplianceType, { shouldDirty: false, shouldValidate: form.formState.isSubmitted });
+      }
+      setAutoApplianceType({ value: derivedApplianceType, serviceOrder: watchedServiceOrder });
+    } else if (setByLookup && auto!.serviceOrder !== watchedServiceOrder) {
+      // Set from another service order; this one has no known type.
+      form.setValue("applianceType", undefined as any, { shouldDirty: false, shouldValidate: false });
+      setAutoApplianceType(null);
+    }
+  }, [applianceLookupSettled, derivedApplianceType, watchedServiceOrder]);
 
   useEffect(() => {
     if (derivedWarranty) {
@@ -1300,6 +1344,7 @@ export default function TechSubmitPage() {
   function applyDraftToForm(draft: DraftEnvelope) {
     if (draft.formValues && typeof draft.formValues === "object") {
       form.reset({ ...form.getValues(), ...pickSubmissionFormFields(draft.formValues as Record<string, unknown>) });
+      setAutoApplianceType(null);
     }
     if (Array.isArray(draft.estimatePhotoUrls)) setEstimatePhotoUrls(draft.estimatePhotoUrls as string[]);
     if (Array.isArray(draft.issuePhotoUrls)) setIssuePhotoUrls(draft.issuePhotoUrls as string[]);
@@ -1465,6 +1510,7 @@ export default function TechSubmitPage() {
       issueDescription: "",
       techApplianceDetails: { ...EMPTY_TECH_APPLIANCE_DETAILS },
     });
+    setAutoApplianceType(null);
     setEstimatePhotoUrls([]);
     setIssuePhotoUrls([]);
     setEstimatePhotoLocalPreviews({});
@@ -1800,6 +1846,8 @@ export default function TechSubmitPage() {
                       <Select
                         onValueChange={(v) => {
                           field.onChange(v);
+                          // The tech picked a type: it is theirs now.
+                          if (v && v !== autoApplianceTypeRef.current?.value) setAutoApplianceType(null);
                         }}
                         value={field.value}
                       >
@@ -1818,6 +1866,14 @@ export default function TechSubmitPage() {
                           ))}
                         </SelectContent>
                       </Select>
+                      {autoApplianceType &&
+                        autoApplianceType.value === field.value &&
+                        autoApplianceType.serviceOrder === watchedServiceOrder && (
+                          <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1" data-testid="text-appliance-type-auto-note">
+                            <Info className="w-3 h-3" />
+                            Auto-detected from service order
+                          </p>
+                        )}
                       <FormMessage />
                     </FormItem>
                   )}
