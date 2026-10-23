@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - WOM product category selects the specific appliance (2026-10-23)
+- Merged the Replit workspace's 16 detailed appliance choices
+  (`shared/appliance-types.ts`; routing stays on the 7 divisions).
+- The service-order product text now selects the matching specific appliance
+  (`applianceKindFromServiceOrderProduct`), e.g. "WASHERDD - WASHER, DIRECT
+  DRIVE" selects Washer. The mapping is conservative: ambiguous text (a bare
+  "FREEZER") leaves the dropdown empty with "<Category> category detected —
+  select the specific appliance".
+- Fixed an `applianceLabel` crash for rows with neither kind nor type.
+
 ### Added - WOM product category under Appliance Type (2026-10-23)
 - The tech form now shows the service order's product category, exactly as
   WOM / ServicePower has it, under the Appliance Type dropdown, e.g. "From
