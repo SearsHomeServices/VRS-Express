@@ -590,3 +590,113 @@ describe("tech-submit service order product line", () => {
     expect(byTestId(PRODUCT)).toBeNull();
   });
 });
+
+// A draft saved before the 16 choices (or after a category-only lookup) has
+// the division (applianceType) but no specific appliance (applianceKind).
+// Restored, it must not block the lookup from filling the dropdown.
+describe("tech-submit Appliance Type after a restored draft", () => {
+  const DRAFT_KEY = `vrs_tech_submit_draft_v1_${fixtures.user.id}`;
+
+  function seedDraft(formValues: Record<string, unknown>) {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      identity: { userId: fixtures.user.id, ldapId: fixtures.user.ldapId },
+      formValues: { serviceOrder: SO_A, requestType: "authorization", warrantyType: "sears_protect", ...formValues },
+    }));
+  }
+
+  async function mountAndResume() {
+    await mount();
+    await act(async () => byTestId("button-draft-prompt-resume")!.click());
+    await flush(10);
+  }
+
+  it.each([
+    ["no kind", { applianceType: "laundry" }],
+    ["a pre-16-choice kind", { applianceType: "laundry", applianceKind: "laundry" }],
+    ["a kind from another build", { applianceType: "cooking", applianceKind: "toaster" }],
+  ])("fills Washer from the lookup for a draft with %s", async (_label, values) => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    seedDraft(values);
+    await mountAndResume();
+    expect(fixtures.lookupCalls).toEqual([SO_A]);
+    expect(applianceTypeText()).toBe("Washer");
+    expect(byTestId(PRODUCT)!.textContent).toBe("From service order product: WASHERDD - WASHER, DIRECT DRIVE");
+    expect(byTestId(PRODUCT)!.getAttribute("data-auto-detected")).toBe("true");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+
+  it("shows the category hint for a draft with no kind when the lookup knows only the division", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry" };
+    seedDraft({ applianceType: "laundry" });
+    await mountAndResume();
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)!.textContent).toBe("Laundry category detected — select the specific appliance");
+  });
+
+  it("does not keep a hidden division when the lookup has none", async () => {
+    fixtures.lookups[SO_A] = AHS;
+    seedDraft({ applianceType: "laundry" });
+    await mountAndResume();
+    expect(applianceTypeText()).toBe("Select appliance type");
+    expect(byTestId(NOTE)).toBeNull();
+    // Autosave writes the pair back consistently: neither field.
+    await flush(700);
+    const saved = JSON.parse(localStorage.getItem(DRAFT_KEY)!);
+    expect(saved.formValues.serviceOrder).toBe(SO_A);
+    expect(saved.formValues).not.toHaveProperty("applianceType");
+    expect(saved.formValues).not.toHaveProperty("applianceKind");
+    // The tech picks it; the division follows the pick.
+    await pickApplianceType("dryer");
+    expect(applianceTypeText()).toBe("Dryer");
+  });
+
+  it("never overwrites the kind a restored draft carries", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    seedDraft({ applianceType: "laundry", applianceKind: "dryer" });
+    await mountAndResume();
+    expect(fixtures.lookupCalls).toEqual([SO_A]);
+    expect(applianceTypeText()).toBe("Dryer");
+    expect(byTestId(PRODUCT)!.textContent).toBe("Service order product: WASHERDD - WASHER, DIRECT DRIVE");
+    expect(byTestId(PRODUCT)!.getAttribute("data-auto-detected")).toBe("false");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+
+  it("never overwrites a restored kind from another division either", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    seedDraft({ applianceType: "laundry", applianceKind: "refrigerator" });
+    await mountAndResume();
+    expect(applianceTypeText()).toBe("Refrigerator");
+    expect(byTestId(NOTE)).toBeNull();
+  });
+});
+
+describe("tech-submit lookup retry for a service order", () => {
+  it.each([
+    ["no appliance type", AHS],
+    ["a failed lookup", "error"],
+  ])("looks up again after %s when the tech comes back to the service order", async (_label, first) => {
+    fixtures.lookups[SO_A] = first;
+    fixtures.lookups[SO_B] = AHS;
+    await mount();
+    await enterServiceOrder(SO_A);
+    expect(applianceTypeText()).toBe("Select appliance type");
+
+    // The product lookup has recovered by the time the tech comes back.
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    await type("input-service-order", SO_B.split("-")[1]);
+    await type("input-service-order", SO_A.split("-")[1]);
+    expect(fixtures.lookupCalls).toEqual([SO_A, SO_B, SO_A]);
+    expect(applianceTypeText()).toBe("Washer");
+  });
+
+  it("keeps a lookup that found the appliance type cached", async () => {
+    fixtures.lookups[SO_A] = { applianceType: "laundry", serviceOrderProduct: WOM_WASHER };
+    fixtures.lookups[SO_B] = { applianceType: "dishwasher" };
+    await mount();
+    await enterServiceOrder(SO_A);
+    await type("input-service-order", SO_B.split("-")[1]);
+    await type("input-service-order", SO_A.split("-")[1]);
+    expect(fixtures.lookupCalls).toEqual([SO_A, SO_B]);
+    expect(applianceTypeText()).toBe("Washer");
+  });
+});
