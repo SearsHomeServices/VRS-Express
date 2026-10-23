@@ -7644,10 +7644,13 @@ export async function registerRoutes(
     //   serviceOrderProduct: { text, source }: the WOM Product Category, else
     //     the Snowflake HS_SP_CD. applianceType is mapped from that same text.
     //   Both are absent when unknown. The product lookup
-    //   (resolveServiceOrderProduct: WOM bounded by WOM_TIMEOUT_MS, ~4s, and
-    //   the Snowflake appliance statement, 5s) runs in parallel with the
-    //   ProcID lookup; its failure or timeout only drops these fields and
-    //   never changes the warranty answer.
+    //   (resolveServiceOrderProduct: WOM bounded by WOM_TIMEOUT_MS, ~4s, in
+    //   parallel with the Snowflake appliance statement, which has the
+    //   ProcID lookup's deadline) runs in parallel with the ProcID lookup,
+    //   so the response waits for the slower of the two, not their sum; its
+    //   failure or timeout only drops these fields and never changes the
+    //   warranty answer. A ProcID outage stays a 503 without the product
+    //   (apiRequest throws on non-2xx, so the form never reads that body).
     try {
       const authReq = req as AuthenticatedRequest;
       const caller = authReq.user;

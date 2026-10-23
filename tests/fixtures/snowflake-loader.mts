@@ -36,9 +36,22 @@ const sdk = {
         }
         callback(null, this);
       },
-      execute(options: { binds: string[]; complete: Function }) {
+      execute(options: { sqlText: string; binds: string[]; complete: Function }) {
         executes++;
-        assert.deepEqual(options.binds, ["123456"]);
+        if (executes === 1) {
+          // District first ("000000" padded), then the most recent order.
+          assert.match(options.sqlText, /ORDER BY CASE WHEN SVC_UN_NO = LPAD\(\?, 7, '0'\) THEN 0 ELSE 1 END, SO_CRT_DT DESC NULLS LAST LIMIT 1$/);
+          assert.deepEqual(options.binds, ["123456", "0000000"]);
+        } else {
+          // The unordered fallback, only after the ordered statement failed.
+          assert.equal(mode, "ordered-fails");
+          assert.match(options.sqlText, /WHERE SO_NO = \? LIMIT 1$/);
+          assert.deepEqual(options.binds, ["123456"]);
+        }
+        if (mode === "ordered-fails" && executes === 1) {
+          options.complete(new Error("SQL compilation error: invalid identifier 'SO_CRT_DT'"), null, undefined);
+          return { cancel(callback: Function) { cancels++; callback(null); } };
+        }
         if (mode === "query-timeout") {
           return { cancel(callback: Function) { cancels++; callback(null); } };
         }
@@ -91,7 +104,7 @@ try {
   probeSnowflakeSDK();
   assert.equal(sdkLoads, mode === "failure" ? 2 : 1, "successful SDK loads are cached");
 
-  if (["encrypted-key", "late-connect", "query-timeout"].includes(mode)) {
+  if (["encrypted-key", "ordered-fails", "late-connect", "query-timeout"].includes(mode)) {
     // Synthetic ephemeral key, not a real credential; no SDK/network connection.
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     expectedPrivateKey = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -99,7 +112,19 @@ try {
       type: "pkcs8", format: "pem", cipher: "aes-256-cbc", passphrase: "test-only",
     }).toString().replace(/\n/g, " ");
     process.env.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE = "test-only";
-    if (mode !== "encrypted-key") {
+    if (mode === "ordered-fails") {
+      const warn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.deepEqual(await fetchProcIdForServiceOrder("000000-123456"), {
+          status: "FOUND", procId: "test-proc", clientNm: "test-client",
+        });
+      } finally {
+        console.warn = warn;
+      }
+      assert.equal(executes, 2, "the fallback statement ran after the ordered one failed");
+      assert.equal(destroys, 1, "both statements share one connection, released once");
+    } else if (mode !== "encrypted-key") {
       assert.deepEqual(await fetchProcIdForServiceOrder("000000-123456"), {
         status: "LOOKUP_UNAVAILABLE", retryable: true,
       });
@@ -113,6 +138,7 @@ try {
       status: "FOUND", procId: "test-proc", clientNm: "test-client",
       });
       assert.equal(destroys, 1, "lookup still releases its connection");
+      assert.equal(executes, 1, "no fallback when the ordered statement succeeds");
     }
     assert.equal(sdkLoads, 1, "lookups reuse the probed SDK");
   }

@@ -1,7 +1,12 @@
 import { createPrivateKey } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
-import { createAhsPrefillLookup, createProcLookup, createServiceOrderApplianceLookup } from "./snowflake-lookup";
+import {
+  createAhsPrefillLookup,
+  createProcLookup,
+  createServiceOrderApplianceLookup,
+  type LookupStatement,
+} from "./snowflake-lookup";
 export type {
   AhsPrefillLookupResult,
   AhsServiceOrderPart,
@@ -324,29 +329,19 @@ class TtlCache<T> {
   }
 }
 
-export const fetchProcIdForServiceOrder = createProcLookup(async (key, signal) => {
-  const connection = await getConnection(signal);
-  if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
-  return new Promise<any[]>((resolve, reject) => {
-    const statement = connection.execute({
-      sqlText: `SELECT CMB_THD_PTY_ID, CLIENT_NM FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL WHERE SO_NO = ? LIMIT 1`,
-      binds: [key],
-      complete: (err, _stmt, rows) => err ? reject(err) : resolve(rows || []),
-    });
-    signal.addEventListener("abort", () => {
-      try { statement.cancel(() => {}); } catch {}
-    }, { once: true });
-  });
-}, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 60000)) });
+// Every lookup statement for one lookup (the bounded lookup's signal) runs
+// on one connection, opened on its first statement, so a fallback statement
+// (snowflake-lookup.ts withFallbackStatement) does not open a second one.
+// The abort that ends every lookup destroys it (getConnection).
+const lookupConnections = new WeakMap<AbortSignal, Promise<Connection>>();
 
-// Appliance type (HS_SP_CD -> division, plus the raw HS_SP_CD and the
-// resolved unit) for GET /api/tech/lookup-warranty and submit, the fallback
-// when WOM has no product category (server/services/wom-work-order.ts).
-// Its own connection and statement, separate from the ProcID lookup above,
-// so a failure here never affects warranty detection; bounded by its own 5s
-// deadline, which aborts the statement and destroys the connection.
-export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(async ({ sqlText, binds }, signal) => {
-  const connection = await getConnection(signal);
+async function runLookupStatement({ sqlText, binds }: LookupStatement, signal: AbortSignal): Promise<any[]> {
+  let pending = lookupConnections.get(signal);
+  if (!pending) {
+    pending = getConnection(signal);
+    lookupConnections.set(signal, pending);
+  }
+  const connection = await pending;
   if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
   return new Promise<any[]>((resolve, reject) => {
     const statement = connection.execute({
@@ -358,7 +353,25 @@ export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(
       try { statement.cancel(() => {}); } catch {}
     }, { once: true });
   });
-}, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 5000)) });
+}
+
+// The ProcID and appliance-type lookups share this deadline: the endpoint
+// waits for both in parallel, so the appliance lookup never answers
+// unavailable while the ProcID lookup is still allowed to run.
+const SERVICE_ORDER_LOOKUP_DEADLINE_MS = Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 60000));
+
+// ProcID / client name (PROC_ID_SQL, falling back to PROC_ID_FALLBACK_SQL).
+export const fetchProcIdForServiceOrder = createProcLookup(runLookupStatement,
+  { deadlineMs: SERVICE_ORDER_LOOKUP_DEADLINE_MS });
+
+// Appliance type (HS_SP_CD -> division, plus the raw HS_SP_CD and the
+// resolved unit) for GET /api/tech/lookup-warranty and submit, the fallback
+// when WOM has no product category (server/services/wom-work-order.ts).
+// Its own connection and statement, separate from the ProcID lookup above,
+// so a failure here never affects warranty detection; the deadline aborts
+// the statement and destroys the connection.
+export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(runLookupStatement,
+  { deadlineMs: SERVICE_ORDER_LOOKUP_DEADLINE_MS });
 
 // AHS service-order prefill (brand / model / serial / service contract ID,
 // the parts and the resolved service unit), keyed by district + 8-digit SO

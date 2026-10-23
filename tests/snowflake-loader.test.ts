@@ -47,7 +47,7 @@ afterAll(async () => {
 });
 
 describe.each(["tsx ESM", "production CJS"])("Snowflake lazy loader in %s", (runtime) => {
-  it.each(["real", "cached", "failure", "metadata-missing", "encrypted-key", "late-connect", "query-timeout"])("%s", async (mode) => {
+  it.each(["real", "cached", "failure", "metadata-missing", "encrypted-key", "ordered-fails", "late-connect", "query-timeout"])("%s", async (mode) => {
     const args = runtime === "tsx ESM"
       ? ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), fixture, mode]
       : [path.join(buildDir, "index.cjs"), mode];
