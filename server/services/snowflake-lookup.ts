@@ -387,16 +387,20 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
 // type by divisionFromServiceOrderProduct. Its own statement and its own
 // bounded lookup, never part of the ProcID statement: a failure here can
 // never touch warranty detection or submit. Same unit resolution as the AHS
-// prefill. Only the division leaves this module (and the cache): never the
-// raw HS_SP_CD value.
+// prefill. The raw HS_SP_CD value (non-PII) leaves this module as `product`,
+// the fallback the tech form shows under Appliance Type when WOM has no
+// product category (server/services/wom-work-order.ts), with the resolved
+// unit the WOM lookup uses. Neither is ever logged.
 
 // Binds: [serviceOrder, district].
 export const SERVICE_ORDER_APPLIANCE_SQL =
   `SELECT ${SERVICE_UNIT_SELECT}, HS_SP_CD AS PRODUCT FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
 
 export type ServiceOrderApplianceResult =
-  // applianceType is absent when the product does not map to a division.
-  | { status: "found"; applianceType?: ApplianceDivision }
+  // applianceType is absent when the product does not map to a division;
+  // product (the raw HS_SP_CD, trimmed) when it is blank. serviceUnit is the
+  // resolved SVC_UN_NO, e.g. "0008366".
+  | { status: "found"; applianceType?: ApplianceDivision; product?: string; serviceUnit?: string }
   | { status: "not_found" }
   | { status: "unavailable" };
 
@@ -423,16 +427,23 @@ export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQu
       let result: ServiceOrderApplianceResult;
       try {
         const rows = await query({ sqlText: SERVICE_ORDER_APPLIANCE_SQL, binds: [so, district] }, signal);
-        if (!rows[0] || !resolveServiceUnit(rows[0], district)) {
+        const serviceUnit = rows[0] ? resolveServiceUnit(rows[0], district) : undefined;
+        if (!serviceUnit) {
           result = { status: "not_found" };
         } else {
-          const applianceType = divisionFromServiceOrderProduct(text(rows[0].PRODUCT));
-          result = applianceType ? { status: "found", applianceType } : { status: "found" };
+          const product = text(rows[0].PRODUCT);
+          const applianceType = divisionFromServiceOrderProduct(product);
+          result = {
+            status: "found",
+            ...(applianceType ? { applianceType } : {}),
+            ...(product ? { product } : {}),
+            serviceUnit,
+          };
         }
       } catch {
         result = { status: "unavailable" };
       }
-      // The SO and the division only; never HS_SP_CD's value.
+      // The SO and the division only; never HS_SP_CD's value or the unit.
       const division = result.status === "found" ? result.applianceType ?? "unknown" : "none";
       console.info(`[appliance-type] SO=${district}-${so} status=${result.status} division=${division}`);
       return result;

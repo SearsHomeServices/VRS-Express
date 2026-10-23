@@ -1,5 +1,6 @@
 // Appliance type from the service order (HS_SP_CD -> division) for
-// GET /api/tech/lookup-warranty: server/services/snowflake-lookup.ts
+// GET /api/tech/lookup-warranty and submit (the fallback when WOM has no
+// product category): server/services/snowflake-lookup.ts
 // createServiceOrderApplianceLookup. Hermetic: Snowflake is a double.
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,31 +45,35 @@ describe("appliance type statement", () => {
 
 describe("appliance type lookup", () => {
   it.each([
-    ["Washer", "laundry"],
-    ["HVAC", "hvac"],
-    [" refrigerator ", "refrigeration"],
-    ["MICROWAVE HOOD COMBO", "microwave"],
-  ])("maps %j to %s", async (product, division) => {
+    ["Washer", "laundry", "Washer"],
+    ["HVAC", "hvac", "HVAC"],
+    [" refrigerator ", "refrigeration", "refrigerator"],
+    ["MICROWAVE HOOD COMBO", "microwave", "MICROWAVE HOOD COMBO"],
+  ])("maps %j to %s and returns the trimmed raw product", async (product, division, raw) => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     expect(await createServiceOrderApplianceLookup(queryReturning([row(product)]))("8175-12345678"))
-      .toEqual({ status: "found", applianceType: division });
+      .toEqual({ status: "found", applianceType: division, product: raw, serviceUnit: "0008175" });
   });
 
-  it("leaves the type absent when the product is unknown or blank", async () => {
+  it("leaves the type absent when the product is unknown, and the product too when blank", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
-    for (const product of ["ZZTOP", "", null]) {
+    const unknown = await createServiceOrderApplianceLookup(queryReturning([row("ZZTOP")]))("8175-12345678");
+    expect(unknown).toEqual({ status: "found", product: "ZZTOP", serviceUnit: "0008175" });
+    for (const product of ["", "   ", null]) {
       const result = await createServiceOrderApplianceLookup(queryReturning([row(product)]))("8175-12345678");
-      expect(result).toEqual({ status: "found" });
+      expect(result).toEqual({ status: "found", serviceUnit: "0008175" });
       expect(result).not.toHaveProperty("applianceType");
+      expect(result).not.toHaveProperty("product");
     }
   });
 
-  it("never returns or logs the raw HS_SP_CD value; logs the SO and division only", async () => {
+  it("returns the raw HS_SP_CD (non-PII) but never logs it or the unit; logs the SO and division only", async () => {
     const spies = (["log", "info", "warn", "error"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     const lookup = createServiceOrderApplianceLookup(queryReturning([row("WASHERDD - WASHER, DIRECT DRIVE")]));
     const result = await lookup("8175-12345678");
-    expect(result).toEqual({ status: "found", applianceType: "laundry" });
-    expect(JSON.stringify(result)).not.toMatch(/WASHERDD|DIRECT DRIVE/);
+    expect(result).toEqual({
+      status: "found", applianceType: "laundry", product: "WASHERDD - WASHER, DIRECT DRIVE", serviceUnit: "0008175",
+    });
     const logged = spies.flatMap((spy) => spy.mock.calls.flat()).join(" ");
     expect(logged).toContain("SO=8175-12345678");
     expect(logged).toContain("division=laundry");
@@ -78,11 +83,12 @@ describe("appliance type lookup", () => {
   it("resolves the unit like the AHS prefill", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     // District differs, one unit: that unit's product (7995 -> 0008366).
+    // The resolved unit comes back for the WOM lookup.
     expect(await createServiceOrderApplianceLookup(queryReturning([row("Washer", "0008366", 1)]))("7995-11075199"))
-      .toEqual({ status: "found", applianceType: "laundry" });
+      .toEqual({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0008366" });
     // District matches among several units.
     expect(await createServiceOrderApplianceLookup(queryReturning([row("HVAC", "0007995", 3)]))("7995-11075199"))
-      .toEqual({ status: "found", applianceType: "hvac" });
+      .toEqual({ status: "found", applianceType: "hvac", product: "HVAC", serviceUnit: "0007995" });
     // Several units, none the district: ambiguous.
     expect(await createServiceOrderApplianceLookup(queryReturning([row("Washer", "0008366", 2)]))("7995-11075199"))
       .toEqual({ status: "not_found" });

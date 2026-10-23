@@ -3,7 +3,8 @@ import ts from "typescript";
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { deriveWarrantyFromProcId } from "../shared/warranty";
+import { deriveWarrantyFromProcId, type WarrantyLookupResponse } from "../shared/warranty";
+import { resolveServiceOrderProduct } from "../server/services/wom-work-order";
 
 // Execute the actual route registration with hermetic auth/Snowflake doubles.
 // No DB or ticket fixture is supplied: first-time orders must work without one.
@@ -21,6 +22,8 @@ function harness() {
   });
   // Appliance type (HS_SP_CD -> division); not found unless a test says so.
   const applianceLookup = vi.fn().mockResolvedValue({ status: "not_found" });
+  // WOM product category; unavailable (flag off) unless a test says so.
+  const womLookup = vi.fn().mockResolvedValue({ status: "unavailable" });
   const app = express();
   const authenticateToken = (req: any, res: any, next: any) => {
     if (!req.headers["x-test-role"]) return res.status(401).json({ error: "Unauthorized" });
@@ -31,11 +34,12 @@ function harness() {
     roles.includes(req.user.role) ? next() : res.status(403).json({ error: "Forbidden" });
   new Function(
     "app", "authenticateToken", "requireRole", "fetchProcIdForServiceOrder",
-    "fetchServiceOrderApplianceType",
+    "fetchServiceOrderApplianceType", "lookupWomProductCategory", "resolveServiceOrderProduct",
     "deriveWarrantyFromProcId", "warrantyLookupLog", "WARRANTY_LOOKUP_WINDOW_MS",
     "WARRANTY_LOOKUP_MAX_PER_WINDOW", routeJs,
-  )(app, authenticateToken, requireRole, lookup, applianceLookup, deriveWarrantyFromProcId, new Map(), 3600000, 2);
-  return { app, lookup, applianceLookup };
+  )(app, authenticateToken, requireRole, lookup, applianceLookup, womLookup, resolveServiceOrderProduct,
+    deriveWarrantyFromProcId, new Map(), 3600000, 2);
+  return { app, lookup, applianceLookup, womLookup };
 }
 
 const so = "1234-12345678";
@@ -114,7 +118,7 @@ describe("technician pre-submission warranty lookup", () => {
 
   it("adds the appliance type to a known warranty and at the top level", async () => {
     const { app, applianceLookup } = harness();
-    applianceLookup.mockResolvedValue({ status: "found", applianceType: "laundry" });
+    applianceLookup.mockResolvedValue({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0001234" });
     const res = await request(app).get(url).set("x-test-role", "technician");
     expect(res.status).toBe(200);
     expect(applianceLookup).toHaveBeenCalledWith(so);
@@ -122,17 +126,21 @@ describe("technician pre-submission warranty lookup", () => {
       serviceOrder: so,
       derived: { ...deriveWarrantyFromProcId("private-proc", "American Home Shield"), applianceType: "laundry" },
       applianceType: "laundry",
+      serviceOrderProduct: { text: "Washer", source: "snowflake" },
     });
   });
 
   it("returns the appliance type when the warranty is unknown, keeping derived null for older forms", async () => {
     const { app, lookup, applianceLookup } = harness();
     lookup.mockResolvedValue({ status: "FOUND", procId: "UNRECOGNIZED", clientNm: "Some Retailer" });
-    applianceLookup.mockResolvedValue({ status: "found", applianceType: "hvac" });
+    applianceLookup.mockResolvedValue({ status: "found", applianceType: "hvac", product: "HVAC", serviceUnit: "0001234" });
     const res = await request(app).get(url).set("x-test-role", "technician");
     expect(res.status).toBe(200);
     // Older forms treat any non-null derived as a locked warranty.
-    expect(res.body).toEqual({ serviceOrder: so, derived: null, applianceType: "hvac" });
+    expect(res.body).toEqual({
+      serviceOrder: so, derived: null, applianceType: "hvac",
+      serviceOrderProduct: { text: "HVAC", source: "snowflake" },
+    });
     expect(JSON.stringify(res.body)).not.toMatch(/UNRECOGNIZED|Some Retailer/);
   });
 
@@ -160,11 +168,107 @@ describe("technician pre-submission warranty lookup", () => {
     const res = await request(app).get(url).set("x-test-role", "technician");
     expect(res.status).toBe(503);
     expect(res.body).not.toHaveProperty("applianceType");
+    expect(res.body).not.toHaveProperty("serviceOrderProduct");
   });
 
   it("uses an explicit query URL without changing the global query client", () => {
     const form = fs.readFileSync("client/src/pages/tech-submit.tsx", "utf8");
     expect(form).toContain("/api/tech/lookup-warranty?serviceOrder=${encodeURIComponent(watchedServiceOrder)}");
     expect(form).toContain("enabled: isValidSo && !isProvider1099");
+  });
+});
+
+describe("technician warranty lookup: the service order's product (WOM, else Snowflake)", () => {
+  const AHS = deriveWarrantyFromProcId("private-proc", "American Home Shield");
+
+  it("prefers the WOM Product Category and maps the type from it", async () => {
+    const { app, applianceLookup, womLookup } = harness();
+    womLookup.mockResolvedValue({ status: "found", productCategory: "WASHERDD - WASHER, DIRECT DRIVE" });
+    applianceLookup.mockResolvedValue({ status: "found", applianceType: "refrigeration", product: "Refrigerator", serviceUnit: "0001234" });
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(res.status).toBe(200);
+    // WOM is asked under the padded district: unit and 8-digit SO.
+    expect(womLookup).toHaveBeenCalledWith("1234", "12345678");
+    const expected: WarrantyLookupResponse = {
+      serviceOrder: so,
+      derived: { ...AHS!, applianceType: "laundry" },
+      applianceType: "laundry",
+      serviceOrderProduct: { text: "WASHERDD - WASHER, DIRECT DRIVE", source: "wom" },
+    };
+    expect(res.body).toEqual(expected);
+  });
+
+  it.each([
+    ["unavailable", { status: "unavailable" }],
+    ["not found", { status: "not_found" }],
+    ["found without a category", { status: "found" }],
+  ])("falls back to Snowflake HS_SP_CD when WOM is %s", async (_label, wom) => {
+    const { app, applianceLookup, womLookup } = harness();
+    womLookup.mockResolvedValue(wom);
+    applianceLookup.mockResolvedValue({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0001234" });
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(res.body).toEqual({
+      serviceOrder: so,
+      derived: { ...AHS, applianceType: "laundry" },
+      applianceType: "laundry",
+      serviceOrderProduct: { text: "Washer", source: "snowflake" },
+    });
+  });
+
+  it("asks WOM again under the unit Snowflake resolved when the district has no order", async () => {
+    const { app, applianceLookup, womLookup } = harness();
+    applianceLookup.mockResolvedValue({ status: "found", applianceType: "laundry", product: "Washer", serviceUnit: "0008366" });
+    womLookup.mockImplementation(async (unit: string) => unit === "0008366"
+      ? { status: "found", productCategory: "DRYERE - DRYER, ELECTRIC" }
+      : { status: "not_found" });
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(womLookup.mock.calls).toEqual([["1234", "12345678"], ["0008366", "12345678"]]);
+    expect(res.body.serviceOrderProduct).toEqual({ text: "DRYERE - DRYER, ELECTRIC", source: "wom" });
+    expect(res.body.applianceType).toBe("laundry");
+  });
+
+  it("omits both when neither source knows the product", async () => {
+    const { app, womLookup } = harness();
+    womLookup.mockResolvedValue({ status: "not_found" });
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(res.body).toEqual({ serviceOrder: so, derived: AHS });
+  });
+
+  it("keeps derived null for older forms when only the product is known", async () => {
+    const { app, lookup, womLookup } = harness();
+    lookup.mockResolvedValue({ status: "NOT_FOUND", procId: "Not Found", clientNm: "Not Found" });
+    womLookup.mockResolvedValue({ status: "found", productCategory: "RANGEGAS - RANGE, GAS" });
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(res.body).toEqual({
+      serviceOrder: so,
+      derived: null,
+      applianceType: "cooking",
+      serviceOrderProduct: { text: "RANGEGAS - RANGE, GAS", source: "wom" },
+    });
+  });
+
+  it("a WOM failure never changes the warranty answer", async () => {
+    const { app, womLookup } = harness();
+    womLookup.mockRejectedValue(new Error("wom exploded"));
+    const res = await request(app).get(url).set("x-test-role", "technician");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ serviceOrder: so, derived: AHS });
+  });
+
+  it("a slow WOM falls back to Snowflake inside the WOM budget", async () => {
+    const previous = process.env.WOM_TIMEOUT_MS;
+    process.env.WOM_TIMEOUT_MS = "50";
+    try {
+      const { app, applianceLookup, womLookup } = harness();
+      womLookup.mockImplementation(() => new Promise(() => {}));
+      applianceLookup.mockResolvedValue({ status: "found", applianceType: "hvac", product: "HVAC", serviceUnit: "0001234" });
+      const started = Date.now();
+      const res = await request(app).get(url).set("x-test-role", "technician");
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(res.body.serviceOrderProduct).toEqual({ text: "HVAC", source: "snowflake" });
+    } finally {
+      if (previous === undefined) delete process.env.WOM_TIMEOUT_MS;
+      else process.env.WOM_TIMEOUT_MS = previous;
+    }
   });
 });
