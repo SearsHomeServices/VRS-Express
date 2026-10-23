@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Snowflake product codes map exactly (2026-10-23)
+- Snowflake `HS_SP_CD` holds product-line codes such as DISH, WASHER and
+  REFRIGERATION, not descriptions. All 23 codes seen in the last 12 months
+  now map exactly (`SNOWFLAKE_PRODUCT_CODE_DIVISIONS`). Before, DISH matched
+  nothing.
+- Codes for one specific appliance preselect it: WASHER, DRYER, DISH,
+  COOKING MICRO, DISPOSER and HVAC. Broad codes (REFRIGERATION, COOKING,
+  GRILLING, ...) set the category and ask the tech for the specific
+  appliance, per the approved appliance-selection rule.
+- New read-only `scripts/diagnostics/list-product-codes.mts` lists the codes
+  and their mapping.
+
 ### Fixed - Appliance Type not auto-filling (2026-10-23)
 - The appliance-type lookup no longer gives up when an 8-digit SO number
   exists under several service units. It prefers the tech's district, then

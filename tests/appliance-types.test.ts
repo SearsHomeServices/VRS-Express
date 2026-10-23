@@ -146,3 +146,39 @@ describe("applianceKindFromServiceOrderProduct", () => {
     }
   });
 });
+
+describe("Snowflake HS_SP_CD product-line codes (full list, 2026-10-23)", () => {
+  // CODE → [division, specific appliance or undefined (tech picks)].
+  const table: Record<string, [string, string | undefined]> = {
+    REFRIGERATION: ["refrigeration", undefined],
+    WASHER: ["laundry", "washer"],
+    DRYER: ["laundry", "dryer"],
+    COOKING: ["cooking", undefined],
+    HVAC: ["hvac", "hvac"],
+    DISH: ["dishwasher", "dishwasher"],
+    "COOKING MICRO": ["microwave", "microwave"],
+    TRACTOR: ["all_other", undefined],
+    "LAWN & GARDEN": ["all_other", undefined],
+    WATERHEAT: ["all_other", undefined],
+    COOL: ["hvac", undefined],
+    DISPOSER: ["all_other", "garbage_disposal"],
+    GDO: ["all_other", undefined],
+    WATERTREAT: ["all_other", undefined],
+    GRILLING: ["cooking", undefined],
+    RECREATION: ["all_other", undefined],
+    "OIL-BOILER": ["hvac", undefined],
+    OTHER: ["all_other", undefined],
+    PORTHEATER: ["hvac", undefined],
+    "TV DIGITAL": ["all_other", undefined],
+    TOOLS: ["all_other", undefined],
+    AV: ["all_other", undefined],
+  };
+  it.each(Object.entries(table))("%s maps to its division and appliance", async (code, [division, kind]) => {
+    const { divisionFromServiceOrderProduct } = await import("../shared/appliance-division");
+    const { applianceKindFromServiceOrderProduct, applianceChoice } = await import("../shared/appliance-types");
+    expect(divisionFromServiceOrderProduct(code)).toBe(division);
+    expect(divisionFromServiceOrderProduct(` ${code.toLowerCase()} `)).toBe(division);
+    expect(applianceKindFromServiceOrderProduct(code)).toBe(kind);
+    if (kind) expect(applianceChoice(kind)?.division).toBe(division);
+  });
+});

@@ -104,9 +104,26 @@ const KIND_RULES: { kind: ApplianceKind | undefined; test: (value: string, laund
   { kind: "hvac", test: (v) => /HVAC|AIR\s*COND|\bA\/?C\b|FURNACE|HEAT\s*PUMP/.test(v) },
 ];
 
+// Snowflake product-line codes (shared/appliance-division.ts
+// SNOWFLAKE_PRODUCT_CODE_DIVISIONS) that name one specific appliance. Broad
+// codes (REFRIGERATION, COOKING, GRILLING, ...) are absent on purpose: they
+// set the routing category and the tech picks the specific appliance.
+const SNOWFLAKE_PRODUCT_CODE_KINDS: Record<string, ApplianceKind | null> = {
+  REFRIGERATION: null,
+  WASHER: "washer",
+  DRYER: "dryer",
+  COOKING: null,
+  HVAC: "hvac",
+  DISH: "dishwasher",
+  "COOKING MICRO": "microwave",
+  DISPOSER: "garbage_disposal",
+  GRILLING: null,
+};
+
 export function applianceKindFromServiceOrderProduct(text: string | null | undefined): ApplianceKind | undefined {
   const value = (text ?? "").toString().trim().toUpperCase();
   if (!value) return undefined;
+  if (value in SNOWFLAKE_PRODUCT_CODE_KINDS) return SNOWFLAKE_PRODUCT_CODE_KINDS[value] ?? undefined;
   const laundryWash = /WASH/.test(value.replace(/DISH\s*WASH/g, " "));
   const kind = KIND_RULES.find((rule) => rule.test(value, laundryWash))?.kind;
   if (!kind) return undefined;

@@ -32,8 +32,38 @@ const RULES: { division: ApplianceDivision; pattern: RegExp }[] = [
   { division: "all_other", pattern: /DISPOS|WATER\s*HEATER|SOFTENER|GENERATOR|VACUUM|MOWER|TRACTOR/ },
 ];
 
+// Snowflake HS_SP_CD holds one of a small set of product-line codes, not a
+// free-text description. The full list (orders created in the last 12
+// months, 2026-10-23, via scripts/diagnostics/list-product-codes.mts) maps
+// exactly; the keyword RULES below handle WOM's longer Product Category text.
+// "COOL" and "PORTHEATER" are read as room cooling / portable heating (HVAC).
+export const SNOWFLAKE_PRODUCT_CODE_DIVISIONS: Record<string, ApplianceDivision> = {
+  REFRIGERATION: "refrigeration",
+  WASHER: "laundry",
+  DRYER: "laundry",
+  COOKING: "cooking",
+  HVAC: "hvac",
+  DISH: "dishwasher",
+  "COOKING MICRO": "microwave",
+  TRACTOR: "all_other",
+  "LAWN & GARDEN": "all_other",
+  WATERHEAT: "all_other",
+  COOL: "hvac",
+  DISPOSER: "all_other",
+  GDO: "all_other",
+  WATERTREAT: "all_other",
+  GRILLING: "cooking",
+  RECREATION: "all_other",
+  "OIL-BOILER": "hvac",
+  OTHER: "all_other",
+  PORTHEATER: "hvac",
+  "TV DIGITAL": "all_other",
+  TOOLS: "all_other",
+  AV: "all_other",
+};
+
 export function divisionFromServiceOrderProduct(raw: string | null | undefined): ApplianceDivision | undefined {
   const value = (raw ?? "").toString().trim().toUpperCase();
   if (!value) return undefined;
-  return RULES.find((rule) => rule.pattern.test(value))?.division;
+  return SNOWFLAKE_PRODUCT_CODE_DIVISIONS[value] ?? RULES.find((rule) => rule.pattern.test(value))?.division;
 }
