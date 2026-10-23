@@ -63,3 +63,9 @@ export function isAhsServiceOrderPrefillEnabled(): boolean {
 export function isAhsHssomCustomerPrefillEnabled(): boolean {
   return process.env.AHS_HSSOM_CUSTOMER_PREFILL_ENABLED === "true";
 }
+
+// Appliance grade, color and part function on the tech form for AHS and
+// First American authorization tickets (shared/tech-appliance-details.ts).
+export function isTechApplianceDetailsEnabled(): boolean {
+  return process.env.TECH_APPLIANCE_DETAILS_ENABLED === "true";
+}

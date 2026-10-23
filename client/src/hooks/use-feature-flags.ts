@@ -7,6 +7,7 @@ interface AppConfig {
   vrsAiAppEnrollEnabled?: boolean;
   ahsServiceOrderPrefill?: boolean;
   ahsHssomCustomerPrefill?: boolean;
+  techApplianceDetailsEnabled?: boolean;
 }
 
 // Runtime feature flags sourced from GET /api/config. Defaults to disabled
@@ -49,5 +50,8 @@ export function useFeatureFlags() {
     // Customer name/address from the HSSOM Order Lookup, filled on the
     // server only (server AHS_HSSOM_CUSTOMER_PREFILL_ENABLED).
     ahsHssomCustomerPrefill: data?.ahsHssomCustomerPrefill ?? false,
+    // Grade / color / part function on AHS and First American tech tickets
+    // (server TECH_APPLIANCE_DETAILS_ENABLED).
+    techApplianceDetailsEnabled: data?.techApplianceDetailsEnabled ?? false,
   };
 }

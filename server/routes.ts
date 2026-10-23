@@ -82,6 +82,7 @@ import {
   isVrsAiAppEnrollEnabled,
   isAhsServiceOrderPrefillEnabled,
   isAhsHssomCustomerPrefillEnabled,
+  isTechApplianceDetailsEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -703,6 +704,7 @@ export async function registerRoutes(
       vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
       ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),
       ahsHssomCustomerPrefill: isAhsHssomCustomerPrefillEnabled(),
+      techApplianceDetailsEnabled: isTechApplianceDetailsEnabled(),
     });
   });
 

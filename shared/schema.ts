@@ -205,6 +205,11 @@ export const submissions = pgTable("submissions", {
   // shared/ahs-details.ts ahsDetailsSchema; null for every other ticket.
   // Migrated idempotently in seed.ts (ensureAhsDetailsColumn).
   ahsDetails: text("ahs_details"),
+  // 2026-10-23 — appliance grade, color and part function the technician
+  // enters on AHS / First American authorization tickets. JSON matching
+  // shared/tech-appliance-details.ts; null for every other ticket.
+  // Migrated idempotently in seed.ts (ensureTechApplianceDetailsColumn).
+  techApplianceDetails: text("tech_appliance_details"),
   // Tyler 2026-05-20 (afternoon) — Replacement Review outcome. Set true when
   // a standard /process action of `approve_replacement_review` is used so VRS
   // can flag tickets where the warranty company is taking over replacement.

@@ -100,6 +100,7 @@ export async function seedDatabase() {
   // 2026-10-16 — submissions.ahs_details is referenced by the Drizzle
   // schema, so it must exist BEFORE the first submissions query too.
   await ensureAhsDetailsColumn();
+  await ensureTechApplianceDetailsColumn();
   await ensureWeeklyReportsTable();
   // Must precede scheduler startup and any report-delivery query on a fresh
   // dev/prod database.  This table is an audit ledger, not seed data.
@@ -432,6 +433,22 @@ async function ensureAhsDetailsColumn() {
     console.log("[ahs-details] submissions.ahs_details ensured (nullable)");
   } catch (err: any) {
     console.warn(`[ahs-details] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// 2026-10-23 — appliance grade/color/part function (JSON text) the tech
+// enters on AHS and First American authorization tickets. Same idempotent
+// pattern as ensureAhsDetailsColumn; must run before the first submissions
+// query on boot. Safe to re-run.
+async function ensureTechApplianceDetailsColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS tech_appliance_details TEXT
+    `));
+    console.log("[tech-appliance-details] submissions.tech_appliance_details ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[tech-appliance-details] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

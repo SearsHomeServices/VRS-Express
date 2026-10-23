@@ -78,6 +78,7 @@ VRS_AI_BASE_URL = "https://agentic-vrs-agent-dev.stage.nextgen.shs.com"
 VRS_EXPRESS_PUBLIC_URL = "https://a11bb216-7de2-40f6-ada7-2f3b2631048f-00-8qow8i4553hq.riker.replit.dev/"
 VRS_BRIDGE_PHOTO_PROXY_ENABLED = "true"
 VRS_AI_APP_ENROLL_ENABLED = "true"
+TECH_APPLIANCE_DETAILS_ENABLED = "true"
 
 [userenv.production]
 ENABLE_TECHHUB_PHOTOS = "true"
