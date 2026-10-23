@@ -1,3 +1,5 @@
+import { divisionFromServiceOrderProduct, type ApplianceDivision } from "../../shared/appliance-division";
+
 export type ProcIdResult =
   | { status: "FOUND" | "NOT_FOUND"; procId: string; clientNm: string }
   | { status: "LOOKUP_UNAVAILABLE"; retryable: true };
@@ -103,20 +105,64 @@ export function createProcLookup(
 }
 
 // ===========================================================================
+// Service unit resolution (AHS prefill and the appliance type)
+// ===========================================================================
+//
+// Service order numbers are reused across units, and the district the tech
+// types is not always the unit the order lives under: a tech in district
+// 7995 can work SO 11075199 that lives under unit 0008366 (ServicePower
+// "0008366-11075199"). So the statements match on SO_NO and resolve the unit
+// from the rows:
+//   1. the row under the tech's padded district ("7995" -> "0007995") wins;
+//   2. else, if every row for the SO is under one unit, that unit wins;
+//   3. else the order is ambiguous (several units, none the district) and the
+//      lookup answers not_found rather than return another unit's data.
+// One statement does it: the ORDER BY puts the district's row first, and the
+// window COUNT(DISTINCT SVC_UN_NO) OVER () is computed over every row the
+// WHERE matched (before LIMIT 1), so one row tells both the chosen unit and
+// how many units the SO spans. Rows for one SO are few; no second statement.
+
+const SERVICE_ORDER_TABLE = "PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL";
+
+// Binds: [serviceOrder, district].
+const SO_MATCH_PREFER_DISTRICT =
+  "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1";
+
+// The resolved unit and how many units the SO spans.
+const SERVICE_UNIT_SELECT = "SVC_UN_NO AS SERVICE_UNIT, COUNT(DISTINCT SVC_UN_NO) OVER () AS UNIT_COUNT";
+
+// SVC_UN_NO as a 7-digit unit ("8366" or "0008366" -> "0008366"), or
+// undefined when it is not one.
+export function normalizeServiceUnit(value: unknown): string | undefined {
+  const unit = value == null ? "" : String(value).trim();
+  return /^\d{1,7}$/.test(unit) ? unit.padStart(7, "0") : undefined;
+}
+
+// The unit an order resolves to from its first row (SERVICE_UNIT,
+// UNIT_COUNT; see SO_MATCH_PREFER_DISTRICT), or undefined when it is
+// ambiguous or the row has no usable unit.
+export function resolveServiceUnit(row: any, district: string): string | undefined {
+  const unit = normalizeServiceUnit(row?.SERVICE_UNIT);
+  if (!unit) return undefined;
+  if (unit === district.padStart(7, "0")) return unit;
+  return Number(row?.UNIT_COUNT) === 1 ? unit : undefined;
+}
+
+// ===========================================================================
 // AHS service-order prefill (shared/ahs-prefill.ts)
 // ===========================================================================
 //
-// Service order numbers are reused across units, so every statement filters
-// on the unit as well: district "8175" -> SVC_UN_NO "0008175".
+// Every statement matches the order by SO_NO and resolves the unit as
+// above. The core statement decides the unit; the appliance and parts
+// statements resolve it the same way in SQL so all three still run in
+// parallel under the 5s deadline, and their rows are kept only when their
+// unit equals the core statement's.
 //
 // Columns NOT yet verified against the live schema live in
 // AHS_PREFILL_UNVERIFIED_COLUMNS and run as their own statement: one wrong
 // identifier fails a whole Snowflake statement, and the brand and partner
 // columns must still come back when it does. Change a column name there
 // only; the aliases keep the row mapping below unchanged.
-
-const AHS_PREFILL_TABLE = "PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL";
-const AHS_PREFILL_WHERE = "WHERE SVC_UN_NO = LPAD(?, 7, '0') AND SO_NO = ? LIMIT 1";
 
 // In use elsewhere against this table.
 export const AHS_PREFILL_CONFIRMED_COLUMNS = {
@@ -133,13 +179,18 @@ export const AHS_PREFILL_UNVERIFIED_COLUMNS = {
   SERIAL_NUMBER: "PSV_MDS_SRL_NO",
 } as const;
 
-function selectFrom(columns: Record<string, string>): string {
-  const list = Object.entries(columns).map(([alias, column]) => `${column} AS ${alias}`).join(", ");
-  return `SELECT ${list} FROM ${AHS_PREFILL_TABLE} ${AHS_PREFILL_WHERE}`;
+function columnList(columns: Record<string, string>): string {
+  return Object.entries(columns).map(([alias, column]) => `${column} AS ${alias}`).join(", ");
 }
 
-export const AHS_PREFILL_CORE_SQL = selectFrom(AHS_PREFILL_CONFIRMED_COLUMNS);
-export const AHS_PREFILL_APPLIANCE_SQL = selectFrom(AHS_PREFILL_UNVERIFIED_COLUMNS);
+// Binds: [serviceOrder, district].
+export const AHS_PREFILL_CORE_SQL =
+  `SELECT ${SERVICE_UNIT_SELECT}, ${columnList(AHS_PREFILL_CONFIRMED_COLUMNS)} ` +
+  `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
+// Binds: [serviceOrder, district].
+export const AHS_PREFILL_APPLIANCE_SQL =
+  `SELECT SVC_UN_NO AS SERVICE_UNIT, ${columnList(AHS_PREFILL_UNVERIFIED_COLUMNS)} ` +
+  `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
 
 // The parts on the order, one row per part line, from the DB2 parts table
 // (columns confirmed in ai-agent-mcp order_parts_tools.py / order_part.py).
@@ -157,9 +208,16 @@ export const AHS_PREFILL_PARTS_COLUMNS = {
 const AHS_PREFILL_PARTS_ROW_LIMIT = 50;
 export const AHS_PREFILL_MAX_PARTS = 10;
 
+// NPSXTPN filtered on SVC_UN_NO = <the resolved unit> AND SO_NO = ?. The
+// unit comes from the same resolution as the core statement (a scalar
+// subquery on the service order table), so the statement need not wait for
+// the core row; each part row carries its unit and only rows under the core
+// statement's resolved unit are kept. Binds: [serviceOrder, serviceOrder,
+// district].
 export const AHS_PREFILL_PARTS_SQL =
-  `SELECT ${Object.entries(AHS_PREFILL_PARTS_COLUMNS).map(([alias, column]) => `${column} AS ${alias}`).join(", ")} ` +
-  "FROM PRD_DB2.HS_DW_TBLS.NPSXTPN WHERE SVC_UN_NO = LPAD(?,7,'0') AND SO_NO = ? " +
+  `SELECT SVC_UN_NO AS SERVICE_UNIT, ${columnList(AHS_PREFILL_PARTS_COLUMNS)} ` +
+  "FROM PRD_DB2.HS_DW_TBLS.NPSXTPN WHERE SO_NO = ? AND SVC_UN_NO = " +
+  `(SELECT SVC_UN_NO FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}) ` +
   `ORDER BY PRT_SEQ_NO LIMIT ${AHS_PREFILL_PARTS_ROW_LIMIT}`;
 
 // Under the lookup's 5s deadline, so a slow parts statement is cancelled
@@ -187,6 +245,10 @@ export interface AhsServiceOrderPrefill {
   serialNumber?: string;
   partnerId?: string;
   clientName?: string;
+  // The resolved SVC_UN_NO (e.g. "0008366"), which may differ from the
+  // tech's district; the HSSOM order ID uses it (server/ahs-prefill.ts).
+  // Never stored on the draft or logged.
+  serviceUnit?: string;
   // Absent when the parts statement failed or the order has no live parts.
   parts?: AhsServiceOrderPart[];
 }
@@ -198,7 +260,8 @@ export type AhsPrefillLookupResult =
 
 export interface AhsPrefillStatement {
   sqlText: string;
-  binds: [district: string, serviceOrder: string];
+  // Positional; see each statement's comment for the order.
+  binds: string[];
   // Cancels and rejects just this statement after this long.
   timeoutMs?: number;
 }
@@ -262,22 +325,31 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
     if (!/^\d{4}$/.test(unit) || !/^\d{8}$/.test(so)) return Promise.resolve({ status: "not_found" });
     return lookup(`${unit}-${so}`, async (signal) => {
       const [core, appliance, parts] = await query([
-        { sqlText: AHS_PREFILL_CORE_SQL, binds: [unit, so] },
-        { sqlText: AHS_PREFILL_APPLIANCE_SQL, binds: [unit, so] },
-        { sqlText: AHS_PREFILL_PARTS_SQL, binds: [unit, so], timeoutMs: AHS_PREFILL_PARTS_TIMEOUT_MS },
+        { sqlText: AHS_PREFILL_CORE_SQL, binds: [so, unit] },
+        { sqlText: AHS_PREFILL_APPLIANCE_SQL, binds: [so, unit] },
+        { sqlText: AHS_PREFILL_PARTS_SQL, binds: [so, so, unit], timeoutMs: AHS_PREFILL_PARTS_TIMEOUT_MS },
       ], signal);
-      // Never log returned values: service order and status only.
+      // Never log returned values (the resolved unit included): service order and status only.
       if (core.status === "rejected") {
         console.warn(`[ahs-prefill] SO=${unit}-${so} status=unavailable (core statement failed)`);
         return { status: "unavailable" };
       }
       const row = core.value[0];
       if (!row) return { status: "not_found" };
+      const serviceUnit = resolveServiceUnit(row, unit);
+      if (!serviceUnit) {
+        console.warn(`[ahs-prefill] SO=${unit}-${so} status=not_found (order under several units, none the district)`);
+        return { status: "not_found" };
+      }
+      if (serviceUnit !== unit.padStart(7, "0")) {
+        console.info(`[ahs-prefill] SO=${unit}-${so} order is under another unit than the district; using that unit`);
+      }
       const found: AhsPrefillLookupResult = {
         status: "found",
         brand: text(row.BRAND),
         partnerId: text(row.PARTNER_ID),
         clientName: text(row.CLIENT_NAME),
+        serviceUnit,
       };
       if (appliance.status === "rejected") {
         // Most likely a column-name mismatch; the message names the column.
@@ -285,12 +357,16 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
         console.warn(`[ahs-prefill] SO=${unit}-${so} appliance statement failed, brand only: ${message}`);
       } else {
         const extra = appliance.value[0];
-        found.serviceContractId = text(extra?.SERVICE_CONTRACT_ID);
-        found.modelNumber = text(extra?.MODEL_NUMBER);
-        found.serialNumber = text(extra?.SERIAL_NUMBER);
+        if (extra && normalizeServiceUnit(extra.SERVICE_UNIT) === serviceUnit) {
+          found.serviceContractId = text(extra.SERVICE_CONTRACT_ID);
+          found.modelNumber = text(extra.MODEL_NUMBER);
+          found.serialNumber = text(extra.SERIAL_NUMBER);
+        }
       }
       if (parts?.status === "fulfilled") {
-        const mapped = mapAhsServiceOrderParts(parts.value);
+        const mapped = mapAhsServiceOrderParts(
+          parts.value.filter((part) => normalizeServiceUnit(part?.SERVICE_UNIT) === serviceUnit),
+        );
         if (mapped.length) found.parts = mapped;
       } else if (parts?.status === "rejected") {
         // Message only (a column or timeout); never the returned values.
@@ -298,6 +374,68 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
         console.warn(`[ahs-prefill] SO=${unit}-${so} parts statement failed, no parts: ${message}`);
       }
       return found;
+    });
+  };
+}
+
+// ===========================================================================
+// Appliance type from the service order (GET /api/tech/lookup-warranty)
+// ===========================================================================
+//
+// HS_SP_CD (the product code, e.g. "Washer", "HVAC"; confirmed in use by
+// ai-agent-mcp service_order_tools.py) mapped to the tech form's appliance
+// type by divisionFromServiceOrderProduct. Its own statement and its own
+// bounded lookup, never part of the ProcID statement: a failure here can
+// never touch warranty detection or submit. Same unit resolution as the AHS
+// prefill. Only the division leaves this module (and the cache): never the
+// raw HS_SP_CD value.
+
+// Binds: [serviceOrder, district].
+export const SERVICE_ORDER_APPLIANCE_SQL =
+  `SELECT ${SERVICE_UNIT_SELECT}, HS_SP_CD AS PRODUCT FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
+
+export type ServiceOrderApplianceResult =
+  // applianceType is absent when the product does not map to a division.
+  | { status: "found"; applianceType?: ApplianceDivision }
+  | { status: "not_found" }
+  | { status: "unavailable" };
+
+export type ServiceOrderApplianceQuery = (
+  statement: { sqlText: string; binds: string[] },
+  signal: AbortSignal,
+) => Promise<any[]>;
+
+// For a "DDDD-SSSSSSSS" service order. Never rejects; bounded by the
+// lookup's deadline (5s by default), coalesced and cached like the others.
+export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQuery, options: LookupOptions = {}) {
+  const lookup = createBoundedLookup<ServiceOrderApplianceResult>(
+    () => ({ status: "unavailable" }),
+    (result, ttl) => result.status === "found" ? ttl.positiveMs
+      : result.status === "not_found" ? ttl.negativeMs : ttl.unavailableMs,
+    { deadlineMs: 5000, ...options },
+  );
+  return (serviceOrder: string): Promise<ServiceOrderApplianceResult> => {
+    const match = /^(\d{4})-(\d{8})$/.exec(String(serviceOrder ?? "").trim());
+    // Never query with input the form could not have produced.
+    if (!match) return Promise.resolve({ status: "not_found" });
+    const [, district, so] = match;
+    return lookup(`${district}-${so}`, async (signal) => {
+      let result: ServiceOrderApplianceResult;
+      try {
+        const rows = await query({ sqlText: SERVICE_ORDER_APPLIANCE_SQL, binds: [so, district] }, signal);
+        if (!rows[0] || !resolveServiceUnit(rows[0], district)) {
+          result = { status: "not_found" };
+        } else {
+          const applianceType = divisionFromServiceOrderProduct(text(rows[0].PRODUCT));
+          result = applianceType ? { status: "found", applianceType } : { status: "found" };
+        }
+      } catch {
+        result = { status: "unavailable" };
+      }
+      // The SO and the division only; never HS_SP_CD's value.
+      const division = result.status === "found" ? result.applianceType ?? "unknown" : "none";
+      console.info(`[appliance-type] SO=${district}-${so} status=${result.status} division=${division}`);
+      return result;
     });
   };
 }

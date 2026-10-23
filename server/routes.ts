@@ -125,7 +125,7 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
-import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder } from "./services/snowflake";
+import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder, fetchServiceOrderApplianceType } from "./services/snowflake";
 import {
   applyAhsSubmitPrefill,
   applyTechApplianceDetails,
@@ -1533,7 +1533,9 @@ export async function registerRoutes(
 
       // AHS service-order prefill (server/ahs-prefill.ts): Snowflake and the
       // HSSOM Order Lookup. Each settles within ~5s and never rejects, so they
-      // can never block or fail the submission. lookupHssomOrder answers
+      // can never block or fail the submission. (HSSOM is asked a second time,
+      // another ~5s at most, when Snowflake finds the order under a unit other
+      // than the typed district; lookupAhsPrefillSources.) lookupHssomOrder answers
       // unavailable while its own flag is off. Started alongside the ProcID
       // lookup when the tech picked AHS; otherwise only once the ProcID
       // derivation says AHS (below).
@@ -7569,7 +7571,18 @@ export async function registerRoutes(
     //
     // Response scoping: procId and clientNm (third-party Snowflake identifiers)
     // are never returned to the client; only the derived warranty classification
-    // is returned. That is all the submission form requires.
+    // is returned, plus the appliance type (a division, never the raw HS_SP_CD
+    // product code) so the form can preselect it.
+    //
+    // Response: { serviceOrder, derived, applianceType? }
+    //   derived: (DerivedWarranty & DerivedServiceOrderAppliance) | null.
+    //     Stays null whenever the warranty is unknown: older open forms read
+    //     any non-null derived as a locked warranty (derived.warrantyType).
+    //   applianceType (top level, DerivedServiceOrderAppliance): whenever the
+    //     appliance type is known, including when the warranty is unknown.
+    //   Both are absent when unknown. The appliance lookup is its own bounded
+    //   statement (fetchServiceOrderApplianceType); its failure or timeout only
+    //   drops applianceType and never changes the warranty answer.
     try {
       const authReq = req as AuthenticatedRequest;
       const caller = authReq.user;
@@ -7597,6 +7610,10 @@ export async function registerRoutes(
 
       console.info(`[lookup-warranty] allowed: user=${callerIdentity} (${callerUserId}) so=${so}`);
 
+      // In parallel; the appliance lookup never rejects (the catch is a backstop).
+      const appliancePromise = Promise.resolve()
+        .then(() => fetchServiceOrderApplianceType(so))
+        .catch(() => ({ status: "unavailable" as const }));
       const result = await fetchProcIdForServiceOrder(so);
       if (result.status === "LOOKUP_UNAVAILABLE") {
         return res.status(503).set("Retry-After", "5").json({
@@ -7605,11 +7622,14 @@ export async function registerRoutes(
         });
       }
       const derived = deriveWarrantyFromProcId(result.procId, result.clientNm);
+      const appliance = await appliancePromise;
+      const applianceType = appliance.status === "found" ? appliance.applianceType : undefined;
 
-      // Return only the derived warranty classification — not procId or clientNm.
+      // Only the derived classification — not procId, clientNm or HS_SP_CD.
       res.json({
         serviceOrder: so,
-        derived,
+        derived: derived ? { ...derived, ...(applianceType ? { applianceType } : {}) } : null,
+        ...(applianceType ? { applianceType } : {}),
       });
     } catch (err) {
       console.error("lookup-warranty error:", err);

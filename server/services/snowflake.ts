@@ -1,8 +1,14 @@
 import { createPrivateKey } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
-import { createAhsPrefillLookup, createProcLookup } from "./snowflake-lookup";
-export type { AhsPrefillLookupResult, AhsServiceOrderPart, AhsServiceOrderPrefill, ProcIdResult } from "./snowflake-lookup";
+import { createAhsPrefillLookup, createProcLookup, createServiceOrderApplianceLookup } from "./snowflake-lookup";
+export type {
+  AhsPrefillLookupResult,
+  AhsServiceOrderPart,
+  AhsServiceOrderPrefill,
+  ProcIdResult,
+  ServiceOrderApplianceResult,
+} from "./snowflake-lookup";
 
 // tsx runs this file as ESM; the production bundle runs as CJS. Resolve from
 // the current module in either runtime, not the process working directory.
@@ -333,8 +339,29 @@ export const fetchProcIdForServiceOrder = createProcLookup(async (key, signal) =
   });
 }, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 60000)) });
 
-// AHS service-order prefill (brand / model / serial / service contract ID),
-// keyed by district + 8-digit SO. Both statements share one connection; the
+// Appliance type (HS_SP_CD -> division) for GET /api/tech/lookup-warranty.
+// Its own connection and statement, separate from the ProcID lookup above,
+// so a failure here never affects warranty detection; bounded by its own 5s
+// deadline, which aborts the statement and destroys the connection.
+export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(async ({ sqlText, binds }, signal) => {
+  const connection = await getConnection(signal);
+  if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
+  return new Promise<any[]>((resolve, reject) => {
+    const statement = connection.execute({
+      sqlText,
+      binds,
+      complete: (err, _stmt, rows) => err ? reject(err) : resolve(rows || []),
+    });
+    signal.addEventListener("abort", () => {
+      try { statement.cancel(() => {}); } catch {}
+    }, { once: true });
+  });
+}, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 5000)) });
+
+// AHS service-order prefill (brand / model / serial / service contract ID,
+// the parts and the resolved service unit), keyed by district + 8-digit SO
+// (the unit is resolved from the order; see snowflake-lookup.ts). The
+// statements share one connection; the
 // lookup's deadline (5s) aborts them, and the abort destroys the connection
 // on every exit. Callers decide whether the order is AHS (server/ahs-prefill.ts).
 // A statement with its own timeoutMs (the parts statement) is cancelled and

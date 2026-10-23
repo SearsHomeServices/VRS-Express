@@ -349,8 +349,25 @@ export function boundedAhsPrefillLookup<T extends AhsPrefillLookupResult | Hssom
   return settleWithin(() => lookup(match[1], match[2]), UNAVAILABLE as T, timeoutMs);
 }
 
-// Both sources in parallel; snowflake null (its flag is off) counts as
-// unavailable. Never rejects and settles within timeoutMs.
+// The 4-digit district HSSOM's order ID takes for a resolved 7-digit unit
+// ("0008366" -> "8366"; buildHssomOrderId pads it back), or undefined when
+// the unit has no such form.
+export function hssomDistrictFromServiceUnit(unit: string | undefined): string | undefined {
+  return /^000(\d{4})$/.exec(unit ?? "")?.[1];
+}
+
+// Both sources; snowflake null (its flag is off) counts as unavailable.
+// Never rejects.
+//
+// HSSOM's order ID is "<unit>-<SO>". HSSOM starts at once with the tech's
+// padded district, in parallel with Snowflake (the usual case: the order is
+// under the district). When Snowflake finds the order under another unit
+// (serviceUnit; e.g. district 7995, order under 0008366), that answer is
+// discarded, since it is a different order or none, and HSSOM is asked again
+// with the resolved unit. Settles within timeoutMs, or within 2 x timeoutMs
+// in that case. LIMITATION: when Snowflake is off, unavailable or has no
+// row, HSSOM only has the padded district, as before, and misses an order
+// under another unit.
 export async function lookupAhsPrefillSources(
   serviceOrder: string,
   lookups: {
@@ -359,11 +376,20 @@ export async function lookupAhsPrefillSources(
   },
   timeoutMs = AHS_PREFILL_SUBMIT_TIMEOUT_MS,
 ): Promise<AhsPrefillSources> {
-  const [snowflake, hssom] = await Promise.all([
-    lookups.snowflake
-      ? boundedAhsPrefillLookup(serviceOrder, lookups.snowflake, timeoutMs)
-      : Promise.resolve<AhsPrefillLookupResult>(UNAVAILABLE),
-    boundedAhsPrefillLookup(serviceOrder, lookups.hssom, timeoutMs),
-  ]);
+  const snowflakeWork = lookups.snowflake
+    ? boundedAhsPrefillLookup(serviceOrder, lookups.snowflake, timeoutMs)
+    : Promise.resolve<AhsPrefillLookupResult>(UNAVAILABLE);
+  const districtHssom = boundedAhsPrefillLookup(serviceOrder, lookups.hssom, timeoutMs);
+  const snowflake = await snowflakeWork;
+  const match = /^(\d{4})-(\d{8})$/.exec(serviceOrder.trim());
+  const unit = snowflake.status === "found" ? snowflake.serviceUnit : undefined;
+  if (!match || !unit || unit === match[1].padStart(7, "0")) {
+    return { snowflake, hssom: await districtHssom };
+  }
+  const district = hssomDistrictFromServiceUnit(unit);
+  // No 4-digit form: HSSOM cannot be asked for this unit's order.
+  const hssom = district
+    ? await settleWithin(() => lookups.hssom(district, match[2]), UNAVAILABLE as HssomOrderLookupResult, timeoutMs)
+    : NOT_FOUND;
   return { snowflake, hssom };
 }
