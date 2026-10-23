@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - WOM product category under Appliance Type (2026-10-23)
+- The tech form now shows the service order's product category, exactly as
+  WOM / ServicePower has it, under the Appliance Type dropdown, e.g. "From
+  service order product: WASHERDD - WASHER, DIRECT DRIVE". The dropdown keeps
+  the 7 routing groups, and the group is mapped from that text.
+- The text comes from the WOM work order API through the HSSOM gateway
+  (`server/services/wom-work-order.ts`, behind `WOM_PRODUCT_LOOKUP_ENABLED`).
+  If WOM is unavailable, it falls back to Snowflake `HS_SP_CD`, marked
+  "(Snowflake)".
+- The text is stored per ticket in `submissions.service_order_product`, and
+  agents and admins see it as "Service order product".
+- WOM's JSON field for the product category is not verified yet; it is read
+  from `WorkItems[].Products[].Type` first. Check one real response in DEV.
+
 ### Added - Appliance type detected from the service order; service unit fix (2026-10-23)
 - The tech form now preselects the Appliance Type from the service order.
   The value comes from Snowflake `HS_SP_CD`, mapped by
