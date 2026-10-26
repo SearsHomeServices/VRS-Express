@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Stage 1 AHS editor starts with the ticket's appliance type (2026-10-26)
+- The AHS draft now takes the ticket's appliance type (the tech's pick,
+  auto-filled from the service-order product) when it has none, at submit
+  and on "Refresh from service order" (`applySubmissionApplianceKind`).
+  Before, the editor's Appliance Type was blank even when the ticket said
+  Range. HVAC is not an AHS appliance type and is skipped.
+- DEV (`.replit [userenv.development]`) turns on the Snowflake service-order
+  prefill (`AHS_SERVICE_ORDER_PREFILL_ENABLED`: dispatch number, brand, model,
+  serial, parts) and the HSSOM customer prefill
+  (`AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`). Both were off, so the editor's
+  lookup fields stayed blank. Production is unchanged.
+
 ### Changed - Service order lookup limit is configurable (2026-10-23)
 - `GET /api/tech/lookup-warranty` allows `TECH_LOOKUP_RATE_LIMIT_PER_HOUR`
   lookups per technician per rolling hour (default 20). DEV sets 200 in

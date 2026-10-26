@@ -130,6 +130,7 @@ import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder, fetchServiceOr
 import { lookupWomProductCategory, resolveServiceOrderProduct, type ResolvedServiceOrderProduct } from "./services/wom-work-order";
 import {
   applyAhsSubmitPrefill,
+  applySubmissionApplianceKind,
   applyTechApplianceDetails,
   draftFromPrevious,
   redactAhsCustomerForTechnician,
@@ -1640,6 +1641,7 @@ export async function registerRoutes(
           finalWarrantyType,
           derivedWarrantyType: derivedWarranty?.warrantyType,
         });
+        ahsDraft = applySubmissionApplianceKind(ahsDraft, parsed.data.applianceKind);
         if (techApplianceDetails) {
           ahsDraft = applyTechApplianceDetails(ahsDraft, techApplianceDetails, previousTechApplianceDetails);
         }

@@ -399,6 +399,15 @@ describe("POST /api/submissions/:id/ahs-details/refresh", () => {
     expect(deps.broadcastTicketUpdated).toHaveBeenCalledTimes(1);
   });
 
+  it("fills the appliance type from the ticket when the draft has none", async () => {
+    quietLogs();
+    const { app, rows } = harness({ sources: unavailable, submission: ticket({ ahsDetails: "{}", applianceKind: "range" }) });
+    const res = await refresh(app, AGENT);
+    expect(res.status).toBe(200);
+    expect(res.body.ahsDetails).toEqual({ applianceKind: "range" });
+    expect(JSON.parse(rows.get(501).ahsDetails)).toEqual({ applianceKind: "range" });
+  });
+
   it("returns the stored draft unchanged when the lookups find nothing", async () => {
     quietLogs();
     const { app, deps } = harness({ sources: unavailable });

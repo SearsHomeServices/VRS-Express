@@ -24,6 +24,7 @@ import { deriveWarrantyFromProcId } from "@shared/warranty";
 import type { AuthenticatedRequest } from "./middleware/auth";
 import {
   applyAhsSubmitPrefill,
+  applySubmissionApplianceKind,
   mergeSavedAhsProvenance,
   prefilledFieldNames,
   type AhsPrefillSources,
@@ -255,10 +256,13 @@ export function registerAhsReviewApi(app: Express, deps: AhsReviewApiDeps): void
 
       const stored: AhsDetailsDraft = parseStoredAhsDetailsDraft(submission.ahsDetails) ?? {};
       const sources = await deps.lookupSources(submission.serviceOrder);
-      const refreshed = applyAhsSubmitPrefill(stored, sources, {
-        finalWarrantyType: submission.warrantyType,
-        derivedWarrantyType: deriveWarrantyFromProcId(submission.procId, submission.clientNm)?.warrantyType,
-      });
+      const refreshed = applySubmissionApplianceKind(
+        applyAhsSubmitPrefill(stored, sources, {
+          finalWarrantyType: submission.warrantyType,
+          derivedWarrantyType: deriveWarrantyFromProcId(submission.procId, submission.clientNm)?.warrantyType,
+        }),
+        submission.applianceKind,
+      );
       console.log(
         `[ahs-review] refresh submission=${submission.id} SO=${submission.serviceOrder} ` +
         `snowflake=${sources.snowflake.status} hssom=${sources.hssom.status} ` +

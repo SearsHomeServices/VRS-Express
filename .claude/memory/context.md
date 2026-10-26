@@ -1,5 +1,5 @@
 # Session Context
-> Last updated: 2026-10-23
+> Last updated: 2026-10-26
 
 ## Current State
 - Platform is deployed on Replit with PostgreSQL (Neon)
@@ -10,6 +10,7 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **Appliance type on the AHS draft + DEV prefill flags** (2026-10-26, `feat/ahs-tech-form-few`). `applySubmissionApplianceKind` (server/ahs-prefill.ts) copies `submissions.appliance_kind` into a draft without one, at submit and on the Stage 1 refresh. DEV `.replit` now sets `AHS_SERVICE_ORDER_PREFILL_ENABLED` and `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`; before, a DEV ticket (SO 8035-14321708) reached Stage 1 with only the tech's grade/color/part function filled.
 - **Stage 1 AHS editor for the VRS manager** (2026-10-23, branch `feat/ahs-mgr-review`, not pushed). The tech form no longer has AHS fields; the server stores a lookup-filled draft and the manager completes it in the Stage 1 card.
   - **Client:** `client/src/components/ahs-details-editor.tsx` (form, evidence, refresh, save), wired through `VrsAiBridgePanel`'s new `allowAhsEdit` prop (only the Stage 1 card passes it). `isAhsDetailsEditable` in `client/src/lib/ahsReview.ts` decides editor vs read-only: AHS (`warrantyType === "american_home_shield"`) authorization, `ticketStatus` pending, Stage 1 undecided, and no bridge row or an undispatched one (`pending_review` / `dispatch_failed`, no provider call id).
   - **Contract:** `shared/ahs-review.ts`; issue paths map to inputs via `ahsIssueFieldName` (with or without a leading `ahsDetails`).

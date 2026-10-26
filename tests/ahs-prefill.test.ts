@@ -13,6 +13,7 @@ import {
 import {
   applyAhsServiceOrderPrefill,
   applyAhsSubmitPrefill,
+  applySubmissionApplianceKind,
   applyTechApplianceDetails,
   boundedAhsPrefillLookup,
   draftFromPrevious,
@@ -1031,5 +1032,30 @@ describe("POST /api/submissions stores a draft", () => {
     expect(block).toContain("store: vrsBridgeStore,");
     expect(block).toContain("broadcastToAdmins({");
     expect(block).not.toContain("broadcastToTechnicians");
+  });
+});
+
+describe("applySubmissionApplianceKind", () => {
+  it("copies the ticket's appliance onto a draft that has none", () => {
+    expect(applySubmissionApplianceKind({ brand: "GE" }, "range")).toEqual({ brand: "GE", applianceKind: "range" });
+    expect(applySubmissionApplianceKind({}, "dishwasher")).toEqual({ applianceKind: "dishwasher" });
+  });
+
+  it("keeps a value already on the draft", () => {
+    const draft = { applianceKind: "cooktop" } as const;
+    expect(applySubmissionApplianceKind(draft, "range")).toBe(draft);
+  });
+
+  it("ignores a blank or non-AHS appliance (HVAC) and never marks provenance", () => {
+    expect(applySubmissionApplianceKind({}, null)).toEqual({});
+    expect(applySubmissionApplianceKind({}, "hvac")).toEqual({});
+    expect(applySubmissionApplianceKind({}, "range").prefilledFields).toBeUndefined();
+  });
+
+  it("runs on the submit path and on the Stage 1 refresh", () => {
+    const routes = fs.readFileSync("server/routes.ts", "utf8");
+    expect(routes).toContain("ahsDraft = applySubmissionApplianceKind(ahsDraft, parsed.data.applianceKind);");
+    const review = fs.readFileSync("server/ahs-review-api.ts", "utf8");
+    expect(review).toContain("submission.applianceKind,");
   });
 });

@@ -11,7 +11,7 @@ import {
   dispatchNumberFromServiceContractId,
   type AhsPrefillField,
 } from "@shared/ahs-prefill";
-import type { AhsDetails, AhsDetailsDraft, AhsPartDraft } from "@shared/ahs-details";
+import { ahsApplianceKind, type AhsDetails, type AhsDetailsDraft, type AhsPartDraft } from "@shared/ahs-details";
 import { ahsGradeFromTechGrade, type TechApplianceDetails } from "@shared/tech-appliance-details";
 import { deriveWarrantyFromProcId } from "@shared/warranty";
 import type { AhsPrefillLookupResult, AhsServiceOrderPart } from "./services/snowflake-lookup";
@@ -254,6 +254,19 @@ export function applyTechApplianceDetails(
   }
   next.parts = parts;
   return next;
+}
+
+// The ticket's appliance (submissions.appliance_kind: the tech's pick, which
+// the form auto-fills from the service-order product) on the AHS draft, only
+// while the draft has none and only when it is one of the AHS appliance types
+// (HVAC is not). Never named in prefilledFields.
+export function applySubmissionApplianceKind(
+  draft: AhsDetailsDraft,
+  applianceKind: string | null | undefined,
+): AhsDetailsDraft {
+  const kind = ahsApplianceKind(applianceKind);
+  if (!kind || draft.applianceKind) return draft;
+  return { ...draft, applianceKind: kind.value };
 }
 
 // Names (never values) of what the server filled, for logging.
