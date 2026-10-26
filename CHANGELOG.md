@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Appliance Location on the tech form (2026-10-26)
+- AHS and First American authorization tickets now ask for Appliance
+  Location (Kitchen, Laundry room, Basement, ...; the same list as the Stage 1
+  editor) next to grade, color and part function, behind
+  `TECH_APPLIANCE_DETAILS_ENABLED`. It is required on the form, shown on the
+  review screen, stored in `tech_appliance_details`, copied into the AHS
+  draft and badged "From technician" for the VRS manager.
+- The server still accepts details without it, so a form cached before this
+  change keeps submitting.
+
+### Changed - Dispatch number, model and serial come from HSSOM only (2026-10-26)
+- The Snowflake AHS prefill no longer queries `CTA_NO`, `PSV_ITM_MDL_NO` or
+  `PSV_MDS_SRL_NO`: they were never verified and ai-agent-mcp does not read
+  them. Snowflake now fills brand and the parts on the order (columns proven
+  in use); the dispatch number (`thirdParty.contractNumber`), model and
+  serial come from the HSSOM Order Lookup, as in ai-agent-mcp.
+
 ### Fixed - Stage 1 AHS editor starts with the ticket's appliance type (2026-10-26)
 - The AHS draft now takes the ticket's appliance type (the tech's pick,
   auto-filled from the service-order product) when it has none, at submit

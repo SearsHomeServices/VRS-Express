@@ -2,9 +2,15 @@
 
 - [x] Stage 1 editor shows the ticket's appliance type (2026-10-26).
 - [ ] DEV prefill flags are on: confirm on a real AHS order that Snowflake
-      returns `found` (CTA_NO / MFG_BND_NM / PSV_ITM_MDL_NO / PSV_MDS_SRL_NO
-      are unverified column names) and what HSSOM QA returns. The server log
+      returns `found` (brand + parts) and what HSSOM QA returns. The server log
       line `[ahs-prefill] submit ... snowflake=<status> hssom=<status>` says.
+- [x] Drop the unverified Snowflake CTA_NO / PSV_* columns; HSSOM only (2026-10-26).
+- [x] Appliance Location on the tech form (2026-10-26).
+- [ ] Production HSSOM Order Lookup access for VRS Express (prod client
+      code/secret for hssom-api-gateway.shs-core.com): fills dispatch,
+      customer, model, serial, purchase date. To request from HSSOM.
+- [ ] Pull one live WOM work order and check whether labor (`LabourJobCodes`)
+      and tax (`TaxRates`) exist at authorization time before using them.
 
 - [x] Editor, refresh and save in the agent's Stage 1 card (`feat/ahs-mgr-review`).
 - [ ] Server: add `"parts"` to `AHS_PREFILL_FIELDS`, or `ahsDetailsDraftSchema`

@@ -79,7 +79,7 @@ import { isValidProvider1099Company } from "@shared/provider1099";
 import {
   parseStoredTechApplianceDetails,
   techApplianceDetailsApply,
-  techApplianceDetailsSchema,
+  storedTechApplianceDetailsSchema,
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
 import {
@@ -1185,13 +1185,14 @@ export async function registerRoutes(
     // can neither fail the submission nor be stored. The server builds the
     // draft itself (below) and the VRS manager completes it at Stage 1
     // (server/ahs-review-api.ts).
-    // Appliance grade, color and part function (shared/tech-appliance-details.ts),
-    // sent by the tech form on AHS / First American authorization tickets.
-    // Optional here (older cached clients don't send it; the form enforces
-    // it); null counts as absent. Kept below only while
+    // Appliance grade, color, location and part function
+    // (shared/tech-appliance-details.ts), sent by the tech form on AHS /
+    // First American authorization tickets. Optional here (older cached
+    // clients don't send it, or send it without the location; the form
+    // enforces both); null counts as absent. Kept below only while
     // TECH_APPLIANCE_DETAILS_ENABLED is on and the server-derived warranty
     // and request type call for it; otherwise dropped silently.
-    techApplianceDetails: techApplianceDetailsSchema.nullish(),
+    techApplianceDetails: storedTechApplianceDetailsSchema.nullish(),
   }).refine(applianceSelectionMatches, {
     message: "Appliance selection does not match its routing category",
     path: ["applianceKind"],
@@ -1648,7 +1649,7 @@ export async function registerRoutes(
         console.log(
           `[ahs-prefill] submit SO=${parsed.data.serviceOrder} snowflake=${sources.snowflake.status} ` +
           `hssom=${sources.hssom.status} filled=${prefilledFieldNames(ahsDraft).join(",") || "none"} ` +
-          `tech=${techApplianceDetails ? "applianceGrade,applianceColor,partFunction" : "none"}`,
+          `tech=${techApplianceDetails ? Object.keys(techApplianceDetails).join(",") : "none"}`,
         );
       }
 

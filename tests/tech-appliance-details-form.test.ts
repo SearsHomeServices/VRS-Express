@@ -22,7 +22,7 @@ import TechSubmitPage, {
 } from "../client/src/pages/tech-submit";
 import TechResubmitPage from "../client/src/pages/tech-resubmit";
 import { Form } from "../client/src/components/ui/form";
-import { TECH_APPLIANCE_COLORS, TECH_APPLIANCE_GRADES } from "../shared/tech-appliance-details";
+import { TECH_APPLIANCE_COLORS, TECH_APPLIANCE_GRADES, TECH_APPLIANCE_LOCATIONS } from "../shared/tech-appliance-details";
 
 const fixtures = vi.hoisted(() => ({
   user: { id: 11, role: "technician", fullName: "Fixture Tech", racId: "RAC11", ldapId: "ldap11", phone: "5555550147" },
@@ -50,9 +50,14 @@ vi.mock("@/components/media", () => ({
   MediaAudio: () => createElement("audio"),
 }));
 
-const DETAILS = { applianceGrade: "medium", applianceColor: "Black Stainless Steel", partFunction: "Pumps water out of the tub" };
+const DETAILS = {
+  applianceGrade: "medium",
+  applianceColor: "Black Stainless Steel",
+  applianceLocation: "Laundry room",
+  partFunction: "Pumps water out of the tub",
+};
 const DRAFT_KEY = `vrs_tech_submit_draft_v1_${fixtures.user.id}`;
-const AHS_ERRORS = ["Select the appliance grade", "Select the appliance color", "Part function is required"];
+const AHS_ERRORS = ["Select the appliance grade", "Select the appliance color", "Select the appliance location", "Part function is required"];
 
 let root: Root;
 let client: QueryClient;
@@ -151,25 +156,25 @@ describe("techApplianceDetailsFormValues (draft and resubmit prefill)", () => {
   });
 
   it.each([null, undefined, "", "not json", "[1,2]", "42", 7, ["low"]])("leaves the fields empty for %j", (raw) => {
-    expect(techApplianceDetailsFormValues(raw)).toEqual({ applianceGrade: undefined, applianceColor: undefined, partFunction: "" });
+    expect(techApplianceDetailsFormValues(raw)).toEqual({ applianceGrade: undefined, applianceColor: undefined, applianceLocation: undefined, partFunction: "" });
   });
 
   it("keeps only the fields that are still valid choices", () => {
-    expect(techApplianceDetailsFormValues(JSON.stringify({ applianceGrade: "entry", applianceColor: "Bisque", partFunction: 5 })))
-      .toEqual({ applianceGrade: undefined, applianceColor: "Bisque", partFunction: "" });
-    expect(techApplianceDetailsFormValues({ applianceGrade: "high", applianceColor: "Red", partFunction: "Heats" }))
-      .toEqual({ applianceGrade: "high", applianceColor: undefined, partFunction: "Heats" });
+    expect(techApplianceDetailsFormValues(JSON.stringify({ applianceGrade: "entry", applianceColor: "Bisque", applianceLocation: "Attic", partFunction: 5 })))
+      .toEqual({ applianceGrade: undefined, applianceColor: "Bisque", applianceLocation: undefined, partFunction: "" });
+    expect(techApplianceDetailsFormValues({ applianceGrade: "high", applianceColor: "Red", applianceLocation: "Kitchen", partFunction: "Heats" }))
+      .toEqual({ applianceGrade: "high", applianceColor: undefined, applianceLocation: "Kitchen", partFunction: "Heats" });
   });
 });
 
 describe("techApplianceDetailsForPayload", () => {
-  it("is exactly { applianceGrade, applianceColor, partFunction } (trimmed) when shown", () => {
+  it("is exactly { applianceGrade, applianceColor, applianceLocation, partFunction } (trimmed) when shown", () => {
     const payload = techApplianceDetailsForPayload(
       { warrantyType: "first_american", requestType: "authorization", techApplianceDetails: { ...DETAILS, partFunction: "  Heats the oven  " } },
       true,
     );
-    expect(payload).toEqual({ applianceGrade: "medium", applianceColor: "Black Stainless Steel", partFunction: "Heats the oven" });
-    expect(Object.keys(payload!).sort()).toEqual(["applianceColor", "applianceGrade", "partFunction"]);
+    expect(payload).toEqual({ ...DETAILS, partFunction: "Heats the oven" });
+    expect(Object.keys(payload!).sort()).toEqual(["applianceColor", "applianceGrade", "applianceLocation", "partFunction"]);
   });
 
   it("is null when hidden, whatever the form still holds", () => {
@@ -190,14 +195,15 @@ describe("techApplianceDetailsResolver", () => {
   const options = { fields: {}, shouldUseNativeValidation: false } as any;
   const run = (values: Record<string, unknown>, enabled = true) =>
     techApplianceDetailsResolver(zodResolver(schema) as any, () => enabled)(values as any, undefined, options);
-  const empty = { applianceGrade: undefined, applianceColor: undefined, partFunction: "  " };
+  const empty = { applianceGrade: undefined, applianceColor: undefined, applianceLocation: undefined, partFunction: "  " };
 
-  it("requires all three, with the shared schema's messages, alongside the form's own errors", async () => {
+  it("requires all four, with the shared schema's messages, alongside the form's own errors", async () => {
     const result = await run({ issueDescription: "short", requestType: "authorization", warrantyType: "american_home_shield", techApplianceDetails: empty });
     expect(Object.keys(result.errors).sort()).toEqual(["issueDescription", "techApplianceDetails"]);
     const errors = result.errors.techApplianceDetails as any;
     expect(errors.applianceGrade.message).toBe("Select the appliance grade");
     expect(errors.applianceColor.message).toBe("Select the appliance color");
+    expect(errors.applianceLocation.message).toBe("Select the appliance location");
     expect(errors.partFunction.message).toBe("Part function is required");
   });
 
@@ -206,10 +212,10 @@ describe("techApplianceDetailsResolver", () => {
       issueDescription: "long enough text",
       requestType: "authorization",
       warrantyType: "first_american",
-      techApplianceDetails: { applianceGrade: "entry", applianceColor: "Red", partFunction: "x".repeat(201) },
+      techApplianceDetails: { applianceGrade: "entry", applianceColor: "Red", applianceLocation: "Attic", partFunction: "x".repeat(201) },
     });
     const errors = result.errors.techApplianceDetails as any;
-    expect(Object.keys(errors).sort()).toEqual(["applianceColor", "applianceGrade", "partFunction"]);
+    expect(Object.keys(errors).sort()).toEqual(["applianceColor", "applianceGrade", "applianceLocation", "partFunction"]);
     expect(errors.partFunction.message).toBe("Part function must be 200 characters or less");
   });
 
@@ -238,7 +244,9 @@ describe("techApplianceDetailsResolver", () => {
 
 describe("TechApplianceDetailsFields", () => {
   function Harness() {
-    const form = useForm({ defaultValues: { techApplianceDetails: { applianceGrade: undefined, applianceColor: undefined, partFunction: "" } } });
+    const form = useForm({
+      defaultValues: { techApplianceDetails: { applianceGrade: undefined, applianceColor: undefined, applianceLocation: undefined, partFunction: "" } },
+    });
     // Inside a <form>, as on the pages (Radix then renders its native select).
     return createElement(Form, {
       ...form,
@@ -246,16 +254,17 @@ describe("TechApplianceDetailsFields", () => {
     });
   }
 
-  it("renders Grade, Color, then Part Function with the exact labels, options and placeholder", async () => {
+  it("renders Grade, Color, Location, then Part Function with the exact labels, options and placeholder", async () => {
     await mount(createElement(Harness));
     const section = byTestId("section-tech-appliance-details")!;
-    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Part Function *"]);
+    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Appliance Location *", "Part Function *"]);
     expect(byTestId("input-part-function")!.getAttribute("placeholder")).toBe("What does the part do?");
     expect(byTestId("select-appliance-grade")!.textContent).toBe("Select appliance grade");
     expect(byTestId("select-appliance-color")!.textContent).toBe("Select appliance color");
+    expect(byTestId("select-appliance-location")!.textContent).toBe("Select appliance location");
 
     // Radix keeps a hidden native <select> per dropdown, one <option> per item.
-    const [gradeSelect, colorSelect] = Array.from(section.querySelectorAll("select"));
+    const [gradeSelect, colorSelect, locationSelect] = Array.from(section.querySelectorAll("select"));
     const options = (select: HTMLSelectElement) =>
       Array.from(select.options).filter((option) => option.value !== "").map((option) => [option.value, option.textContent]);
     expect(options(gradeSelect)).toEqual([["low", "Low"], ["medium", "Medium"], ["high", "High"]]);
@@ -265,6 +274,9 @@ describe("TechApplianceDetailsFields", () => {
       ["Black Stainless Steel", "Black Stainless Steel"],
       ["Stainless Steel", "Stainless Steel"],
       ["Bisque", "Bisque"],
+    ]);
+    expect(options(locationSelect).map(([value]) => value)).toEqual([
+      "Kitchen", "Laundry room", "Basement", "Garage", "Utility room", "Bathroom", "Hallway / closet", "Outdoor", "Other",
     ]);
     expect(TECH_APPLIANCE_GRADES.map((grade) => grade.label)).toEqual(["Low", "Medium", "High"]);
     expect([...TECH_APPLIANCE_COLORS]).toEqual(["Black", "White", "Black Stainless Steel", "Stainless Steel", "Bisque"]);
@@ -287,7 +299,7 @@ describe("tech-submit page", () => {
     expect(card.querySelector("p")!.textContent).toBe("Appliance Details");
     expect(section.previousElementSibling!.querySelector('[data-testid="provider-first_american"]')).not.toBeNull();
     expect(section.nextElementSibling).toBeNull();
-    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Part Function *"]);
+    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Appliance Location *", "Part Function *"]);
 
     await click("provider-first_american");
     expect(byTestId("section-tech-appliance-details")).not.toBeNull();
@@ -362,8 +374,9 @@ describe("tech-submit page", () => {
     expect((byTestId("input-part-function") as HTMLInputElement).value).toBe(DETAILS.partFunction);
     expect(byTestId("select-appliance-grade")!.textContent).toBe("Medium");
     expect(byTestId("select-appliance-color")!.textContent).toBe("Black Stainless Steel");
+    expect(byTestId("select-appliance-location")!.textContent).toBe("Laundry room");
 
-    // Autosave keeps the three values (and still drops unknown keys).
+    // Autosave keeps the four values (and still drops unknown keys).
     await flush(700);
     const saved = JSON.parse(localStorage.getItem(DRAFT_KEY)!);
     expect(saved.formValues.techApplianceDetails).toEqual(DETAILS);
@@ -372,6 +385,7 @@ describe("tech-submit page", () => {
     await submitForm();
     expect(byTestId("review-appliance-grade")!.textContent).toBe("Medium");
     expect(byTestId("review-appliance-color")!.textContent).toBe("Black Stainless Steel");
+    expect(byTestId("review-appliance-location")!.textContent).toBe("Laundry room");
     expect(byTestId("review-part-function")!.textContent).toBe(DETAILS.partFunction);
 
     await click("button-review-confirm");
@@ -428,13 +442,14 @@ describe("tech-resubmit page", () => {
     await mount(createElement(TechResubmitPage));
   }
 
-  it("prefills the three fields from the original ticket and sends them", async () => {
+  it("prefills the four fields from the original ticket and sends them", async () => {
     await mountResubmit(original({}));
     const section = byTestId("section-tech-appliance-details-resubmit")!;
-    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Part Function *"]);
+    expect(labelsIn(section)).toEqual(["Appliance Grade *", "Appliance Color *", "Appliance Location *", "Part Function *"]);
     expect(section.parentElement!.querySelector("p")!.textContent).toBe("Appliance Details");
     expect(byTestId("select-appliance-grade-resubmit")!.textContent).toBe("Medium");
     expect(byTestId("select-appliance-color-resubmit")!.textContent).toBe("Black Stainless Steel");
+    expect(byTestId("select-appliance-location-resubmit")!.textContent).toBe("Laundry room");
     expect((byTestId("input-part-function-resubmit") as HTMLInputElement).value).toBe(DETAILS.partFunction);
 
     await submitForm();
@@ -487,6 +502,10 @@ describe("source wiring", () => {
   it("the fields component maps the shared option lists", () => {
     expect(submit).toContain("{TECH_APPLIANCE_GRADES.map((grade) => (");
     expect(submit).toContain("{TECH_APPLIANCE_COLORS.map((color) => (");
+    expect(submit).toContain("{TECH_APPLIANCE_LOCATIONS.map((location) => (");
+    expect([...TECH_APPLIANCE_LOCATIONS]).toEqual([
+      "Kitchen", "Laundry room", "Basement", "Garage", "Utility room", "Bathroom", "Hallway / closet", "Outdoor", "Other",
+    ]);
     expect(submit).toContain('from "@shared/tech-appliance-details"');
   });
 });

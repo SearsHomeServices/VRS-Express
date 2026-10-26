@@ -360,6 +360,26 @@ describe("POST /api/submissions — AHS draft gets the tech values", () => {
   });
 });
 
+describe("POST /api/submissions — appliance location from the tech", () => {
+  it("stores it and copies it into the AHS draft", async () => {
+    await submit(body({ techApplianceDetails: { ...tech, applianceLocation: "Laundry room" } }));
+    expect(JSON.parse(inserted().techApplianceDetails).applianceLocation).toBe("Laundry room");
+    expect(JSON.parse(inserted().ahsDetails).applianceLocation).toBe("Laundry room");
+  });
+
+  it("still accepts details without it (a form cached before it was added)", async () => {
+    const res = await submit(body({ techApplianceDetails: tech }));
+    expect(res.status).toBe(201);
+    expect(JSON.parse(inserted().techApplianceDetails)).not.toHaveProperty("applianceLocation");
+    expect(JSON.parse(inserted().ahsDetails)).not.toHaveProperty("applianceLocation");
+  });
+
+  it("rejects a location outside the list", async () => {
+    const res = await submit(body({ techApplianceDetails: { ...tech, applianceLocation: "Attic" } }));
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/submissions — the service order's product", () => {
   const WOM_TEXT = "WASHERDD - WASHER, DIRECT DRIVE";
   const stored = () => inserted().serviceOrderProduct;

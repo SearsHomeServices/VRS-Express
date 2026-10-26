@@ -182,6 +182,7 @@ export function techApplianceDetailsForTicket(
 export interface TechSuppliedAhsValues {
   applianceGrade?: string;
   applianceColor?: string;
+  applianceLocation?: string;
   partFunction?: string;
 }
 
@@ -190,6 +191,7 @@ export function techSuppliedAhsValues(details: TechApplianceDetails | null | und
   return {
     applianceGrade: ahsGradeFromTechGrade(details.applianceGrade),
     applianceColor: details.applianceColor.trim(),
+    applianceLocation: details.applianceLocation?.trim() || undefined,
     partFunction: details.partFunction.trim(),
   };
 }

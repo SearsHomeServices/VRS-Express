@@ -28,7 +28,6 @@ const SECRET_PART = "WPW10503278";
 function rowsFor(unit: string, unitCount: number) {
   return [
     ok([{ SERVICE_UNIT: unit, UNIT_COUNT: unitCount, BRAND: SECRET_BRAND, PARTNER_ID: "AHS-1", CLIENT_NAME: "American Home Shield" }]),
-    ok([{ SERVICE_UNIT: unit, SERVICE_CONTRACT_ID: "551200/0003", MODEL_NUMBER: SECRET_MODEL, SERIAL_NUMBER: "C3" }]),
     ok([{ SERVICE_UNIT: unit, PART_NUMBER: SECRET_PART, QUANTITY: 1, UNIT_PRICE: 10, STATUS: "I" }]),
   ];
 }
@@ -58,7 +57,7 @@ describe("AHS prefill resolves the unit from the service order", () => {
     const query = vi.fn<AhsPrefillQuery>(async () => rowsFor("0008175", 2));
     const result = await createAhsPrefillLookup(query)("8175", "12345678");
     expect(result).toMatchObject({
-      status: "found", serviceUnit: "0008175", brand: SECRET_BRAND, modelNumber: SECRET_MODEL,
+      status: "found", serviceUnit: "0008175", brand: SECRET_BRAND,
       parts: [{ partNumber: SECRET_PART, quantity: 1, unitPrice: 10 }],
     });
   });
@@ -68,13 +67,13 @@ describe("AHS prefill resolves the unit from the service order", () => {
     const query = vi.fn<AhsPrefillQuery>(async () => rowsFor("0008366", 1));
     const result = await createAhsPrefillLookup(query)("7995", "11075199");
     expect(result).toMatchObject({
-      status: "found", serviceUnit: "0008366", brand: SECRET_BRAND, modelNumber: SECRET_MODEL,
+      status: "found", serviceUnit: "0008366", brand: SECRET_BRAND,
       parts: [{ partNumber: SECRET_PART }],
     });
     // Every statement matched by SO; the district only orders the rows.
     const [statements] = query.mock.calls[0];
     expect(statements.map((s) => s.binds)).toEqual([
-      ["11075199", "7995"], ["11075199", "7995"], ["11075199", "11075199", "7995"],
+      ["11075199", "7995"], ["11075199", "11075199", "7995"],
     ]);
   });
 
@@ -87,10 +86,9 @@ describe("AHS prefill resolves the unit from the service order", () => {
     for (const value of ["0008366", SECRET_BRAND, SECRET_MODEL, SECRET_PART]) expect(logged).not.toContain(value);
   });
 
-  it("parts and appliance rows under another unit than the resolved one are dropped", async () => {
+  it("parts rows under another unit than the resolved one are dropped", async () => {
     const query = vi.fn<AhsPrefillQuery>(async () => [
       ok([{ SERVICE_UNIT: "0008175", UNIT_COUNT: 2, BRAND: SECRET_BRAND, PARTNER_ID: "AHS-1", CLIENT_NAME: "AHS" }]),
-      ok([{ SERVICE_UNIT: "0009999", MODEL_NUMBER: SECRET_MODEL }]),
       ok([
         { SERVICE_UNIT: "0009999", PART_NUMBER: "OTHER-UNIT", QUANTITY: 1 },
         { SERVICE_UNIT: " 0008175 ", PART_NUMBER: SECRET_PART, QUANTITY: 1 },
@@ -98,7 +96,10 @@ describe("AHS prefill resolves the unit from the service order", () => {
     ]);
     const result = await createAhsPrefillLookup(query)("8175", "12345678");
     expect(result).toMatchObject({ status: "found", serviceUnit: "0008175", parts: [{ partNumber: SECRET_PART }] });
-    expect(result).not.toHaveProperty("modelNumber");
+    expect(result).toEqual({
+      status: "found", serviceUnit: "0008175", brand: SECRET_BRAND, partnerId: "AHS-1", clientName: "AHS",
+      parts: [{ partNumber: SECRET_PART, quantity: 1 }],
+    });
   });
 });
 

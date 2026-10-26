@@ -66,6 +66,7 @@ import { parseServiceOrderProduct, ServiceOrderProductText } from "@/components/
 import {
   TECH_APPLIANCE_COLORS,
   TECH_APPLIANCE_GRADES,
+  TECH_APPLIANCE_LOCATIONS,
   techApplianceDetailsApply,
   techApplianceDetailsSchema,
   techApplianceGradeLabel,
@@ -124,8 +125,8 @@ const REQUEST_TYPE_WARRANTY_MATRIX: Record<RequestTypeValue, WarrantyValue[]> = 
 };
 
 // ---------------------------------------------------------------------------
-// Tech appliance details (2026-10-23): Appliance Grade, Appliance Color and
-// Part Function on American Home Shield and First American authorization
+// Tech appliance details (2026-10-23): Appliance Grade, Appliance Color,
+// Appliance Location (2026-10-26) and Part Function on American Home Shield and First American authorization
 // tickets, behind TECH_APPLIANCE_DETAILS_ENABLED. The contract lives in
 // shared/tech-appliance-details.ts; tech-resubmit.tsx reuses these helpers.
 // ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ export const techApplianceDetailsFormSchema = z
   .object({
     applianceGrade: z.string().optional(),
     applianceColor: z.string().optional(),
+    applianceLocation: z.string().optional(),
     partFunction: z.string().optional(),
   })
   .optional()
@@ -141,16 +143,18 @@ export const techApplianceDetailsFormSchema = z
 export type TechApplianceDetailsFormValues = {
   applianceGrade?: string;
   applianceColor?: string;
+  applianceLocation?: string;
   partFunction?: string;
 };
 
 export const EMPTY_TECH_APPLIANCE_DETAILS: TechApplianceDetailsFormValues = {
   applianceGrade: undefined,
   applianceColor: undefined,
+  applianceLocation: undefined,
   partFunction: "",
 };
 
-// The single gate for showing, validating and sending the three fields.
+// The single gate for showing, validating and sending the four fields.
 export function showTechApplianceDetails(
   enabled: boolean,
   warrantyType: string | null | undefined,
@@ -174,11 +178,16 @@ export function techApplianceDetailsFormValues(raw: unknown): TechApplianceDetai
   const obj = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   const grade = obj.applianceGrade;
   const color = obj.applianceColor;
+  const location = obj.applianceLocation;
   return {
     applianceGrade:
       typeof grade === "string" && TECH_APPLIANCE_GRADES.some((option) => option.value === grade) ? grade : undefined,
     applianceColor:
       typeof color === "string" && (TECH_APPLIANCE_COLORS as readonly string[]).includes(color) ? color : undefined,
+    applianceLocation:
+      typeof location === "string" && (TECH_APPLIANCE_LOCATIONS as readonly string[]).includes(location)
+        ? location
+        : undefined,
     partFunction: typeof obj.partFunction === "string" ? obj.partFunction : "",
   };
 }
@@ -200,7 +209,7 @@ export function techApplianceDetailsForPayload(
   return parsed.success ? parsed.data : null;
 }
 
-// Wraps the page's zod resolver: when the section is shown, the three
+// Wraps the page's zod resolver: when the section is shown, the four
 // fields are validated with the shared techApplianceDetailsSchema and their
 // errors merged with the form's own. (A superRefine on the form schema would
 // not run while another field is missing, so the tech would only see these
@@ -230,8 +239,8 @@ export function techApplianceDetailsResolver<T extends FieldValues>(
   };
 }
 
-// Appliance Grade, Appliance Color, Part Function, in that order, with the
-// form's standard controls. Rendered only when showTechApplianceDetails().
+// Appliance Grade, Appliance Color, Appliance Location, Part Function, in
+// that order, with the form's standard controls. Rendered only when showTechApplianceDetails().
 export function TechApplianceDetailsFields<T extends FieldValues>({
   control,
   testIdSuffix = "",
@@ -281,6 +290,34 @@ export function TechApplianceDetailsFields<T extends FieldValues>({
                 {TECH_APPLIANCE_COLORS.map((color) => (
                   <SelectItem key={color} value={color} data-testid={`option-appliance-color-${color.toLowerCase().replace(/\s+/g, "-")}`}>
                     {color}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={control}
+        name={"techApplianceDetails.applianceLocation" as FieldPath<T>}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Appliance Location *</FormLabel>
+            <Select onValueChange={field.onChange} value={field.value}>
+              <FormControl>
+                <SelectTrigger data-testid={`select-appliance-location${testIdSuffix}`}>
+                  <SelectValue placeholder="Select appliance location" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {TECH_APPLIANCE_LOCATIONS.map((location) => (
+                  <SelectItem
+                    key={location}
+                    value={location}
+                    data-testid={`option-appliance-location-${location.toLowerCase().replace(/[^a-z]+/g, "-")}`}
+                  >
+                    {location}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -2101,7 +2138,7 @@ export default function TechSubmitPage() {
                   </div>
                 </div>
                 )}
-                {/* Appliance Grade / Color / Part Function: AHS and First
+                {/* Appliance Grade / Color / Location / Part Function: AHS and First
                     American authorization tickets only (flag
                     techApplianceDetailsEnabled). */}
                 {techApplianceDetailsShown && <TechApplianceDetailsFields control={form.control} />}
@@ -2769,6 +2806,10 @@ export default function TechSubmitPage() {
                       <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Appliance Color</span>
                         <span className="font-medium text-right" data-testid="review-appliance-color">{pendingPayload.techApplianceDetails.applianceColor}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Appliance Location</span>
+                        <span className="font-medium text-right" data-testid="review-appliance-location">{pendingPayload.techApplianceDetails.applianceLocation}</span>
                       </div>
                       <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Part Function</span>

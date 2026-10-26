@@ -230,6 +230,9 @@ export function TechApplianceDetailsBlock({ details }: { details: TechApplianceD
   const rows: { label: string; field: string; value: string }[] = [
     { label: "Grade", field: "tech-appliance-grade", value: techApplianceGradeLabel(details.applianceGrade) ?? details.applianceGrade },
     { label: "Color", field: "tech-appliance-color", value: details.applianceColor },
+    ...(details.applianceLocation
+      ? [{ label: "Location", field: "tech-appliance-location", value: details.applianceLocation }]
+      : []),
     { label: "Part function", field: "tech-part-function", value: details.partFunction },
   ];
   return (
@@ -397,7 +400,7 @@ export function AhsTicketReview({
           label="Appliance location"
           dataField="ahs-appliance-location"
           value={details.applianceLocation}
-          source="tech"
+          source={techOr(details.applianceLocation, tech.applianceLocation, "tech")}
         />
         <AhsField
           label="Appliance grade"

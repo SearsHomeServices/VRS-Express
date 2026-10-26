@@ -1,12 +1,15 @@
-// The three appliance details the technician enters on AHS and First
-// American authorization tickets (tech submit and resubmit forms).
+// The four appliance details the technician enters on AHS and First
+// American authorization tickets (tech submit and resubmit forms): grade,
+// color, location (room) and part function.
 //
 // Stored as JSON in submissions.tech_appliance_details for both warranties.
 // For AHS tickets the server also copies them into the AHS draft
-// (submissions.ahs_details: applianceGrade, applianceColor and part 1's
-// partFunction) so the VRS manager sees them prefilled at Stage 1.
+// (submissions.ahs_details: applianceGrade, applianceColor,
+// applianceLocation and part 1's partFunction) so the VRS manager sees them
+// prefilled at Stage 1.
 // Behind TECH_APPLIANCE_DETAILS_ENABLED (/api/config techApplianceDetailsEnabled).
 import { z } from "zod";
+import { AHS_APPLIANCE_LOCATIONS } from "./ahs-details";
 import type { WarrantyType } from "./warranty";
 
 export const TECH_APPLIANCE_GRADES = [
@@ -27,6 +30,15 @@ export const TECH_APPLIANCE_COLORS = [
 
 export type TechApplianceColor = (typeof TECH_APPLIANCE_COLORS)[number];
 
+// The same rooms the VRS manager's Stage 1 editor offers.
+export const TECH_APPLIANCE_LOCATIONS = AHS_APPLIANCE_LOCATIONS;
+export type TechApplianceLocation = (typeof TECH_APPLIANCE_LOCATIONS)[number];
+
+const applianceLocationSchema = z.enum(TECH_APPLIANCE_LOCATIONS, {
+  errorMap: () => ({ message: "Select the appliance location" }),
+});
+
+// What the tech form requires (client-side validation).
 export const techApplianceDetailsSchema = z.object({
   applianceGrade: z.enum(
     TECH_APPLIANCE_GRADES.map((grade) => grade.value) as [TechApplianceGrade, ...TechApplianceGrade[]],
@@ -35,6 +47,7 @@ export const techApplianceDetailsSchema = z.object({
   applianceColor: z.enum(TECH_APPLIANCE_COLORS, {
     errorMap: () => ({ message: "Select the appliance color" }),
   }),
+  applianceLocation: applianceLocationSchema,
   partFunction: z
     .string({ required_error: "Part function is required" })
     .trim()
@@ -42,7 +55,14 @@ export const techApplianceDetailsSchema = z.object({
     .max(200, "Part function must be 200 characters or less"),
 });
 
-export type TechApplianceDetails = z.infer<typeof techApplianceDetailsSchema>;
+// What the server accepts and stores: the location may be missing, so a
+// tech form cached before it was added still submits and rows stored
+// before it was added still parse.
+export const storedTechApplianceDetailsSchema = techApplianceDetailsSchema.extend({
+  applianceLocation: applianceLocationSchema.optional(),
+});
+
+export type TechApplianceDetails = z.infer<typeof storedTechApplianceDetailsSchema>;
 
 export const TECH_APPLIANCE_DETAILS_WARRANTIES: readonly WarrantyType[] = [
   "american_home_shield",
@@ -72,7 +92,7 @@ export function techApplianceGradeLabel(grade: string | null | undefined): strin
 export function parseStoredTechApplianceDetails(raw: string | null | undefined): TechApplianceDetails | null {
   if (!raw) return null;
   try {
-    const parsed = techApplianceDetailsSchema.safeParse(JSON.parse(raw));
+    const parsed = storedTechApplianceDetailsSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : null;
   } catch {
     return null;

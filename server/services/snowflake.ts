@@ -373,7 +373,7 @@ export const fetchProcIdForServiceOrder = createProcLookup(runLookupStatement,
 export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(runLookupStatement,
   { deadlineMs: SERVICE_ORDER_LOOKUP_DEADLINE_MS });
 
-// AHS service-order prefill (brand / model / serial / service contract ID,
+// AHS service-order prefill (brand, partner, client name,
 // the parts and the resolved service unit), keyed by district + 8-digit SO
 // (the unit is resolved from the order; see snowflake-lookup.ts). The
 // statements share one connection; the

@@ -797,7 +797,7 @@ export default function TechResubmitPage() {
                       </FormItem>
                     )}
                   />
-                  {/* Appliance Grade / Color / Part Function: AHS and First
+                  {/* Appliance Grade / Color / Location / Part Function: AHS and First
                       American authorization tickets only (flag
                       techApplianceDetailsEnabled). */}
                   {techApplianceDetailsShown && (

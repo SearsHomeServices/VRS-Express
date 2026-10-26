@@ -5,7 +5,6 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  AHS_PREFILL_APPLIANCE_SQL,
   AHS_PREFILL_CORE_SQL,
   AHS_PREFILL_PARTS_SQL,
   PROC_ID_SQL,
@@ -70,7 +69,7 @@ describe("appliance type statement", () => {
   });
 
   it("leaves the AHS prefill statements strict (no SO_CRT_DT ordering)", () => {
-    for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL, AHS_PREFILL_PARTS_SQL]) {
+    for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_PARTS_SQL]) {
       expect(sql).not.toContain("SO_CRT_DT");
       expect(sql).toContain("ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1");
     }

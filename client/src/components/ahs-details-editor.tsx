@@ -312,15 +312,17 @@ export function AhsDetailsEditor({
   // A tech-supplied field keeps "From technician" while it still holds the
   // tech's value; it never shows "From service order".
   const tech = techSuppliedAhsValues(techDetails);
-  const fromTechnician = (field: "applianceGrade" | "applianceColor") =>
-    holdsTechValue(values[field], tech[field]);
-  const techBadge = (field: "applianceGrade" | "applianceColor") =>
+  type TechField = "applianceGrade" | "applianceColor" | "applianceLocation";
+  const isTechField = (field: AhsReviewFormField): field is TechField =>
+    field === "applianceGrade" || field === "applianceColor" || field === "applianceLocation";
+  const fromTechnician = (field: TechField) => holdsTechValue(values[field], tech[field]);
+  const techBadge = (field: TechField) =>
     fromTechnician(field) ? <AhsFromTechnicianBadge testId={`badge-ahs-from-tech-${field}`} /> : null;
   const partFunctionFromTechnician = holdsTechValue(values.parts?.[0]?.partFunction, tech.partFunction);
 
   // A prefilled field keeps its badge while it still holds the stored value.
   const fromServiceOrder = (field: AhsReviewFormField) => {
-    if ((field === "applianceGrade" || field === "applianceColor") && fromTechnician(field)) return null;
+    if (isTechField(field) && fromTechnician(field)) return null;
     if (!baseline.prefilled.includes(field as AhsReviewProvenanceField)) return null;
     const value = String(values[field] ?? "").trim();
     if (value === "" || value !== baseline.values[field].trim()) return null;
@@ -474,7 +476,7 @@ export function AhsDetailsEditor({
                 placeholder="Select location"
                 options={locationOptions}
                 testId="select-ahs-location"
-                badge={fromServiceOrder("applianceLocation")}
+                badge={techBadge("applianceLocation") ?? fromServiceOrder("applianceLocation")}
               />
               <SelectField
                 form={form}

@@ -3,9 +3,10 @@
 // the VRS manager completes at Stage 1; PATCH /api/submissions/:id/ahs-details
 // and its refresh route (server/ahs-review-api.ts) merge provenance and refill
 // blanks. The lookups themselves are fetchAhsServiceOrderPrefill in
-// server/services/snowflake.ts (appliance, dispatch number and the parts on
-// the order) and lookupHssomOrder in server/services/hssom-order-lookup.ts
-// (customer name and address, plus appliance fields Snowflake may lack).
+// server/services/snowflake.ts (brand and the parts on the order) and
+// lookupHssomOrder in server/services/hssom-order-lookup.ts (dispatch
+// number, customer name and address, model, serial, and brand when
+// Snowflake has none).
 import {
   AHS_PREFILL_FIELDS,
   dispatchNumberFromServiceContractId,
@@ -76,10 +77,10 @@ function purchaseYearFrom(raw: string | undefined, now: Date): number | undefine
   return year >= AHS_MIN_PURCHASE_YEAR && year <= now.getUTCFullYear() ? year : undefined;
 }
 
-// Merges the two lookups field by field. Snowflake wins for the dispatch
-// number and the appliance fields; HSSOM fills only what Snowflake lacks.
-// Customer name and address come from HSSOM only, the parts from Snowflake
-// only. Does not decide whether the order is AHS (see applyAhsSubmitPrefill).
+// Merges the two lookups field by field. Brand: Snowflake, else HSSOM. The
+// dispatch number, model, serial, customer name and address come from HSSOM
+// only, the parts from Snowflake only. Does not decide whether the order is
+// AHS (see applyAhsSubmitPrefill).
 export function mergeAhsPrefillSources(
   snowflake: AhsPrefillLookupResult,
   hssom: HssomOrderLookupResult,
@@ -90,14 +91,10 @@ export function mergeAhsPrefillSources(
   const either = (field: AhsPrefillTextField, a: string | undefined, b: string | undefined) =>
     usable(field, a) ?? usable(field, b);
   const values: AhsPrefillValues = {
-    contractNumber: either(
-      "contractNumber",
-      dispatchNumberFromServiceContractId(sf?.serviceContractId),
-      dispatchNumberFromServiceContractId(hs?.serviceContractId),
-    ),
+    contractNumber: usable("contractNumber", dispatchNumberFromServiceContractId(hs?.serviceContractId)),
     brand: either("brand", sf?.brand, hs?.brand),
-    modelNumber: either("modelNumber", sf?.modelNumber, hs?.modelNumber),
-    serialNumber: either("serialNumber", sf?.serialNumber, hs?.serialNumber),
+    modelNumber: usable("modelNumber", hs?.modelNumber),
+    serialNumber: usable("serialNumber", hs?.serialNumber),
     customerName: usable("customerName", hs?.customerName),
     customerAddress: usable("customerAddress", hs?.customerAddress),
     purchaseYear: purchaseYearFrom(hs?.purchaseDate, now),
@@ -228,8 +225,8 @@ export function applyAhsSubmitPrefill(
 }
 
 // The appliance details the technician entered (shared/tech-appliance-details.ts)
-// on the AHS draft: grade (Low/Medium/High → entry/mid/top), color and part
-// 1's function, as a partial part 1 when the draft has no parts (the VRS
+// on the AHS draft: grade (Low/Medium/High → entry/mid/top), color, location
+// (when sent; older forms lack it) and part 1's function, as a partial part 1 when the draft has no parts (the VRS
 // manager completes it; a later refresh may still fill the parts around it).
 // Tech-entered, so never named in prefilledFields. A value already in the
 // draft wins (a resubmission carries the previous ticket's details, possibly
@@ -247,6 +244,9 @@ export function applyTechApplianceDetails(
   }
   if (!next.applianceColor?.trim() || changed("applianceColor")) {
     next.applianceColor = tech.applianceColor;
+  }
+  if (tech.applianceLocation && (!next.applianceLocation?.trim() || changed("applianceLocation"))) {
+    next.applianceLocation = tech.applianceLocation;
   }
   const parts = next.parts?.length ? next.parts.map((part) => ({ ...part })) : [{}];
   if (!parts[0].partFunction?.trim() || changed("partFunction")) {

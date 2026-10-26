@@ -1557,6 +1557,23 @@ describe("Technician appliance details: AHS editor", () => {
     expect(html).toContain('data-testid="badge-ahs-from-so-contractNumber"');
   });
 
+  it('shows "From technician" on the location the tech picked', () => {
+    const withLocation = JSON.stringify({ ...techDetails, applianceLocation: "Laundry room" });
+    const html = renderEditorPanel({
+      bridge: null,
+      submission: techTicket({ ...draftWithTechValues, applianceLocation: "Laundry room" }, withLocation),
+      allowAhsEdit: true,
+    });
+    expect(html).toContain('data-testid="badge-ahs-from-tech-applianceLocation"');
+    // Without a tech location, a location the manager entered gets no badge.
+    const manual = renderEditorPanel({
+      bridge: null,
+      submission: techTicket({ ...draftWithTechValues, applianceLocation: "Kitchen" }),
+      allowAhsEdit: true,
+    });
+    expect(manual).not.toContain('data-testid="badge-ahs-from-tech-applianceLocation"');
+  });
+
   it("shows no technician badge without tech details or when the draft holds other values", () => {
     const none = renderEditorPanel({ bridge: null, submission: techTicket(draftWithTechValues, null), allowAhsEdit: true });
     expect(none).not.toContain("badge-ahs-from-tech-");

@@ -186,6 +186,13 @@ describe("Agent dashboard: technician appliance details", () => {
     },
   );
 
+  it("shows the location when the tech gave one, and no Location row otherwise", async () => {
+    await renderDashboard(ticket("first_american", techDetailsJson));
+    expect(document.querySelector('[data-testid="text-tech-appliance-location"]')).toBeNull();
+    await renderDashboard(ticket("first_american", JSON.stringify({ ...JSON.parse(techDetailsJson), applianceLocation: "Kitchen" })));
+    expect(text("text-tech-appliance-location")).toBe("Kitchen");
+  });
+
   it.each([null, "not-json", "{}"])("hides the block when the details are absent or unreadable: %s", async (raw) => {
     await renderDashboard(ticket("first_american", raw));
     expect(document.querySelector('[data-testid="tech-appliance-details"]')).toBeNull();
