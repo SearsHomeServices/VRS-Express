@@ -226,22 +226,32 @@ export function resolveServiceUnit(row: any, district: string): string | undefin
 // ===========================================================================
 //
 // Every statement matches the order by SO_NO and resolves the unit as
-// above. The core statement decides the unit; the parts statement resolves
-// it the same way in SQL so both still run in parallel under the 5s
-// deadline, and its rows are kept only when their unit equals the core
-// statement's.
+// above. The core statement decides the unit; the appliance and parts
+// statements resolve it the same way in SQL so all three still run in
+// parallel under the 5s deadline, and their rows are kept only when their
+// unit equals the core statement's.
 //
-// Only columns confirmed in use (here or in ai-agent-mcp) are read. The
-// dispatch number, model and serial come from the HSSOM Order Lookup
-// (server/services/hssom-order-lookup.ts), as in ai-agent-mcp: the
-// Snowflake columns once tried for them (CTA_NO, PSV_ITM_MDL_NO,
-// PSV_MDS_SRL_NO) were never verified and are not read.
+// Columns NOT yet verified against the live schema live in
+// AHS_PREFILL_UNVERIFIED_COLUMNS and run as their own statement: one wrong
+// identifier fails a whole Snowflake statement, and the brand and partner
+// columns must still come back when it does. Change a column name there
+// only; the aliases keep the row mapping below unchanged.
 
 // In use elsewhere against this table.
 export const AHS_PREFILL_CONFIRMED_COLUMNS = {
   BRAND: "MFG_BND_NM",
   PARTNER_ID: "CMB_THD_PTY_ID", // what deriveWarrantyFromProcId reads at submit today
   CLIENT_NAME: "CLIENT_NM",
+} as const;
+
+// Present and holding values on a live AHS order (2026-10-26,
+// scripts/diagnostics/ahs-prefill-check.mts on 4766-14268083: CTA_NO shape
+// 99999999/9999999, model and serial filled). Still their own statement so a
+// failure here never costs the brand, partner and parts.
+export const AHS_PREFILL_UNVERIFIED_COLUMNS = {
+  SERVICE_CONTRACT_ID: "CTA_NO", // AHS dispatch number is the part before "/"
+  MODEL_NUMBER: "PSV_ITM_MDL_NO",
+  SERIAL_NUMBER: "PSV_MDS_SRL_NO",
 } as const;
 
 function columnList(columns: Record<string, string>): string {
@@ -251,6 +261,10 @@ function columnList(columns: Record<string, string>): string {
 // Binds: [serviceOrder, district].
 export const AHS_PREFILL_CORE_SQL =
   `SELECT ${SERVICE_UNIT_SELECT}, ${columnList(AHS_PREFILL_CONFIRMED_COLUMNS)} ` +
+  `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
+// Binds: [serviceOrder, district].
+export const AHS_PREFILL_APPLIANCE_SQL =
+  `SELECT SVC_UN_NO AS SERVICE_UNIT, ${columnList(AHS_PREFILL_UNVERIFIED_COLUMNS)} ` +
   `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
 
 // The parts on the order, one row per part line, from the DB2 parts table
@@ -300,7 +314,10 @@ export interface AhsServiceOrderPart {
 }
 
 export interface AhsServiceOrderPrefill {
+  serviceContractId?: string;
   brand?: string;
+  modelNumber?: string;
+  serialNumber?: string;
   partnerId?: string;
   clientName?: string;
   // The resolved SVC_UN_NO (e.g. "0008366"), which may differ from the
@@ -382,8 +399,9 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
     // Never query with input the form could not have produced.
     if (!/^\d{4}$/.test(unit) || !/^\d{8}$/.test(so)) return Promise.resolve({ status: "not_found" });
     return lookup(`${unit}-${so}`, async (signal) => {
-      const [core, parts] = await query([
+      const [core, appliance, parts] = await query([
         { sqlText: AHS_PREFILL_CORE_SQL, binds: [so, unit] },
+        { sqlText: AHS_PREFILL_APPLIANCE_SQL, binds: [so, unit] },
         { sqlText: AHS_PREFILL_PARTS_SQL, binds: [so, so, unit], timeoutMs: AHS_PREFILL_PARTS_TIMEOUT_MS },
       ], signal);
       // Never log returned values (the resolved unit included): service order and status only.
@@ -408,6 +426,18 @@ export function createAhsPrefillLookup(query: AhsPrefillQuery, options: LookupOp
         clientName: text(row.CLIENT_NAME),
         serviceUnit,
       };
+      if (appliance.status === "rejected") {
+        // Most likely a column-name mismatch; the message names the column.
+        const message = String((appliance.reason as any)?.message ?? appliance.reason).slice(0, 200);
+        console.warn(`[ahs-prefill] SO=${unit}-${so} appliance statement failed, brand only: ${message}`);
+      } else {
+        const extra = appliance.value[0];
+        if (extra && normalizeServiceUnit(extra.SERVICE_UNIT) === serviceUnit) {
+          found.serviceContractId = text(extra.SERVICE_CONTRACT_ID);
+          found.modelNumber = text(extra.MODEL_NUMBER);
+          found.serialNumber = text(extra.SERIAL_NUMBER);
+        }
+      }
       if (parts?.status === "fulfilled") {
         const mapped = mapAhsServiceOrderParts(
           parts.value.filter((part) => normalizeServiceUnit(part?.SERVICE_UNIT) === serviceUnit),

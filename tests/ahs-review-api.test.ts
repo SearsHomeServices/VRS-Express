@@ -359,16 +359,11 @@ describe("POST /api/submissions/:id/ahs-details/refresh", () => {
       partnerId: "AHS123",
       clientName: "American Home Shield",
       brand: "Maytag",
-      parts: [{ partNumber: "SO-PART", quantity: 1 }],
-    },
-    // Model and serial come from HSSOM only.
-    hssom: {
-      status: "found",
-      customerName: "HSSOM Name",
-      customerAddress: SECRET_ADDRESS,
       modelNumber: "SO-MODEL",
       serialNumber: "SO-SERIAL",
+      parts: [{ partNumber: "SO-PART", quantity: 1 }],
     },
+    hssom: { status: "found", customerName: "HSSOM Name", customerAddress: SECRET_ADDRESS },
   };
 
   it("has the same access rules", async () => {

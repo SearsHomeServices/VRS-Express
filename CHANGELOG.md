@@ -16,12 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The server still accepts details without it, so a form cached before this
   change keeps submitting.
 
-### Changed - Dispatch number, model and serial come from HSSOM only (2026-10-26)
-- The Snowflake AHS prefill no longer queries `CTA_NO`, `PSV_ITM_MDL_NO` or
-  `PSV_MDS_SRL_NO`: they were never verified and ai-agent-mcp does not read
-  them. Snowflake now fills brand and the parts on the order (columns proven
-  in use); the dispatch number (`thirdParty.contractNumber`), model and
-  serial come from the HSSOM Order Lookup, as in ai-agent-mcp.
+### Fixed - Snowflake dispatch number, model and serial restored (2026-10-26)
+- An earlier change the same day stopped reading `CTA_NO`, `PSV_ITM_MDL_NO`
+  and `PSV_MDS_SRL_NO` and relied on HSSOM alone. The new read-only
+  `scripts/diagnostics/ahs-prefill-check.mts` showed all three exist and hold
+  values on a live AHS order (4766-14268083), so Snowflake is again the first
+  source for the dispatch number, model and serial, with HSSOM filling gaps.
 
 ### Fixed - Stage 1 AHS editor starts with the ticket's appliance type (2026-10-26)
 - The AHS draft now takes the ticket's appliance type (the tech's pick,

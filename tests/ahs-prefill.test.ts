@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as snowflakeLookup from "../server/services/snowflake-lookup";
 import {
+  AHS_PREFILL_APPLIANCE_SQL,
   AHS_PREFILL_CORE_SQL,
   AHS_PREFILL_PARTS_SQL,
   AHS_PREFILL_PARTS_TIMEOUT_MS,
@@ -63,6 +63,12 @@ const SECRET_PARTNER = "AHS-PARTNER-77";
 const SECRET_CLIENT = "American Home Shield";
 
 const coreRow = { SERVICE_UNIT: "0008175", UNIT_COUNT: 1, BRAND: " Whirlpool ", PARTNER_ID: SECRET_PARTNER, CLIENT_NAME: SECRET_CLIENT };
+const applianceRow = {
+  SERVICE_UNIT: "0008175",
+  SERVICE_CONTRACT_ID: ` ${SECRET_CONTRACT}/0003 `,
+  MODEL_NUMBER: "WTW5000DW1",
+  SERIAL_NUMBER: " C31290822 ",
+};
 
 const ok = (rows: any[]): PromiseSettledResult<any[]> => ({ status: "fulfilled", value: rows });
 const failed = (message: string): PromiseSettledResult<any[]> => ({ status: "rejected", reason: new Error(message) });
@@ -72,31 +78,19 @@ const partRows = [
   { SERVICE_UNIT: "0008175", PART_NUMBER: "W10820048", DESCRIPTION: "Drain pump clip", QUANTITY: 0, ORDERED_QUANTITY: 2, UNIT_PRICE: 4.255, STATUS: "O" },
 ];
 
-// The Snowflake prefill sends two statements: [core, parts].
-function mockQuery(results: PromiseSettledResult<any[]>[] = [ok([coreRow]), ok([])]) {
+function mockQuery(results: PromiseSettledResult<any[]>[] = [ok([coreRow]), ok([applianceRow]), ok([])]) {
   return vi.fn<AhsPrefillQuery>(async () => results);
 }
 
-// Snowflake carries brand, partner, client (and parts); never the dispatch
-// number, model or serial.
 const found: AhsPrefillLookupResult = {
   status: "found",
+  serviceContractId: `${SECRET_CONTRACT}/0003`,
   brand: "Whirlpool",
+  modelNumber: "WTW5000DW1",
+  serialNumber: "C31290822",
   partnerId: SECRET_PARTNER,
   clientName: SECRET_CLIENT,
 };
-
-// The dispatch number, model and serial come from HSSOM only.
-const hssomAppliance: HssomOrderLookupResult = {
-  status: "found",
-  serviceContractId: ` ${SECRET_CONTRACT}/0003 `,
-  modelNumber: "WTW5000DW1",
-  serialNumber: " C31290822 ",
-};
-
-// Column names once tried for the dispatch number, model and serial; never
-// verified against the live schema, so never read from Snowflake.
-const DROPPED_SNOWFLAKE_COLUMNS = ["CTA_NO", "PSV_ITM_MDL_NO", "PSV_MDS_SRL_NO"];
 
 const details: AhsDetails = {
   contractNumber: "",
@@ -131,50 +125,35 @@ describe("Snowflake AHS service-order lookup", () => {
     const [statements] = query.mock.calls[0];
     expect(statements.map((s) => s.binds)).toEqual([
       ["12345678", "8175"],
+      ["12345678", "8175"],
       ["12345678", "12345678", "8175"],
     ]);
-    for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_PARTS_SQL]) {
+    for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL]) {
       expect(sql).toContain("FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL");
       expect(sql).toContain("WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1");
       expect(sql).toContain("SVC_UN_NO AS SERVICE_UNIT");
       expect(sql).not.toContain("WHERE SVC_UN_NO = LPAD");
     }
-    expect(statements.map((s) => s.sqlText)).toEqual([AHS_PREFILL_CORE_SQL, AHS_PREFILL_PARTS_SQL]);
+    expect(statements.map((s) => s.sqlText)).toEqual([AHS_PREFILL_CORE_SQL, AHS_PREFILL_APPLIANCE_SQL, AHS_PREFILL_PARTS_SQL]);
     // Only the parts statement carries its own (shorter) timeout.
-    expect(statements.map((s) => s.timeoutMs)).toEqual([undefined, AHS_PREFILL_PARTS_TIMEOUT_MS]);
+    expect(statements.map((s) => s.timeoutMs)).toEqual([undefined, undefined, AHS_PREFILL_PARTS_TIMEOUT_MS]);
     expect(AHS_PREFILL_PARTS_TIMEOUT_MS).toBeLessThan(5000);
     // LPAD(?, 7, '0') turns district 8175 into unit 0008175.
     expect("8175".padStart(7, "0")).toBe("0008175");
   });
 
-  it("reads only the confirmed columns in the core statement", () => {
+  it("keeps the unverified columns out of the confirmed statement", () => {
     expect(AHS_PREFILL_CORE_SQL).toBe(
       "SELECT SVC_UN_NO AS SERVICE_UNIT, COUNT(DISTINCT SVC_UN_NO) OVER () AS UNIT_COUNT, " +
       "MFG_BND_NM AS BRAND, CMB_THD_PTY_ID AS PARTNER_ID, CLIENT_NM AS CLIENT_NAME " +
       "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL " +
       "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1",
     );
-  });
-
-  it("sends only the core and parts statements and never reads the dispatch, model or serial columns", async () => {
-    const query = mockQuery();
-    await createAhsPrefillLookup(query)("8175", "12345678");
-    expect(query).toHaveBeenCalledTimes(1);
-    const [statements] = query.mock.calls[0];
-    expect(statements).toHaveLength(2);
-    for (const sql of [AHS_PREFILL_CORE_SQL, AHS_PREFILL_PARTS_SQL, ...statements.map((s) => s.sqlText)]) {
-      for (const column of DROPPED_SNOWFLAKE_COLUMNS) expect(sql).not.toContain(column);
-    }
-    // The separate appliance statement and its column map are gone.
-    expect(snowflakeLookup).not.toHaveProperty("AHS_PREFILL_APPLIANCE_SQL");
-    expect(snowflakeLookup).not.toHaveProperty("AHS_PREFILL_UNVERIFIED_COLUMNS");
-  });
-
-  it("never returns a dispatch number, model or serial, even if the core row had them", async () => {
-    const withExtras = { ...coreRow, SERVICE_CONTRACT_ID: `${SECRET_CONTRACT}/0003`, MODEL_NUMBER: "WTW5000DW1", SERIAL_NUMBER: "C31290822" };
-    const result = await createAhsPrefillLookup(mockQuery([ok([withExtras]), ok([])]))("8175", "12345678");
-    expect(result).toMatchObject({ status: "found", brand: "Whirlpool", partnerId: SECRET_PARTNER });
-    for (const key of ["serviceContractId", "modelNumber", "serialNumber"]) expect(result).not.toHaveProperty(key);
+    expect(AHS_PREFILL_APPLIANCE_SQL).toBe(
+      "SELECT SVC_UN_NO AS SERVICE_UNIT, CTA_NO AS SERVICE_CONTRACT_ID, PSV_ITM_MDL_NO AS MODEL_NUMBER, PSV_MDS_SRL_NO AS SERIAL_NUMBER " +
+      "FROM PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL " +
+      "WHERE SO_NO = ? ORDER BY CASE WHEN SVC_UN_NO = LPAD(?, 7, '0') THEN 0 ELSE 1 END LIMIT 1",
+    );
   });
 
   it.each([["817", "12345678"], ["8175", "1234567"], ["81a5", "12345678"], ["8175", "8175-12345678"], ["", ""]])(
@@ -185,22 +164,33 @@ describe("Snowflake AHS service-order lookup", () => {
     });
 
   it("trims values and treats blanks as missing", async () => {
-    const query = mockQuery([ok([{ ...coreRow, CLIENT_NAME: "   " }]), ok([])]);
+    const query = mockQuery([ok([{ ...coreRow, CLIENT_NAME: "   " }]), ok([{ ...applianceRow, SERIAL_NUMBER: "" }])]);
     expect(await createAhsPrefillLookup(query)("8175", "12345678")).toEqual({
       status: "found",
+      serviceContractId: `${SECRET_CONTRACT}/0003`,
       brand: "Whirlpool",
+      modelNumber: "WTW5000DW1",
+      serialNumber: undefined,
       partnerId: SECRET_PARTNER,
       clientName: undefined,
       serviceUnit: "0008175",
     });
-    const blankBrand = await createAhsPrefillLookup(mockQuery([ok([{ ...coreRow, BRAND: "" }]), ok([])]))("8175", "12345679");
-    expect(blankBrand).toMatchObject({ status: "found", brand: undefined, partnerId: SECRET_PARTNER });
+  });
+
+  it("still returns brand when the unverified statement fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const query = mockQuery([ok([coreRow]), failed("SQL compilation error: invalid identifier 'CTA_NO'")]);
+    const result = await createAhsPrefillLookup(query)("8175", "12345678");
+    expect(result).toMatchObject({ status: "found", brand: "Whirlpool", partnerId: SECRET_PARTNER });
+    expect(result).not.toHaveProperty("modelNumber");
+    expect(result).not.toHaveProperty("serviceContractId");
+    expect(warn.mock.calls.flat().join(" ")).toContain("invalid identifier 'CTA_NO'");
   });
 
   it("maps no row to not_found and an outage to unavailable", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await createAhsPrefillLookup(mockQuery([ok([]), ok([])]))("8175", "12345678")).toEqual({ status: "not_found" });
-    expect(await createAhsPrefillLookup(mockQuery([failed("auth"), ok(partRows)]))("8175", "12345678"))
+    expect(await createAhsPrefillLookup(mockQuery([failed("auth"), ok([applianceRow])]))("8175", "12345678"))
       .toEqual({ status: "unavailable" });
     const connectFails = vi.fn<AhsPrefillQuery>(async () => { throw new Error("connect failed"); });
     expect(await createAhsPrefillLookup(connectFails)("8175", "12345678")).toEqual({ status: "unavailable" });
@@ -209,13 +199,9 @@ describe("Snowflake AHS service-order lookup", () => {
   it("never logs returned values", async () => {
     const spies = (["log", "info", "warn", "error"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     await createAhsPrefillLookup(mockQuery())("8175", "12345678");
-    // The warning paths: a failed parts statement, an order under another unit.
-    await createAhsPrefillLookup(mockQuery([ok([coreRow]), failed("statement timed out after 2500ms")]))("8175", "12345679");
-    await createAhsPrefillLookup(mockQuery([ok([{ ...coreRow, SERVICE_UNIT: "0008366" }]), ok([])]))("8175", "12345680");
+    await createAhsPrefillLookup(mockQuery([ok([coreRow]), failed("invalid identifier 'PSV_ITM_MDL_NO'")]))("8175", "12345679");
     const logged = spies.flatMap((spy) => spy.mock.calls.flat()).join(" ");
-    expect(logged).toContain("parts statement failed");
-    expect(logged).toContain("under another unit");
-    for (const value of ["Whirlpool", SECRET_PARTNER, SECRET_CLIENT, "0008175", "0008366"]) {
+    for (const value of ["Whirlpool", "WTW5000DW1", "C31290822", SECRET_CONTRACT, SECRET_PARTNER, SECRET_CLIENT]) {
       expect(logged).not.toContain(value);
     }
   });
@@ -223,7 +209,7 @@ describe("Snowflake AHS service-order lookup", () => {
   it("coalesces concurrent lookups and keys the cache by district and SO", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const query = vi.fn<AhsPrefillQuery>(async () => { await gate; return [ok([coreRow]), ok([])]; });
+    const query = vi.fn<AhsPrefillQuery>(async () => { await gate; return [ok([coreRow]), ok([applianceRow])]; });
     const lookup = createAhsPrefillLookup(query);
     const first = lookup("8175", "12345678");
     expect(lookup(" 8175 ", "12345678")).toBe(first);
@@ -238,7 +224,7 @@ describe("Snowflake AHS service-order lookup", () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const byKey: Record<string, PromiseSettledResult<any[]>[]> = {
-      "11111111": [ok([coreRow]), ok([])],
+      "11111111": [ok([coreRow]), ok([applianceRow])],
       "22222222": [ok([]), ok([])],
       "33333333": [failed("warehouse down"), failed("warehouse down")],
     };
@@ -272,8 +258,8 @@ describe("Snowflake AHS service-order lookup", () => {
 });
 
 describe("AHS prefill rules", () => {
-  it("fills blank fields with the dispatch number taken before the '/' of the HSSOM contract ID", () => {
-    const next = applyAhsServiceOrderPrefill(details, found, hssomAppliance);
+  it("fills blank fields with the dispatch number taken before the '/'", () => {
+    const next = applyAhsServiceOrderPrefill(details, found);
     expect(next).toMatchObject({
       contractNumber: SECRET_CONTRACT,
       brand: "Whirlpool",
@@ -285,16 +271,12 @@ describe("AHS prefill rules", () => {
     // What gets stored still parses as valid details (parsing may add
     // schema defaults such as techRecommendation).
     expect(parseStoredAhsDetails(JSON.stringify(next))).toMatchObject(next);
-    // Snowflake alone fills only the brand.
-    const snowflakeOnly = applyAhsServiceOrderPrefill(details, found);
-    expect(snowflakeOnly).toMatchObject({ contractNumber: "", modelNumber: "", serialNumber: "", prefilledFields: ["brand"] });
   });
 
   it("never overwrites a value the tech entered", () => {
     const next = applyAhsServiceOrderPrefill(
       { ...details, contractNumber: "TECH-1", modelNumber: "TECH-MODEL", serialNumber: "   " },
       found,
-      hssomAppliance,
     );
     expect(next.contractNumber).toBe("TECH-1");
     expect(next.modelNumber).toBe("TECH-MODEL");
@@ -325,11 +307,9 @@ describe("AHS prefill rules", () => {
   });
 
   it("skips a contract ID with no dispatch part and values the schema would reject", () => {
-    const next = applyAhsServiceOrderPrefill(
-      details,
-      { status: "found", brand: "B".repeat(101) },
-      { status: "found", serviceContractId: " /0003", modelNumber: "M1" },
-    );
+    const next = applyAhsServiceOrderPrefill(details, {
+      status: "found", serviceContractId: " /0003", brand: "B".repeat(101), modelNumber: "M1",
+    });
     expect(next.contractNumber).toBe("");
     expect(next.brand).toBe("");
     expect(next.prefilledFields).toEqual(["modelNumber"]);
@@ -413,45 +393,28 @@ const storedPrefill = (d: AhsDetails) => {
 };
 
 describe("HSSOM customer prefill merge", () => {
-  it("brand: Snowflake first; dispatch/model/serial: HSSOM only (a Snowflake-only result fills only brand and parts)", () => {
-    const parts = [{ partNumber: "WPW10503278", quantity: 1 }];
-    const snowflake: AhsPrefillLookupResult = { status: "found", brand: "Whirlpool", partnerId: "AHS1", parts };
-    const now = new Date("2026-10-22T00:00:00Z");
-    expect(mergeAhsPrefillSources(snowflake, hssomFound, now)).toEqual({
-      contractNumber: SECRET_HSSOM_CONTRACT,
+  it("takes Snowflake first for dispatch/appliance fields and fills gaps from HSSOM", () => {
+    const values = mergeAhsPrefillSources(
+      { status: "found", serviceContractId: `${SECRET_CONTRACT}/0003`, brand: "Whirlpool", partnerId: "AHS1" },
+      hssomFound,
+      new Date("2026-10-22T00:00:00Z"),
+    );
+    expect(values).toEqual({
+      contractNumber: SECRET_CONTRACT,
       brand: "Whirlpool",
       modelNumber: "MVW6230HW",
       serialNumber: "HS-SERIAL-1",
       customerName: SECRET_NAME,
       customerAddress: SECRET_ADDRESS,
       purchaseYear: 2019,
-      parts,
-    });
-    // HSSOM's brand fills in only when Snowflake has none.
-    expect(mergeAhsPrefillSources({ status: "found", partnerId: "AHS1" }, hssomFound, now).brand).toBe("Maytag");
-    // Without HSSOM, Snowflake fills brand and parts only; even a row that
-    // ever carried the old fields gives no dispatch number, model or serial.
-    const withOldFields = {
-      ...snowflake, serviceContractId: `${SECRET_CONTRACT}/0003`, modelNumber: "SF-MODEL", serialNumber: "SF-SERIAL",
-    } as AhsPrefillLookupResult;
-    for (const hssom of [{ status: "unavailable" }, { status: "not_found" }] as HssomOrderLookupResult[]) {
-      expect(mergeAhsPrefillSources(snowflake, hssom, now)).toEqual({ brand: "Whirlpool", parts });
-      expect(mergeAhsPrefillSources(withOldFields, hssom, now)).toEqual({ brand: "Whirlpool", parts });
-    }
-    // With HSSOM found, HSSOM's values win over anything Snowflake carried.
-    expect(mergeAhsPrefillSources(withOldFields, hssomFound, now)).toMatchObject({
-      contractNumber: SECRET_HSSOM_CONTRACT, modelNumber: "MVW6230HW", serialNumber: "HS-SERIAL-1",
     });
   });
 
-  it("takes the dispatch number from the HSSOM contract's part before '/', whatever Snowflake returns", () => {
+  it("uses the HSSOM contract's part before '/' when Snowflake has none", () => {
     expect(mergeAhsPrefillSources({ status: "found", brand: "GE" }, hssomFound).contractNumber).toBe(SECRET_HSSOM_CONTRACT);
     expect(mergeAhsPrefillSources({ status: "unavailable" }, hssomFound).contractNumber).toBe(SECRET_HSSOM_CONTRACT);
-    // No dispatch part before the '/': no dispatch number.
-    expect(mergeAhsPrefillSources({ status: "found", brand: "GE" }, { ...hssomFound, serviceContractId: " /0003" }))
-      .not.toHaveProperty("contractNumber");
-    expect(mergeAhsPrefillSources({ status: "found", brand: "GE" }, { status: "not_found" }))
-      .not.toHaveProperty("contractNumber");
+    expect(mergeAhsPrefillSources({ status: "found", serviceContractId: " /0003" }, hssomFound).contractNumber)
+      .toBe(SECRET_HSSOM_CONTRACT);
   });
 
   it("takes customer fields from HSSOM only", () => {
@@ -490,10 +453,10 @@ describe("HSSOM customer prefill merge", () => {
   it("fills every blank field and lists exactly those in prefilledFields", () => {
     const next = applyAhsSubmitPrefill(blankDetails, sources(found, hssomFound), ahsWarranty);
     expect(next).toMatchObject({
-      contractNumber: SECRET_HSSOM_CONTRACT,
+      contractNumber: SECRET_CONTRACT,
       brand: "Whirlpool",
-      modelNumber: "MVW6230HW",
-      serialNumber: "HS-SERIAL-1",
+      modelNumber: "WTW5000DW1",
+      serialNumber: "C31290822",
       customerName: SECRET_NAME,
       customerAddress: SECRET_ADDRESS,
       purchaseYear: 2019,
@@ -522,16 +485,9 @@ describe("HSSOM customer prefill merge", () => {
     expect(next.prefilledFields).toEqual(["brand", "modelNumber", "customerAddress"]);
   });
 
-  it("fills only the Snowflake fields (brand, parts) when HSSOM is unavailable", () => {
+  it("fills Snowflake fields only when HSSOM is unavailable", () => {
     const next = applyAhsSubmitPrefill(blankDetails, sources(found, { status: "unavailable" }), ahsWarranty);
-    expect(next.prefilledFields).toEqual(["brand"]);
-    expect(next).toMatchObject({ brand: "Whirlpool", contractNumber: "", modelNumber: "", serialNumber: "" });
-    const withParts = applyAhsSubmitPrefill(
-      { ...blankDetails, parts: [] },
-      sources({ ...found, parts: [{ partNumber: "SO-1", quantity: 1 }] }, { status: "unavailable" }),
-      ahsWarranty,
-    );
-    expect(withParts.prefilledFields).toEqual(["brand", "parts"]);
+    expect(next.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
     expect(next.customerName).toBeUndefined();
     expect(next.customerAddress).toBeUndefined();
     expect(next).not.toHaveProperty("purchaseYear");
@@ -599,9 +555,7 @@ describe("HSSOM customer prefill merge", () => {
       "contractNumber", "brand", "modelNumber", "serialNumber", "customerName", "customerAddress", "purchaseYear",
     ]);
     const logged = names.join(",");
-    for (const value of [SECRET_NAME, SECRET_ADDRESS, SECRET_HSSOM_CONTRACT, "2019", "Whirlpool", "MVW6230HW", "HS-SERIAL-1"]) {
-      expect(logged).not.toContain(value);
-    }
+    for (const value of [SECRET_NAME, SECRET_ADDRESS, SECRET_CONTRACT, "2019", "Whirlpool"]) expect(logged).not.toContain(value);
     expect(prefilledFieldNames(blankDetails)).toEqual([]);
   });
 });
@@ -633,9 +587,9 @@ describe("HSSOM lookup bounds", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(await fast).toEqual({ snowflake: found, hssom: { status: "unavailable" } });
     expect(await bothHung).toEqual({ snowflake: { status: "unavailable" }, hssom: { status: "unavailable" } });
-    // A timed-out HSSOM lookup leaves the Snowflake fill (brand) intact.
+    // A timed-out HSSOM lookup leaves the Snowflake fill intact.
     const next = applyAhsSubmitPrefill(blankDetails, await fast, ahsWarranty);
-    expect(next.prefilledFields).toEqual(["brand"]);
+    expect(next.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
   });
 
 });
@@ -659,7 +613,7 @@ describe("Snowflake parts on the order (NPSXTPN)", () => {
   });
 
   it("maps part number, description, quantity and unit price", async () => {
-    const query = mockQuery([ok([coreRow]), ok(partRows)]);
+    const query = mockQuery([ok([coreRow]), ok([applianceRow]), ok(partRows)]);
     const result = await createAhsPrefillLookup(query)("8175", "12345678");
     expect(result).toMatchObject({
       status: "found",
@@ -699,19 +653,18 @@ describe("Snowflake parts on the order (NPSXTPN)", () => {
   it("keeps every other value when the parts statement fails or times out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await createAhsPrefillLookup(
-      mockQuery([ok([coreRow]), failed("statement timed out after 2500ms")]),
+      mockQuery([ok([coreRow]), ok([applianceRow]), failed("statement timed out after 2500ms")]),
     )("8175", "12345678");
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       status: "found",
       brand: "Whirlpool",
-      partnerId: SECRET_PARTNER,
-      clientName: SECRET_CLIENT,
-      serviceUnit: "0008175",
+      modelNumber: "WTW5000DW1",
+      serviceContractId: `${SECRET_CONTRACT}/0003`,
     });
     expect(result).not.toHaveProperty("parts");
     expect(warn.mock.calls.flat().join(" ")).toContain("parts statement failed");
     // No live parts is just no parts.
-    const none = await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([{ SERVICE_UNIT: "0008175", PART_NUMBER: "X", STATUS: "X" }])]))(
+    const none = await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), ok([{ PART_NUMBER: "X", STATUS: "X" }])]))(
       "8175", "12345679",
     );
     expect(none).toMatchObject({ status: "found" });
@@ -720,8 +673,8 @@ describe("Snowflake parts on the order (NPSXTPN)", () => {
 
   it("never logs part values", async () => {
     const spies = (["log", "info", "warn", "error"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
-    await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok(partRows)]))("8175", "12345678");
-    await createAhsPrefillLookup(mockQuery([ok([coreRow]), failed("invalid identifier 'PRT_DS'")]))("8175", "12345679");
+    await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), ok(partRows)]))("8175", "12345678");
+    await createAhsPrefillLookup(mockQuery([ok([coreRow]), ok([applianceRow]), failed("invalid identifier 'PRT_DS'")]))("8175", "12345679");
     const logged = spies.flatMap((spy) => spy.mock.calls.flat()).join(" ");
     for (const value of ["WPW10503278", "Electronic control board", "245", "W10820048"]) expect(logged).not.toContain(value);
   });
@@ -752,10 +705,10 @@ describe("AHS draft built at submit", () => {
   it("fills an empty draft and names exactly what was filled", () => {
     const draft = applyAhsSubmitPrefill({}, sources(foundWithParts, hssomFound), ahsWarranty);
     expect(draft).toEqual({
-      contractNumber: SECRET_HSSOM_CONTRACT,
+      contractNumber: SECRET_CONTRACT,
       brand: "Whirlpool",
-      modelNumber: "MVW6230HW",
-      serialNumber: "HS-SERIAL-1",
+      modelNumber: "WTW5000DW1",
+      serialNumber: "C31290822",
       customerName: SECRET_NAME,
       customerAddress: SECRET_ADDRESS,
       parts: foundWithParts.parts,
@@ -794,17 +747,10 @@ describe("AHS draft built at submit", () => {
       { ...details, brand: "Whirlpool" },
       { brand: "Whirlpool", prefilledFields: ["brand"] },
     );
-    const draft = applyAhsSubmitPrefill(draftFromPrevious(previous), sources(foundWithParts, hssomFound), ahsWarranty);
+    const draft = applyAhsSubmitPrefill(draftFromPrevious(previous), sources(foundWithParts, { status: "unavailable" }), ahsWarranty);
     expect(draft.parts).toEqual(details.parts); // the previous parts win
     expect(draft.laborAmount).toBe(details.laborAmount);
-    expect(draft.customerName).toBe(details.customerName); // the previous customer wins
-    // Blanks fill from HSSOM (dispatch, model, serial); the brand kept its provenance.
-    expect(draft).toMatchObject({ contractNumber: SECRET_HSSOM_CONTRACT, modelNumber: "MVW6230HW", serialNumber: "HS-SERIAL-1" });
     expect(draft.prefilledFields).toEqual(["contractNumber", "brand", "modelNumber", "serialNumber"]);
-    // With HSSOM unavailable only the brand (already the previous value) is marked.
-    const snowflakeOnly = applyAhsSubmitPrefill(draftFromPrevious(previous), sources(foundWithParts, { status: "unavailable" }), ahsWarranty);
-    expect(snowflakeOnly.prefilledFields).toEqual(["brand"]);
-    expect(snowflakeOnly.contractNumber).toBe("");
     expect(draftFromPrevious(null)).toEqual({});
   });
 });

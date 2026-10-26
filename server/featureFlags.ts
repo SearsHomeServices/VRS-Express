@@ -47,16 +47,17 @@ export function isVrsAiAppEnrollEnabled(): boolean {
 
 // AHS service-order prefill from Snowflake (server/ahs-prefill.ts). Default
 // OFF everywhere; only the exact value "true" enables it. When on, the AHS
-// draft (POST /api/submissions, Stage 1 refresh) gets the brand
-// (IH_SERVICEORDER_FULLDETAIL_TBL) and the parts on the order (NPSXTPN).
+// draft (POST /api/submissions, Stage 1 refresh) gets the dispatch number,
+// brand, model and serial (IH_SERVICEORDER_FULLDETAIL_TBL) and the parts on
+// the order (NPSXTPN).
 export function isAhsServiceOrderPrefillEnabled(): boolean {
   return process.env.AHS_SERVICE_ORDER_PREFILL_ENABLED === "true";
 }
 
 // AHS prefill from the HSSOM Order Lookup API
-// (server/services/hssom-order-lookup.ts): customer name and address, and
-// the only source of the dispatch number, model and serial (plus brand when
-// Snowflake has none). Default OFF everywhere; only the
+// (server/services/hssom-order-lookup.ts): customer name and address, plus
+// the dispatch number and appliance fields Snowflake lacks. Default OFF
+// everywhere; only the
 // exact value "true" enables it. Also needs HSSOM_ORDER_LOOKUP_URL,
 // HSSOM_AUTH_URL, HSSOM_CLIENT_CODE, HSSOM_CLIENT_SECRET and HSSOM_CLIENT_ID;
 // without them every lookup returns "unavailable" and no request is made.
