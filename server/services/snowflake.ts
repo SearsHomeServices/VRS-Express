@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import type { Connection } from "snowflake-sdk";
 import {
   createAhsPrefillLookup,
+  createRepairReplaceLookup,
+  type AhsPrefillQuery,
   createProcLookup,
   createServiceOrderApplianceLookup,
   type LookupStatement,
@@ -382,7 +384,7 @@ export const fetchServiceOrderApplianceType = createServiceOrderApplianceLookup(
 // A statement with its own timeoutMs (the parts statement) is cancelled and
 // rejected on its own, so it can never hold the other statements past the
 // lookup's deadline.
-export const fetchAhsServiceOrderPrefill = createAhsPrefillLookup(async (statements, signal) => {
+const runSettledStatements: AhsPrefillQuery = async (statements, signal) => {
   const connection = await getConnection(signal);
   if (signal.aborted) throw new Error("Snowflake lookup deadline exceeded");
   return Promise.allSettled(statements.map(({ sqlText, binds, timeoutMs }) => new Promise<any[]>((resolve, reject) => {
@@ -410,7 +412,16 @@ export const fetchAhsServiceOrderPrefill = createAhsPrefillLookup(async (stateme
       cancel();
     }, { once: true });
   })));
-}, { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 5000)) });
+};
+
+export const fetchAhsServiceOrderPrefill = createAhsPrefillLookup(runSettledStatements,
+  { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 5000)) });
+
+// Repair / replace calculator prefill rows (service order, TechHub estimate,
+// part lines), same runner: one connection, each statement settles on its
+// own, the TechHub and parts statements carry their own timeout.
+export const fetchRepairReplaceRows = createRepairReplaceLookup(runSettledStatements,
+  { deadlineMs: Math.max(1, Math.min(SNOWFLAKE_OP_TIMEOUT_MS, 8000)) });
 
 // ===========================================================================
 // TechHub parts photos (read-only)

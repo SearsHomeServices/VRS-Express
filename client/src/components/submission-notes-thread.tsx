@@ -128,8 +128,13 @@ export function SubmissionNotesThread({
         )}
 
         {notes.map((n) => {
-          const afterClose = n.visibility === "staff_only" ||
-            (n.visibility == null && Number.isFinite(closedMs) && new Date(n.createdAt).getTime() > closedMs);
+          // Staff-only notes are also written on open tickets (Stage 1 AHS
+          // review, repair / replace calculator), so staff-only alone does
+          // not mean "after close": use the close time when there is one.
+          const staffOnly = n.visibility === "staff_only";
+          const afterClose = Number.isFinite(closedMs)
+            ? new Date(n.createdAt).getTime() > closedMs
+            : terminal && staffOnly;
           return (
             <div
               key={n.id}
@@ -151,6 +156,15 @@ export function SubmissionNotesThread({
                       data-testid={`agent-note-after-close-${n.id}`}
                     >
                       <Lock className="w-3 h-3" /> after close
+                    </Badge>
+                  )}
+                  {!afterClose && staffOnly && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] gap-1"
+                      data-testid={`agent-note-staff-only-${n.id}`}
+                    >
+                      <Lock className="w-3 h-3" /> staff only
                     </Badge>
                   )}
                   <span className="text-xs text-muted-foreground">

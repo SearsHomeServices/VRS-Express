@@ -8,6 +8,7 @@ interface AppConfig {
   ahsServiceOrderPrefill?: boolean;
   ahsHssomCustomerPrefill?: boolean;
   techApplianceDetailsEnabled?: boolean;
+  repairReplaceCalculatorEnabled?: boolean;
 }
 
 // Runtime feature flags sourced from GET /api/config. Defaults to disabled
@@ -36,6 +37,13 @@ export function useVrsAiAppEnrollEnabled(): boolean {
   return data?.vrsAiAppEnrollEnabled ?? false;
 }
 
+// Built-in repair / replace calculator on Sears Protect tickets (server
+// REPAIR_REPLACE_CALCULATOR_ENABLED); off keeps the Streamlit iframe.
+export function useRepairReplaceCalculatorEnabled(): boolean {
+  const { data } = useAppConfig();
+  return data?.repairReplaceCalculatorEnabled ?? false;
+}
+
 // Every runtime flag, each false until /api/config confirms it.
 export function useFeatureFlags() {
   const { data } = useAppConfig();
@@ -53,5 +61,6 @@ export function useFeatureFlags() {
     // Grade / color / part function on AHS and First American tech tickets
     // (server TECH_APPLIANCE_DETAILS_ENABLED).
     techApplianceDetailsEnabled: data?.techApplianceDetailsEnabled ?? false,
+    repairReplaceCalculatorEnabled: data?.repairReplaceCalculatorEnabled ?? false,
   };
 }

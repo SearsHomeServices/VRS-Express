@@ -1,3 +1,32 @@
+## 2026-10-28 — Repair / replace calculator built into VRS Express (Sears Protect)
+
+**Port, not iframe or service call.** The ai-agent-vrs Python calculator is
+not deployed, so VRS Express carries its own TypeScript port in `shared/`
+(pure, runs in the browser for instant results and on the server for the
+saved note). Parity with the Python is checked by random comparison, and the
+Python golden tests are ported to `tests/repair-replace.test.ts`.
+
+**Legacy formulas are the default tab.** They are what the Streamlit
+calculator applies today. Forward Repair Cost is shown second, labelled
+illustrative and not approved; nothing routes on it.
+
+**Scope: `warrantyType === "sears_protect"` only** (SPHW, SHW, Sears PA /
+Cinch). AHS and First American keep the iframe. The endpoints refuse other
+warranties.
+
+**Stricter than the Python on bad input.** Unreadable, non-finite or negative
+numbers and yes/no values other than true/false/yes/no count as missing; the
+Python raised or read them as truthy. The note endpoint rejects unknown
+fields and `repeat_probability_override` (a demo lever in the Python wizard).
+
+**Saved as a staff-only note, no new table.** The Python stored evaluations in
+a table; here the server recomputes and writes a `staff_only` submission note,
+so no schema change or production migration is needed.
+
+**Unit resolution like the AHS prefill.** The Python read FULLDETAIL by SO_NO
+alone; VRS Express resolves the unit from the district (or the order's only
+unit) and keys TechHub and parts on it, so a reused SO number cannot mix units.
+
 ## 2026-10-23 — The VRS manager completes AHS details in the Stage 1 card
 
 **Editor lives in `VrsAiBridgePanel`, opt-in by caller.** Only the Stage 1

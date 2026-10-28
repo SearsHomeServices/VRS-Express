@@ -1,0 +1,217 @@
+{
+ "source": "ai-agent-vrs tests/repair_replace/fixtures/service_orders.json (2026-10-27), reduced to the columns the prefill reads; no customer or unit ids",
+ "orders": [
+  {
+   "service_order": "14294947",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "WASHERFL",
+    "AP_PCHS_DATE": null,
+    "SL_DT": null,
+    "JOB_CD_DS": "Diagnostic Fee"
+   },
+   "techhub": [
+    {
+     "CRT_TS": "2026-10-15T16:36:18",
+     "UDF_FLD_NM": "deTripCharge",
+     "UDF_FLD_VAL_TX": "CC~139.00"
+    },
+    {
+     "CRT_TS": "2026-10-15T16:36:18",
+     "UDF_FLD_NM": "deLabor",
+     "UDF_FLD_VAL_TX": "60000~CC~99.00"
+    },
+    {
+     "CRT_TS": "2026-10-15T16:36:18",
+     "UDF_FLD_NM": "applianceAssessment",
+     "UDF_FLD_VAL_TX": "4~4~Well Maintained"
+    },
+    {
+     "CRT_TS": "2026-10-15T16:36:18",
+     "UDF_FLD_NM": "deLabor",
+     "UDF_FLD_VAL_TX": "84100~CC~344.95"
+    },
+    {
+     "CRT_TS": "2026-10-15T16:36:18",
+     "UDF_FLD_NM": "deLabor",
+     "UDF_FLD_VAL_TX": "85225~CC~0.00"
+    }
+   ],
+   "parts": [
+    {
+     "SVC_PRT_STS_CD": "H",
+     "SVC_PRT_QT": 0,
+     "PRT_SEL_PRC_AM": "253.67"
+    },
+    {
+     "SVC_PRT_STS_CD": "H",
+     "SVC_PRT_QT": 0,
+     "PRT_SEL_PRC_AM": "220.73"
+    }
+   ],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "appliance_type": "washer",
+    "labor_cost": "443.95",
+    "trip_cost": "139.00",
+    "technician_confident": true,
+    "parts_cost": "474.40"
+   }
+  },
+  {
+   "service_order": "14294483",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "REFRIGBF",
+    "AP_PCHS_DATE": null,
+    "SL_DT": null,
+    "JOB_CD_DS": "Diagnostic Fee"
+   },
+   "techhub": [
+    {
+     "CRT_TS": "2026-10-15T14:06:38",
+     "UDF_FLD_NM": "deLabor",
+     "UDF_FLD_VAL_TX": "32111~CC~369.95"
+    },
+    {
+     "CRT_TS": "2026-10-15T14:06:38",
+     "UDF_FLD_NM": "deTripCharge",
+     "UDF_FLD_VAL_TX": "CC~119.00"
+    },
+    {
+     "CRT_TS": "2026-10-15T14:06:38",
+     "UDF_FLD_NM": "applianceAssessment",
+     "UDF_FLD_VAL_TX": "5~5~Well Maintained"
+    }
+   ],
+   "parts": [
+    {
+     "SVC_PRT_STS_CD": "H",
+     "SVC_PRT_QT": 0,
+     "PRT_SEL_PRC_AM": "340.50"
+    }
+   ],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "appliance_type": "refrigerator",
+    "labor_cost": "369.95",
+    "trip_cost": "119.00",
+    "technician_confident": true,
+    "parts_cost": "340.50"
+   }
+  },
+  {
+   "service_order": "14297825",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "DISHWASHBI",
+    "AP_PCHS_DATE": null,
+    "SL_DT": null,
+    "JOB_CD_DS": "Diagnostic Fee"
+   },
+   "techhub": [
+    {
+     "CRT_TS": "2026-10-16T12:02:45",
+     "UDF_FLD_NM": "applianceAssessment",
+     "UDF_FLD_VAL_TX": "4~4~Worn"
+    },
+    {
+     "CRT_TS": "2026-10-16T12:02:45",
+     "UDF_FLD_NM": "deTripCharge",
+     "UDF_FLD_VAL_TX": "CC~139.00"
+    }
+   ],
+   "parts": [
+    {
+     "SVC_PRT_STS_CD": "H",
+     "SVC_PRT_QT": 0,
+     "PRT_SEL_PRC_AM": "210.49"
+    }
+   ],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "appliance_type": "dishwasher",
+    "trip_cost": "139.00",
+    "technician_confident": true,
+    "parts_cost": "210.49"
+   }
+  },
+  {
+   "service_order": "14298011",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "RANGEEG",
+    "AP_PCHS_DATE": null,
+    "SL_DT": null,
+    "JOB_CD_DS": "$0BundlePt-Preventive Maintenance"
+   },
+   "techhub": [
+    {
+     "CRT_TS": "2026-10-16T10:33:59",
+     "UDF_FLD_NM": "applianceAssessment",
+     "UDF_FLD_VAL_TX": "2~4~Worn"
+    }
+   ],
+   "parts": [],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "appliance_type": "range",
+    "technician_confident": true
+   }
+  },
+  {
+   "service_order": "14298486",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "DRYERE",
+    "AP_PCHS_DATE": null,
+    "SL_DT": null,
+    "JOB_CD_DS": null
+   },
+   "techhub": [],
+   "parts": [],
+   "prefill_status": "partial",
+   "prefill_fields": {}
+  },
+  {
+   "service_order": "14298285",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "WASHTOP1YR4",
+    "AP_PCHS_DATE": "2022-10-13",
+    "SL_DT": null,
+    "JOB_CD_DS": "Part Unavailable"
+   },
+   "techhub": [
+    {
+     "CRT_TS": "2026-10-16T16:53:01",
+     "UDF_FLD_NM": "applianceAssessment",
+     "UDF_FLD_VAL_TX": "1~1~Rust~Worn"
+    }
+   ],
+   "parts": [],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "age_years": "4.04",
+    "technician_confident": false
+   }
+  },
+  {
+   "service_order": "14332701",
+   "captured_at": "2026-10-27",
+   "row": {
+    "MDS_CD": "OVENBI",
+    "AP_PCHS_DATE": "2025-12-26",
+    "SL_DT": null,
+    "JOB_CD_DS": null
+   },
+   "techhub": [],
+   "parts": [],
+   "prefill_status": "partial",
+   "prefill_fields": {
+    "appliance_type": "range",
+    "age_years": "0.84"
+   }
+  }
+ ]
+}

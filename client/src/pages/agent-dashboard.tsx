@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 // the prefill URL — only the client-side fieldset/gating helpers are gone.
 import { IntakeFormTab } from "@/components/intake-form-tab";
 import { CalculatorIframe } from "@/components/calculator-iframe";
+import { RepairReplaceCalculator } from "@/components/repair-replace-calculator";
 import { CalculatorSettingsDialog } from "@/components/calculator-settings-dialog";
 import type { Submission, SubmissionListItemWithTech } from "@shared/schema";
 import searsLogo from "@assets/sears-home-services-logo-brands_1770949137899.png";
@@ -132,7 +133,7 @@ import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
 import { parseServiceOrderProduct, ServiceOrderProductText, TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
 import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
-import { useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
+import { useRepairReplaceCalculatorEnabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { VrsAiPilotClosedReview } from "@/components/vrs-ai-pilot-closed-review";
 import { isDevelopmentRuntime } from "@/lib/runtime-environment";
@@ -368,6 +369,11 @@ export default function AgentDashboard() {
   // that replaced the IntakeFormReviewModal popup.
   // ----------------------------------------------------------------------
   type RightPanelView = "shsai" | "calculator" | "intake";
+  // Built-in repair / replace calculator on Sears Protect tickets
+  // (REPAIR_REPLACE_CALCULATOR_ENABLED); the agent can still switch back to
+  // the Streamlit iframe for the session.
+  const repairReplaceCalculatorEnabled = useRepairReplaceCalculatorEnabled();
+  const [preferOldCalculator, setPreferOldCalculator] = useState(false);
   // Tyler 2026-05-20: SHSAI restored on the new Sears-hosted prod host
   // (shsai-routing-assist.prod.nextgen.shs.com). The 2026-05-09 hide
   // (Telluride UAT going to 403) has been reverted — default landing
@@ -5161,7 +5167,39 @@ export default function AgentDashboard() {
                             the Streamlit logo (clipping the Username / Password /
                             Sign In form below). Mirrors the SHSAI TabsContent
                             classes above so both tabs fill the panel identically. */}
-                        <CalculatorIframe onOpenSettings={() => setCalcSettingsOpen(true)} />
+                        {repairReplaceCalculatorEnabled && effectiveSelectedSubmission?.warrantyType === "sears_protect" && (
+                          // Stays mounted behind the old iframe so what the
+                          // manager typed survives "Old calculator" and back.
+                          <div className={preferOldCalculator ? "hidden" : "flex-1 flex flex-col min-h-0"}>
+                            <RepairReplaceCalculator
+                              key={effectiveSelectedSubmission.id}
+                              ticket={{
+                                id: effectiveSelectedSubmission.id,
+                                serviceOrder: effectiveSelectedSubmission.serviceOrder,
+                                procId: (effectiveSelectedSubmission as any).procId ?? null,
+                              }}
+                              onUseOldCalculator={() => setPreferOldCalculator(true)}
+                            />
+                          </div>
+                        )}
+                        {!(repairReplaceCalculatorEnabled && effectiveSelectedSubmission?.warrantyType === "sears_protect" && !preferOldCalculator) && (
+                          <>
+                            {repairReplaceCalculatorEnabled && effectiveSelectedSubmission?.warrantyType === "sears_protect" && (
+                              <div className="px-2 py-1 border-b">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setPreferOldCalculator(false)}
+                                  data-testid="button-rr-built-in-calculator"
+                                >
+                                  Back to the built-in calculator
+                                </Button>
+                              </div>
+                            )}
+                            <CalculatorIframe onOpenSettings={() => setCalcSettingsOpen(true)} />
+                          </>
+                        )}
                       </TabsContent>
                       {/* Tyler 2026-04-27: Intake Form tab — replaces the
                           retired IntakeFormReviewModal. Same flex-col min-h-0

@@ -71,6 +71,13 @@ export function isTechApplianceDetailsEnabled(): boolean {
   return process.env.TECH_APPLIANCE_DETAILS_ENABLED === "true";
 }
 
+// The built-in repair / replace calculator on Sears Protect tickets
+// (shared/repair-replace.ts, server/repair-replace-api.ts) in place of the
+// Streamlit iframe. Default OFF; only the exact value "true" enables it.
+export function isRepairReplaceCalculatorEnabled(): boolean {
+  return process.env.REPAIR_REPLACE_CALCULATOR_ENABLED === "true";
+}
+
 // Product category from the WOM (ServicePower) work order API through the
 // HSSOM gateway, for the tech form's Appliance Type (server/services/wom-work-order.ts).
 export function isWomProductLookupEnabled(): boolean {

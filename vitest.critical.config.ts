@@ -16,6 +16,7 @@ export default defineConfig({
       "tests/password-input.test.ts",
       "tests/storage-result-types.test.ts",
       "tests/snowflake-*.test.ts",
+      "tests/repair-replace.test.ts",
       "tests/vrs-bridge-photo-*.test.ts",
       "tests/vrs-sasha-intake.test.ts",
       "tests/vrs-sasha-queue.test.ts",

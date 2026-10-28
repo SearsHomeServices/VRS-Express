@@ -45,6 +45,8 @@ import {
 } from "./vrs-ai-call-result";
 import { vrsBridgeStore } from "./vrs-sasha-store";
 import { registerAhsReviewApi } from "./ahs-review-api";
+import { registerRepairReplaceApi } from "./repair-replace-api";
+import { loadRepairReplacePrefill } from "./repair-replace-prefill";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
@@ -90,6 +92,7 @@ import {
   isAhsServiceOrderPrefillEnabled,
   isAhsHssomCustomerPrefillEnabled,
   isTechApplianceDetailsEnabled,
+  isRepairReplaceCalculatorEnabled,
 } from "./featureFlags";
 import {
   registerVrsBridgePhotoProxy,
@@ -126,7 +129,7 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
-import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder, fetchServiceOrderApplianceType } from "./services/snowflake";
+import { fetchAhsServiceOrderPrefill, fetchProcIdForServiceOrder, fetchRepairReplaceRows, fetchServiceOrderApplianceType } from "./services/snowflake";
 import { lookupWomProductCategory, resolveServiceOrderProduct, type ResolvedServiceOrderProduct } from "./services/wom-work-order";
 import {
   applyAhsSubmitPrefill,
@@ -726,6 +729,7 @@ export async function registerRoutes(
       ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),
       ahsHssomCustomerPrefill: isAhsHssomCustomerPrefillEnabled(),
       techApplianceDetailsEnabled: isTechApplianceDetailsEnabled(),
+      repairReplaceCalculatorEnabled: isRepairReplaceCalculatorEnabled(),
     });
   });
 
@@ -3646,6 +3650,18 @@ export async function registerRoutes(
         type: "ticket_updated",
         payload: { submissionId: submission.id, ticketStatus: submission.ticketStatus },
       }),
+  });
+
+  // Repair / replace calculator on Sears Protect tickets: service-order
+  // prefill and the staff-only result note (server/repair-replace-api.ts).
+  registerRepairReplaceApi(app, {
+    authenticateToken,
+    requireRole,
+    isEnabled: isRepairReplaceCalculatorEnabled,
+    getSubmission: (id) => storage.getSubmission(id),
+    loadPrefill: (serviceOrder, applianceKind) =>
+      loadRepairReplacePrefill(serviceOrder, applianceKind, fetchRepairReplaceRows),
+    createNote: (note) => storage.createSubmissionNote(note),
   });
 
   // VRS AI calls back into Express, not directly to SASHA. Express applies

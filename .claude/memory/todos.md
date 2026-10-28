@@ -1,3 +1,12 @@
+## Open — repair / replace calculator, Sears Protect (2026-10-28)
+
+- [x] Port the calculator (legacy + Forward Repair Cost) and its service-order prefill; built-in panel in the Calculator tab behind `REPAIR_REPLACE_CALCULATOR_ENABLED` (DEV on).
+- [ ] Run `npx tsx scripts/diagnostics/ahs-prefill-check.mts DDDD-SSSSSSSS` on a Sears Protect order in Replit: section 7 must show the order, TechHub (NPSXTFS) and parts statements answering without a Snowflake role.
+- [ ] Decide whether Forward Repair Cost (policy `illustrative-v1`, not approved) stays visible to agents, and who approves real thresholds.
+- [ ] Turn `REPAIR_REPLACE_CALCULATOR_ENABLED` on in production only after agents compare it with the Streamlit calculator on real tickets.
+- [ ] Sources still missing (same as the Python handoff): replacement cost (beyond the legacy reference prices), visit history / unresolved / failed attempts (WOM work order), 12-month repeat history, backorder days, contract spend (HSSOM).
+- [ ] Local `node_modules` lacks `jsdom` (in package.json/lock): run `npm install` so the jsdom UI test files start.
+
 ## Open — Stage 1 AHS editor (2026-10-23)
 
 - [x] Stage 1 editor shows the ticket's appliance type (2026-10-26).

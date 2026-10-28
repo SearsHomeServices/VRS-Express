@@ -681,7 +681,9 @@ describe("Snowflake parts on the order (NPSXTPN)", () => {
 
   it("the real driver cancels a slow parts statement on its own timer", () => {
     const source = fs.readFileSync("server/services/snowflake.ts", "utf8");
-    const driver = source.slice(source.indexOf("export const fetchAhsServiceOrderPrefill"));
+    // The runner the AHS prefill (and the repair / replace prefill) uses.
+    expect(source).toContain("export const fetchAhsServiceOrderPrefill = createAhsPrefillLookup(runSettledStatements,");
+    const driver = source.slice(source.indexOf("const runSettledStatements"));
     expect(driver).toContain("statements.map(({ sqlText, binds, timeoutMs })");
     expect(driver).toMatch(/if \(timeoutMs\) \{\s+timer = setTimeout\(\(\) => \{\s+cancel\(\);\s+reject\(/);
     expect(driver).toContain("Promise.allSettled(");

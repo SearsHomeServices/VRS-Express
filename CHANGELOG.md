@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Built-in repair / replace calculator for Sears Protect tickets (2026-10-28)
+- On Sears Protect tickets (Sears Protect Home Warranty, Sears Home Warranty,
+  Sears PA / Cinch), the agent dashboard's Calculator tab now shows a built-in
+  calculator instead of the Streamlit iframe, behind
+  `REPAIR_REPLACE_CALCULATOR_ENABLED` (on in DEV only). "Old calculator" still
+  opens the iframe. AHS and First American tickets keep the iframe.
+- Ported from the teammate's Python package (ai-agent-vrs
+  `src/core/repair_replace`, branch `repair-replace-calculator`, 7fddd80) to
+  `shared/repair-replace.ts`. It has two calculators on the same inputs:
+  - **Legacy formulas** (the default tab): Standard, PA 2.0 age bands, the
+    First American and AHS estimators, Sears Tech / 1099 labor, the appliance
+    reference prices and the $3,500 Sears Protect Home Warranty cap.
+  - **Forward Repair Cost**: five hard stops and a repeat-repair probability.
+    Its policy `illustrative-v1` is not approved, and the tab says so.
+  - A 5,400-case random comparison against the Python package matched exactly.
+- The service order fills what it can prove, each value badged "From service
+  order": appliance (`MDS_CD`), age (`AP_PCHS_DATE`, else `SL_DT`), TechHub
+  labor and trip estimates and repair confidence (`NPSXTFS`), and parts cost
+  (`NPSXTPN`). The technician's appliance pick fills in when the code is not
+  one of the four. `CC_LAB_NET` is not used: it is the trip charge, not labor.
+- "Save to ticket notes" re-runs the check on the server and saves the
+  summary as a staff-only note. "Copy summary" copies the same text. Nothing
+  buys or authorizes a replacement.
+- New endpoints `GET /api/submissions/:id/repair-replace/prefill` and
+  `POST /api/submissions/:id/repair-replace/note` (assigned agent or admin,
+  Sears Protect only). The read-only diagnostic
+  `scripts/diagnostics/ahs-prefill-check.mts` now also runs the calculator's
+  three statements.
+- Ticket notes: a staff-only note on an open ticket now shows "staff only",
+  not "after close" (the AHS review and calculator notes are staff-only
+  while the ticket is open).
+
 ### Added - Appliance Location on the tech form (2026-10-26)
 - AHS and First American authorization tickets now ask for Appliance
   Location (Kitchen, Laundry room, Basement, ...; the same list as the Stage 1

@@ -1,5 +1,5 @@
 # Session Context
-> Last updated: 2026-10-26
+> Last updated: 2026-10-28
 
 ## Current State
 - Platform is deployed on Replit with PostgreSQL (Neon)
@@ -10,6 +10,7 @@
 - HEIC photo upload fix deployed for iPhone users
 
 ## Recent Changes
+- **Built-in repair / replace calculator, Sears Protect** (2026-10-28, `feat/ahs-tech-form-few`). `shared/repair-replace.ts` (legacy Streamlit formulas + Forward Repair Cost `illustrative-v1`, pure), `server/repair-replace-prefill.ts` (pure mapping + `loadRepairReplacePrefill`), `createRepairReplaceLookup` / `REPAIR_REPLACE_*_SQL` in snowflake-lookup.ts (`fetchRepairReplaceRows` in snowflake.ts shares `runSettledStatements` with the AHS prefill), `server/repair-replace-api.ts` (prefill + staff-only note), `client/src/components/repair-replace-calculator.tsx` (Calculator tab when `warrantyType === "sears_protect"` and `REPAIR_REPLACE_CALCULATOR_ENABLED`). Source port: ai-agent-vrs branch `repair-replace-calculator` 7fddd80, handoff `~/Downloads/repair-replace-calculator/HANDOFF.md`. Parity: 5,400 random cases identical to the Python. Tests: `tests/repair-replace.test.ts` (in test:critical). Unverified here: whether VRS Express's Snowflake user (no role) can read `PRD_DB2.HS_DW_VIEWS.NPSXTFS` and the FULLDETAIL date columns; the diagnostic's section 7 answers it.
 - **Appliance location on the tech form; HSSOM-only dispatch/model/serial** (2026-10-26, `feat/ahs-tech-form-few`). `techApplianceDetailsSchema` (client validation) requires `applianceLocation` from `AHS_APPLIANCE_LOCATIONS`; `storedTechApplianceDetailsSchema` (server route and stored-row parse) keeps it optional for cached clients and older rows. `applyTechApplianceDetails` copies it into the AHS draft. The Snowflake appliance statement (CTA_NO / PSV_ITM_MDL_NO / PSV_MDS_SRL_NO) was briefly removed, then restored the same day: `scripts/diagnostics/ahs-prefill-check.mts` confirmed all three hold values on live AHS order 4766-14268083. Field-source map from ai-agent-mcp (2026-10-26): HSSOM Order Lookup = dispatch, customer, brand/model/serial, purchase date; NPSXTPN = parts; WOM work order = possible labor/tax (unverified); no source anywhere for grade, color, location, failure cause, part function, part failure reason.
 - **Appliance type on the AHS draft + DEV prefill flags** (2026-10-26, `feat/ahs-tech-form-few`). `applySubmissionApplianceKind` (server/ahs-prefill.ts) copies `submissions.appliance_kind` into a draft without one, at submit and on the Stage 1 refresh. DEV `.replit` now sets `AHS_SERVICE_ORDER_PREFILL_ENABLED` and `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`; before, a DEV ticket (SO 8035-14321708) reached Stage 1 with only the tech's grade/color/part function filled.
 - **Stage 1 AHS editor for the VRS manager** (2026-10-23, branch `feat/ahs-mgr-review`, not pushed). The tech form no longer has AHS fields; the server stores a lookup-filled draft and the manager completes it in the Stage 1 card.

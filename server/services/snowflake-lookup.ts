@@ -560,3 +560,95 @@ export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQu
     });
   };
 }
+
+// ===========================================================================
+// Repair / replace calculator prefill (server/repair-replace-prefill.ts)
+// ===========================================================================
+//
+// Three statements on one connection, each settling on its own, with the
+// unit resolved as for the AHS prefill (district first, else the order's
+// only unit). Columns from the ai-agent-vrs calculator handoff (2026-10-27),
+// where each was read on live orders with role ANALYST_BUSINESS2; VRS
+// Express runs without a role, so scripts/diagnostics/ahs-prefill-check.mts
+// checks they answer here too. A failing TechHub or parts statement only
+// loses its own fields.
+
+// Binds: [serviceOrder, district].
+export const REPAIR_REPLACE_ORDER_SQL =
+  `SELECT ${SERVICE_UNIT_SELECT}, MDS_CD, AP_PCHS_DATE, SL_DT, JOB_CD_DS ` +
+  `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
+
+export const REPAIR_REPLACE_TECHHUB_FIELDS = ["applianceAssessment", "deLabor", "deTripCharge"] as const;
+
+// TechHub form values (the table behind ai-agent-mcp ApplianceAssessmentTools).
+// Binds: [serviceOrder, serviceOrder, district].
+export const REPAIR_REPLACE_TECHHUB_SQL =
+  "SELECT SVC_UN_NO AS SERVICE_UNIT, CRT_TS, UDF_FLD_NM, UDF_FLD_VAL_TX FROM PRD_DB2.HS_DW_VIEWS.NPSXTFS " +
+  `WHERE SO_NO = ? AND SVC_UN_NO = (SELECT SVC_UN_NO FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}) ` +
+  `AND UDF_FLD_NM IN (${REPAIR_REPLACE_TECHHUB_FIELDS.map((name) => `'${name}'`).join(", ")}) ` +
+  "ORDER BY CRT_TS DESC LIMIT 200";
+
+// Part lines with status, quantity and selling price. Binds: [serviceOrder,
+// serviceOrder, district].
+export const REPAIR_REPLACE_PARTS_SQL =
+  "SELECT SVC_UN_NO AS SERVICE_UNIT, SVC_PRT_STS_CD, SVC_PRT_QT, PRT_SEL_PRC_AM FROM PRD_DB2.HS_DW_TBLS.NPSXTPN " +
+  `WHERE SO_NO = ? AND SVC_UN_NO = (SELECT SVC_UN_NO FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}) ` +
+  "ORDER BY PRT_SEQ_NO LIMIT 100";
+
+export const REPAIR_REPLACE_SECONDARY_TIMEOUT_MS = 6000;
+
+export type RepairReplaceLookupResult =
+  | { status: "found"; row: Record<string, unknown>; techhub: Record<string, unknown>[] | null; parts: Record<string, unknown>[] | null }
+  | { status: "not_found" }
+  | { status: "unavailable" };
+
+export function createRepairReplaceLookup(query: AhsPrefillQuery, options: LookupOptions = {}) {
+  const lookup = createBoundedLookup<RepairReplaceLookupResult>(
+    () => ({ status: "unavailable" }),
+    (result, ttl) => result.status === "found" ? ttl.positiveMs
+      : result.status === "not_found" ? ttl.negativeMs : ttl.unavailableMs,
+    // Estimates change during the day: keep a found order for 5 minutes.
+    { deadlineMs: 8000, positiveMs: 300000, ...options },
+  );
+  return (district: string, serviceOrder: string): Promise<RepairReplaceLookupResult> => {
+    const unit = String(district ?? "").trim();
+    const so = String(serviceOrder ?? "").trim();
+    if (!/^\d{4}$/.test(unit) || !/^\d{8}$/.test(so)) return Promise.resolve({ status: "not_found" });
+    return lookup(`${unit}-${so}`, async (signal) => {
+      const [order, techhub, parts] = await query([
+        { sqlText: REPAIR_REPLACE_ORDER_SQL, binds: [so, unit] },
+        { sqlText: REPAIR_REPLACE_TECHHUB_SQL, binds: [so, so, unit], timeoutMs: REPAIR_REPLACE_SECONDARY_TIMEOUT_MS },
+        { sqlText: REPAIR_REPLACE_PARTS_SQL, binds: [so, so, unit], timeoutMs: REPAIR_REPLACE_SECONDARY_TIMEOUT_MS },
+      ], signal);
+      // Service order and statuses only; never values.
+      const failure = (settled: PromiseSettledResult<any[]>) =>
+        settled.status === "rejected" ? String((settled.reason as any)?.message ?? settled.reason).split("\n")[0].slice(0, 200) : "";
+      if (order.status === "rejected") {
+        console.warn(`[repair-replace] SO=${unit}-${so} status=unavailable (order statement failed: ${failure(order)})`);
+        return { status: "unavailable" };
+      }
+      const row = order.value[0];
+      if (!row) return { status: "not_found" };
+      const serviceUnit = resolveServiceUnit(row, unit);
+      if (!serviceUnit) {
+        console.warn(`[repair-replace] SO=${unit}-${so} status=not_found (order under several units, none the district)`);
+        return { status: "not_found" };
+      }
+      const underUnit = (settled: PromiseSettledResult<any[]>, name: string) => {
+        if (settled.status === "rejected") {
+          console.warn(`[repair-replace] SO=${unit}-${so} ${name} statement failed: ${failure(settled)}`);
+          return null;
+        }
+        return settled.value.filter((item) => normalizeServiceUnit(item?.SERVICE_UNIT) === serviceUnit);
+      };
+      const result: RepairReplaceLookupResult = {
+        status: "found",
+        row,
+        techhub: underUnit(techhub, "techhub"),
+        parts: underUnit(parts, "parts"),
+      };
+      console.info(`[repair-replace] SO=${unit}-${so} status=found techhub_rows=${result.techhub?.length ?? "failed"} part_rows=${result.parts?.length ?? "failed"}`);
+      return result;
+    });
+  };
+}
