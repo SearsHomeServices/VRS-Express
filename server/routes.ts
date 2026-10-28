@@ -3659,8 +3659,14 @@ export async function registerRoutes(
     requireRole,
     isEnabled: isRepairReplaceCalculatorEnabled,
     getSubmission: (id) => storage.getSubmission(id),
-    loadPrefill: (serviceOrder, applianceKind) =>
-      loadRepairReplacePrefill(serviceOrder, applianceKind, fetchRepairReplaceRows),
+    // HSSOM gives the purchase date when the tech entered no age; it answers
+    // unavailable while AHS_HSSOM_CUSTOMER_PREFILL_ENABLED is off. Only the
+    // date is kept: the customer's name and address are dropped here.
+    loadPrefill: (serviceOrder, ticket) =>
+      loadRepairReplacePrefill(serviceOrder, ticket, fetchRepairReplaceRows, async (district, so) => {
+        const found = await lookupHssomOrder(district, so);
+        return found.status === "found" ? { status: "found", purchaseDate: found.purchaseDate } : found;
+      }),
     createNote: (note) => storage.createSubmissionNote(note),
   });
 

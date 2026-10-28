@@ -66,9 +66,12 @@ import { parseServiceOrderProduct, ServiceOrderProductText } from "@/components/
 import {
   TECH_APPLIANCE_COLORS,
   TECH_APPLIANCE_GRADES,
+  TECH_APPLIANCE_AGE_MAX,
   TECH_APPLIANCE_LOCATIONS,
+  techApplianceAgeApplies,
+  techApplianceAgeLabel,
   techApplianceDetailsApply,
-  techApplianceDetailsSchema,
+  techApplianceDetailsSchemaFor,
   techApplianceGradeLabel,
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
@@ -127,7 +130,9 @@ const REQUEST_TYPE_WARRANTY_MATRIX: Record<RequestTypeValue, WarrantyValue[]> = 
 // ---------------------------------------------------------------------------
 // Tech appliance details (2026-10-23): Appliance Grade, Appliance Color,
 // Appliance Location (2026-10-26) and Part Function on American Home Shield and First American authorization
-// tickets, behind TECH_APPLIANCE_DETAILS_ENABLED. The contract lives in
+// tickets, behind TECH_APPLIANCE_DETAILS_ENABLED. Sears Protect (2026-10-28)
+// gets the same four plus Appliance Age (whole years) for the repair /
+// replace calculator. The contract lives in
 // shared/tech-appliance-details.ts; tech-resubmit.tsx reuses these helpers.
 // ---------------------------------------------------------------------------
 export const techApplianceDetailsFormSchema = z
@@ -135,6 +140,7 @@ export const techApplianceDetailsFormSchema = z
     applianceGrade: z.string().optional(),
     applianceColor: z.string().optional(),
     applianceLocation: z.string().optional(),
+    applianceAgeYears: z.string().optional(),
     partFunction: z.string().optional(),
   })
   .optional()
@@ -144,6 +150,8 @@ export type TechApplianceDetailsFormValues = {
   applianceGrade?: string;
   applianceColor?: string;
   applianceLocation?: string;
+  // The input's text; the shared schema reads it as whole years.
+  applianceAgeYears?: string;
   partFunction?: string;
 };
 
@@ -151,6 +159,7 @@ export const EMPTY_TECH_APPLIANCE_DETAILS: TechApplianceDetailsFormValues = {
   applianceGrade: undefined,
   applianceColor: undefined,
   applianceLocation: undefined,
+  applianceAgeYears: "",
   partFunction: "",
 };
 
@@ -179,6 +188,7 @@ export function techApplianceDetailsFormValues(raw: unknown): TechApplianceDetai
   const grade = obj.applianceGrade;
   const color = obj.applianceColor;
   const location = obj.applianceLocation;
+  const age = obj.applianceAgeYears;
   return {
     applianceGrade:
       typeof grade === "string" && TECH_APPLIANCE_GRADES.some((option) => option.value === grade) ? grade : undefined,
@@ -188,6 +198,12 @@ export function techApplianceDetailsFormValues(raw: unknown): TechApplianceDetai
       typeof location === "string" && (TECH_APPLIANCE_LOCATIONS as readonly string[]).includes(location)
         ? location
         : undefined,
+    applianceAgeYears:
+      typeof age === "number" && Number.isInteger(age) && age >= 0 && age <= TECH_APPLIANCE_AGE_MAX
+        ? String(age)
+        : typeof age === "string" && /^\d{1,2}$/.test(age.trim())
+          ? age.trim()
+          : "",
     partFunction: typeof obj.partFunction === "string" ? obj.partFunction : "",
   };
 }
@@ -205,12 +221,12 @@ export function techApplianceDetailsForPayload(
   enabled: boolean,
 ): TechApplianceDetails | null {
   if (!showTechApplianceDetails(enabled, values.warrantyType, values.requestType)) return null;
-  const parsed = techApplianceDetailsSchema.safeParse(values.techApplianceDetails ?? {});
+  const parsed = techApplianceDetailsSchemaFor(values.warrantyType).safeParse(values.techApplianceDetails ?? {});
   return parsed.success ? parsed.data : null;
 }
 
 // Wraps the page's zod resolver: when the section is shown, the four
-// fields are validated with the shared techApplianceDetailsSchema and their
+// fields are validated with the shared techApplianceDetailsSchemaFor and their
 // errors merged with the form's own. (A superRefine on the form schema would
 // not run while another field is missing, so the tech would only see these
 // errors on a second tap of Submit.)
@@ -222,7 +238,7 @@ export function techApplianceDetailsResolver<T extends FieldValues>(
     const result = await base(values, context, options);
     const gate = values as TechApplianceDetailsGateValues;
     if (!showTechApplianceDetails(isEnabled(), gate.warrantyType, gate.requestType)) return result;
-    const parsed = techApplianceDetailsSchema.safeParse(gate.techApplianceDetails ?? {});
+    const parsed = techApplianceDetailsSchemaFor(gate.warrantyType).safeParse(gate.techApplianceDetails ?? {});
     if (parsed.success) {
       if (Object.keys(result.errors).length > 0) return result;
       return { values: { ...result.values, techApplianceDetails: parsed.data } as unknown as T, errors: {} };
@@ -239,14 +255,17 @@ export function techApplianceDetailsResolver<T extends FieldValues>(
   };
 }
 
-// Appliance Grade, Appliance Color, Appliance Location, Part Function, in
-// that order, with the form's standard controls. Rendered only when showTechApplianceDetails().
+// Appliance Grade, Appliance Color, Appliance Location, Appliance Age
+// (askAge: Sears Protect), Part Function, in that order, with the form's
+// standard controls. Rendered only when showTechApplianceDetails().
 export function TechApplianceDetailsFields<T extends FieldValues>({
   control,
   testIdSuffix = "",
+  askAge = false,
 }: {
   control: Control<T>;
   testIdSuffix?: string;
+  askAge?: boolean;
 }) {
   return (
     <div className="space-y-4" data-testid={`section-tech-appliance-details${testIdSuffix}`}>
@@ -326,6 +345,31 @@ export function TechApplianceDetailsFields<T extends FieldValues>({
           </FormItem>
         )}
       />
+      {askAge && (
+        <FormField
+          control={control}
+          name={"techApplianceDetails.applianceAgeYears" as FieldPath<T>}
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Appliance Age (years) *</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={TECH_APPLIANCE_AGE_MAX}
+                  step={1}
+                  placeholder="Ask the customer; 0 if under a year"
+                  {...field}
+                  value={field.value ?? ""}
+                  data-testid={`input-appliance-age${testIdSuffix}`}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
       <FormField
         control={control}
         name={"techApplianceDetails.partFunction" as FieldPath<T>}
@@ -2138,10 +2182,15 @@ export default function TechSubmitPage() {
                   </div>
                 </div>
                 )}
-                {/* Appliance Grade / Color / Location / Part Function: AHS and First
-                    American authorization tickets only (flag
-                    techApplianceDetailsEnabled). */}
-                {techApplianceDetailsShown && <TechApplianceDetailsFields control={form.control} />}
+                {/* Appliance Grade / Color / Location / Part Function: AHS, First
+                    American and Sears Protect authorization tickets (flag
+                    techApplianceDetailsEnabled); Appliance Age on Sears Protect. */}
+                {techApplianceDetailsShown && (
+                  <TechApplianceDetailsFields
+                    control={form.control}
+                    askAge={techApplianceAgeApplies(watchedValues.warrantyType)}
+                  />
+                )}
               </CardContent>
             </Card>
 
@@ -2811,6 +2860,12 @@ export default function TechSubmitPage() {
                         <span className="text-muted-foreground">Appliance Location</span>
                         <span className="font-medium text-right" data-testid="review-appliance-location">{pendingPayload.techApplianceDetails.applianceLocation}</span>
                       </div>
+                      {pendingPayload.techApplianceDetails.applianceAgeYears != null && (
+                        <div className="flex justify-between gap-3">
+                          <span className="text-muted-foreground">Appliance Age</span>
+                          <span className="font-medium text-right" data-testid="review-appliance-age">{techApplianceAgeLabel(pendingPayload.techApplianceDetails.applianceAgeYears)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between gap-3">
                         <span className="text-muted-foreground">Part Function</span>
                         <span className="font-medium text-right break-words" data-testid="review-part-function">{pendingPayload.techApplianceDetails.partFunction}</span>

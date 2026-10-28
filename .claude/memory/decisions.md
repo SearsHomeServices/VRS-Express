@@ -1,3 +1,9 @@
+## 2026-10-28 — Sears Protect gets the AHS tech details plus age; the technician's age wins
+
+- **Decision:** Sears Protect authorization tickets ask the same four tech details as AHS / First American plus Appliance Age (whole years, from the customer), and the calculator uses that age ahead of any service-order date. The grade picks the legacy catalog row only where it names exactly one.
+- **Why:** Enzo (2026-10-28): age should come from the technician or the customer; SPHW should use the same form as AHS. On 8035-14326835 (Assurant PA) the service order gave 0.36 years, likely the agreement's date. HSSOM's purchase date is added as a fallback after `AP_PCHS_DATE`, keeping only the date.
+- **Not done:** age stays optional on the server (forms cached before it still submit); no AHS draft for Sears Protect; Medium grade and washers (load type) are left to the agent.
+
 ## 2026-10-28 — Repair / replace calculator built into VRS Express (Sears Protect)
 
 **Port, not iframe or service call.** The ai-agent-vrs Python calculator is

@@ -19,7 +19,9 @@ import {
   type RrInput,
   type RrPrefillResponse,
 } from "@shared/repair-replace";
+import { parseStoredTechApplianceDetails } from "@shared/tech-appliance-details";
 import type { AuthenticatedRequest } from "./middleware/auth";
+import type { RepairReplaceTicketInput } from "./repair-replace-prefill";
 
 export const REPAIR_REPLACE_ROLES = ["vrs_agent", "admin", "super_admin"] as const;
 // submission_notes.body limit (POST /api/submissions/:id/notes).
@@ -30,9 +32,9 @@ export interface RepairReplaceApiDeps {
   requireRole: (...roles: string[]) => RequestHandler;
   isEnabled(): boolean;
   getSubmission(id: number): Promise<Submission | undefined>;
-  // loadRepairReplacePrefill with the Snowflake lookup (or null when off);
-  // bounded and never rejects.
-  loadPrefill(serviceOrder: string, ticketApplianceKind: string | null): Promise<RrPrefillResponse>;
+  // loadRepairReplacePrefill with the Snowflake and HSSOM lookups (or null
+  // when off); bounded and never rejects.
+  loadPrefill(serviceOrder: string, ticket: RepairReplaceTicketInput): Promise<RrPrefillResponse>;
   createNote(note: {
     submissionId: number;
     authorId: number;
@@ -113,7 +115,10 @@ export function registerRepairReplaceApi(app: Express, deps: RepairReplaceApiDep
     try {
       const ticket = await loadTicket(deps, req, res);
       if (!ticket) return;
-      const prefill = await deps.loadPrefill(ticket.submission.serviceOrder, ticket.submission.applianceKind ?? null);
+      const prefill = await deps.loadPrefill(ticket.submission.serviceOrder, {
+        ticketApplianceKind: ticket.submission.applianceKind ?? null,
+        techDetails: parseStoredTechApplianceDetails(ticket.submission.techApplianceDetails),
+      });
       console.info(`[repair-replace] prefill submission=${ticket.submission.id} status=${prefill.status} fields=${Object.keys(prefill.fields).join(",") || "none"}`);
       res.json(prefill);
     } catch (error) {

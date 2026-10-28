@@ -2954,7 +2954,7 @@ export default function AgentDashboard() {
                               )}
                             </div>
                           )}
-                          {/* AHS / First American: grade, color and part
+                          {/* AHS / First American / Sears Protect: grade, color, age and part
                               function the tech entered (hidden when absent). */}
                           {(() => {
                             const techDetails = techApplianceDetailsForTicket(selectedSubmission);

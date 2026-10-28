@@ -139,7 +139,7 @@ describe("tech appliance details gate", () => {
   it.each([
     ["american_home_shield", "authorization", true],
     ["first_american", "authorization", true],
-    ["sears_protect", "authorization", false],
+    ["sears_protect", "authorization", true],
     ["american_home_shield", "infestation_non_accessible", false],
     ["first_american", "infestation_non_accessible", false],
     ["sears_protect", "parts_nla", false],

@@ -5,6 +5,9 @@
 - [ ] Decide whether Forward Repair Cost (policy `illustrative-v1`, not approved) stays visible to agents, and who approves real thresholds.
 - [ ] Turn `REPAIR_REPLACE_CALCULATOR_ENABLED` on in production only after agents compare it with the Streamlit calculator on real tickets.
 - [ ] Sources still missing (same as the Python handoff): replacement cost (beyond the legacy reference prices), visit history / unresolved / failed attempts (WOM work order), 12-month repeat history, backorder days, contract spend (HSSOM).
+- [x] Sears Protect tech form asks grade, color, location, part function and appliance age; the calculator uses the age and grade (2026-10-28).
+- [ ] Find out why 8035-14326835 filled only appliance and age: read the `[repair-replace] SO=... techhub_rows= part_rows=` log line and run the diagnostic's section 7 in Replit.
+- [ ] Confirm what `AP_PCHS_DATE` / `SL_DT` hold on a Sears PA (Assurant) order: 8035-14326835 gave 0.36 years, likely the agreement's date, not the appliance's.
 - [ ] Local `node_modules` lacks `jsdom` (in package.json/lock): run `npm install` so the jsdom UI test files start.
 
 ## Open — Stage 1 AHS editor (2026-10-23)

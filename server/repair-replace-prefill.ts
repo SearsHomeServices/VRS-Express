@@ -8,14 +8,18 @@
 // Sources, and only these (each checked against live orders in the Python
 // handoff, 2026-10-27):
 //   MDS_CD -> appliance_type, only washer / refrigerator / dishwasher / range
-//   AP_PCHS_DATE, else SL_DT, to today -> age_years
+//   AP_PCHS_DATE, else the HSSOM purchase date, else SL_DT, to today -> age_years
 //   TechHub (NPSXTFS) deLabor, latest submission, summed when positive -> labor_cost
 //   TechHub deTripCharge, latest submission, when positive -> trip_cost
 //   TechHub applianceAssessment repair confidence 4-5 / 1-2 -> technician_confident
 //   NPSXTPN selling prices of lines not cancelled, voided or returned -> parts_cost
 //   NPSXTPN: a line installed or fulfilled -> parts_available = true (never false)
-// VRS Express adds one fallback: the appliance the technician picked on the
-// ticket, when the service order's code is not one of the four.
+// VRS Express adds what the technician entered on the ticket
+// (submissions.appliance_kind and tech_appliance_details):
+//   the appliance they picked -> appliance_type, when MDS_CD is not one of the four
+//   the age they entered (asked the customer) -> age_years, ahead of every date
+//   their grade (Low / Medium / High) and appliance -> appliance_reference,
+//     the legacy catalog row, where the grade names exactly one
 //
 // Not used, on purpose: CC_LAB_NET (equals the trip charge on ~94% of
 // orders, not labor), JOB_CD_DS (the billed job code, not the failed
@@ -34,6 +38,7 @@ import {
   type RrPrefillFieldName,
   type RrPrefillResponse,
 } from "@shared/repair-replace";
+import { techApplianceGradeLabel, type TechApplianceDetails } from "@shared/tech-appliance-details";
 
 // A located row is "found" only when every one of these was filled.
 export const RR_AUTHORITATIVE_FIELDS: RrPrefillFieldName[] = ["appliance_type", "age_years", "labor_cost"];
@@ -57,6 +62,10 @@ export interface RrPrefillInput {
   unavailable?: boolean;
   // submissions.appliance_kind, the technician's pick.
   ticketApplianceKind?: string | null;
+  // submissions.tech_appliance_details (grade, age in years).
+  techDetails?: TechApplianceDetails | null;
+  // The HSSOM Order Lookup's purchase date (YYYY-MM-DD), when it had one.
+  hssomPurchaseDate?: string | null;
   // Reference date for age (YYYY-MM-DD); defaults to today (UTC).
   asOf?: string;
 }
@@ -169,7 +178,34 @@ function dayNumber(iso: string): number {
   return Date.UTC(y, m - 1, d) / 86_400_000;
 }
 
-function mapAge(row: Row, fields: RrPrefillResponse["fields"], warnings: string[], asOf: string): void {
+function ageFromDate(
+  start: string,
+  source: "snowflake" | "hssom",
+  label: string,
+  fields: RrPrefillResponse["fields"],
+  warnings: string[],
+  asOf: string,
+): void {
+  const days = dayNumber(asOf) - dayNumber(start);
+  if (days < 0) {
+    warnings.push(`${label} is after the lookup date, so age was not filled.`);
+    return;
+  }
+  fields.age_years = {
+    value: roundHalfUp(days / 365.25, 2).toFixed(2),
+    source,
+    source_field: `${label} relative to the lookup date`,
+    observed_at: asOf,
+  };
+}
+
+function mapAge(
+  row: Row,
+  fields: RrPrefillResponse["fields"],
+  warnings: string[],
+  asOf: string,
+  hssomPurchaseDate: string | undefined,
+): void {
   const purchaseRaw = cell(row, "AP_PCHS_DATE");
   const saleRaw = cell(row, "SL_DT");
   const purchase = present(purchaseRaw) ? asDate(purchaseRaw) : undefined;
@@ -178,24 +214,13 @@ function mapAge(row: Row, fields: RrPrefillResponse["fields"], warnings: string[
     warnings.push("AP_PCHS_DATE could not be read, so age was not filled.");
     return;
   }
-  if (!purchase && present(saleRaw) && !sale) {
+  if (purchase) return ageFromDate(purchase, "snowflake", "AP_PCHS_DATE", fields, warnings, asOf);
+  if (hssomPurchaseDate) return ageFromDate(hssomPurchaseDate, "hssom", "HSSOM purchase date", fields, warnings, asOf);
+  if (present(saleRaw) && !sale) {
     warnings.push("SL_DT could not be read, so age was not filled.");
     return;
   }
-  const start = purchase ?? sale;
-  const source = purchase ? "AP_PCHS_DATE" : "SL_DT";
-  if (!start) return;
-  const days = dayNumber(asOf) - dayNumber(start);
-  if (days < 0) {
-    warnings.push(`${source} is after the lookup date, so age was not filled.`);
-    return;
-  }
-  fields.age_years = {
-    value: roundHalfUp(days / 365.25, 2).toFixed(2),
-    source: "snowflake",
-    source_field: `${source} relative to the lookup date`,
-    observed_at: asOf,
-  };
+  if (sale) ageFromDate(sale, "snowflake", "SL_DT", fields, warnings, asOf);
 }
 
 function asTimestamp(value: unknown): number | undefined {
@@ -361,12 +386,12 @@ export function todayUtc(): string {
 export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillResponse {
   const order = (input.serviceOrder || "").trim();
   if (input.unavailable || (input.row != null && typeof input.row !== "object")) {
-    return withTicketAppliance(contract(order, "unavailable", {}, LOOKUP_FAILED), input.ticketApplianceKind);
+    return withTicket(contract(order, "unavailable", {}, LOOKUP_FAILED), input);
   }
   if (input.row == null) {
-    return withTicketAppliance(
+    return withTicket(
       contract(order, "not_found", {}, ["No service-order row was found. Enter the visit manually."]),
-      input.ticketApplianceKind,
+      input,
     );
   }
   const row = input.row;
@@ -379,7 +404,7 @@ export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillRespo
     if (appliance) fields.appliance_type = { value: appliance, source: "snowflake", source_field: "MDS_CD" };
     else warnings.push(`MDS_CD '${short(mds)}' is not a washing machine, refrigerator, dishwasher, or stove/oven.`);
   }
-  mapAge(row, fields, warnings, input.asOf ?? todayUtc());
+  mapAge(row, fields, warnings, input.asOf ?? todayUtc(), input.hssomPurchaseDate ?? undefined);
   const jobCode = cell(row, "JOB_CD_DS");
   if (present(jobCode)) {
     warnings.push(`Billed job code is '${short(jobCode)}'. That is not necessarily the failed component, so component was not filled.`);
@@ -389,17 +414,78 @@ export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillRespo
   mapConfidence(input.techhub ?? [], fields, warnings);
   mapParts(input.parts ?? [], fields, warnings);
 
-  const result = withTicketAppliance(contract(order, "partial", fields, warnings), input.ticketApplianceKind);
+  const result = withTicket(contract(order, "partial", fields, warnings), input);
   result.status = RR_AUTHORITATIVE_FIELDS.every((name) => name in result.fields) ? "found" : "partial";
   return result;
 }
 
-// Fills appliance_type from the ticket when the service order did not.
-function withTicketAppliance(result: RrPrefillResponse, kind: string | null | undefined): RrPrefillResponse {
+// The legacy catalog row (APPLIANCE_REPLACEMENT) for the technician's grade
+// and appliance. Only where the grade names one row: Medium is a tier of its
+// own for refrigerators only, and a washer needs top or front load.
+const GRADE_REFERENCES: Record<string, { low?: string; medium?: string; high?: string }> = {
+  refrigerator: { low: "Refrigerator Basic", medium: "Refrigerator Mid Level", high: "Refrigerator High End" },
+  dishwasher: { low: "Dishwasher Basic", high: "Dishwasher High End" },
+  range: { low: "Range Basic", high: "Range High End" },
+  cooktop: { low: "Cook Top Basic", high: "Cooktop High End" },
+  dryer: { low: "Dryer Basic", high: "Dryer High End" },
+  upright_freezer: { low: "Freezer Basic", high: "Freezer High End" },
+  chest_freezer: { low: "Freezer Basic", high: "Freezer High End" },
+  trash_compactor: { low: "Compactor", medium: "Compactor", high: "Compactor" },
+  free_standing_ice_maker: { low: "Ice Maker Free Standing", medium: "Ice Maker Free Standing", high: "Ice Maker Free Standing" },
+};
+
+// Big enough that it is not a rounding or "about N years" difference.
+const AGE_DISAGREEMENT_YEARS = 2;
+
+// What the technician entered on the ticket: the appliance (when the service
+// order's code did not give one), the age (ahead of any date; a date that
+// disagrees is a warning) and the catalog row for their grade. Also the
+// HSSOM purchase date when there was no service-order row.
+function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefillResponse {
+  const fields = { ...result.fields };
+  const warnings = [...result.warnings];
+  const kind = input.ticketApplianceKind;
   const appliance = applianceFromTicketKind(kind);
-  if (result.fields.appliance_type || !appliance) return result;
-  const fields = { ...result.fields, appliance_type: { value: appliance, source: "ticket", source_field: "Appliance the technician picked" } as RrPrefillField };
-  return { ...result, fields, missing_fields: result.missing_fields.filter((name) => name !== "appliance_type") };
+  if (!fields.appliance_type && appliance) {
+    fields.appliance_type = { value: appliance, source: "ticket", source_field: "Appliance the technician picked" };
+  }
+  if (!fields.age_years && input.row == null && input.hssomPurchaseDate) {
+    ageFromDate(input.hssomPurchaseDate, "hssom", "HSSOM purchase date", fields, warnings, input.asOf ?? todayUtc());
+  }
+  const tech = input.techDetails;
+  const techAge = tech?.applianceAgeYears;
+  if (typeof techAge === "number" && Number.isInteger(techAge) && techAge >= 0) {
+    const dated = fields.age_years;
+    const datedAge = dated ? Number(dated.value) : NaN;
+    if (Number.isFinite(datedAge) && Math.abs(datedAge - techAge) >= AGE_DISAGREEMENT_YEARS) {
+      warnings.push(
+        `The technician entered ${techAge} year${techAge === 1 ? "" : "s"}; ${dated!.source_field.replace(/ relative to the lookup date$/, "")} gives ${dated!.value}. Age uses the technician's.`,
+      );
+    }
+    fields.age_years = { value: String(techAge), source: "ticket", source_field: "Age the technician entered (from the customer)" };
+  }
+  const grade = tech?.applianceGrade;
+  if (grade && kind) {
+    const reference = GRADE_REFERENCES[kind]?.[grade];
+    const gradeLabel = techApplianceGradeLabel(grade) ?? grade;
+    if (reference) {
+      fields.appliance_reference = {
+        value: reference,
+        source: "ticket",
+        source_field: `Technician's grade (${gradeLabel}) and appliance`,
+      };
+    } else if (kind === "washer") {
+      warnings.push(`The technician graded the washer ${gradeLabel}. Pick the top or front load reference.`);
+    } else if (GRADE_REFERENCES[kind]) {
+      warnings.push(`The technician graded the appliance ${gradeLabel}, which has no single reference. Pick Basic or High End.`);
+    }
+  }
+  return {
+    ...result,
+    fields,
+    warnings,
+    missing_fields: RR_PREFILL_FIELDS.filter((name) => !(name in fields)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -411,30 +497,52 @@ export type RepairReplaceSnowflakeResult =
   | { status: "not_found" }
   | { status: "unavailable" };
 
+// The HSSOM Order Lookup, reduced to the purchase date. Bounded and never
+// rejects (server/services/hssom-order-lookup.ts); answers unavailable while
+// its flag is off.
+export type RepairReplaceHssomLookup = (
+  district: string,
+  so: string,
+) => Promise<{ status: "found"; purchaseDate?: string } | { status: "not_found" } | { status: "unavailable" }>;
+
+export interface RepairReplaceTicketInput {
+  ticketApplianceKind?: string | null;
+  techDetails?: TechApplianceDetails | null;
+}
+
 export async function loadRepairReplacePrefill(
   serviceOrder: string,
-  ticketApplianceKind: string | null | undefined,
+  ticket: RepairReplaceTicketInput,
   lookup: ((district: string, so: string) => Promise<RepairReplaceSnowflakeResult>) | null,
+  hssomLookup: RepairReplaceHssomLookup | null = null,
 ): Promise<RrPrefillResponse> {
+  const { ticketApplianceKind, techDetails } = ticket;
   const match = /^(\d{4})-(\d{8})$/.exec((serviceOrder || "").trim());
   if (!lookup || !match) {
-    const result = buildRepairReplacePrefill({ serviceOrder, row: null, unavailable: true, ticketApplianceKind });
-    if (!lookup) result.warnings = ["The service-order lookup is off here. Enter the visit manually."];
+    const result = buildRepairReplacePrefill({ serviceOrder, row: null, unavailable: true, ticketApplianceKind, techDetails });
+    if (!lookup) result.warnings = ["The service-order lookup is off here. Enter the visit manually.", ...result.warnings.slice(LOOKUP_FAILED.length)];
     return result;
   }
+  // HSSOM only when the technician gave no age; alongside Snowflake.
+  const wantsHssom = hssomLookup != null && techDetails?.applianceAgeYears == null;
+  const hssomPromise = wantsHssom
+    ? hssomLookup!(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
+    : Promise.resolve(null);
   let found: RepairReplaceSnowflakeResult;
   try {
     found = await lookup(match[1], match[2]);
   } catch {
     found = { status: "unavailable" };
   }
+  const hssom = await hssomPromise;
+  const hssomPurchaseDate = hssom?.status === "found" ? hssom.purchaseDate ?? null : null;
   if (found.status !== "found") {
     return buildRepairReplacePrefill({
-      serviceOrder, row: null, unavailable: found.status === "unavailable", ticketApplianceKind,
+      serviceOrder, row: null, unavailable: found.status === "unavailable", ticketApplianceKind, techDetails, hssomPurchaseDate,
     });
   }
   const result = buildRepairReplacePrefill({
-    serviceOrder, row: found.row, techhub: found.techhub, parts: found.parts, ticketApplianceKind,
+    serviceOrder, row: found.row, techhub: found.techhub, parts: found.parts, ticketApplianceKind, techDetails, hssomPurchaseDate,
   });
   if (found.techhub == null) result.warnings.push("TechHub lookup failed, so labor, trip, and confidence were not filled.");
   if (found.parts == null) result.warnings.push("Parts lookup failed, so parts_cost was not filled.");

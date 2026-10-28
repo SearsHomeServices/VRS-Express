@@ -241,7 +241,8 @@ export function applyTechApplianceDetails(
   tech: TechApplianceDetails,
   previous?: TechApplianceDetails | null,
 ): AhsDetailsDraft {
-  const changed = (field: keyof TechApplianceDetails) => !!previous && !sameText(previous[field], tech[field]);
+  const changed = (field: "applianceGrade" | "applianceColor" | "applianceLocation" | "partFunction") =>
+    !!previous && !sameText(previous[field], tech[field]);
   const next: AhsDetailsDraft = { ...draft };
   if (!next.applianceGrade || changed("applianceGrade")) {
     next.applianceGrade = ahsGradeFromTechGrade(tech.applianceGrade);

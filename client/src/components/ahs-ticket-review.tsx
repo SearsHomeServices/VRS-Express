@@ -35,6 +35,7 @@ import {
   type AhsReviewProvenanceField,
 } from "@/lib/ahsReview";
 import {
+  techApplianceAgeLabel,
   techApplianceGradeLabel,
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
@@ -222,9 +223,9 @@ export function AhsMedia({
   );
 }
 
-// Read-only summary of what the technician entered, for AHS and First
-// American tickets (First American has no VRS AI editor, so this is the
-// agent's only view of these values). Renders nothing without details.
+// Read-only summary of what the technician entered, for AHS, First
+// American and Sears Protect tickets (only AHS has the VRS AI editor, so for
+// the others this is the agent's only view of these values). Renders nothing without details.
 export function TechApplianceDetailsBlock({ details }: { details: TechApplianceDetails | null | undefined }) {
   if (!details) return null;
   const rows: { label: string; field: string; value: string }[] = [
@@ -232,6 +233,9 @@ export function TechApplianceDetailsBlock({ details }: { details: TechApplianceD
     { label: "Color", field: "tech-appliance-color", value: details.applianceColor },
     ...(details.applianceLocation
       ? [{ label: "Location", field: "tech-appliance-location", value: details.applianceLocation }]
+      : []),
+    ...(details.applianceAgeYears != null
+      ? [{ label: "Age", field: "tech-appliance-age", value: techApplianceAgeLabel(details.applianceAgeYears)! }]
       : []),
     { label: "Part function", field: "tech-part-function", value: details.partFunction },
   ];

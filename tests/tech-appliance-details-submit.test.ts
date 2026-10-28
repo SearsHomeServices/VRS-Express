@@ -235,13 +235,19 @@ describe("POST /api/submissions — techApplianceDetails", () => {
     expect(JSON.parse(inserted().techApplianceDetails)).toEqual(tech);
   });
 
-  it("drops it silently for Sears Protect, even when the tech picked AHS", async () => {
+  it("keeps it for Sears Protect (with the age, no AHS draft), even when the tech picked AHS", async () => {
     mocks.fetchProcIdForServiceOrder.mockResolvedValue({ status: "FOUND", ...PROC.sears_protect });
-    const res = await submit(body());
+    const res = await submit(body({ techApplianceDetails: { ...tech, applianceAgeYears: 8 } }));
     expect(res.status).toBe(201);
     expect(inserted().warrantyType).toBe("sears_protect");
-    expect(inserted().techApplianceDetails).toBeNull();
+    expect(JSON.parse(inserted().techApplianceDetails)).toEqual({ ...tech, applianceAgeYears: 8 });
     expect(inserted().ahsDetails).toBeNull();
+  });
+
+  it("accepts Sears Protect details from a form without the age", async () => {
+    mocks.fetchProcIdForServiceOrder.mockResolvedValue({ status: "FOUND", ...PROC.sears_protect });
+    await submit(body({ warrantyType: "sears_protect" }));
+    expect(JSON.parse(inserted().techApplianceDetails)).toEqual(tech);
   });
 
   it("drops it silently for a non-authorization request", async () => {
@@ -266,6 +272,8 @@ describe("POST /api/submissions — techApplianceDetails", () => {
     [{ ...tech, partFunction: "x".repeat(201) }, "Part function must be 200 characters or less"],
     [{ applianceGrade: "low", applianceColor: "White" }, "Part function is required"],
     ["low", "Expected object, received string"],
+    [{ ...tech, applianceAgeYears: 4.5 }, "Expected integer, received float"],
+    [{ ...tech, applianceAgeYears: 51 }, "Number must be less than or equal to 50"],
   ])("answers 400 with the first message when it is invalid (%#)", async (sent, message) => {
     const res = await submit(body({ techApplianceDetails: sent }));
     expect(res.status).toBe(400);

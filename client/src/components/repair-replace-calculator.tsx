@@ -176,10 +176,24 @@ const PREFILL_TARGETS: Partial<Record<keyof RrPrefillResponse["fields"], FieldKe
   labor_cost: "laborCost",
   trip_cost: "tripCost",
   technician_confident: "confident",
+  appliance_reference: "catalog",
 };
 
 function sourceLabel(field: RrPrefillField): string {
   return field.source === "ticket" ? "From technician" : "From service order";
+}
+
+// "4 fields filled: 2 from the technician, 2 from the service order."
+export function filledSummary(prefilled: Partial<Record<string, RrPrefillField>>): string {
+  const fields = Object.values(prefilled).filter(Boolean) as RrPrefillField[];
+  if (!fields.length) return "No fields filled.";
+  const fromTech = fields.filter((field) => field.source === "ticket").length;
+  const fromOrder = fields.length - fromTech;
+  const parts = [
+    fromTech ? `${fromTech} from the technician` : "",
+    fromOrder ? `${fromOrder} from the service order` : "",
+  ].filter(Boolean);
+  return `${fields.length} field${fields.length === 1 ? "" : "s"} filled: ${parts.join(", ")}.`;
 }
 
 function SourceBadge({ field, testId }: { field?: RrPrefillField; testId: string }) {
@@ -456,7 +470,7 @@ export function RepairReplaceCalculator({
             : prefillQuery.isError ? "The service-order lookup failed. Enter the visit by hand."
             : prefillStatus === "unavailable" || prefillStatus === "not_found"
               ? `${prefillQuery.data?.warnings[0] ?? "No service-order data."} ${filledCount ? `${filledCount} field(s) filled from the ticket.` : ""}`
-              : `${filledCount} field(s) filled from the service order. Everything else is blank until you enter it; blank is never treated as zero.`}
+              : `${filledSummary(prefilled)} Everything else is blank until you enter it; blank is never treated as zero.`}
         </span>
       </div>
 
@@ -509,7 +523,7 @@ export function RepairReplaceCalculator({
                 </SelectContent>
               </Select>
             </Field>
-            <Field id="rr-catalog" label="Appliance reference"
+            <Field id="rr-catalog" label="Appliance reference" badge={<SourceBadge field={prefilled.catalog} testId="badge-rr-catalog" />}
               hint={form.catalog ? `Reference price ${APPLIANCE_REPLACEMENT[form.catalog] != null ? `$${APPLIANCE_REPLACEMENT[form.catalog]}` : "none"}.` : "Or enter a replacement cost above."}>
               <Select value={form.catalog || "none"} onValueChange={(value) => set("catalog", value === "none" ? "" : value)}>
                 <SelectTrigger id="rr-catalog" data-testid="select-rr-catalog"><SelectValue placeholder="None" /></SelectTrigger>

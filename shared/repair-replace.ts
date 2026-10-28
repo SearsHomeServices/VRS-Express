@@ -1056,14 +1056,17 @@ export const RR_PREFILL_FIELDS = [
   "replacement_cost", "visit_number", "unresolved", "failed_attempt_count",
   "other_service_orders_12mo", "same_part_or_system_repeat", "technician_confident",
   "parts_available", "backorder_days", "contract_spend",
+  // VRS Express: the legacy catalog row (APPLIANCE_REPLACEMENT key).
+  "appliance_reference",
 ] as const;
 export type RrPrefillFieldName = (typeof RR_PREFILL_FIELDS)[number];
 
 export interface RrPrefillField {
   value: string | boolean;
   // "snowflake": the service order (FULLDETAIL, TechHub NPSXTFS, parts
-  // NPSXTPN). "ticket": what the technician picked on this ticket.
-  source: "snowflake" | "ticket";
+  // NPSXTPN). "hssom": the HSSOM Order Lookup (purchase date). "ticket":
+  // what the technician entered on this ticket.
+  source: "snowflake" | "hssom" | "ticket";
   source_field: string;
   observed_at?: string;
 }

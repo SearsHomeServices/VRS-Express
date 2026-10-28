@@ -1,4 +1,5 @@
 import { APPLIANCE_CHOICES, applianceChoice, applianceKindSchema, applianceLabel } from "@shared/appliance-types";
+import { techApplianceAgeApplies } from "@shared/tech-appliance-details";
 import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -797,11 +798,15 @@ export default function TechResubmitPage() {
                       </FormItem>
                     )}
                   />
-                  {/* Appliance Grade / Color / Location / Part Function: AHS and First
-                      American authorization tickets only (flag
-                      techApplianceDetailsEnabled). */}
+                  {/* Appliance Grade / Color / Location / Part Function: AHS, First
+                      American and Sears Protect authorization tickets (flag
+                      techApplianceDetailsEnabled); Appliance Age on Sears Protect. */}
                   {techApplianceDetailsShown && (
-                    <TechApplianceDetailsFields control={form.control} testIdSuffix="-resubmit" />
+                    <TechApplianceDetailsFields
+                      control={form.control}
+                      testIdSuffix="-resubmit"
+                      askAge={techApplianceAgeApplies(watchedWarrantyType)}
+                    />
                   )}
                 </CardContent>
               </Card>

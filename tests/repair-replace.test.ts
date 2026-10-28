@@ -21,6 +21,7 @@ import {
   buildRepairReplacePrefill,
   loadRepairReplacePrefill,
   RR_AUTHORITATIVE_FIELDS,
+  type RepairReplaceTicketInput,
 } from "../server/repair-replace-prefill";
 import {
   REPAIR_REPLACE_ORDER_SQL,
@@ -461,19 +462,80 @@ describe("prefill lookup", () => {
   });
 
   it("says when the lookup is off and warns per failed statement", async () => {
-    const off = await loadRepairReplacePrefill("8175-13538277", "washer", null);
+    const off = await loadRepairReplacePrefill("8175-13538277", { ticketApplianceKind: "washer" }, null);
     expect(off.status).toBe("unavailable");
     expect(off.warnings).toEqual(["The service-order lookup is off here. Enter the visit manually."]);
     expect(off.fields.appliance_type?.source).toBe("ticket");
-    const partial = await loadRepairReplacePrefill("8175-13538277", null, async () => ({
+    const partial = await loadRepairReplacePrefill("8175-13538277", {}, async () => ({
       status: "found", row: { MDS_CD: "WASHERFL" }, techhub: null, parts: null,
     }));
     expect(partial.warnings).toEqual(expect.arrayContaining([
       "TechHub lookup failed, so labor, trip, and confidence were not filled.",
       "Parts lookup failed, so parts_cost was not filled.",
     ]));
-    const thrown = await loadRepairReplacePrefill("8175-13538277", null, async () => { throw new Error("down"); });
+    const thrown = await loadRepairReplacePrefill("8175-13538277", {}, async () => { throw new Error("down"); });
     expect(thrown.status).toBe("unavailable");
+  });
+
+  it("asks HSSOM for the purchase date only when the technician gave no age", async () => {
+    const snowflake = async () => ({ status: "found" as const, row: { MDS_CD: "WASHERFL" }, techhub: [], parts: [] });
+    const hssom = vi.fn(async () => ({ status: "found" as const, purchaseDate: "2020-01-01" }));
+    const dated = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, hssom);
+    expect(hssom).toHaveBeenCalledWith("8175", "13538277");
+    expect(dated.fields.age_years).toMatchObject({ source: "hssom", source_field: "HSSOM purchase date relative to the lookup date" });
+    hssom.mockClear();
+    const told = await loadRepairReplacePrefill("8175-13538277", { techDetails: { ...TECH_DETAILS, applianceAgeYears: 3 } }, snowflake, hssom);
+    expect(hssom).not.toHaveBeenCalled();
+    expect(told.fields.age_years).toMatchObject({ value: "3", source: "ticket" });
+    const failed = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, async () => { throw new Error("down"); });
+    expect(failed.fields.age_years).toBeUndefined();
+    const noRow = await loadRepairReplacePrefill("8175-13538277", {}, async () => ({ status: "not_found" as const }), hssom);
+    expect(noRow.fields.age_years?.source).toBe("hssom");
+  });
+});
+
+const TECH_DETAILS = {
+  applianceGrade: "high" as const, applianceColor: "White" as const, applianceLocation: "Kitchen" as const, partFunction: "Pumps water",
+};
+
+describe("prefill from what the technician entered", () => {
+  it("uses the technician's age ahead of every date, and warns when a date disagrees", () => {
+    const told = prefill({
+      row: row({ AP_PCHS_DATE: "2023-09-01" }), techDetails: { ...TECH_DETAILS, applianceAgeYears: 8 },
+    });
+    expect(told.fields.age_years).toEqual({ value: "8", source: "ticket", source_field: "Age the technician entered (from the customer)" });
+    expect(told.warnings).toContain("The technician entered 8 years; AP_PCHS_DATE gives 0.33. Age uses the technician's.");
+    const close = prefill({ row: row({ AP_PCHS_DATE: "2016-01-01" }), techDetails: { ...TECH_DETAILS, applianceAgeYears: 8 } });
+    expect(close.warnings.some((warning) => warning.startsWith("The technician entered"))).toBe(false);
+    const zero = prefill({ row: null, techDetails: { ...TECH_DETAILS, applianceAgeYears: 0 } });
+    expect(zero.fields.age_years?.value).toBe("0");
+    expect(prefill({ row: row(), techDetails: TECH_DETAILS }).fields.age_years?.source).toBe("snowflake");
+  });
+
+  it("orders the dates AP_PCHS_DATE, HSSOM, then SL_DT", () => {
+    const both = prefill({ row: row({ AP_PCHS_DATE: "2020-01-01", SL_DT: "2023-01-01" }), hssomPurchaseDate: "2018-01-01" });
+    expect(both.fields.age_years?.source_field).toBe("AP_PCHS_DATE relative to the lookup date");
+    const hssom = prefill({ row: row({ AP_PCHS_DATE: null, SL_DT: "2023-01-01" }), hssomPurchaseDate: "2018-01-01" });
+    expect(hssom.fields.age_years).toMatchObject({ source: "hssom", value: "6.00" });
+    const sale = prefill({ row: row({ AP_PCHS_DATE: null, SL_DT: "2023-01-01" }) });
+    expect(sale.fields.age_years?.source_field).toBe("SL_DT relative to the lookup date");
+  });
+
+  it("picks the catalog row the grade names, and says when it names none", () => {
+    const ref = (kind: string, grade: "low" | "medium" | "high") =>
+      prefill({ row: row(), ticketApplianceKind: kind, techDetails: { ...TECH_DETAILS, applianceGrade: grade } });
+    expect(ref("refrigerator", "medium").fields.appliance_reference).toEqual({
+      value: "Refrigerator Mid Level", source: "ticket", source_field: "Technician's grade (Medium) and appliance",
+    });
+    expect(ref("dishwasher", "high").fields.appliance_reference?.value).toBe("Dishwasher High End");
+    expect(ref("range", "low").fields.appliance_reference?.value).toBe("Range Basic");
+    const medium = ref("dishwasher", "medium");
+    expect(medium.fields.appliance_reference).toBeUndefined();
+    expect(medium.missing_fields).toContain("appliance_reference");
+    expect(medium.warnings).toContain("The technician graded the appliance Medium, which has no single reference. Pick Basic or High End.");
+    expect(ref("washer", "high").warnings).toContain("The technician graded the washer High. Pick the top or front load reference.");
+    expect(ref("microwave", "high").fields.appliance_reference).toBeUndefined();
+    expect(prefill({ row: row(), ticketApplianceKind: "refrigerator" }).fields.appliance_reference).toBeUndefined();
   });
 });
 
@@ -506,8 +568,8 @@ function harness(options: { submission?: any; enabled?: boolean } = {}) {
       roles.includes(req.user.role) ? next() : res.status(403).json({ error: "Access denied" }),
     isEnabled: () => options.enabled ?? true,
     getSubmission: vi.fn(async (id: number) => (id === submission.id ? submission : undefined)),
-    loadPrefill: vi.fn(async (serviceOrder: string, kind: string | null) => buildRepairReplacePrefill({
-      serviceOrder, row: row(), techhub: techhub(), parts: parts(), ticketApplianceKind: kind, asOf: "2024-01-01",
+    loadPrefill: vi.fn(async (serviceOrder: string, ticketInput: RepairReplaceTicketInput) => buildRepairReplacePrefill({
+      serviceOrder, row: row(), techhub: techhub(), parts: parts(), ...ticketInput, asOf: "2024-01-01",
     })),
     createNote: vi.fn(async () => ({})),
   } satisfies RepairReplaceApiDeps;
@@ -533,7 +595,12 @@ describe("repair / replace endpoints", () => {
     const off = harness({ enabled: false });
     expect((await request(off.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT))).status).toBe(404);
     expect(off.deps.getSubmission).not.toHaveBeenCalled();
-    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", "washer");
+    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", { ticketApplianceKind: "washer", techDetails: null });
+    const told = harness({ submission: ticket({ techApplianceDetails: JSON.stringify({ ...TECH_DETAILS, applianceAgeYears: 6 }) }) });
+    await request(told.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT));
+    expect(told.deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", {
+      ticketApplianceKind: "washer", techDetails: { ...TECH_DETAILS, applianceAgeYears: 6 },
+    });
   });
 
   it("returns the prefill contract", async () => {

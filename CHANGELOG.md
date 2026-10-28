@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Sears Protect tech form details; calculator fills from the technician (2026-10-28)
+- Sears Protect authorization tickets now ask the technician the same details
+  as AHS and First American (Appliance Grade, Color, Location, Part Function,
+  behind `TECH_APPLIANCE_DETAILS_ENABLED`) plus **Appliance Age (years)**, whole
+  years, asked of the customer (0 when under a year). Stored in
+  `submissions.tech_appliance_details` (JSON, no schema change); no AHS draft
+  is made for Sears Protect. The agent and admin dashboards show them,
+  including the age, in Submission Details.
+- The repair / replace calculator fills from what the technician entered,
+  badged "From technician":
+  - **Age**: the technician's age comes ahead of every date. When a service
+    order date disagrees by 2 years or more, a warning shows both.
+  - **Appliance reference**: the legacy catalog row for the technician's grade
+    and appliance where the grade names exactly one (e.g. Refrigerator Medium
+    -> Refrigerator Mid Level). Medium on other appliances, and washers (top or
+    front load), say to pick one.
+- Without a technician age, the date order is `AP_PCHS_DATE`, then the HSSOM
+  Order Lookup purchase date (new; only the date is kept, answers nothing while
+  `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED` is off), then `SL_DT`.
+- The status line counts fields by source ("4 fields filled: 2 from the
+  technician, 2 from the service order").
+
 ### Added - Built-in repair / replace calculator for Sears Protect tickets (2026-10-28)
 - On Sears Protect tickets (Sears Protect Home Warranty, Sears Home Warranty,
   Sears PA / Cinch), the agent dashboard's Calculator tab now shows a built-in
