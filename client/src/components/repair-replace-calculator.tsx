@@ -131,10 +131,12 @@ export function frcInputFromForm(form: FormState): RrInput {
   if (form.partsStatus === "on_hand") { partsAvailable = true; backorderDays = "0"; }
   else if (form.partsStatus === "backordered") { partsAvailable = true; backorderDays = blankToNull(form.backorderDays); }
   else if (form.partsStatus === "unavailable") { partsAvailable = false; backorderDays = blankToNull(form.backorderDays); }
+  // Blank replacement cost uses the appliance reference price, as legacy does.
+  const catalogCost = form.catalog ? APPLIANCE_REPLACEMENT[form.catalog] : null;
   return {
     appliance_type: appliance,
     age_years: blankToNull(form.ageYears),
-    replacement_cost: blankToNull(form.replacementCost),
+    replacement_cost: blankToNull(form.replacementCost) ?? (catalogCost != null ? String(catalogCost) : null),
     component,
     parts_cost: blankToNull(form.partsCost),
     labor_cost: blankToNull(form.laborCost),
@@ -177,6 +179,12 @@ const PREFILL_TARGETS: Partial<Record<keyof RrPrefillResponse["fields"], FieldKe
   trip_cost: "tripCost",
   technician_confident: "confident",
   appliance_reference: "catalog",
+  servicer_type: "servicerType",
+  visit_number: "visitNumber",
+  unresolved: "unresolved",
+  failed_attempt_count: "failedAttempts",
+  other_service_orders_12mo: "otherServiceOrders",
+  same_part_or_system_repeat: "samePart",
 };
 
 function sourceLabel(field: RrPrefillField): string {
@@ -491,7 +499,8 @@ export function RepairReplaceCalculator({
           <Field id="rr-ageYears" label="Age (years)" badge={<SourceBadge field={prefilled.ageYears} testId="badge-rr-age" />}>
             <Input {...text("ageYears")} inputMode="decimal" />
           </Field>
-          <Field id="rr-replacementCost" label="Replacement cost ($)" hint={form.catalog && !form.replacementCost ? "Blank uses the appliance reference price (legacy)." : undefined}>
+          <Field id="rr-replacementCost" label="Replacement cost ($)" hint={form.catalog && !form.replacementCost && APPLIANCE_REPLACEMENT[form.catalog] != null
+            ? `Blank uses the appliance reference price, ${money(String(APPLIANCE_REPLACEMENT[form.catalog]))}.` : undefined}>
             <Input {...text("replacementCost")} inputMode="decimal" />
           </Field>
           <Field id="rr-partsCost" label="Parts cost ($)" badge={<SourceBadge field={prefilled.partsCost} testId="badge-rr-parts" />}>
@@ -559,7 +568,7 @@ export function RepairReplaceCalculator({
               </>
             ) : (
               <>
-                <Field id="rr-servicer" label="Servicer">
+                <Field id="rr-servicer" label="Servicer" badge={<SourceBadge field={prefilled.servicerType} testId="badge-rr-servicer" />}>
                   <Choice id="rr-servicer" value={form.servicerType}
                     options={RR_SERVICER_TYPES.map((value) => ({ value: value as string, label: value }))}
                     onChange={(value) => set("servicerType", value)} />
@@ -610,19 +619,21 @@ export function RepairReplaceCalculator({
             </Field>
           )}
           <div className="grid grid-cols-2 gap-3">
-            <Field id="rr-visitNumber" label="Visit number on this order" hint="This visit counts; the first is 1.">
+            <Field id="rr-visitNumber" label="Visit number on this order" hint="This visit counts; the first is 1."
+              badge={<SourceBadge field={prefilled.visitNumber} testId="badge-rr-visit" />}>
               <Input {...text("visitNumber")} inputMode="numeric" />
             </Field>
-            <Field id="rr-unresolved" label="Still unresolved?">
+            <Field id="rr-unresolved" label="Still unresolved?" badge={<SourceBadge field={prefilled.unresolved} testId="badge-rr-unresolved" />}>
               <Choice id="rr-unresolved" value={form.unresolved} options={YES_NO} onChange={(value) => set("unresolved", value)} />
             </Field>
-            <Field id="rr-failedAttempts" label="Failed attempts before this visit">
+            <Field id="rr-failedAttempts" label="Failed attempts before this visit" badge={<SourceBadge field={prefilled.failedAttempts} testId="badge-rr-failed" />}>
               <Input {...text("failedAttempts")} inputMode="numeric" />
             </Field>
-            <Field id="rr-otherServiceOrders" label="Other service orders, 12 months" hint="Not counting this one.">
+            <Field id="rr-otherServiceOrders" label="Other service orders, 12 months" hint="Not counting this one."
+              badge={<SourceBadge field={prefilled.otherServiceOrders} testId="badge-rr-other-orders" />}>
               <Input {...text("otherServiceOrders")} inputMode="numeric" />
             </Field>
-            <Field id="rr-samePart" label="Same part or system again?">
+            <Field id="rr-samePart" label="Same part or system again?" badge={<SourceBadge field={prefilled.samePart} testId="badge-rr-same-part" />}>
               <Choice id="rr-samePart" value={form.samePart} options={YES_NO} onChange={(value) => set("samePart", value)} />
             </Field>
             <Field id="rr-contractSpend" label="Contract spend so far ($)">

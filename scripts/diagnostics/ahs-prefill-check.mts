@@ -5,7 +5,8 @@
 // has, the warranty each row derives to, whether brand and parts are there,
 // whether the dispatch / model / serial columns tried before
 // (CTA_NO, PSV_ITM_MDL_NO, PSV_MDS_SRL_NO) exist and hold a value, and
-// whether the repair / replace calculator's statements answer.
+// whether the repair / replace calculator's statements answer, and what the
+// WOM work order gives the calculator (visit, attempts, trip, labor).
 // Uses the app's Snowflake env vars. Prints no secrets and no values: only
 // yes/no, counts, warranty types and masked shapes (digits -> 9, letters -> A).
 import { createRequire } from "node:module";
@@ -19,6 +20,8 @@ const sdk = require("snowflake-sdk");
 sdk.configure({ logLevel: "ERROR" });
 const lookup = await import(pathToFileURL(path.join(root, "server/services/snowflake-lookup.ts")).href);
 const rrPrefill = await import(pathToFileURL(path.join(root, "server/repair-replace-prefill.ts")).href);
+const womFacts = await import(pathToFileURL(path.join(root, "server/services/wom-repair-facts.ts")).href);
+const womClient = await import(pathToFileURL(path.join(root, "server/services/wom-work-order.ts")).href);
 const { deriveWarrantyFromProcId } = await import(pathToFileURL(path.join(root, "shared/warranty.ts")).href);
 
 const match = /^(\d{4})-(\d{8})$/.exec((process.argv[2] ?? "").trim());
@@ -123,12 +126,13 @@ try {
   console.log(`6. Parts on the order: ${parts.length} line(s), ${live.length} live, ${live.filter((p) => present(p.UNIT_PRICE)).length} with a price`);
 
   // 7. Repair / replace calculator sources (Sears Protect tickets): the
-  // three statements the calculator runs, and what the prefill makes of them.
+  // four statements the calculator runs, and what the prefill makes of them.
   console.log("7. Repair / replace calculator statements:");
   const rr: Array<[string, string, string[]]> = [
-    ["order (MDS_CD, AP_PCHS_DATE, SL_DT, JOB_CD_DS)", lookup.REPAIR_REPLACE_ORDER_SQL, [so, district]],
+    ["order (MDS_CD, AP_PCHS_DATE, SL_DT, JOB_CD_DS, CC_LAB_NET)", lookup.REPAIR_REPLACE_ORDER_SQL, [so, district]],
     ["TechHub NPSXTFS (deLabor, deTripCharge, applianceAssessment)", lookup.REPAIR_REPLACE_TECHHUB_SQL, [so, so, district]],
-    ["parts NPSXTPN (status, quantity, price)", lookup.REPAIR_REPLACE_PARTS_SQL, [so, so, district]],
+    ["parts NPSXTPN (status, type, quantity, price)", lookup.REPAIR_REPLACE_PARTS_SQL, [so, so, district]],
+    ["12-month history (same model + serial)", lookup.REPAIR_REPLACE_HISTORY_SQL, [so, district, so, so]],
   ];
   const rrRows: Array<any[] | null> = [];
   for (const [label, sqlText, binds] of rr) {
@@ -143,16 +147,50 @@ try {
   }
   if (rrRows[0]?.[0]) {
     const result = rrPrefill.buildRepairReplacePrefill({
-      serviceOrder: `${district}-${so}`, row: rrRows[0][0], techhub: rrRows[1], parts: rrRows[2],
+      serviceOrder: `${district}-${so}`, row: rrRows[0][0], techhub: rrRows[1], parts: rrRows[2], history: rrRows[3],
     });
     console.log(`   prefill status=${result.status}; filled: ${Object.keys(result.fields).join(", ") || "nothing"}`);
-    console.log(`   AP_PCHS_DATE present=${present(rrRows[0][0].AP_PCHS_DATE)}, SL_DT present=${present(rrRows[0][0].SL_DT)}, MDS_CD present=${present(rrRows[0][0].MDS_CD)}`);
+    console.log(`   AP_PCHS_DATE present=${present(rrRows[0][0].AP_PCHS_DATE)}, SL_DT present=${present(rrRows[0][0].SL_DT)}, MDS_CD present=${present(rrRows[0][0].MDS_CD)}, CC_LAB_NET present=${present(rrRows[0][0].CC_LAB_NET)}`);
+    const types = (rrRows[2] ?? []).map((p) => String(p.SVC_PRT_TYP_CD ?? "?").trim() || "?");
+    console.log(`   part line types: ${types.join(",") || "none"}`);
+    const history = rrRows[3] ?? [];
+    console.log(`   history: serial usable=${String(history[0]?.SERIAL_USABLE ?? "n/a")}, other orders=${history.filter((h) => present(h.H_SO)).length}, with a repeated part=${history.filter((h) => Number(h.SAME_PART_LINES) > 0).length}`);
   }
 
   // 8. HSSOM settings (names only).
-  console.log("7. HSSOM settings present:");
+  console.log("8. HSSOM settings present:");
   for (const name of ["AHS_HSSOM_CUSTOMER_PREFILL_ENABLED", "HSSOM_ORDER_LOOKUP_URL", "HSSOM_AUTH_URL", "HSSOM_CLIENT_CODE", "HSSOM_CLIENT_SECRET", "HSSOM_CLIENT_ID"]) {
     console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+  }
+
+  // 9. WOM work order (calculator): config, status, which facts it gives
+  // (numbers only; they are not customer data) and the record's key paths
+  // with types, never values. Customer subtrees are skipped.
+  console.log("9. WOM work order (calculator):");
+  for (const name of ["WOM_WORK_ORDER_URL", "WOM_TENANT_ID", "WOM_BEARER_TOKEN"]) {
+    console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+  }
+  const womConfig = womClient.readWomWorkOrderConfig();
+  console.log(`   config usable: ${womConfig ? `yes (token: ${womConfig.staticToken ? "WOM_BEARER_TOKEN" : "HSSOM gateway"})` : "no"}`);
+  if (womConfig) {
+    let womRecord: unknown;
+    const womLookup = womFacts.createWomRepairFactsLookup({ onRecord: (r: unknown) => { womRecord = r; } });
+    const result = await womLookup(district, so);
+    console.log(`   status: ${result.status}`);
+    if (result.status === "found") {
+      const f = result.facts;
+      console.log(
+        `   visit number=${f.visitNumber ?? "none"}, unresolved=${f.unresolved ?? "unknown"}, ` +
+          `failed attempts=${f.failedAttemptCount ?? "unknown"}, trip=${f.tripCharge ?? "none"}, ` +
+          `labor=${f.laborTotal ?? "none"} (${f.laborLineCount ?? 0} line(s))`,
+      );
+      for (const warning of result.warnings) console.log(`   warning: ${warning}`);
+      for (const rootKey of ["Extensions", "LabourJobCodes", "Parts", "WorkItems"]) {
+        const paths = womFacts.workOrderShape(womRecord, [rootKey]);
+        console.log(`   ${rootKey}: ${paths.length ? "" : "(absent)"}`);
+        for (const p of paths) console.log(`     ${p}`);
+      }
+    }
   }
 } catch (e) {
   console.log("QUERY ERROR:", errorText(e));

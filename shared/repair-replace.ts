@@ -1056,17 +1056,19 @@ export const RR_PREFILL_FIELDS = [
   "replacement_cost", "visit_number", "unresolved", "failed_attempt_count",
   "other_service_orders_12mo", "same_part_or_system_repeat", "technician_confident",
   "parts_available", "backorder_days", "contract_spend",
-  // VRS Express: the legacy catalog row (APPLIANCE_REPLACEMENT key).
-  "appliance_reference",
+  // VRS Express: the legacy catalog row (APPLIANCE_REPLACEMENT key) and
+  // the legacy servicer ("Sears Tech" / "1099").
+  "appliance_reference", "servicer_type",
 ] as const;
 export type RrPrefillFieldName = (typeof RR_PREFILL_FIELDS)[number];
 
 export interface RrPrefillField {
   value: string | boolean;
   // "snowflake": the service order (FULLDETAIL, TechHub NPSXTFS, parts
-  // NPSXTPN). "hssom": the HSSOM Order Lookup (purchase date). "ticket":
-  // what the technician entered on this ticket.
-  source: "snowflake" | "hssom" | "ticket";
+  // NPSXTPN). "hssom": the HSSOM Order Lookup (purchase date). "wom": the
+  // WOM work order (visits, labor, trip). "ticket": what the technician
+  // entered on this ticket, or their account.
+  source: "snowflake" | "hssom" | "wom" | "ticket";
   source_field: string;
   observed_at?: string;
 }

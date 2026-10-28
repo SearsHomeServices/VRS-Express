@@ -196,6 +196,10 @@ export function productCategoryFromWorkOrderRecord(record: unknown): string | un
 
 // The record's OrderNum, when it is a composite ID, must be the order asked
 // for: SO numbers are reused across units.
+export function womRecordMatchesOrder(recordOrderNum: unknown, orderNum: string): boolean {
+  return sameOrder(recordOrderNum, orderNum);
+}
+
 function sameOrder(recordOrderNum: unknown, orderNum: string): boolean {
   const value = clean(recordOrderNum);
   const match = value ? /^(\d{1,7})-(\d{8})$/.exec(value) : null;

@@ -574,8 +574,10 @@ export function createServiceOrderApplianceLookup(query: ServiceOrderApplianceQu
 // loses its own fields.
 
 // Binds: [serviceOrder, district].
+// CC_LAB_NET is not labor: it equals the TechHub trip charge on ~94% of
+// orders (handoff), so it is only a trip-charge fallback.
 export const REPAIR_REPLACE_ORDER_SQL =
-  `SELECT ${SERVICE_UNIT_SELECT}, MDS_CD, AP_PCHS_DATE, SL_DT, JOB_CD_DS ` +
+  `SELECT ${SERVICE_UNIT_SELECT}, MDS_CD, AP_PCHS_DATE, SL_DT, JOB_CD_DS, CC_LAB_NET ` +
   `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}`;
 
 export const REPAIR_REPLACE_TECHHUB_FIELDS = ["applianceAssessment", "deLabor", "deTripCharge"] as const;
@@ -588,17 +590,60 @@ export const REPAIR_REPLACE_TECHHUB_SQL =
   `AND UDF_FLD_NM IN (${REPAIR_REPLACE_TECHHUB_FIELDS.map((name) => `'${name}'`).join(", ")}) ` +
   "ORDER BY CRT_TS DESC LIMIT 200";
 
-// Part lines with status, quantity and selling price. Binds: [serviceOrder,
-// serviceOrder, district].
+// Part lines with status, type ('L' is labor coded as a part), quantity and
+// selling price. Binds: [serviceOrder, serviceOrder, district].
 export const REPAIR_REPLACE_PARTS_SQL =
-  "SELECT SVC_UN_NO AS SERVICE_UNIT, SVC_PRT_STS_CD, SVC_PRT_QT, PRT_SEL_PRC_AM FROM PRD_DB2.HS_DW_TBLS.NPSXTPN " +
+  "SELECT SVC_UN_NO AS SERVICE_UNIT, SVC_PRT_STS_CD, SVC_PRT_TYP_CD, SVC_PRT_QT, PRT_SEL_PRC_AM FROM PRD_DB2.HS_DW_TBLS.NPSXTPN " +
   `WHERE SO_NO = ? AND SVC_UN_NO = (SELECT SVC_UN_NO FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}) ` +
   "ORDER BY PRT_SEQ_NO LIMIT 100";
+
+// Placeholder serials typed when the tag is unreadable (ai-agent-mcp
+// service_order_tools._PLACEHOLDER_SERIALS); matching on them would merge
+// unrelated appliances.
+const PLACEHOLDER_SERIALS = [
+  "NA", "N/A", "NONE", "NULL", "UNK", "UNKNOWN", "NOSERIAL", "NO SERIAL", "NOTAG", "NO TAG", "XXXX",
+];
+
+// The same appliance's other service orders in the last 365 days, matched on
+// model + serial (PSV_ITM_MDL_NO / PSV_MDS_SRL_NO, confirmed on live orders
+// 2026-10-26), each with how many installed part lines repeat a part number
+// on this order. One row per other order; with none, one row with the H_*
+// columns null. SERIAL_USABLE false when the serial is blank, short or a
+// placeholder (then there is no history to read, not "no history").
+// Model, serial and the other orders' numbers stay on the server: the
+// prefill passes counts only. Binds: [serviceOrder, district, serviceOrder, serviceOrder].
+export const REPAIR_REPLACE_HISTORY_SQL =
+  "WITH anchor AS (" +
+  "SELECT SVC_UN_NO AS UN, UPPER(TRIM(PSV_ITM_MDL_NO)) AS MDL, UPPER(TRIM(PSV_MDS_SRL_NO)) AS SRL " +
+  `FROM ${SERVICE_ORDER_TABLE} ${SO_MATCH_PREFER_DISTRICT}), ` +
+  "usable AS (SELECT UN, MDL, SRL, (SRL IS NOT NULL AND LENGTH(SRL) >= 4 AND MDL IS NOT NULL AND LENGTH(MDL) >= 3 " +
+  `AND SRL NOT IN (${PLACEHOLDER_SERIALS.map((value) => `'${value}'`).join(", ")}) ` +
+  "AND SRL <> REPEAT(LEFT(SRL, 1), LENGTH(SRL))) AS OK FROM anchor), " +
+  "cur AS (SELECT DISTINCT p.SVC_PRT_NO FROM PRD_DB2.HS_DW_TBLS.NPSXTPN p JOIN usable u ON p.SVC_UN_NO = u.UN " +
+  "WHERE p.SO_NO = ? AND COALESCE(p.SVC_PRT_STS_CD, '') NOT IN ('X', 'V', 'R') AND COALESCE(p.SVC_PRT_TYP_CD, '') <> 'L'), " +
+  "hist AS (SELECT h.SVC_UN_NO, h.SO_NO, MAX(h.SO_STS_CD) AS SO_STS_CD, MAX(h.SO_CRT_DT) AS SO_CRT_DT " +
+  `FROM ${SERVICE_ORDER_TABLE} h JOIN usable u ON u.OK AND UPPER(TRIM(h.PSV_MDS_SRL_NO)) = u.SRL AND UPPER(TRIM(h.PSV_ITM_MDL_NO)) = u.MDL ` +
+  "WHERE h.SO_CRT_DT >= DATEADD(day, -365, CURRENT_DATE()) AND NOT (h.SO_NO = ? AND h.SVC_UN_NO = u.UN) " +
+  "GROUP BY h.SVC_UN_NO, h.SO_NO), " +
+  "same AS (SELECT p.SVC_UN_NO, p.SO_NO, COUNT(*) AS N FROM PRD_DB2.HS_DW_TBLS.NPSXTPN p " +
+  "JOIN hist ON p.SVC_UN_NO = hist.SVC_UN_NO AND p.SO_NO = hist.SO_NO " +
+  "WHERE p.SVC_PRT_STS_CD = 'I' AND p.SVC_PRT_NO IN (SELECT SVC_PRT_NO FROM cur) GROUP BY p.SVC_UN_NO, p.SO_NO) " +
+  "SELECT u.UN AS SERVICE_UNIT, u.OK AS SERIAL_USABLE, hist.SO_NO AS H_SO, hist.SO_STS_CD AS H_STATUS, " +
+  "hist.SO_CRT_DT AS H_CREATED, COALESCE(same.N, 0) AS SAME_PART_LINES " +
+  "FROM usable u LEFT JOIN hist ON TRUE " +
+  "LEFT JOIN same ON same.SVC_UN_NO = hist.SVC_UN_NO AND same.SO_NO = hist.SO_NO " +
+  "ORDER BY hist.SO_CRT_DT DESC NULLS LAST LIMIT 60";
 
 export const REPAIR_REPLACE_SECONDARY_TIMEOUT_MS = 6000;
 
 export type RepairReplaceLookupResult =
-  | { status: "found"; row: Record<string, unknown>; techhub: Record<string, unknown>[] | null; parts: Record<string, unknown>[] | null }
+  | {
+      status: "found";
+      row: Record<string, unknown>;
+      techhub: Record<string, unknown>[] | null;
+      parts: Record<string, unknown>[] | null;
+      history: Record<string, unknown>[] | null;
+    }
   | { status: "not_found" }
   | { status: "unavailable" };
 
@@ -615,10 +660,11 @@ export function createRepairReplaceLookup(query: AhsPrefillQuery, options: Looku
     const so = String(serviceOrder ?? "").trim();
     if (!/^\d{4}$/.test(unit) || !/^\d{8}$/.test(so)) return Promise.resolve({ status: "not_found" });
     return lookup(`${unit}-${so}`, async (signal) => {
-      const [order, techhub, parts] = await query([
+      const [order, techhub, parts, history] = await query([
         { sqlText: REPAIR_REPLACE_ORDER_SQL, binds: [so, unit] },
         { sqlText: REPAIR_REPLACE_TECHHUB_SQL, binds: [so, so, unit], timeoutMs: REPAIR_REPLACE_SECONDARY_TIMEOUT_MS },
         { sqlText: REPAIR_REPLACE_PARTS_SQL, binds: [so, so, unit], timeoutMs: REPAIR_REPLACE_SECONDARY_TIMEOUT_MS },
+        { sqlText: REPAIR_REPLACE_HISTORY_SQL, binds: [so, unit, so, so], timeoutMs: REPAIR_REPLACE_SECONDARY_TIMEOUT_MS },
       ], signal);
       // Service order and statuses only; never values.
       const failure = (settled: PromiseSettledResult<any[]>) =>
@@ -634,7 +680,8 @@ export function createRepairReplaceLookup(query: AhsPrefillQuery, options: Looku
         console.warn(`[repair-replace] SO=${unit}-${so} status=not_found (order under several units, none the district)`);
         return { status: "not_found" };
       }
-      const underUnit = (settled: PromiseSettledResult<any[]>, name: string) => {
+      const underUnit = (settled: PromiseSettledResult<any[]> | undefined, name: string) => {
+        if (!settled) return null;
         if (settled.status === "rejected") {
           console.warn(`[repair-replace] SO=${unit}-${so} ${name} statement failed: ${failure(settled)}`);
           return null;
@@ -646,8 +693,12 @@ export function createRepairReplaceLookup(query: AhsPrefillQuery, options: Looku
         row,
         techhub: underUnit(techhub, "techhub"),
         parts: underUnit(parts, "parts"),
+        history: underUnit(history, "history"),
       };
-      console.info(`[repair-replace] SO=${unit}-${so} status=found techhub_rows=${result.techhub?.length ?? "failed"} part_rows=${result.parts?.length ?? "failed"}`);
+      console.info(
+        `[repair-replace] SO=${unit}-${so} status=found techhub_rows=${result.techhub?.length ?? "failed"} ` +
+        `part_rows=${result.parts?.length ?? "failed"} history_rows=${result.history?.length ?? "failed"}`,
+      );
       return result;
     });
   };

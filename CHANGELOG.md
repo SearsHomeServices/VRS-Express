@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Calculator fills labor, trip, visits and 12-month history; admins get Service Order History (2026-10-28)
+- **Service Order History** answered 403 for admins (`/api/shsai/query` and
+  `/followup` allowed only `vrs_agent`). Admins can now use it too.
+- The repair / replace calculator fills more from the service order. Each
+  field is badged with its source:
+  - **WOM work order** (new `server/services/wom-repair-facts.ts`): visit number,
+    whether the previous visit was left Incomplete, earlier Incomplete visits,
+    labor (`LabourJobCodes`) and trip charge (`Extensions.TripChargeAmount`).
+    It runs whenever `WOM_WORK_ORDER_URL`, `WOM_TENANT_ID` and a token
+    (`WOM_BEARER_TOKEN`, or HSSOM credentials allowed on the work-orders
+    gateway) are set. It reads numbers only; the record's customer data never
+    leaves the module. The labor price key is not yet confirmed on a live record.
+  - **12-month history** (new `REPAIR_REPLACE_HISTORY_SQL`): other service
+    orders on the same model and serial in the last 365 days (cancelled ones
+    left out), and whether a part on this order was installed on one of them.
+    Placeholder serials are not matched.
+  - **Labor lines on the parts table** (`NPSXTPN` type `L`): counted as labor,
+    not parts, when TechHub and WOM have no labor.
+  - **Trip charge fallback** `CC_LAB_NET` (it matches the trip charge on ~94%
+    of orders), after TechHub and WOM.
+  - **Servicer**: Sears Tech, or 1099 when the technician's account belongs to
+    a 1099 provider company.
+- Forward Repair Cost uses the appliance reference price when the
+  replacement cost is blank, as the legacy calculator already did.
+- Diagnostic: section 7 runs the history statement and prints part line
+  types; new section 9 checks the WOM work order (settings, status, facts and
+  the record's key paths, never values).
+
 ### Added - Sears Protect tech form details; calculator fills from the technician (2026-10-28)
 - Sears Protect authorization tickets now ask the technician the same details
   as AHS and First American (Appliance Grade, Color, Location, Part Function,

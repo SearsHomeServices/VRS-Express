@@ -14,6 +14,16 @@
 //   TechHub applianceAssessment repair confidence 4-5 / 1-2 -> technician_confident
 //   NPSXTPN selling prices of lines not cancelled, voided or returned -> parts_cost
 //   NPSXTPN: a line installed or fulfilled -> parts_available = true (never false)
+// VRS Express adds (2026-10-28):
+//   NPSXTPN type 'L' lines (labor coded as a part) -> labor_cost when TechHub
+//     and WOM have none; they are not counted as parts
+//   WOM work order (server/services/wom-repair-facts.ts) -> visit_number,
+//     unresolved, failed_attempt_count; labor_cost and trip_cost after TechHub
+//   CC_LAB_NET -> trip_cost, last (it equals the trip charge on ~94% of orders)
+//   same model + serial in the last 365 days (REPAIR_REPLACE_HISTORY_SQL) ->
+//     other_service_orders_12mo (not cancelled), same_part_or_system_repeat
+//     (true when an installed part number repeats; false only with no other order)
+//   the technician's account (1099 provider company or not) -> servicer_type
 // VRS Express adds what the technician entered on the ticket
 // (submissions.appliance_kind and tech_appliance_details):
 //   the appliance they picked -> appliance_type, when MDS_CD is not one of the four
@@ -50,6 +60,17 @@ const LOOKUP_FAILED = [
 
 type Row = Record<string, unknown>;
 
+// Mirrors WomRepairFacts (server/services/wom-repair-facts.ts).
+export interface RrWomFacts {
+  visitNumber?: number;
+  unresolved?: boolean;
+  failedAttemptCount?: number;
+  tripCharge?: number;
+  laborTotal?: number;
+  laborLineCount?: number;
+  observedAt?: string;
+}
+
 export interface RrPrefillInput {
   serviceOrder: string;
   // The service order's FULLDETAIL row; null when there is none.
@@ -66,6 +87,12 @@ export interface RrPrefillInput {
   techDetails?: TechApplianceDetails | null;
   // The HSSOM Order Lookup's purchase date (YYYY-MM-DD), when it had one.
   hssomPurchaseDate?: string | null;
+  // REPAIR_REPLACE_HISTORY_SQL rows; null when that statement failed.
+  history?: Row[] | null;
+  // What the WOM work order proves (server/services/wom-repair-facts.ts).
+  wom?: RrWomFacts | null;
+  // The submitting technician's account: "1099" for a 1099 provider company.
+  servicerType?: "Sears Tech" | "1099" | null;
   // Reference date for age (YYYY-MM-DD); defaults to today (UTC).
   asOf?: string;
 }
@@ -334,8 +361,32 @@ function partStatus(row: Row): string {
   return String(cell(row, "SVC_PRT_STS_CD") ?? "").trim().toUpperCase();
 }
 
+function partType(row: Row): string {
+  return String(cell(row, "SVC_PRT_TYP_CD") ?? "").trim().toUpperCase();
+}
+
+// Labor coded as a part (type 'L'), summed; undefined when there is none or
+// a line is unreadable.
+function laborLines(parts: Row[], warnings: string[]): { total: number; count: number } | undefined {
+  const lines = parts.filter((row) => row && typeof row === "object"
+    && !INACTIVE_PART_STATUSES.has(partStatus(row)) && partType(row) === "L");
+  if (!lines.length) return undefined;
+  let total = 0;
+  for (const row of lines) {
+    const price = rrNumber(cell(row, "PRT_SEL_PRC_AM"));
+    const quantity = rrNumber(cell(row, "SVC_PRT_QT"));
+    if (price == null || price < 0 || (quantity != null && quantity > 1)) {
+      warnings.push("A labor line on the parts table could not be read, so it was not used for labor_cost.");
+      return undefined;
+    }
+    total += price;
+  }
+  return { total, count: lines.length };
+}
+
 function mapParts(parts: Row[], fields: RrPrefillResponse["fields"], warnings: string[]): void {
-  const active = parts.filter((row) => row && typeof row === "object" && !INACTIVE_PART_STATUSES.has(partStatus(row)));
+  const active = parts.filter((row) => row && typeof row === "object"
+    && !INACTIVE_PART_STATUSES.has(partStatus(row)) && partType(row) !== "L");
   if (!active.length) return;
   // Only ever true, from a line that arrived. "On order" (O) is not
   // evidence parts are unavailable; false would fire a hard stop.
@@ -379,6 +430,83 @@ function mapParts(parts: Row[], fields: RrPrefillResponse["fields"], warnings: s
   };
 }
 
+// WOM: visits on this order; labor and trip only where TechHub had none.
+function mapWom(wom: RrWomFacts | null, fields: RrPrefillResponse["fields"]): void {
+  if (!wom) return;
+  const at = wom.observedAt;
+  const field = (value: string | boolean, sourceField: string): RrPrefillField =>
+    ({ value, source: "wom", source_field: sourceField, ...(at ? { observed_at: at } : {}) });
+  if (Number.isInteger(wom.visitNumber) && wom.visitNumber! >= 1) {
+    fields.visit_number = field(String(wom.visitNumber), "WOM work order visits (not cancelled)");
+  }
+  if (typeof wom.unresolved === "boolean") {
+    fields.unresolved = field(wom.unresolved, "WOM status of the previous visit");
+  }
+  if (Number.isInteger(wom.failedAttemptCount) && wom.failedAttemptCount! >= 0) {
+    fields.failed_attempt_count = field(String(wom.failedAttemptCount), "WOM earlier visits marked Incomplete");
+  }
+  if (!fields.labor_cost && typeof wom.laborTotal === "number" && cents(wom.laborTotal) > 0) {
+    const count = wom.laborLineCount ?? 0;
+    fields.labor_cost = field(money(wom.laborTotal), `WOM labor job codes${count ? ` (${count} line${count === 1 ? "" : "s"})` : ""}`);
+  }
+  if (!fields.trip_cost && typeof wom.tripCharge === "number" && cents(wom.tripCharge) > 0) {
+    fields.trip_cost = field(money(wom.tripCharge), "WOM trip charge");
+  }
+}
+
+function mapTripFallback(row: Row, fields: RrPrefillResponse["fields"]): void {
+  const amount = rrNumber(cell(row, "CC_LAB_NET"));
+  if (amount == null || cents(amount) <= 0) return;
+  fields.trip_cost = {
+    value: money(amount),
+    source: "snowflake",
+    source_field: "CC_LAB_NET (matches the trip charge on most orders; confirm)",
+  };
+}
+
+const CANCELLED_ORDER_STATUS = "CA";
+
+function mapHistory(history: Row[], fields: RrPrefillResponse["fields"], warnings: string[]): void {
+  const anchor = history[0];
+  if (!anchor) return;
+  const usable = cell(anchor, "SERIAL_USABLE");
+  if (usable !== true && String(usable).toLowerCase() !== "true") {
+    warnings.push("The model or serial on the service order is missing or a placeholder, so the 12-month history was not filled.");
+    return;
+  }
+  const others = new Map<string, number>();
+  for (const row of history) {
+    const so = cell(row, "H_SO");
+    if (!present(so)) continue;
+    if (String(cell(row, "H_STATUS") ?? "").trim().toUpperCase() === CANCELLED_ORDER_STATUS) continue;
+    const key = `${cell(row, "SERVICE_UNIT")}-${String(so).trim()}`;
+    others.set(key, Math.max(others.get(key) ?? 0, rrNumber(cell(row, "SAME_PART_LINES")) ?? 0));
+  }
+  const count = others.size;
+  const capped = history.length >= 60;
+  fields.other_service_orders_12mo = {
+    value: String(count),
+    source: "snowflake",
+    source_field: `Other service orders on the same model and serial in the last 12 months${capped ? " (at least)" : ""}`,
+  };
+  const repeats = [...others.values()].filter((lines) => lines > 0).length;
+  if (repeats > 0) {
+    fields.same_part_or_system_repeat = {
+      value: true,
+      source: "snowflake",
+      source_field: `A part on this order was installed on ${repeats} earlier order${repeats === 1 ? "" : "s"} for this appliance`,
+    };
+  } else if (count === 0) {
+    fields.same_part_or_system_repeat = {
+      value: false,
+      source: "snowflake",
+      source_field: "No other service order on this appliance in the last 12 months",
+    };
+  } else {
+    warnings.push("Earlier orders on this appliance installed different part numbers. Check whether it is the same system.");
+  }
+}
+
 export function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -413,6 +541,19 @@ export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillRespo
   mapTrip(input.techhub ?? [], fields, warnings);
   mapConfidence(input.techhub ?? [], fields, warnings);
   mapParts(input.parts ?? [], fields, warnings);
+  mapWom(input.wom ?? null, fields);
+  if (!fields.labor_cost) {
+    const lines = laborLines(input.parts ?? [], warnings);
+    if (lines && cents(lines.total) > 0) {
+      fields.labor_cost = {
+        value: money(lines.total),
+        source: "snowflake",
+        source_field: `NPSXTPN labor lines (${lines.count} line${lines.count === 1 ? "" : "s"}, type L)`,
+      };
+    }
+  }
+  if (!fields.trip_cost) mapTripFallback(row, fields);
+  if (input.history) mapHistory(input.history, fields, warnings);
 
   const result = withTicket(contract(order, "partial", fields, warnings), input);
   result.status = RR_AUTHORITATIVE_FIELDS.every((name) => name in result.fields) ? "found" : "partial";
@@ -449,6 +590,7 @@ function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefill
   if (!fields.appliance_type && appliance) {
     fields.appliance_type = { value: appliance, source: "ticket", source_field: "Appliance the technician picked" };
   }
+  if (input.row == null) mapWom(input.wom ?? null, fields);
   if (!fields.age_years && input.row == null && input.hssomPurchaseDate) {
     ageFromDate(input.hssomPurchaseDate, "hssom", "HSSOM purchase date", fields, warnings, input.asOf ?? todayUtc());
   }
@@ -463,6 +605,13 @@ function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefill
       );
     }
     fields.age_years = { value: String(techAge), source: "ticket", source_field: "Age the technician entered (from the customer)" };
+  }
+  if (input.servicerType === "Sears Tech" || input.servicerType === "1099") {
+    fields.servicer_type = {
+      value: input.servicerType,
+      source: "ticket",
+      source_field: input.servicerType === "1099" ? "Technician's account (1099 provider company)" : "Technician's account (Sears technician)",
+    };
   }
   const grade = tech?.applianceGrade;
   if (grade && kind) {
@@ -493,7 +642,7 @@ function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefill
 // ---------------------------------------------------------------------------
 
 export type RepairReplaceSnowflakeResult =
-  | { status: "found"; row: Row; techhub: Row[] | null; parts: Row[] | null }
+  | { status: "found"; row: Row; techhub: Row[] | null; parts: Row[] | null; history?: Row[] | null }
   | { status: "not_found" }
   | { status: "unavailable" };
 
@@ -508,18 +657,27 @@ export type RepairReplaceHssomLookup = (
 export interface RepairReplaceTicketInput {
   ticketApplianceKind?: string | null;
   techDetails?: TechApplianceDetails | null;
+  servicerType?: "Sears Tech" | "1099" | null;
 }
+
+// The WOM work-order facts (createWomRepairFactsLookup). Bounded and never
+// rejects; unavailable when WOM is not configured.
+export type RepairReplaceWomLookup = (
+  district: string,
+  so: string,
+) => Promise<{ status: "found"; facts: RrWomFacts; warnings: string[] } | { status: "not_found" } | { status: "unavailable" }>;
 
 export async function loadRepairReplacePrefill(
   serviceOrder: string,
   ticket: RepairReplaceTicketInput,
   lookup: ((district: string, so: string) => Promise<RepairReplaceSnowflakeResult>) | null,
   hssomLookup: RepairReplaceHssomLookup | null = null,
+  womLookup: RepairReplaceWomLookup | null = null,
 ): Promise<RrPrefillResponse> {
-  const { ticketApplianceKind, techDetails } = ticket;
+  const { ticketApplianceKind, techDetails, servicerType } = ticket;
   const match = /^(\d{4})-(\d{8})$/.exec((serviceOrder || "").trim());
   if (!lookup || !match) {
-    const result = buildRepairReplacePrefill({ serviceOrder, row: null, unavailable: true, ticketApplianceKind, techDetails });
+    const result = buildRepairReplacePrefill({ serviceOrder, row: null, unavailable: true, ticketApplianceKind, techDetails, servicerType });
     if (!lookup) result.warnings = ["The service-order lookup is off here. Enter the visit manually.", ...result.warnings.slice(LOOKUP_FAILED.length)];
     return result;
   }
@@ -527,6 +685,9 @@ export async function loadRepairReplacePrefill(
   const wantsHssom = hssomLookup != null && techDetails?.applianceAgeYears == null;
   const hssomPromise = wantsHssom
     ? hssomLookup!(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
+    : Promise.resolve(null);
+  const womPromise = womLookup
+    ? womLookup(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
     : Promise.resolve(null);
   let found: RepairReplaceSnowflakeResult;
   try {
@@ -536,15 +697,21 @@ export async function loadRepairReplacePrefill(
   }
   const hssom = await hssomPromise;
   const hssomPurchaseDate = hssom?.status === "found" ? hssom.purchaseDate ?? null : null;
+  const womResult = await womPromise;
+  const wom = womResult?.status === "found" ? womResult.facts : null;
+  const womWarnings = womResult?.status === "found" ? womResult.warnings : [];
+  const shared = { serviceOrder, ticketApplianceKind, techDetails, servicerType, hssomPurchaseDate, wom };
   if (found.status !== "found") {
-    return buildRepairReplacePrefill({
-      serviceOrder, row: null, unavailable: found.status === "unavailable", ticketApplianceKind, techDetails, hssomPurchaseDate,
-    });
+    const result = buildRepairReplacePrefill({ ...shared, row: null, unavailable: found.status === "unavailable" });
+    result.warnings.push(...womWarnings);
+    return result;
   }
   const result = buildRepairReplacePrefill({
-    serviceOrder, row: found.row, techhub: found.techhub, parts: found.parts, ticketApplianceKind, techDetails, hssomPurchaseDate,
+    ...shared, row: found.row, techhub: found.techhub, parts: found.parts, history: found.history ?? null,
   });
+  result.warnings.push(...womWarnings);
   if (found.techhub == null) result.warnings.push("TechHub lookup failed, so labor, trip, and confidence were not filled.");
   if (found.parts == null) result.warnings.push("Parts lookup failed, so parts_cost was not filled.");
+  if (found.history === null) result.warnings.push("The 12-month history lookup failed, so it was not filled.");
   return result;
 }

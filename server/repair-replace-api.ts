@@ -32,6 +32,9 @@ export interface RepairReplaceApiDeps {
   requireRole: (...roles: string[]) => RequestHandler;
   isEnabled(): boolean;
   getSubmission(id: number): Promise<Submission | undefined>;
+  // The submitting technician's account; companyName is set for 1099
+  // provider accounts (shared/provider1099.ts).
+  getUser(id: number): Promise<{ role: string; companyName?: string | null } | undefined>;
   // loadRepairReplacePrefill with the Snowflake and HSSOM lookups (or null
   // when off); bounded and never rejects.
   loadPrefill(serviceOrder: string, ticket: RepairReplaceTicketInput): Promise<RrPrefillResponse>;
@@ -115,9 +118,13 @@ export function registerRepairReplaceApi(app: Express, deps: RepairReplaceApiDep
     try {
       const ticket = await loadTicket(deps, req, res);
       if (!ticket) return;
+      const technician = ticket.submission.technicianId
+        ? await deps.getUser(ticket.submission.technicianId).catch(() => undefined)
+        : undefined;
       const prefill = await deps.loadPrefill(ticket.submission.serviceOrder, {
         ticketApplianceKind: ticket.submission.applianceKind ?? null,
         techDetails: parseStoredTechApplianceDetails(ticket.submission.techApplianceDetails),
+        servicerType: technician?.role === "technician" ? (technician.companyName?.trim() ? "1099" : "Sears Tech") : null,
       });
       console.info(`[repair-replace] prefill submission=${ticket.submission.id} status=${prefill.status} fields=${Object.keys(prefill.fields).join(",") || "none"}`);
       res.json(prefill);

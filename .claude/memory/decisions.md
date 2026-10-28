@@ -1,3 +1,9 @@
+## 2026-10-28 — Calculator source order: TechHub, then WOM, then the parts table / CC_LAB_NET
+
+- **Decision:** labor = TechHub `deLabor` > WOM `LabourJobCodes` > NPSXTPN type `L` lines; trip = TechHub `deTripCharge` > WOM `TripChargeAmount` > `CC_LAB_NET`. Visits come from WOM only (`totNumVisits` and `N_ATP` were rejected by the handoff). The 12-month history matches model + serial (`PSV_ITM_MDL_NO` / `PSV_MDS_SRL_NO`), not `SVC_CUS_ID_NO`, which the handoff showed merges unrelated orders. `same_part_or_system_repeat` is false only when there is no other order at all.
+- **Why:** Enzo (2026-10-28) asked to fill as much as possible from every source (ai-agent-mcp tools, HSSOM, WOM). On 7108-14335276 TechHub had no labor or trip estimate.
+- **Not done:** Koyfin (VPN only), SIS (its own credentials), UE model (other role), repair hours, backorder days, contract spend.
+
 ## 2026-10-28 — Sears Protect gets the AHS tech details plus age; the technician's age wins
 
 - **Decision:** Sears Protect authorization tickets ask the same four tech details as AHS / First American plus Appliance Age (whole years, from the customer), and the calculator uses that age ahead of any service-order date. The grade picks the legacy catalog row only where it names exactly one.

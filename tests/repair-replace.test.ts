@@ -24,6 +24,7 @@ import {
   type RepairReplaceTicketInput,
 } from "../server/repair-replace-prefill";
 import {
+  REPAIR_REPLACE_HISTORY_SQL,
   REPAIR_REPLACE_ORDER_SQL,
   REPAIR_REPLACE_PARTS_SQL,
   REPAIR_REPLACE_TECHHUB_SQL,
@@ -428,19 +429,32 @@ describe("prefill lookup", () => {
   const settled = (rows: any[]): PromiseSettledResult<any[]> => ({ status: "fulfilled", value: rows });
   const failed = (message: string): PromiseSettledResult<any[]> => ({ status: "rejected", reason: new Error(message) });
 
-  it("runs three statements keyed on SO and district, and keeps rows under the resolved unit only", async () => {
+  it("runs four statements keyed on SO and district, and keeps rows under the resolved unit only", async () => {
     const query = vi.fn<AhsPrefillQuery>(async () => [
       settled([{ SERVICE_UNIT: "0008366", UNIT_COUNT: 1, MDS_CD: "WASHERFL" }]),
       settled([{ SERVICE_UNIT: "0008366", CRT_TS: "2026-10-15T16:36:18", UDF_FLD_NM: "deLabor", UDF_FLD_VAL_TX: "1~CC~10" },
         { SERVICE_UNIT: "0009999", CRT_TS: "2026-10-15T16:36:18", UDF_FLD_NM: "deLabor", UDF_FLD_VAL_TX: "1~CC~999" }]),
       settled([{ SERVICE_UNIT: "0008366", SVC_PRT_STS_CD: "I", PRT_SEL_PRC_AM: "5" }]),
+      settled([{ SERVICE_UNIT: "0008366", SERIAL_USABLE: true, H_SO: "10000001" },
+        { SERVICE_UNIT: "0009999", SERIAL_USABLE: true, H_SO: "10000002" }]),
     ]);
     quietLogs();
     const result = await createRepairReplaceLookup(query)("7995", "11075199");
     const [statements] = query.mock.calls[0];
-    expect(statements.map((s) => s.sqlText)).toEqual([REPAIR_REPLACE_ORDER_SQL, REPAIR_REPLACE_TECHHUB_SQL, REPAIR_REPLACE_PARTS_SQL]);
-    expect(statements.map((s) => s.binds)).toEqual([["11075199", "7995"], ["11075199", "11075199", "7995"], ["11075199", "11075199", "7995"]]);
-    expect(result).toMatchObject({ status: "found", techhub: [{ UDF_FLD_VAL_TX: "1~CC~10" }], parts: [{ PRT_SEL_PRC_AM: "5" }] });
+    expect(statements.map((s) => s.sqlText)).toEqual([
+      REPAIR_REPLACE_ORDER_SQL, REPAIR_REPLACE_TECHHUB_SQL, REPAIR_REPLACE_PARTS_SQL, REPAIR_REPLACE_HISTORY_SQL,
+    ]);
+    expect(statements.map((s) => s.binds)).toEqual([
+      ["11075199", "7995"], ["11075199", "11075199", "7995"], ["11075199", "11075199", "7995"],
+      ["11075199", "7995", "11075199", "11075199"],
+    ]);
+    expect(result).toMatchObject({
+      status: "found", techhub: [{ UDF_FLD_VAL_TX: "1~CC~10" }], parts: [{ PRT_SEL_PRC_AM: "5" }], history: [{ H_SO: "10000001" }],
+    });
+    expect((result as any).history).toHaveLength(1);
+    // Placeholder binds: the history SQL has exactly four.
+    expect(REPAIR_REPLACE_HISTORY_SQL.split("?").length - 1).toBe(4);
+    expect(REPAIR_REPLACE_HISTORY_SQL).toContain("DATEADD(day, -365, CURRENT_DATE())");
     expect(REPAIR_REPLACE_TECHHUB_SQL).toContain("PRD_DB2.HS_DW_VIEWS.NPSXTFS");
     expect(REPAIR_REPLACE_TECHHUB_SQL).not.toContain("CC_LAB_NET");
   });
@@ -450,7 +464,7 @@ describe("prefill lookup", () => {
     const partial = await createRepairReplaceLookup(async () => [
       settled([{ SERVICE_UNIT: "0008175", UNIT_COUNT: 2, MDS_CD: "SECRET-CODE" }]), failed("NPSXTFS does not exist"), failed("timeout"),
     ])("8175", "12345678");
-    expect(partial).toMatchObject({ status: "found", techhub: null, parts: null });
+    expect(partial).toMatchObject({ status: "found", techhub: null, parts: null, history: null });
     expect(await createRepairReplaceLookup(async () => [failed("bad column"), settled([]), settled([])])("8175", "12345678"))
       .toEqual({ status: "unavailable" });
     expect(await createRepairReplaceLookup(async () => [
@@ -497,6 +511,72 @@ describe("prefill lookup", () => {
 const TECH_DETAILS = {
   applianceGrade: "high" as const, applianceColor: "White" as const, applianceLocation: "Kitchen" as const, partFunction: "Pumps water",
 };
+
+describe("prefill from parts labor lines, CC_LAB_NET, history and WOM", () => {
+  it("keeps labor-coded part lines out of parts and uses them for labor when nothing else has labor", () => {
+    const result = prefill({ techhub: [], parts: [
+      { SVC_PRT_STS_CD: "O", SVC_PRT_TYP_CD: "D", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "100.00" },
+      { SVC_PRT_STS_CD: "O", SVC_PRT_TYP_CD: "L", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "89.50" },
+      { SVC_PRT_STS_CD: "X", SVC_PRT_TYP_CD: "L", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "500" },
+    ] });
+    expect(result.fields.parts_cost?.value).toBe("100.00");
+    expect(result.fields.labor_cost).toMatchObject({ value: "89.50", source_field: "NPSXTPN labor lines (1 line, type L)" });
+    const techhubWins = prefill({ techhub: techhub(), parts: [{ SVC_PRT_STS_CD: "O", SVC_PRT_TYP_CD: "L", PRT_SEL_PRC_AM: "89.50" }] });
+    expect(techhubWins.fields.labor_cost?.source_field).toContain("TechHub");
+  });
+
+  it("uses CC_LAB_NET for the trip charge only when TechHub and WOM have none", () => {
+    expect(prefill({ row: row({ CC_LAB_NET: "139" }), techhub: [] }).fields.trip_cost)
+      .toMatchObject({ value: "139.00", source_field: "CC_LAB_NET (matches the trip charge on most orders; confirm)" });
+    expect(prefill({ row: row({ CC_LAB_NET: "0" }), techhub: [] }).fields.trip_cost).toBeUndefined();
+    expect(prefill({ row: row({ CC_LAB_NET: "139" }), techhub: [], wom: { tripCharge: 99 } }).fields.trip_cost)
+      .toMatchObject({ value: "99.00", source: "wom" });
+  });
+
+  it("counts other orders on the same appliance, not cancelled, and finds repeated parts", () => {
+    const h = (so: string | null, status = "CO", same = 0) =>
+      ({ SERVICE_UNIT: "0008175", SERIAL_USABLE: true, H_SO: so, H_STATUS: status, SAME_PART_LINES: same });
+    const none = prefill({ history: [h(null)] });
+    expect(none.fields.other_service_orders_12mo?.value).toBe("0");
+    expect(none.fields.same_part_or_system_repeat?.value).toBe(false);
+    const repeat = prefill({ history: [h("1"), h("2", "CA", 3), h("3", "CO", 2)] });
+    expect(repeat.fields.other_service_orders_12mo?.value).toBe("2");
+    expect(repeat.fields.same_part_or_system_repeat).toMatchObject({ value: true, source: "snowflake" });
+    const different = prefill({ history: [h("1")] });
+    expect(different.fields.same_part_or_system_repeat).toBeUndefined();
+    expect(different.warnings).toContain("Earlier orders on this appliance installed different part numbers. Check whether it is the same system.");
+    const placeholder = prefill({ history: [{ SERVICE_UNIT: "0008175", SERIAL_USABLE: false, H_SO: null }] });
+    expect(placeholder.fields.other_service_orders_12mo).toBeUndefined();
+    expect(prefill({ history: null }).fields.other_service_orders_12mo).toBeUndefined();
+  });
+
+  it("fills visits from WOM, and WOM labor after TechHub", () => {
+    const result = prefill({ techhub: [], wom: { visitNumber: 2, unresolved: true, failedAttemptCount: 1, laborTotal: 210, laborLineCount: 2 } });
+    expect(result.fields.visit_number).toMatchObject({ value: "2", source: "wom" });
+    expect(result.fields.unresolved).toMatchObject({ value: true, source: "wom" });
+    expect(result.fields.failed_attempt_count?.value).toBe("1");
+    expect(result.fields.labor_cost).toMatchObject({ value: "210.00", source: "wom", source_field: "WOM labor job codes (2 lines)" });
+    expect(prefill({ techhub: techhub(), wom: { laborTotal: 210 } }).fields.labor_cost?.source).toBe("snowflake");
+    expect(prefill({ row: null, wom: { visitNumber: 3 } }).fields.visit_number?.value).toBe("3");
+    expect(prefill({ wom: { laborTotal: 0, visitNumber: 0 } }).fields.visit_number).toBeUndefined();
+  });
+
+  it("fills the servicer from the technician's account", () => {
+    expect(prefill({ servicerType: "1099" }).fields.servicer_type).toMatchObject({ value: "1099", source: "ticket" });
+    expect(prefill({ servicerType: null }).fields.servicer_type).toBeUndefined();
+  });
+
+  it("passes WOM facts and warnings through the loader, and never needs WOM", async () => {
+    const snowflake = async () => ({ status: "found" as const, row: { MDS_CD: "WASHERFL" }, techhub: [], parts: [], history: [] });
+    const wom = vi.fn(async () => ({ status: "found" as const, facts: { visitNumber: 2 }, warnings: ["A WOM labor line has no readable price, so labor was not filled."] }));
+    const result = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, null, wom);
+    expect(wom).toHaveBeenCalledWith("8175", "13538277");
+    expect(result.fields.visit_number?.value).toBe("2");
+    expect(result.warnings).toContain("A WOM labor line has no readable price, so labor was not filled.");
+    const down = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, null, async () => { throw new Error("x"); });
+    expect(down.fields.visit_number).toBeUndefined();
+  });
+});
 
 describe("prefill from what the technician entered", () => {
   it("uses the technician's age ahead of every date, and warns when a date disagrees", () => {
@@ -551,11 +631,11 @@ const TECH = { id: 40, role: "technician" };
 function ticket(overrides: Record<string, unknown> = {}) {
   return {
     id: 601, serviceOrder: "8175-13538277", warrantyType: "sears_protect", requestType: "authorization",
-    ticketStatus: "pending", assignedTo: AGENT.id, applianceKind: "washer", procId: "SPHW100", ...overrides,
+    ticketStatus: "pending", assignedTo: AGENT.id, applianceKind: "washer", procId: "SPHW100", technicianId: 40, ...overrides,
   } as any;
 }
 
-function harness(options: { submission?: any; enabled?: boolean } = {}) {
+function harness(options: { submission?: any; enabled?: boolean; companyName?: string } = {}) {
   const submission = options.submission ?? ticket();
   const deps = {
     authenticateToken: (req: any, res: any, next: any) => {
@@ -568,6 +648,7 @@ function harness(options: { submission?: any; enabled?: boolean } = {}) {
       roles.includes(req.user.role) ? next() : res.status(403).json({ error: "Access denied" }),
     isEnabled: () => options.enabled ?? true,
     getSubmission: vi.fn(async (id: number) => (id === submission.id ? submission : undefined)),
+    getUser: vi.fn(async (id: number) => (id === 40 ? { role: "technician", companyName: options.companyName ?? null } : undefined)),
     loadPrefill: vi.fn(async (serviceOrder: string, ticketInput: RepairReplaceTicketInput) => buildRepairReplacePrefill({
       serviceOrder, row: row(), techhub: techhub(), parts: parts(), ...ticketInput, asOf: "2024-01-01",
     })),
@@ -595,11 +676,14 @@ describe("repair / replace endpoints", () => {
     const off = harness({ enabled: false });
     expect((await request(off.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT))).status).toBe(404);
     expect(off.deps.getSubmission).not.toHaveBeenCalled();
-    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", { ticketApplianceKind: "washer", techDetails: null });
+    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", { ticketApplianceKind: "washer", techDetails: null, servicerType: "Sears Tech" });
+    const provider = harness({ companyName: "A1 APPLIANCE REPAIR" });
+    await request(provider.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT));
+    expect(provider.deps.loadPrefill.mock.calls[0][1]).toMatchObject({ servicerType: "1099" });
     const told = harness({ submission: ticket({ techApplianceDetails: JSON.stringify({ ...TECH_DETAILS, applianceAgeYears: 6 }) }) });
     await request(told.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT));
     expect(told.deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", {
-      ticketApplianceKind: "washer", techDetails: { ...TECH_DETAILS, applianceAgeYears: 6 },
+      ticketApplianceKind: "washer", techDetails: { ...TECH_DETAILS, applianceAgeYears: 6 }, servicerType: "Sears Tech",
     });
   });
 

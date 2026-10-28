@@ -47,6 +47,7 @@ import { vrsBridgeStore } from "./vrs-sasha-store";
 import { registerAhsReviewApi } from "./ahs-review-api";
 import { registerRepairReplaceApi } from "./repair-replace-api";
 import { loadRepairReplacePrefill } from "./repair-replace-prefill";
+import { lookupWomRepairFacts } from "./services/wom-repair-facts";
 import {
   buildVrsAuthorizeEnrichmentCandidates,
   dispatchVrsAiForSubmission,
@@ -3659,6 +3660,7 @@ export async function registerRoutes(
     requireRole,
     isEnabled: isRepairReplaceCalculatorEnabled,
     getSubmission: (id) => storage.getSubmission(id),
+    getUser: (id) => storage.getUser(id),
     // HSSOM gives the purchase date when the tech entered no age; it answers
     // unavailable while AHS_HSSOM_CUSTOMER_PREFILL_ENABLED is off. Only the
     // date is kept: the customer's name and address are dropped here.
@@ -3666,7 +3668,7 @@ export async function registerRoutes(
       loadRepairReplacePrefill(serviceOrder, ticket, fetchRepairReplaceRows, async (district, so) => {
         const found = await lookupHssomOrder(district, so);
         return found.status === "found" ? { status: "found", purchaseDate: found.purchaseDate } : found;
-      }),
+      }, lookupWomRepairFacts),
     createNote: (note) => storage.createSubmissionNote(note),
   });
 
@@ -7854,7 +7856,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/shsai/query", authenticateToken, requireRole("vrs_agent"), async (req, res) => {
+  app.post("/api/shsai/query", authenticateToken, requireRole("vrs_agent", "admin"), async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const parsed = z.object({ serviceOrder: z.string().min(1) }).safeParse(req.body);
@@ -7872,7 +7874,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/shsai/followup", authenticateToken, requireRole("vrs_agent"), async (req, res) => {
+  app.post("/api/shsai/followup", authenticateToken, requireRole("vrs_agent", "admin"), async (req, res) => {
     try {
       const parsed = z.object({
         sessionId: z.string().min(1),
