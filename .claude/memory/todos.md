@@ -7,6 +7,7 @@
 - [ ] Sources still missing (same as the Python handoff): replacement cost (beyond the legacy reference prices), visit history / unresolved / failed attempts (WOM work order), 12-month repeat history, backorder days, contract spend (HSSOM).
 - [x] Sears Protect tech form asks grade, color, location, part function and appliance age; the calculator uses the age and grade (2026-10-28).
 - [x] Calculator: WOM visits/labor/trip, 12-month history, NPSXTPN labor lines, CC_LAB_NET trip fallback, servicer type; admins get Service Order History (2026-10-28).
+- [ ] Run the diagnostic in Replit after Sharyl's OrderLookup grant (2026-10-29): section 8 must show `token: ok`, an `HSSOMOrderLookupService` grant, Order Lookup `found`, and whether the body has any calculator keys (jobCode/labor/trip/visit); WOM work-orders grant still to request from HSSOM for VRS.
 - [ ] Run the diagnostic on 7108-14335276 in Replit: sections 7 (history statement, part types) and 9 (WOM: is a token configured, does the HSSOM token reach the work-orders gateway, which key holds the labor price).
 - [ ] WOM in DEV needs `WOM_WORK_ORDER_URL`, `WOM_TENANT_ID` and a PROD token (`WOM_BEARER_TOKEN`, or PROD HSSOM credentials) in Replit Secrets; DEV's HSSOM credentials are QA.
 - [ ] Still no source: replacement cost beyond the reference prices, backorder days, contract spend, repair hours.
@@ -176,3 +177,4 @@
 - [x] Add notification subscriptions to admin dashboard (2026-04-16)
 - [x] Enable AHS and First American warranty submissions (2026-04-16)
 - [x] Split NLA parts entry into NLA and Available Parts sections (2026-04-16)
+- [ ] Run updated diagnostic in Replit; confirm Order Lookup JSON key paths for ORDER_DETAILS (tripCharge, jobCodes chargeAmount, monetaryDetails, attempts, merchandise.history), then wire them into the calculator prefill (source "hssom") ahead of/alongside WOM.

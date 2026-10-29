@@ -1,3 +1,8 @@
+## 2026-10-29 — Diagnostic HSSOM checks run without Snowflake and the feature flag
+
+- **Decision:** the diagnostic's Order Lookup call bypasses `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`, and sections 8-9 run even when Snowflake fails. The response's key paths (names only, depth 3; odd key names masked) are printed to learn whether SOM's Order Lookup carries anything for the calculator; values are never printed.
+- **Why:** HSSOM granted VRS OrderLookup on 2026-10-29 and Enzo wants calculator fields prefilled from SOM; the check has to answer whether the token carries the grant and what the body holds, without exposing customer data.
+
 ## 2026-10-28 — Calculator source order: TechHub, then WOM, then the parts table / CC_LAB_NET
 
 - **Decision:** labor = TechHub `deLabor` > WOM `LabourJobCodes` > NPSXTPN type `L` lines; trip = TechHub `deTripCharge` > WOM `TripChargeAmount` > `CC_LAB_NET`. Visits come from WOM only (`totNumVisits` and `N_ATP` were rejected by the handoff). The 12-month history matches model + serial (`PSV_ITM_MDL_NO` / `PSV_MDS_SRL_NO`), not `SVC_CUS_ID_NO`, which the handoff showed merges unrelated orders. `same_part_or_system_repeat` is false only when there is no other order at all.

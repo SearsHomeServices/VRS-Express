@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Diagnostic checks the HSSOM token and Order Lookup (2026-10-29)
+- `scripts/diagnostics/ahs-prefill-check.mts` section 8 now gets a fresh
+  HSSOM token and prints its subject, expiry and grant paths (never the
+  token), whether those grants claim the Order Lookup and WOM work-orders
+  paths (unverified; HSSOM enforces access), the live Order Lookup's status
+  and which fields came back (yes/no, purchase year only), and the
+  response's key paths to depth 4 (names only). It also requests the
+  spec's `?type=ORDER_DETAILS` and `?type=ORDER` views and lists only
+  their calculator-related key paths (job codes, labor, trip, attempts,
+  parts, history, monetary totals, provider).
+  The lookup runs even with `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED` off.
+- A Snowflake failure (including missing settings) now stops only sections
+  1-7; sections 8 and 9 still run.
+
 ### Added - Calculator fills labor, trip, visits and 12-month history; admins get Service Order History (2026-10-28)
 - **Service Order History** answered 403 for admins (`/api/shsai/query` and
   `/followup` allowed only `vrs_agent`). Admins can now use it too.

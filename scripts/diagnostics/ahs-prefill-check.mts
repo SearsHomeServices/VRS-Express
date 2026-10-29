@@ -6,9 +6,12 @@
 // whether the dispatch / model / serial columns tried before
 // (CTA_NO, PSV_ITM_MDL_NO, PSV_MDS_SRL_NO) exist and hold a value, and
 // whether the repair / replace calculator's statements answer, and what the
-// WOM work order gives the calculator (visit, attempts, trip, labor).
-// Uses the app's Snowflake env vars. Prints no secrets and no values: only
-// yes/no, counts, warranty types and masked shapes (digits -> 9, letters -> A).
+// WOM work order gives the calculator (visit, attempts, trip, labor), what
+// a fresh HSSOM token is granted, and which fields the HSSOM Order Lookup
+// returns for the order. Sections 8 and 9 still run when Snowflake fails.
+// Uses the app's Snowflake, HSSOM and WOM env vars. Prints no secrets, no
+// tokens and no values: only yes/no, counts, warranty types, grant paths and
+// masked shapes (digits -> 9, letters -> A).
 import { createRequire } from "node:module";
 import { createPrivateKey } from "node:crypto";
 import path from "node:path";
@@ -22,6 +25,8 @@ const lookup = await import(pathToFileURL(path.join(root, "server/services/snowf
 const rrPrefill = await import(pathToFileURL(path.join(root, "server/repair-replace-prefill.ts")).href);
 const womFacts = await import(pathToFileURL(path.join(root, "server/services/wom-repair-facts.ts")).href);
 const womClient = await import(pathToFileURL(path.join(root, "server/services/wom-work-order.ts")).href);
+const hssomAuth = await import(pathToFileURL(path.join(root, "server/services/hssom-auth.ts")).href);
+const hssomLookup = await import(pathToFileURL(path.join(root, "server/services/hssom-order-lookup.ts")).href);
 const { deriveWarrantyFromProcId } = await import(pathToFileURL(path.join(root, "shared/warranty.ts")).href);
 
 const match = /^(\d{4})-(\d{8})$/.exec((process.argv[2] ?? "").trim());
@@ -32,6 +37,9 @@ if (!match) {
 const [, district, so] = match;
 const districtUnit = district.padStart(7, "0");
 const TABLE = "PRD_DB2.HS_PERM_TBLS.IH_SERVICEORDER_FULLDETAIL_TBL";
+// The documented PROD WOM path (wom-work-order.ts), for the grant check
+// when WOM_WORK_ORDER_URL is not set.
+const WOM_DOCUMENTED_URL = "https://hssom-api-gateway.shs-core.com/v1/api/sb/proxy/serviceOrder/api/v1/work-orders";
 
 function normalizePrivateKey(key: string): string {
   const normalized = key.trim().replace(/\\n/g, "\n");
@@ -50,16 +58,24 @@ if (privateKey.includes("ENCRYPTED PRIVATE KEY")) {
   privateKey = createPrivateKey({ key: privateKey, format: "pem", passphrase: process.env.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE })
     .export({ type: "pkcs8", format: "pem" }).toString();
 }
-const connection = sdk.createConnection({
-  account: process.env.SNOWFLAKE_ACCOUNT,
-  username: process.env.SNOWFLAKE_USERNAME,
-  authenticator: "SNOWFLAKE_JWT",
-  privateKey,
-  warehouse: process.env.SNOWFLAKE_WAREHOUSE,
-  database: "PRD_TPMS",
-  schema: "HSTECH",
-});
-const conn: any = await new Promise((resolve, reject) => connection.connect((err: any, c: any) => (err ? reject(err) : resolve(c))));
+// Snowflake failures (missing settings included) stop only sections 1-7.
+let connection: any = null;
+let conn: any = null;
+let connectError: unknown = null;
+try {
+  connection = sdk.createConnection({
+    account: process.env.SNOWFLAKE_ACCOUNT,
+    username: process.env.SNOWFLAKE_USERNAME,
+    authenticator: "SNOWFLAKE_JWT",
+    privateKey,
+    warehouse: process.env.SNOWFLAKE_WAREHOUSE,
+    database: "PRD_TPMS",
+    schema: "HSTECH",
+  });
+  conn = await new Promise((resolve, reject) => connection.connect((err: any, c: any) => (err ? reject(err) : resolve(c))));
+} catch (e) {
+  connectError = e;
+}
 const run = (sqlText: string, binds: string[]): Promise<any[]> =>
   new Promise((resolve, reject) =>
     conn.execute({ sqlText, binds, complete: (err: any, _s: any, rows: any[]) => (err ? reject(err) : resolve(rows || [])) }),
@@ -73,6 +89,7 @@ const warranty = (row: any, partner = "CMB_THD_PTY_ID", client = "CLIENT_NM") =>
 
 console.log(`AHS prefill check for SO ${district}-${so} (district unit ${districtUnit})\n`);
 try {
+  if (!conn) throw connectError;
   await run("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 60", []);
 
   // 1. Rows and units for this SO number.
@@ -156,44 +173,150 @@ try {
     const history = rrRows[3] ?? [];
     console.log(`   history: serial usable=${String(history[0]?.SERIAL_USABLE ?? "n/a")}, other orders=${history.filter((h) => present(h.H_SO)).length}, with a repeated part=${history.filter((h) => Number(h.SAME_PART_LINES) > 0).length}`);
   }
+} catch (e) {
+  console.log("SNOWFLAKE ERROR (sections 1-7 stopped):", errorText(e));
+}
 
-  // 8. HSSOM settings (names only).
-  console.log("8. HSSOM settings present:");
-  for (const name of ["AHS_HSSOM_CUSTOMER_PREFILL_ENABLED", "HSSOM_ORDER_LOOKUP_URL", "HSSOM_AUTH_URL", "HSSOM_CLIENT_CODE", "HSSOM_CLIENT_SECRET", "HSSOM_CLIENT_ID"]) {
-    console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+// 8. HSSOM: settings (names only); a fresh token's subject, expiry and
+// grant paths (never the token); whether those grants claim the Order
+// Lookup and WOM paths (unverified claims, HSSOM enforces access); and
+// which fields the Order Lookup returns for this order (never the values).
+console.log("8. HSSOM settings present:");
+for (const name of ["AHS_HSSOM_CUSTOMER_PREFILL_ENABLED", "HSSOM_ORDER_LOOKUP_URL", "HSSOM_AUTH_URL", "HSSOM_CLIENT_CODE", "HSSOM_CLIENT_SECRET", "HSSOM_CLIENT_ID"]) {
+  console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+}
+const authConfigured = hssomAuth.readHssomAuthConfig() != null;
+let hssomToken: string | null = null;
+if (!authConfigured) {
+  console.log("   token: skipped (auth settings missing, or HSSOM_AUTH_URL is not https)");
+} else {
+  try {
+    hssomToken = await hssomAuth.getHssomBearerToken();
+    console.log("   token: ok");
+  } catch (e) {
+    console.log(`   token: FAILED (${errorText(e)})`);
   }
-
-  // 9. WOM work order (calculator): config, status, which facts it gives
-  // (numbers only; they are not customer data) and the record's key paths
-  // with types, never values. Customer subtrees are skipped.
-  console.log("9. WOM work order (calculator):");
-  for (const name of ["WOM_WORK_ORDER_URL", "WOM_TENANT_ID", "WOM_BEARER_TOKEN"]) {
-    console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+}
+const lookupConfig = hssomLookup.readHssomOrderLookupConfig();
+const hssomOrderId: string | null = hssomLookup.buildHssomOrderId(district, so);
+if (hssomToken) {
+  const summary = hssomAuth.hssomTokenGrants(hssomToken);
+  const expiresIn = summary?.exp != null ? Math.round(summary.exp - Date.now() / 1000) : null;
+  console.log(`   token subject=${summary?.sub ?? "unknown"}, expires in ${expiresIn ?? "unknown"} s`);
+  console.log(`   grants (${summary?.grants.length ?? 0}):`);
+  for (const g of summary?.grants ?? []) console.log(`     ${g.method ?? "ANY"} ${g.pattern}`);
+  // Grants may be written relative to the service rather than the gateway
+  // URL, so every path suffix is tried; the first match is shown.
+  const claims = (url: string | undefined): string => {
+    let pathname: string;
+    try { pathname = new URL(url ?? "").pathname; } catch { return "n/a (no usable URL)"; }
+    const segments = pathname.split("/").filter(Boolean);
+    for (let i = 0; i < segments.length; i++) {
+      const candidate = `/${segments.slice(i).join("/")}`;
+      if (hssomAuth.hssomTokenAllows(hssomToken!, "GET", candidate)) return `yes (as ${candidate})`;
+    }
+    return "no";
+  };
+  const lookupUrl = lookupConfig && hssomOrderId ? `${lookupConfig.lookupUrl}/${encodeURIComponent(hssomOrderId)}` : undefined;
+  const womUrl = process.env.WOM_WORK_ORDER_URL?.trim() || WOM_DOCUMENTED_URL;
+  console.log("   token claims (unverified; HSSOM enforces access):");
+  console.log(`     Order Lookup GET: ${claims(lookupUrl)}`);
+  console.log(`     WOM work-orders GET: ${claims(womUrl)}`);
+}
+if (!lookupConfig) {
+  console.log("   order lookup: skipped (HSSOM_ORDER_LOOKUP_URL missing or not https)");
+} else if (authConfigured) {
+  // Runs even with AHS_HSSOM_CUSTOMER_PREFILL_ENABLED off.
+  const result = await hssomLookup.createHssomOrderLookup({ enabled: () => true })(district, so);
+  console.log(`   order lookup (clientid header ${lookupConfig.lookupClientId}): status=${result.status}`);
+  if (result.status === "found") {
+    const fields = ["customerName", "customerAddress", "serviceContractId", "brand", "modelNumber", "serialNumber", "purchaseDate"] as const;
+    console.log(`   fields: ${fields.map((f) => `${f}=${present(result[f]) ? "yes" : "no"}`).join(", ")}`);
+    if (result.purchaseDate) console.log(`   purchase year: ${String(result.purchaseDate).slice(0, 4)}`);
   }
-  const womConfig = womClient.readWomWorkOrderConfig();
-  console.log(`   config usable: ${womConfig ? `yes (token: ${womConfig.staticToken ? "WOM_BEARER_TOKEN" : "HSSOM gateway"})` : "no"}`);
-  if (womConfig) {
-    let womRecord: unknown;
-    const womLookup = womFacts.createWomRepairFactsLookup({ onRecord: (r: unknown) => { womRecord = r; } });
-    const result = await womLookup(district, so);
-    console.log(`   status: ${result.status}`);
-    if (result.status === "found") {
-      const f = result.facts;
-      console.log(
-        `   visit number=${f.visitNumber ?? "none"}, unresolved=${f.unresolved ?? "unknown"}, ` +
-          `failed attempts=${f.failedAttemptCount ?? "unknown"}, trip=${f.tripCharge ?? "none"}, ` +
-          `labor=${f.laborTotal ?? "none"} (${f.laborLineCount ?? 0} line(s))`,
-      );
-      for (const warning of result.warnings) console.log(`   warning: ${warning}`);
-      for (const rootKey of ["Extensions", "LabourJobCodes", "Parts", "WorkItems"]) {
-        const paths = womFacts.workOrderShape(womRecord, [rootKey]);
-        console.log(`   ${rootKey}: ${paths.length ? "" : "(absent)"}`);
-        for (const p of paths) console.log(`     ${p}`);
+}
+// The Order Lookup body's key paths to depth 4 (names only, never values;
+// arrays show as []), to see whether it carries anything for the
+// calculator. Separate raw GETs with the lookup's own URL and headers: the
+// plain lookup (all key paths), then the spec's ?type=ORDER_DETAILS
+// (estimate.tripCharge, jobCodes[].chargeAmount, monetaryDetails) and
+// ?type=ORDER (attemptCount, previousAttempts), calculator keys only.
+// HSSOMOrderLookupService spec V0.13, "Order Lookup Full - V2".
+const calculatorHint = /jobcode|labo|trip|charge|attempt|visit|part|history|monetary|provider|price|total|amt/i;
+const keyPathsOf = (body: unknown): string[] => {
+  const paths = new Set<string>();
+  const walk = (value: unknown, prefix: string, depth: number) => {
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 5)) walk(item, `${prefix}[]`, depth);
+      return;
+    }
+    if (!value || typeof value !== "object" || depth >= 4) return;
+    for (const [key, child] of Object.entries(value)) {
+      // Key names only; anything that doesn't look like a field name is masked.
+      const name = /^[A-Za-z_][A-Za-z0-9_]{0,60}$/.test(key) ? key : "<key>";
+      const keyPath = prefix ? `${prefix}.${name}` : name;
+      paths.add(keyPath);
+      walk(child, keyPath, depth + 1);
+    }
+  };
+  walk(body, "", 0);
+  return [...paths].sort();
+};
+if (lookupConfig && hssomToken && hssomOrderId) {
+  for (const lookupType of ["", "ORDER_DETAILS", "ORDER"]) {
+    const label = lookupType ? `?type=${lookupType}` : "plain";
+    try {
+      const query = lookupType ? `?type=${lookupType}` : "";
+      const res = await fetch(`${lookupConfig.lookupUrl}/${encodeURIComponent(hssomOrderId)}${query}`, {
+        method: "GET",
+        headers: hssomLookup.lookupHeaders(lookupConfig, hssomToken),
+        signal: AbortSignal.timeout(lookupConfig.timeoutMs),
+      });
+      console.log(`   order lookup body (${label}): http=${res.status}`);
+      if (!res.ok) continue;
+      const sorted = keyPathsOf(await res.json());
+      const hits = sorted.filter((keyPath) => calculatorHint.test(keyPath));
+      if (!lookupType) {
+        console.log(`   key paths (${sorted.length}, depth <= 4):`);
+        for (const keyPath of sorted) console.log(`     ${keyPath}`);
       }
+      console.log(`   calculator-related keys (${label}): ${hits.length ? `${hits.length}` : "none"}`);
+      if (lookupType) for (const keyPath of hits) console.log(`     ${keyPath}`);
+    } catch (e) {
+      console.log(`   order lookup body (${label}): FAILED (${errorText(e)})`);
     }
   }
-} catch (e) {
-  console.log("QUERY ERROR:", errorText(e));
-} finally {
-  connection.destroy(() => process.exit(0));
 }
+
+// 9. WOM work order (calculator): config, status, which facts it gives
+// (numbers only; they are not customer data) and the record's key paths
+// with types, never values. Customer subtrees are skipped.
+console.log("9. WOM work order (calculator):");
+for (const name of ["WOM_WORK_ORDER_URL", "WOM_TENANT_ID", "WOM_BEARER_TOKEN"]) {
+  console.log(`   - ${name}: ${present(process.env[name]) ? "set" : "NOT SET"}`);
+}
+const womConfig = womClient.readWomWorkOrderConfig();
+console.log(`   config usable: ${womConfig ? `yes (token: ${womConfig.staticToken ? "WOM_BEARER_TOKEN" : "HSSOM gateway"})` : "no"}`);
+if (womConfig) {
+  let womRecord: unknown;
+  const womLookup = womFacts.createWomRepairFactsLookup({ onRecord: (r: unknown) => { womRecord = r; } });
+  const result = await womLookup(district, so);
+  console.log(`   status: ${result.status}`);
+  if (result.status === "found") {
+    const f = result.facts;
+    console.log(
+      `   visit number=${f.visitNumber ?? "none"}, unresolved=${f.unresolved ?? "unknown"}, ` +
+        `failed attempts=${f.failedAttemptCount ?? "unknown"}, trip=${f.tripCharge ?? "none"}, ` +
+        `labor=${f.laborTotal ?? "none"} (${f.laborLineCount ?? 0} line(s))`,
+    );
+    for (const warning of result.warnings) console.log(`   warning: ${warning}`);
+    for (const rootKey of ["Extensions", "LabourJobCodes", "Parts", "WorkItems"]) {
+      const paths = womFacts.workOrderShape(womRecord, [rootKey]);
+      console.log(`   ${rootKey}: ${paths.length ? "" : "(absent)"}`);
+      for (const p of paths) console.log(`     ${p}`);
+    }
+  }
+}
+
+if (conn) connection.destroy(() => process.exit(0));
+else process.exit(0);
