@@ -178,3 +178,5 @@
 - [x] Enable AHS and First American warranty submissions (2026-04-16)
 - [x] Split NLA parts entry into NLA and Available Parts sections (2026-04-16)
 - [ ] Run updated diagnostic in Replit; confirm Order Lookup JSON key paths for ORDER_DETAILS (tripCharge, jobCodes chargeAmount, monetaryDetails, attempts, merchandise.history), then wire them into the calculator prefill (source "hssom") ahead of/alongside WOM.
+- [ ] Verify the SOM calculator values on a real ticket (diagnostic section 8 "calculator from SOM"): is attemptCount inclusive of today's visit; are SP-covered job codes $0 (then labor needs a cost source); part status codes match NPSXTPN (X/V/R inactive, I/F received).
+- [ ] Ask HSSOM to remove HSSOMUpdateService / HSSOMUpdateOrderService grants from VRS (read-only use).

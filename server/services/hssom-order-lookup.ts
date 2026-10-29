@@ -44,9 +44,43 @@ export type HssomOrderLookupResult =
       serialNumber?: string;
       // ISO date (YYYY-MM-DD) when HSSOM has one.
       purchaseDate?: string;
+      // What the order says about the repair, for the repair / replace
+      // calculator. Amounts, codes and counts only: no customer data.
+      repairFacts?: HssomRepairFacts;
     }
   | { status: "not_found" }
   | { status: "unavailable" };
+
+// Order Lookup Full V2 (HSSOMOrderLookupService spec V0.13, section 7),
+// paths confirmed on a live PROD order (7108-14201974, 2026-10-29) and QA
+// orders: serviceOrder.estimate.{tripCharge, partsTaxPerc, laborTaxPerc},
+// jobCodes[].{jobCode, description, chargeCode, chargeAmount,
+// coverage.coverageCode}, parts[].{price, quantity, status},
+// serviceInfo.attemptCount, previousAttempts[], providerId (W2 = Sears).
+export interface HssomJobCode {
+  jobCode?: string;
+  description?: string;
+  chargeCode?: string;
+  chargeAmount?: number;
+  coverageCode?: string;
+}
+
+export interface HssomPartLine {
+  price?: number;
+  quantity?: number;
+  status?: string;
+}
+
+export interface HssomRepairFacts {
+  tripCharge?: number;
+  partsTaxRate?: number;
+  laborTaxRate?: number;
+  attemptCount?: number;
+  previousAttemptCount?: number;
+  providerId?: string;
+  jobCodes: HssomJobCode[];
+  parts: HssomPartLine[];
+}
 
 type FoundResult = Extract<HssomOrderLookupResult, { status: "found" }>;
 
@@ -121,6 +155,56 @@ export function toIsoDate(value: unknown): string | undefined {
   return undefined;
 }
 
+// A finite number from a JSON number or numeric string.
+function num(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const raw = text(value);
+  if (!raw || !/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
+// A JSON array, or one object where a list has a single entry.
+function list(value: unknown): Json[] {
+  if (Array.isArray(value)) return value.map(obj).filter((item): item is Json => !!item);
+  const single = obj(value);
+  return single ? [single] : [];
+}
+
+export function repairFactsFromOrder(order: Json): HssomRepairFacts {
+  const estimate = obj(order.estimate);
+  const serviceInfo = obj(order.serviceInfo);
+  const facts: HssomRepairFacts = {
+    tripCharge: num(estimate?.tripCharge),
+    partsTaxRate: num(estimate?.partsTaxPerc),
+    laborTaxRate: num(estimate?.laborTaxPerc),
+    attemptCount: num(serviceInfo?.attemptCount),
+    previousAttemptCount: Array.isArray(order.previousAttempts) || obj(order.previousAttempts)
+      ? list(order.previousAttempts).length : undefined,
+    providerId: text(order.providerId)?.toUpperCase(),
+    jobCodes: list(order.jobCodes).map((line) => ({
+      jobCode: text(line.jobCode),
+      description: text(line.description ?? line.Description),
+      chargeCode: text(line.chargeCode),
+      chargeAmount: num(line.chargeAmount),
+      coverageCode: text(obj(line.coverage)?.coverageCode),
+    })),
+    parts: list(order.parts).map((line) => ({
+      price: num(line.price),
+      quantity: num(line.quantity),
+      status: text(line.status)?.toUpperCase(),
+    })),
+  };
+  for (const key of Object.keys(facts) as Array<keyof HssomRepairFacts>) {
+    if (facts[key] === undefined) delete facts[key];
+  }
+  return facts;
+}
+
+function nonEmptyRepairFacts(facts: HssomRepairFacts): HssomRepairFacts | undefined {
+  const { jobCodes, parts, ...rest } = facts;
+  return jobCodes.length || parts.length || Object.keys(rest).length ? facts : undefined;
+}
+
 function responseCode(...sources: Array<Json | undefined>): string | undefined {
   for (const source of sources) {
     const code = text(source?.responseCode ?? source?.ResponseCode);
@@ -152,6 +236,7 @@ export function classifyHssomOrderBody(body: unknown): HssomOrderLookupResult {
     modelNumber: text(merchandise?.modelNumber),
     serialNumber: text(merchandise?.serialNumber),
     purchaseDate: toIsoDate(merchandise?.purchaseDate),
+    repairFacts: nonEmptyRepairFacts(repairFactsFromOrder(order)),
   };
   for (const key of Object.keys(result) as Array<keyof FoundResult>) {
     if (result[key] === undefined) delete result[key];

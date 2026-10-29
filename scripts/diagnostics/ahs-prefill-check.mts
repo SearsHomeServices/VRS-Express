@@ -233,6 +233,25 @@ if (!lookupConfig) {
     const fields = ["customerName", "customerAddress", "serviceContractId", "brand", "modelNumber", "serialNumber", "purchaseDate"] as const;
     console.log(`   fields: ${fields.map((f) => `${f}=${present(result[f]) ? "yes" : "no"}`).join(", ")}`);
     if (result.purchaseDate) console.log(`   purchase year: ${String(result.purchaseDate).slice(0, 4)}`);
+    // The calculator's facts from SOM: amounts, codes, statuses and counts
+    // only (repairFactsFromOrder never reads customer fields).
+    const facts = result.repairFacts;
+    if (!facts) {
+      console.log("   SOM repair facts: none on this order");
+    } else {
+      const amount = (v: number | undefined) => (v == null ? "-" : v.toFixed(2));
+      console.log(`   SOM repair facts: trip=${amount(facts.tripCharge)} partsTax=${facts.partsTaxRate ?? "-"} laborTax=${facts.laborTaxRate ?? "-"} attempts=${facts.attemptCount ?? "-"} previousAttempts=${facts.previousAttemptCount ?? "-"} provider=${facts.providerId ?? "-"}`);
+      console.log(`   job codes (${facts.jobCodes.length}):`);
+      for (const j of facts.jobCodes) {
+        console.log(`     ${j.jobCode ?? "?"} "${(j.description ?? "").slice(0, 40)}" charge=${amount(j.chargeAmount)} chargeCode=${j.chargeCode ?? "-"} coverage=${j.coverageCode ?? "-"}`);
+      }
+      console.log(`   parts (${facts.parts.length}):`);
+      for (const p of facts.parts) console.log(`     price=${amount(p.price)} qty=${p.quantity ?? "-"} status=${p.status ?? "-"}`);
+      const fromSom = rrPrefill.buildRepairReplacePrefill({ serviceOrder: `${district}-${so}`, row: null, hssom: facts });
+      const filled = Object.entries(fromSom.fields).filter(([, f]) => f?.source === "hssom");
+      console.log(`   calculator from SOM: ${filled.map(([name, f]) => `${name}=${String(f!.value)}`).join(", ") || "nothing"}`);
+      for (const w of fromSom.warnings.filter((w) => /SOM/.test(w))) console.log(`   note: ${w}`);
+    }
   }
 }
 // The Order Lookup body's key paths to depth 4 (names only, never values;

@@ -14,6 +14,7 @@ import {
   lookupHeaders,
   lookupHssomOrder,
   readHssomOrderLookupConfig,
+  repairFactsFromOrder,
   toIsoDate,
   type HssomOrderLookupConfig,
 } from "../server/services/hssom-order-lookup";
@@ -284,6 +285,32 @@ describe("order ID and formatting", () => {
     expect(classifyHssomOrderBody({ responseCode: "12" })).toEqual({ status: "unavailable" });
     expect(classifyHssomOrderBody([])).toEqual({ status: "unavailable" });
     expect(classifyHssomOrderBody(null)).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("repair facts for the calculator", () => {
+  it("reads amounts, codes and counts from Order Lookup V2 (strings, numbers, single objects)", () => {
+    const facts = repairFactsFromOrder({
+      providerId: "w2",
+      estimate: { tripCharge: "139.00", partsTaxPerc: 0.0825 },
+      serviceInfo: { attemptCount: 2 },
+      previousAttempts: [{ callCode: "30" }],
+      jobCodes: { jobCode: 13130, description: "Blower Sq. Cage Rep/Repl", chargeCode: "B", chargeAmount: "369", coverage: { coverageCode: "CC" } },
+      parts: [{ price: 10, quantity: "1", status: "i" }, { price: "n/a" }],
+      customer: { name: { firstName: "Helen" } },
+    });
+    expect(facts).toEqual({
+      tripCharge: 139, partsTaxRate: 0.0825, attemptCount: 2, previousAttemptCount: 1, providerId: "W2",
+      jobCodes: [{ jobCode: "13130", description: "Blower Sq. Cage Rep/Repl", chargeCode: "B", chargeAmount: 369, coverageCode: "CC" }],
+      parts: [{ price: 10, quantity: 1, status: "I" }, { price: undefined, quantity: undefined, status: undefined }],
+    });
+    expect(JSON.stringify(facts)).not.toContain("Helen");
+  });
+
+  it("attaches repairFacts to a found result only when the order has any", () => {
+    expect(classifyHssomOrderBody({ serviceOrder: { merchandise: { modelNumber: "M1" } } })).not.toHaveProperty("repairFacts");
+    const found = classifyHssomOrderBody({ serviceOrder: { merchandise: { modelNumber: "M1" }, estimate: { tripCharge: 119 } } });
+    expect(found).toMatchObject({ status: "found", repairFacts: { tripCharge: 119, jobCodes: [], parts: [] } });
   });
 });
 

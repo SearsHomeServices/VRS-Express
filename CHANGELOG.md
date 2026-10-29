@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - Calculator fills labor, trip, parts, tax and visits from SOM (2026-10-29)
+- The repair / replace calculator now reads the HSSOM (SOM) Order Lookup
+  (`server/services/hssom-order-lookup.ts` `repairFactsFromOrder`; spec
+  HSSOMOrderLookupService V0.13, Order Lookup Full V2, paths confirmed on PROD
+  order 7108-14201974 and QA orders) ahead of TechHub and Snowflake:
+  - parts `price x quantity` (lines not cancelled, voided or returned) ->
+    parts cost; an installed or fulfilled part -> parts available;
+  - job-code `chargeAmount`, summed -> labor, with the job codes listed in the
+    source; service-call codes ("Service Completed", trip, diagnostic) are left
+    out so the trip is not counted twice; $0 (covered) job codes fall back to
+    TechHub with a warning;
+  - `estimate.tripCharge` -> trip; `estimate.partsTaxPerc` -> new prefill field
+    `tax_rate`; `serviceInfo.attemptCount` -> visit number;
+  - `providerId` (W2 = Sears technician, else 1099) -> servicer, ahead of the
+    technician's account.
+- SOM is asked on every prefill (before: only for the purchase date when the
+  technician gave no age). The calculator has its own lookup, gated by
+  `REPAIR_REPLACE_CALCULATOR_ENABLED` instead of
+  `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`. Only amounts, codes and counts are
+  kept; customer fields are never read into the facts.
+- Legacy formulas: an entered labor amount (the SOM job-code charges, or typed)
+  wins over servicer / hours / category; Standard and PA 2.0 add tax on parts
+  when a tax rate is given. The tax rate field shows on every calculator.
+- Diagnostic section 8 prints SOM's calculator values (trip, tax rates,
+  attempts, provider, job codes with charges, part price / quantity / status)
+  and what the calculator would fill from SOM.
+
 ### Added - Diagnostic checks the HSSOM token and Order Lookup (2026-10-29)
 - `scripts/diagnostics/ahs-prefill-check.mts` section 8 now gets a fresh
   HSSOM token and prints its subject, expiry and grant paths (never the

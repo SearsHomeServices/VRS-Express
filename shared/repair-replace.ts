@@ -797,11 +797,16 @@ export function evaluateLegacy(data: RrInput): RrResult {
   }
   if (partsTotal == null) missing.push("part_price");
 
-  // Labor.
+  // Labor. An entered amount (the order's job-code charges from SOM, or
+  // typed) wins over the servicer / hours / category formulas.
   let labor: number | null = null;
   let laborMethod: string | null = null;
   const category = data.labor_category || "";
-  if (settings.kind === "estimate") {
+  const enteredLabor = rrNumber(data.labor_cost);
+  if (enteredLabor != null) {
+    labor = cents(enteredLabor);
+    laborMethod = "entered";
+  } else if (settings.kind === "estimate") {
     if (category !== "Minor" && category !== "Major") missing.push("labor_category");
     else {
       labor = cents(category === "Minor" ? settings.minor_labor_rate : settings.major_labor_rate);
@@ -825,12 +830,16 @@ export function evaluateLegacy(data: RrInput): RrResult {
     missing.push("servicer_type");
   }
 
-  // Tax.
+  // Tax. The estimators tax parts and labor at one rate. Standard and PA 2.0
+  // tax parts only, and only when a rate is given: the rate on file is the
+  // order's parts tax rate (SOM estimate.partsTaxPerc).
   let tax = 0;
   const taxRate = rrNumber(data.tax_rate);
   if (settings.include_tax) {
     if (taxRate == null) warnings.push("No sales-tax rate was supplied. Tax was not applied.");
     else if (partsTotal != null && labor != null) tax = cents((partsTotal + labor) * taxRate);
+  } else if (settings.kind === "binary" && taxRate != null && taxRate > 0 && partsTotal != null) {
+    tax = cents(partsTotal * taxRate);
   }
 
   const total = partsTotal != null && labor != null ? cents(partsTotal + labor + tax) : null;
@@ -989,6 +998,7 @@ export const RR_FIELD_LABELS: Record<string, string> = {
   repair_hours: "Repair hours",
   servicer_type: "Servicer",
   age_band: "PA 2.0 age band",
+  tax_rate: "Tax rate",
 };
 
 export const RR_RULE_LABELS: Record<string, string> = {
@@ -1059,13 +1069,16 @@ export const RR_PREFILL_FIELDS = [
   // VRS Express: the legacy catalog row (APPLIANCE_REPLACEMENT key) and
   // the legacy servicer ("Sears Tech" / "1099").
   "appliance_reference", "servicer_type",
+  // The order's parts tax rate (SOM estimate.partsTaxPerc).
+  "tax_rate",
 ] as const;
 export type RrPrefillFieldName = (typeof RR_PREFILL_FIELDS)[number];
 
 export interface RrPrefillField {
   value: string | boolean;
   // "snowflake": the service order (FULLDETAIL, TechHub NPSXTFS, parts
-  // NPSXTPN). "hssom": the HSSOM Order Lookup (purchase date). "wom": the
+  // NPSXTPN). "hssom": the HSSOM (SOM) Order Lookup (parts, job codes, trip,
+  // tax, attempts, provider, purchase date). "wom": the
   // WOM work order (visits, labor, trip). "ticket": what the technician
   // entered on this ticket, or their account.
   source: "snowflake" | "hssom" | "wom" | "ticket";

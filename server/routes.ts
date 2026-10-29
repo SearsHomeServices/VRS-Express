@@ -141,7 +141,7 @@ import {
   lookupAhsPrefillSources,
   prefilledFieldNames,
 } from "./ahs-prefill";
-import { lookupHssomOrder } from "./services/hssom-order-lookup";
+import { createHssomOrderLookup, lookupHssomOrder } from "./services/hssom-order-lookup";
 import { applyProcIdRepair } from "./services/snowflake-lookup";
 import { runTechnicianSync } from "./services/tech-sync";
 import { isTechPdcConfigured, pushSubmissionToTechPdc, rejectionTimestampOf, TECH_PDC_NOT_CONFIGURED_MESSAGE } from "./services/tech-pdc";
@@ -3655,19 +3655,23 @@ export async function registerRoutes(
 
   // Repair / replace calculator on Sears Protect tickets: service-order
   // prefill and the staff-only result note (server/repair-replace-api.ts).
+  const repairReplaceHssomLookup = createHssomOrderLookup({ enabled: isRepairReplaceCalculatorEnabled });
   registerRepairReplaceApi(app, {
     authenticateToken,
     requireRole,
     isEnabled: isRepairReplaceCalculatorEnabled,
     getSubmission: (id) => storage.getSubmission(id),
     getUser: (id) => storage.getUser(id),
-    // HSSOM gives the purchase date when the tech entered no age; it answers
-    // unavailable while AHS_HSSOM_CUSTOMER_PREFILL_ENABLED is off. Only the
-    // date is kept: the customer's name and address are dropped here.
+    // HSSOM (SOM) gives the order's parts, job-code charges, trip charge,
+    // tax rate, attempts, provider and purchase date. Its own lookup, gated
+    // by the calculator flag rather than AHS_HSSOM_CUSTOMER_PREFILL_ENABLED;
+    // it answers unavailable until the HSSOM settings are configured. Only
+    // the date and repair facts are kept: the customer's name and address
+    // are dropped here.
     loadPrefill: (serviceOrder, ticket) =>
       loadRepairReplacePrefill(serviceOrder, ticket, fetchRepairReplaceRows, async (district, so) => {
-        const found = await lookupHssomOrder(district, so);
-        return found.status === "found" ? { status: "found", purchaseDate: found.purchaseDate } : found;
+        const found = await repairReplaceHssomLookup(district, so);
+        return found.status === "found" ? { status: "found", purchaseDate: found.purchaseDate, repair: found.repairFacts } : found;
       }, lookupWomRepairFacts),
     createNote: (note) => storage.createSubmissionNote(note),
   });

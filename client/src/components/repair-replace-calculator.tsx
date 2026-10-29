@@ -161,6 +161,8 @@ export function legacyInputFromForm(form: FormState): RrInput {
     appliance_type: form.catalog || (form.appliance === "other" ? blankToNull(form.applianceOther) : blankToNull(form.appliance)),
     replacement_cost: blankToNull(form.replacementCost) ?? (catalogCost != null ? String(catalogCost) : null),
     proc_id: form.procId.trim(),
+    // The order's job-code charges (or typed labor) win over hours / category.
+    labor_cost: blankToNull(form.laborCost),
     servicer_type: blankToNull(form.servicerType),
     repair_hours: blankToNull(form.repairHours),
     labor_category: blankToNull(form.laborCategory),
@@ -185,6 +187,7 @@ const PREFILL_TARGETS: Partial<Record<keyof RrPrefillResponse["fields"], FieldKe
   failed_attempt_count: "failedAttempts",
   other_service_orders_12mo: "otherServiceOrders",
   same_part_or_system_repeat: "samePart",
+  tax_rate: "taxRate",
 };
 
 function sourceLabel(field: RrPrefillField): string {
@@ -507,7 +510,7 @@ export function RepairReplaceCalculator({
             <Input {...text("partsCost")} inputMode="decimal" />
           </Field>
           <Field id="rr-laborCost" label="Labor ($)" badge={<SourceBadge field={prefilled.laborCost} testId="badge-rr-labor" />}
-            hint={model === "legacy" ? "Forward Repair Cost only; legacy labor comes from servicer and hours." : undefined}>
+            hint={model === "legacy" ? "Blank uses the servicer and hours (or labor category) below." : undefined}>
             <Input {...text("laborCost")} inputMode="decimal" />
           </Field>
           <Field id="rr-tripCost" label="Trip charge ($)" badge={<SourceBadge field={prefilled.tripCost} testId="badge-rr-trip" />}>
@@ -562,9 +565,6 @@ export function RepairReplaceCalculator({
                     options={RR_ESTIMATOR_CATEGORIES.map((value) => ({ value: value as string, label: value }))}
                     onChange={(value) => set("laborCategory", value)} />
                 </Field>
-                <Field id="rr-taxRate" label="Tax rate" hint="Example 0.08. Blank adds no tax.">
-                  <Input {...text("taxRate")} inputMode="decimal" />
-                </Field>
               </>
             ) : (
               <>
@@ -574,7 +574,7 @@ export function RepairReplaceCalculator({
                     onChange={(value) => set("servicerType", value)} />
                 </Field>
                 {form.servicerType === "Sears Tech" && (
-                  <Field id="rr-repairHours" label="Repair hours" hint="Labor = hours × $32 + $27.">
+                  <Field id="rr-repairHours" label="Repair hours" hint="Used when Labor is blank: hours × $32 + $27.">
                     <Input {...text("repairHours")} inputMode="decimal" />
                   </Field>
                 )}
@@ -592,6 +592,10 @@ export function RepairReplaceCalculator({
             </Field>
             <Field id="rr-quantity" label="Quantity" hint="Blank is 1.">
               <Input {...text("quantity")} inputMode="numeric" />
+            </Field>
+            <Field id="rr-taxRate" label="Tax rate" badge={<SourceBadge field={prefilled.taxRate} testId="badge-rr-tax" />}
+              hint={kind === "estimate" ? "Example 0.08, on parts and labor. Blank adds no tax." : "Example 0.08, on parts. Blank adds no tax."}>
+              <Input {...text("taxRate")} inputMode="decimal" />
             </Field>
             <Field id="rr-procId" label="Proc ID" hint={'Containing "Sears Protect Home Warranty" caps replacement at $3,500.'}>
               <Input {...text("procId")} maxLength={120} />

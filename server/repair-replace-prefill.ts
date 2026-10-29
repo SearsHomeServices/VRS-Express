@@ -24,6 +24,13 @@
 //     other_service_orders_12mo (not cancelled), same_part_or_system_repeat
 //     (true when an installed part number repeats; false only with no other order)
 //   the technician's account (1099 provider company or not) -> servicer_type
+// The HSSOM Order Lookup (SOM, server/services/hssom-order-lookup.ts
+// repairFactsFromOrder), ahead of TechHub and Snowflake (2026-10-29):
+//   parts[] price x quantity, lines not cancelled, voided or returned -> parts_cost
+//   jobCodes[].chargeAmount, summed, without service-call codes -> labor_cost
+//   estimate.tripCharge -> trip_cost; estimate.partsTaxPerc -> tax_rate
+//   serviceInfo.attemptCount -> visit_number
+//   providerId (W2 = Sears employed) -> servicer_type, ahead of the account
 // VRS Express adds what the technician entered on the ticket
 // (submissions.appliance_kind and tech_appliance_details):
 //   the appliance they picked -> appliance_type, when MDS_CD is not one of the four
@@ -49,6 +56,7 @@ import {
   type RrPrefillResponse,
 } from "@shared/repair-replace";
 import { techApplianceGradeLabel, type TechApplianceDetails } from "@shared/tech-appliance-details";
+import type { HssomRepairFacts } from "./services/hssom-order-lookup";
 
 // A located row is "found" only when every one of these was filled.
 export const RR_AUTHORITATIVE_FIELDS: RrPrefillFieldName[] = ["appliance_type", "age_years", "labor_cost"];
@@ -87,6 +95,8 @@ export interface RrPrefillInput {
   techDetails?: TechApplianceDetails | null;
   // The HSSOM Order Lookup's purchase date (YYYY-MM-DD), when it had one.
   hssomPurchaseDate?: string | null;
+  // What the HSSOM Order Lookup says about the repair (numbers and codes).
+  hssom?: HssomRepairFacts | null;
   // REPAIR_REPLACE_HISTORY_SQL rows; null when that statement failed.
   history?: Row[] | null;
   // What the WOM work order proves (server/services/wom-repair-facts.ts).
@@ -390,7 +400,9 @@ function mapParts(parts: Row[], fields: RrPrefillResponse["fields"], warnings: s
   if (!active.length) return;
   // Only ever true, from a line that arrived. "On order" (O) is not
   // evidence parts are unavailable; false would fire a hard stop.
-  if (active.some((row) => RECEIVED_PART_STATUSES.has(partStatus(row)))) {
+  if (fields.parts_available) {
+    // SOM already said so.
+  } else if (active.some((row) => RECEIVED_PART_STATUSES.has(partStatus(row)))) {
     fields.parts_available = {
       value: true,
       source: "snowflake",
@@ -430,13 +442,73 @@ function mapParts(parts: Row[], fields: RrPrefillResponse["fields"], warnings: s
   };
 }
 
+// Job codes that are the service call itself, not repair labor: on QA
+// orders "Service Completed" (90300) carried exactly the trip charge.
+const SERVICE_CALL_JOB = /service (call|completed)|trip charge|diagnos/i;
+
+function jobLabel(line: HssomRepairFacts["jobCodes"][number]): string {
+  return [line.jobCode, line.description].filter(Boolean).join(" ") || "job code";
+}
+
+// SOM first: the live order, ahead of TechHub and the warehouse copy.
+function mapHssom(som: HssomRepairFacts | null | undefined, fields: RrPrefillResponse["fields"], warnings: string[]): void {
+  if (!som) return;
+  const field = (value: string | boolean, sourceField: string): RrPrefillField => ({ value, source: "hssom", source_field: sourceField });
+
+  const active = som.parts.filter((line) => !INACTIVE_PART_STATUSES.has(line.status ?? ""));
+  if (active.length) {
+    let total = 0;
+    let readable = true;
+    for (const line of active) {
+      const quantity = line.quantity ?? 1;
+      if (line.price == null || line.price < 0 || !Number.isFinite(quantity) || quantity < 0) {
+        readable = false;
+        break;
+      }
+      total += line.price * quantity;
+    }
+    if (!readable) warnings.push("A SOM part line has no readable price or quantity, so parts_cost was not taken from SOM.");
+    else if (cents(total) > 0) {
+      fields.parts_cost = field(money(total), `SOM parts, price x quantity (${active.length} line${active.length === 1 ? "" : "s"})`);
+    }
+    if (active.some((line) => RECEIVED_PART_STATUSES.has(line.status ?? ""))) {
+      fields.parts_available = field(true, "SOM part status (installed or fulfilled)");
+    }
+  }
+
+  const charged = som.jobCodes.filter((line) => line.chargeAmount != null);
+  const serviceCall = charged.filter((line) => SERVICE_CALL_JOB.test(line.description ?? ""));
+  const repair = charged.filter((line) => !serviceCall.includes(line));
+  if (serviceCall.length) {
+    warnings.push(`SOM job code${serviceCall.length === 1 ? "" : "s"} ${serviceCall.map(jobLabel).join(", ")} ${serviceCall.length === 1 ? "is" : "are"} the service call, not repair labor, so ${serviceCall.length === 1 ? "it was" : "they were"} left out of labor_cost.`);
+  }
+  if (repair.length) {
+    const total = repair.reduce((sum, line) => sum + (line.chargeAmount as number), 0);
+    const detail = repair.map((line) => `${jobLabel(line)} $${money(line.chargeAmount as number)}`).join("; ");
+    if (cents(total) > 0) fields.labor_cost = field(money(total), `SOM job codes: ${detail}`.slice(0, 200));
+    else warnings.push(`SOM job codes (${detail}) charge $0.00 to the customer (covered), so labor_cost was not taken from SOM.`.slice(0, 300));
+  }
+
+  if (som.tripCharge != null && cents(som.tripCharge) > 0) fields.trip_cost = field(money(som.tripCharge), "SOM trip charge");
+  if (som.partsTaxRate != null && som.partsTaxRate >= 0 && som.partsTaxRate < 1) {
+    fields.tax_rate = field(String(roundHalfUp(som.partsTaxRate, 4)), "SOM parts tax rate");
+  }
+  if (som.attemptCount != null && Number.isInteger(som.attemptCount) && som.attemptCount >= 1) {
+    fields.visit_number = field(String(som.attemptCount), "SOM attempt count on this order (check whether today's visit is in it)");
+  }
+  if (som.providerId) {
+    const sears = som.providerId === "W2";
+    fields.servicer_type = field(sears ? "Sears Tech" : "1099", sears ? "SOM provider W2 (Sears technician)" : `SOM provider ${som.providerId} (not W2)`);
+  }
+}
+
 // WOM: visits on this order; labor and trip only where TechHub had none.
 function mapWom(wom: RrWomFacts | null, fields: RrPrefillResponse["fields"]): void {
   if (!wom) return;
   const at = wom.observedAt;
   const field = (value: string | boolean, sourceField: string): RrPrefillField =>
     ({ value, source: "wom", source_field: sourceField, ...(at ? { observed_at: at } : {}) });
-  if (Number.isInteger(wom.visitNumber) && wom.visitNumber! >= 1) {
+  if (!fields.visit_number && Number.isInteger(wom.visitNumber) && wom.visitNumber! >= 1) {
     fields.visit_number = field(String(wom.visitNumber), "WOM work order visits (not cancelled)");
   }
   if (typeof wom.unresolved === "boolean") {
@@ -537,10 +609,11 @@ export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillRespo
   if (present(jobCode)) {
     warnings.push(`Billed job code is '${short(jobCode)}'. That is not necessarily the failed component, so component was not filled.`);
   }
-  mapLabor(input.techhub ?? [], fields, warnings);
-  mapTrip(input.techhub ?? [], fields, warnings);
+  mapHssom(input.hssom, fields, warnings);
+  if (!fields.labor_cost) mapLabor(input.techhub ?? [], fields, warnings);
+  if (!fields.trip_cost) mapTrip(input.techhub ?? [], fields, warnings);
   mapConfidence(input.techhub ?? [], fields, warnings);
-  mapParts(input.parts ?? [], fields, warnings);
+  if (!fields.parts_cost) mapParts(input.parts ?? [], fields, warnings);
   mapWom(input.wom ?? null, fields);
   if (!fields.labor_cost) {
     const lines = laborLines(input.parts ?? [], warnings);
@@ -590,7 +663,10 @@ function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefill
   if (!fields.appliance_type && appliance) {
     fields.appliance_type = { value: appliance, source: "ticket", source_field: "Appliance the technician picked" };
   }
-  if (input.row == null) mapWom(input.wom ?? null, fields);
+  if (input.row == null) {
+    mapHssom(input.hssom, fields, warnings);
+    mapWom(input.wom ?? null, fields);
+  }
   if (!fields.age_years && input.row == null && input.hssomPurchaseDate) {
     ageFromDate(input.hssomPurchaseDate, "hssom", "HSSOM purchase date", fields, warnings, input.asOf ?? todayUtc());
   }
@@ -606,7 +682,7 @@ function withTicket(result: RrPrefillResponse, input: RrPrefillInput): RrPrefill
     }
     fields.age_years = { value: String(techAge), source: "ticket", source_field: "Age the technician entered (from the customer)" };
   }
-  if (input.servicerType === "Sears Tech" || input.servicerType === "1099") {
+  if (!fields.servicer_type && (input.servicerType === "Sears Tech" || input.servicerType === "1099")) {
     fields.servicer_type = {
       value: input.servicerType,
       source: "ticket",
@@ -646,13 +722,17 @@ export type RepairReplaceSnowflakeResult =
   | { status: "not_found" }
   | { status: "unavailable" };
 
-// The HSSOM Order Lookup, reduced to the purchase date. Bounded and never
-// rejects (server/services/hssom-order-lookup.ts); answers unavailable while
-// its flag is off.
+// The HSSOM Order Lookup, reduced to the purchase date and the repair facts
+// (no customer data). Bounded and never rejects
+// (server/services/hssom-order-lookup.ts).
 export type RepairReplaceHssomLookup = (
   district: string,
   so: string,
-) => Promise<{ status: "found"; purchaseDate?: string } | { status: "not_found" } | { status: "unavailable" }>;
+) => Promise<
+  | { status: "found"; purchaseDate?: string; repair?: HssomRepairFacts }
+  | { status: "not_found" }
+  | { status: "unavailable" }
+>;
 
 export interface RepairReplaceTicketInput {
   ticketApplianceKind?: string | null;
@@ -681,10 +761,9 @@ export async function loadRepairReplacePrefill(
     if (!lookup) result.warnings = ["The service-order lookup is off here. Enter the visit manually.", ...result.warnings.slice(LOOKUP_FAILED.length)];
     return result;
   }
-  // HSSOM only when the technician gave no age; alongside Snowflake.
-  const wantsHssom = hssomLookup != null && techDetails?.applianceAgeYears == null;
-  const hssomPromise = wantsHssom
-    ? hssomLookup!(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
+  // HSSOM alongside Snowflake.
+  const hssomPromise = hssomLookup
+    ? hssomLookup(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
     : Promise.resolve(null);
   const womPromise = womLookup
     ? womLookup(match[1], match[2]).catch(() => ({ status: "unavailable" as const }))
@@ -697,10 +776,11 @@ export async function loadRepairReplacePrefill(
   }
   const hssom = await hssomPromise;
   const hssomPurchaseDate = hssom?.status === "found" ? hssom.purchaseDate ?? null : null;
+  const hssomFacts = hssom?.status === "found" ? hssom.repair ?? null : null;
   const womResult = await womPromise;
   const wom = womResult?.status === "found" ? womResult.facts : null;
   const womWarnings = womResult?.status === "found" ? womResult.warnings : [];
-  const shared = { serviceOrder, ticketApplianceKind, techDetails, servicerType, hssomPurchaseDate, wom };
+  const shared = { serviceOrder, ticketApplianceKind, techDetails, servicerType, hssomPurchaseDate, hssom: hssomFacts, wom };
   if (found.status !== "found") {
     const result = buildRepairReplacePrefill({ ...shared, row: null, unavailable: found.status === "unavailable" });
     result.warnings.push(...womWarnings);

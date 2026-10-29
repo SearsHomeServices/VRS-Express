@@ -32,6 +32,7 @@ import {
   type AhsPrefillQuery,
 } from "../server/services/snowflake-lookup";
 import { registerRepairReplaceApi, type RepairReplaceApiDeps } from "../server/repair-replace-api";
+import type { HssomRepairFacts } from "../server/services/hssom-order-lookup";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -491,7 +492,7 @@ describe("prefill lookup", () => {
     expect(thrown.status).toBe("unavailable");
   });
 
-  it("asks HSSOM for the purchase date only when the technician gave no age", async () => {
+  it("asks HSSOM every time; the technician's age still wins over its purchase date", async () => {
     const snowflake = async () => ({ status: "found" as const, row: { MDS_CD: "WASHERFL" }, techhub: [], parts: [] });
     const hssom = vi.fn(async () => ({ status: "found" as const, purchaseDate: "2020-01-01" }));
     const dated = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, hssom);
@@ -499,12 +500,103 @@ describe("prefill lookup", () => {
     expect(dated.fields.age_years).toMatchObject({ source: "hssom", source_field: "HSSOM purchase date relative to the lookup date" });
     hssom.mockClear();
     const told = await loadRepairReplacePrefill("8175-13538277", { techDetails: { ...TECH_DETAILS, applianceAgeYears: 3 } }, snowflake, hssom);
-    expect(hssom).not.toHaveBeenCalled();
+    expect(hssom).toHaveBeenCalledTimes(1);
     expect(told.fields.age_years).toMatchObject({ value: "3", source: "ticket" });
     const failed = await loadRepairReplacePrefill("8175-13538277", {}, snowflake, async () => { throw new Error("down"); });
     expect(failed.fields.age_years).toBeUndefined();
     const noRow = await loadRepairReplacePrefill("8175-13538277", {}, async () => ({ status: "not_found" as const }), hssom);
     expect(noRow.fields.age_years?.source).toBe("hssom");
+  });
+});
+
+// Shapes from the live PROD order 7108-14201974 and QA orders (2026-10-29).
+const SOM_FACTS: HssomRepairFacts = {
+  tripCharge: 139,
+  partsTaxRate: 0.0825,
+  attemptCount: 2,
+  previousAttemptCount: 1,
+  providerId: "W2",
+  jobCodes: [
+    { jobCode: "13130", description: "Blower Sq. Cage Rep/Repl", chargeCode: "B", chargeAmount: 369, coverageCode: "CC" },
+    { jobCode: "60000", description: "Helper Required", chargeCode: "Y", chargeAmount: 99, coverageCode: "CC" },
+    { jobCode: "90300", description: "Service Completed", chargeCode: "B", chargeAmount: 139, coverageCode: "CC" },
+  ],
+  parts: [
+    { price: 120.5, quantity: 2, status: "I" },
+    { price: 40, quantity: 1, status: "O" },
+    { price: 999, quantity: 1, status: "X" },
+  ],
+};
+
+describe("prefill from SOM (HSSOM Order Lookup)", () => {
+  const techhub = [
+    { CRT_TS: "2026-10-01 10:00:00", UDF_FLD_NM: "deLabor", UDF_FLD_VAL_TX: "84100~CC~344.95" },
+    { CRT_TS: "2026-10-01 10:00:00", UDF_FLD_NM: "deTripCharge", UDF_FLD_VAL_TX: "CC~89.00" },
+  ];
+  const parts = [{ SVC_PRT_STS_CD: "I", SVC_PRT_TYP_CD: "D", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: 10 }];
+
+  it("fills parts, labor, trip, tax, visits and servicer from SOM ahead of TechHub and NPSXTPN", () => {
+    const result = buildRepairReplacePrefill({
+      serviceOrder: "7108-14201974", row: { MDS_CD: "WASHERFL" }, techhub, parts, hssom: SOM_FACTS, servicerType: "1099",
+    });
+    expect(result.fields.parts_cost).toMatchObject({ value: "281.00", source: "hssom" });
+    expect(result.fields.labor_cost).toMatchObject({ value: "468.00", source: "hssom" });
+    expect(result.fields.labor_cost?.source_field).toContain("13130 Blower Sq. Cage Rep/Repl $369.00");
+    expect(result.fields.trip_cost).toMatchObject({ value: "139.00", source: "hssom" });
+    expect(result.fields.tax_rate).toMatchObject({ value: "0.0825", source: "hssom" });
+    expect(result.fields.visit_number).toMatchObject({ value: "2", source: "hssom" });
+    expect(result.fields.servicer_type).toMatchObject({ value: "Sears Tech", source: "hssom" });
+    expect(result.fields.parts_available).toMatchObject({ value: true, source: "hssom" });
+    expect(result.warnings.some((w) => w.includes("90300 Service Completed") && w.includes("left out of labor_cost"))).toBe(true);
+  });
+
+  it("falls back to TechHub and NPSXTPN when SOM has no usable amounts", () => {
+    const covered: HssomRepairFacts = {
+      jobCodes: [{ jobCode: "13130", description: "Blower Sq. Cage Rep/Repl", chargeAmount: 0 }],
+      parts: [{ quantity: 1, status: "I" }],
+    };
+    const result = buildRepairReplacePrefill({ serviceOrder: "7108-14201974", row: { MDS_CD: "WASHERFL" }, techhub, parts, hssom: covered });
+    expect(result.fields.labor_cost).toMatchObject({ value: "344.95", source: "snowflake" });
+    expect(result.fields.trip_cost).toMatchObject({ value: "89.00", source: "snowflake" });
+    expect(result.fields.parts_cost).toMatchObject({ value: "10.00", source: "snowflake" });
+    expect(result.warnings.some((w) => w.includes("charge $0.00 to the customer (covered)"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("SOM part line has no readable price"))).toBe(true);
+  });
+
+  it("uses SOM when Snowflake has no row, and the account servicer when SOM has no provider", () => {
+    const result = buildRepairReplacePrefill({
+      serviceOrder: "7108-14201974", row: null, hssom: { ...SOM_FACTS, providerId: undefined }, servicerType: "1099",
+    });
+    expect(result.fields.labor_cost?.source).toBe("hssom");
+    expect(result.fields.servicer_type).toMatchObject({ value: "1099", source: "ticket" });
+    const other = buildRepairReplacePrefill({ serviceOrder: "7108-14201974", row: null, hssom: { ...SOM_FACTS, providerId: "SB" } });
+    expect(other.fields.servicer_type).toMatchObject({ value: "1099", source: "hssom" });
+  });
+
+  it("passes the lookup's repair facts through", async () => {
+    const snowflake = async () => ({ status: "found" as const, row: { MDS_CD: "WASHERFL" }, techhub: [], parts: [] });
+    const hssom = async () => ({ status: "found" as const, repair: SOM_FACTS });
+    const result = await loadRepairReplacePrefill("7108-14201974", {}, snowflake, hssom);
+    expect(result.fields.labor_cost?.source).toBe("hssom");
+    expect(result.missing_fields).not.toContain("tax_rate");
+  });
+});
+
+describe("legacy formulas with the order's labor and tax", () => {
+  it("uses an entered labor amount ahead of servicer and hours, and taxes parts on Standard", () => {
+    const result = evaluateLegacy({
+      calculator_type: "Standard", appliance_type: "Refrigerator Basic", servicer_type: "Sears Tech",
+      labor_cost: "468.00", tax_rate: "0.10", parts: [{ cost: "200.00", sell_price: "200.00", quantity: 1 }],
+    });
+    expect(result.costs.labor).toBe("468.00");
+    expect(result.costs.tax).toBe("20.00");
+    expect(result.explanation).toContain("labor method entered");
+    const noRate = evaluateLegacy({
+      calculator_type: "Standard", appliance_type: "Refrigerator Basic", servicer_type: "Sears Tech",
+      repair_hours: "2", parts: [{ cost: "200.00", sell_price: "200.00", quantity: 1 }],
+    });
+    expect(noRate.costs.labor).toBe("91.00");
+    expect(noRate.costs.tax).toBe("0.00");
   });
 });
 
