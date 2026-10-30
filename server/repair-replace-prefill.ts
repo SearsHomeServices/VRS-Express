@@ -27,9 +27,10 @@
 //   the technician's account (1099 provider company or not) -> servicer_type
 // The HSSOM Order Lookup (SOM, server/services/hssom-order-lookup.ts
 // repairFactsFromOrder), ahead of TechHub and Snowflake (2026-10-29):
-//   parts[] costPrice (else localCost) per line, never times quantity, lines
-//     not cancelled, voided, returned or uninstalled -> parts_cost
-//   parts[] price (the line's customer sell price), same lines -> sell_price
+//   parts[] costPrice (per unit) x quantity, lines not cancelled, voided,
+//     returned or uninstalled -> parts_cost
+//   parts[] price (the line's customer sell price, already x quantity), same
+//     lines -> sell_price
 //   jobCodes[].chargeAmount, summed, without 9xxxx codes (90000 Deductible,
 //     90300 Service Completed) or service-call descriptions -> labor_cost
 //   estimate.tripCharge -> trip_cost; estimate.partsTaxPerc -> tax_rate
@@ -450,16 +451,17 @@ function jobLabel(line: HssomRepairFacts["jobCodes"][number]): string {
 // lines are not in the repair.
 const SOM_INACTIVE_PART_STATUSES = new Set([...INACTIVE_PART_STATUSES, "U"]);
 
-// What a SOM part line costs Sears: costPrice, else localCost (a local
-// purchase). Both are per line, like price: PROD 7995-14335804 returned
-// price=142.44 for 6 screws at 23.74, so quantity is never multiplied in.
+// What a SOM part line costs Sears: costPrice, which is per unit, times the
+// quantity. PROD 7995-14335804 (2026-10-30), 6 screws: price=142.44 (the
+// line's sell, 6 x 23.74), costPrice=2.02 (x 6 = 12.12, cost/sell 0.085 like
+// the other small parts there; as a line total it would be 0.014).
+// localCost is NOT a cost: it equalled the unit sell price on every line.
 // A line with no cost is unreadable, unless it is a $0 line with a $0 cost.
 function somPartCost(line: HssomRepairFacts["parts"][number]): number | undefined {
-  for (const cost of [line.costPrice, line.localCost]) {
-    if (cost != null && cost > 0) return cost;
-  }
-  const zero = line.costPrice === 0 || line.localCost === 0;
-  return zero && (line.price ?? 0) === 0 ? 0 : undefined;
+  const quantity = line.quantity ?? 1;
+  if (!Number.isFinite(quantity) || quantity < 0) return undefined;
+  if (line.costPrice != null && line.costPrice > 0) return line.costPrice * quantity;
+  return line.costPrice === 0 && (line.price ?? 0) === 0 ? 0 : undefined;
 }
 
 // SOM first: the live order, ahead of TechHub and the warehouse copy.
@@ -471,15 +473,11 @@ function mapHssom(som: HssomRepairFacts | null | undefined, fields: RrPrefillRes
   if (active.length) {
     const costs = active.map(somPartCost);
     if (costs.some((cost) => cost == null)) {
-      warnings.push("A SOM part line has no cost (costPrice or localCost), so parts_cost was not filled. Parts cost is the cost, not the sell price.");
+      warnings.push("A SOM part line has no cost (costPrice), so parts_cost was not filled. Parts cost is the cost, not the sell price.");
     } else {
       const total = (costs as number[]).reduce((sum, cost) => sum + cost, 0);
       if (cents(total) > 0) {
-        fields.parts_cost = field(money(total), `SOM part cost (${active.length} line${active.length === 1 ? "" : "s"})`);
-        const multi = active.filter((line) => (line.quantity ?? 1) > 1).length;
-        if (multi) {
-          warnings.push(`${multi} SOM part line${multi === 1 ? " has" : "s have"} a quantity above 1; its cost was taken as the line total, like its sell price. Check it against the order.`);
-        }
+        fields.parts_cost = field(money(total), `SOM part cost x quantity (${active.length} line${active.length === 1 ? "" : "s"})`);
       }
     }
     // Sell price: the same lines' customer price, also per line. Only the

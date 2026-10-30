@@ -246,11 +246,11 @@ if (!lookupConfig) {
         console.log(`     ${j.jobCode ?? "?"} "${(j.description ?? "").slice(0, 40)}" charge=${amount(j.chargeAmount)} chargeCode=${j.chargeCode ?? "-"} coverage=${j.coverageCode ?? "-"}`);
       }
       console.log(`   parts (${facts.parts.length}):`);
-      // Sell (price) and cost per line, plus cost / sell, so a quantity
-      // above 1 shows whether the cost is per line like the price.
+      // Sell (price, the line total), unit cost and the line's cost / sell
+      // (unit cost x quantity over price).
       for (const p of facts.parts) {
-        const ratio = p.price && p.costPrice != null ? ` cost/sell=${(p.costPrice / p.price).toFixed(2)}` : "";
-        console.log(`     sell=${amount(p.price)} cost=${amount(p.costPrice)} localCost=${amount(p.localCost)} qty=${p.quantity ?? "-"} status=${p.status ?? "-"}${ratio}`);
+        const ratio = p.price && p.costPrice != null ? ` line cost/sell=${((p.costPrice * (p.quantity ?? 1)) / p.price).toFixed(2)}` : "";
+        console.log(`     sell=${amount(p.price)} unitCost=${amount(p.costPrice)} localCost=${amount(p.localCost)} qty=${p.quantity ?? "-"} status=${p.status ?? "-"}${ratio}`);
       }
       const fromSom = rrPrefill.buildRepairReplacePrefill({ serviceOrder: `${district}-${so}`, row: null, hssom: facts });
       const filled = Object.entries(fromSom.fields).filter(([, f]) => f?.source === "hssom");

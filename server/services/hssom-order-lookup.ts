@@ -56,8 +56,8 @@ export type HssomOrderLookupResult =
 // orders: serviceOrder.estimate.{tripCharge, partsTaxPerc, laborTaxPerc},
 // jobCodes[].{jobCode, description, chargeCode, chargeAmount,
 // coverage.coverageCode}, parts[].{price, costPrice, localCost, quantity,
-// status} (price is the customer sell price for the whole line: PROD
-// 7995-14335804, 6 screws at 23.74 came back price=142.44 qty=6),
+// status} (PROD 7995-14335804, 6 screws: price=142.44 is the line's sell,
+// costPrice=2.02 is per unit, localCost=23.74 is the unit sell, not a cost),
 // serviceInfo.attemptCount, previousAttempts[], providerId (W2 = Sears).
 export interface HssomJobCode {
   jobCode?: string;

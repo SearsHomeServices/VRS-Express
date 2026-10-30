@@ -180,6 +180,6 @@
 - [ ] Run updated diagnostic in Replit; confirm Order Lookup JSON key paths for ORDER_DETAILS (tripCharge, jobCodes chargeAmount, monetaryDetails, attempts, merchandise.history), then wire them into the calculator prefill (source "hssom") ahead of/alongside WOM.
 - [ ] Verify the SOM calculator values on a real ticket (diagnostic section 8 "calculator from SOM"): is attemptCount inclusive of today's visit; are SP-covered job codes $0 (then labor needs a cost source); part status codes match NPSXTPN (X/V/R inactive, I/F received).
 - [ ] Ask HSSOM to remove HSSOMUpdateService / HSSOMUpdateOrderService grants from VRS (read-only use).
-- [ ] Run the diagnostic on 7995-14335804 in Replit: confirm SOM `costPrice` is per line (screws line cost/sell ratio like the others) and matches the parts screen
+- [x] Diagnostic on 7995-14335804: SOM `costPrice` is per unit (x quantity); localCost is the unit sell price
 - [x] Prefill the legacy calculator's Sell price from SOM `price`
 - [ ] Confirm on 8228-14169759 which job code gave labor $129 (Labor badge tooltip) and that 9xxxx are never repair labor

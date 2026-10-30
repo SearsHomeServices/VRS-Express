@@ -11,10 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   about $1,012 of parts at sell price. SOM `parts[].price` is the customer sell
   price for the whole line (6 screws at $23.74 came back `price=142.44 qty=6`),
   and the prefill multiplied it by the quantity again.
-- Parts cost now comes from SOM `parts[].costPrice` (else `localCost`), summed
-  per line and never multiplied by quantity. A line with a quantity above 1
-  adds a warning to check it. A line with no cost leaves parts cost blank with
-  a warning; the sell price is never used.
+- Parts cost now comes from SOM `parts[].costPrice` x quantity: `costPrice` is
+  per unit, while `price` is already the line total (7995-14335804, 6 screws:
+  unit cost 2.02, line sell 142.44). `localCost` is the unit sell price, not a
+  cost, and is not used. A line with no cost leaves parts cost blank with a
+  warning; the sell price is never used.
 - Uninstalled SOM part lines (status U) are left out.
 - NPSXTPN selling prices no longer fill parts cost (they still set parts
   available).

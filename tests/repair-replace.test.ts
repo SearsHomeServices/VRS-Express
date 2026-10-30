@@ -520,7 +520,7 @@ const SOM_FACTS: HssomRepairFacts = {
   ],
   parts: [
     { price: 120.5, costPrice: 70.25, quantity: 1, status: "I" },
-    { price: 40, localCost: 22, quantity: 1, status: "O" },
+    { price: 40, costPrice: 22, localCost: 40, quantity: 1, status: "O" },
     { price: 999, costPrice: 600, quantity: 1, status: "X" },
     { price: 0, costPrice: 300, quantity: 1, status: "U" },
   ],
@@ -537,7 +537,7 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     const result = buildRepairReplacePrefill({
       serviceOrder: "7108-14201974", row: { MDS_CD: "WASHERFL" }, techhub, parts, hssom: SOM_FACTS, servicerType: "1099",
     });
-    expect(result.fields.parts_cost).toMatchObject({ value: "92.25", source: "hssom", source_field: "SOM part cost (2 lines)" });
+    expect(result.fields.parts_cost).toMatchObject({ value: "92.25", source: "hssom", source_field: "SOM part cost x quantity (2 lines)" });
     expect(result.fields.labor_cost).toMatchObject({ value: "468.00", source: "hssom" });
     expect(result.fields.labor_cost?.source_field).toContain("13130 Blower Sq. Cage Rep/Repl $369.00");
     expect(result.fields.trip_cost).toMatchObject({ value: "139.00", source: "hssom" });
@@ -568,23 +568,24 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     expect(result.warnings.some((w) => w.includes("90000 Deductible") && w.includes("not repair labor"))).toBe(true);
   });
 
-  it("takes each part line's cost as the line total, never times quantity (PROD 7995-14335804 shape)", () => {
-    const sell = [236.79, 75.85, 198.19, 127.13, 171.67, 24.83, 35.16];
+  it("multiplies the unit cost by quantity but not the line's sell price (PROD 7995-14335804)", () => {
+    // [sell (line total), unit cost, unit sell as localCost], live values 2026-10-30.
+    const lines: Array<[number, number, number, number]> = [
+      [236.79, 133.48, 236.79, 1], [75.85, 21.98, 75.85, 1], [198.19, 99.90, 198.19, 1], [127.13, 32.50, 127.13, 1],
+      [171.67, 82.45, 171.67, 1], [24.83, 1.64, 24.83, 1], [35.16, 4.18, 35.16, 1], [142.44, 2.02, 23.74, 6],
+    ];
     const result = buildRepairReplacePrefill({
       serviceOrder: "7995-14335804", row: null,
       hssom: {
         jobCodes: [],
-        parts: [
-          ...sell.map((price) => ({ price, costPrice: price / 2, quantity: 1, status: "F" })),
-          { price: 142.44, costPrice: 71.22, quantity: 6, status: "F" },
-        ],
+        parts: lines.map(([price, costPrice, localCost, quantity]) => ({ price, costPrice, localCost, quantity, status: "F" })),
       },
     });
-    // Sell total 1012.06 (not 1724.26, which multiplied the screws line by 6); cost is half.
-    expect(result.fields.parts_cost).toMatchObject({ value: "506.03", source: "hssom" });
+    // Cost: 376.13 for the single lines + 6 x 2.02 for the screws.
+    expect(result.fields.parts_cost).toMatchObject({ value: "388.25", source: "hssom" });
+    // Sell: line totals as they are (not 1724.26, which multiplied the screws line by 6).
     expect(result.fields.sell_price).toMatchObject({ value: "1012.06", source: "hssom", source_field: "SOM part sell price (8 lines)" });
     expect(result.fields.parts_available).toMatchObject({ value: true, source: "hssom" });
-    expect(result.warnings.some((w) => w.includes("quantity above 1") && w.includes("line total"))).toBe(true);
   });
 
   it("leaves 9xxxx job codes out of labor whatever their description (8228-14169759 showed labor = trip)", () => {
@@ -606,7 +607,11 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
   });
 
   it("leaves parts cost blank when a SOM line has no cost, and never uses the sell price", () => {
-    for (const line of [{ price: 50, quantity: 1, status: "I" }, { price: 50, costPrice: 0, quantity: 1, status: "I" }]) {
+    for (const line of [
+      { price: 50, quantity: 1, status: "I" },
+      { price: 50, costPrice: 0, quantity: 1, status: "I" },
+      { price: 50, localCost: 50, quantity: 1, status: "I" }, // localCost is the unit sell price, not a cost
+    ]) {
       const result = buildRepairReplacePrefill({ serviceOrder: "7995-14335804", row: null, hssom: { jobCodes: [], parts: [line] } });
       expect(result.fields.parts_cost).toBeUndefined();
       expect(result.fields.sell_price?.value).toBe("50.00");
