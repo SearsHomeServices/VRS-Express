@@ -328,3 +328,9 @@ Use this format for new entries:
 
 ## 2026-10-29: SOM Order Lookup is the calculator's first source
 - Parts, labor (job-code charges), trip, tax rate, visits and servicer come from the HSSOM Order Lookup (live order) ahead of TechHub/Snowflake (warehouse copy, TechHub labor on ~1 in 8 orders). Service-call job codes are excluded from labor (QA: "Service Completed" = trip charge). Legacy formulas use an entered labor amount over hours x rate (Enzo: the old Streamlit app doesn't matter) and Standard/PA 2.0 tax parts only when a rate is given (SOM gives the parts tax rate). The calculator's SOM lookup is gated by the calculator flag, not the AHS customer-prefill flag.
+
+## 2026-10-30: Parts cost is the cost, not the sell price
+- The calculator's parts cost comes from SOM `parts[].costPrice` (else `localCost`), per line. SOM `price` is the customer sell price for the whole line, so nothing is multiplied by quantity.
+- No sell-price fallback: a line without a cost leaves parts cost blank with a warning, and NPSXTPN (selling prices only) no longer fills it. A blank the agent fills beats a sell price shown as cost.
+- Why: a technician showed 7995-14335804 at $1,724.26 (sell x quantity again) and asked for cost; Enzo chose cost.
+- Sell price is still filled, into its own field (`sell_price`), because First American / AHS discount the sell price. 9xxxx job codes are treated as service call / deductible, not labor (unverified range; the warning names each dropped code).

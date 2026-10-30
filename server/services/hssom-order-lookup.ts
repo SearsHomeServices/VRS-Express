@@ -55,7 +55,9 @@ export type HssomOrderLookupResult =
 // paths confirmed on a live PROD order (7108-14201974, 2026-10-29) and QA
 // orders: serviceOrder.estimate.{tripCharge, partsTaxPerc, laborTaxPerc},
 // jobCodes[].{jobCode, description, chargeCode, chargeAmount,
-// coverage.coverageCode}, parts[].{price, quantity, status},
+// coverage.coverageCode}, parts[].{price, costPrice, localCost, quantity,
+// status} (price is the customer sell price for the whole line: PROD
+// 7995-14335804, 6 screws at 23.74 came back price=142.44 qty=6),
 // serviceInfo.attemptCount, previousAttempts[], providerId (W2 = Sears).
 export interface HssomJobCode {
   jobCode?: string;
@@ -67,6 +69,8 @@ export interface HssomJobCode {
 
 export interface HssomPartLine {
   price?: number;
+  costPrice?: number;
+  localCost?: number;
   quantity?: number;
   status?: string;
 }
@@ -190,6 +194,8 @@ export function repairFactsFromOrder(order: Json): HssomRepairFacts {
     })),
     parts: list(order.parts).map((line) => ({
       price: num(line.price),
+      costPrice: num(line.costPrice),
+      localCost: num(line.localCost),
       quantity: num(line.quantity),
       status: text(line.status)?.toUpperCase(),
     })),

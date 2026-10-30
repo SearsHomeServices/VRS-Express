@@ -188,6 +188,7 @@ const PREFILL_TARGETS: Partial<Record<keyof RrPrefillResponse["fields"], FieldKe
   other_service_orders_12mo: "otherServiceOrders",
   same_part_or_system_repeat: "samePart",
   tax_rate: "taxRate",
+  sell_price: "sellPrice",
 };
 
 function sourceLabel(field: RrPrefillField): string {
@@ -587,7 +588,8 @@ export function RepairReplaceCalculator({
                 )}
               </>
             )}
-            <Field id="rr-sellPrice" label="Sell price ($)" hint="Blank uses the parts cost.">
+            <Field id="rr-sellPrice" label="Sell price ($)" badge={<SourceBadge field={prefilled.sellPrice} testId="badge-rr-sell" />}
+              hint="All parts at the customer's price. Blank uses the parts cost.">
               <Input {...text("sellPrice")} inputMode="decimal" />
             </Field>
             <Field id="rr-quantity" label="Quantity" hint="Blank is 1.">

@@ -246,7 +246,12 @@ if (!lookupConfig) {
         console.log(`     ${j.jobCode ?? "?"} "${(j.description ?? "").slice(0, 40)}" charge=${amount(j.chargeAmount)} chargeCode=${j.chargeCode ?? "-"} coverage=${j.coverageCode ?? "-"}`);
       }
       console.log(`   parts (${facts.parts.length}):`);
-      for (const p of facts.parts) console.log(`     price=${amount(p.price)} qty=${p.quantity ?? "-"} status=${p.status ?? "-"}`);
+      // Sell (price) and cost per line, plus cost / sell, so a quantity
+      // above 1 shows whether the cost is per line like the price.
+      for (const p of facts.parts) {
+        const ratio = p.price && p.costPrice != null ? ` cost/sell=${(p.costPrice / p.price).toFixed(2)}` : "";
+        console.log(`     sell=${amount(p.price)} cost=${amount(p.costPrice)} localCost=${amount(p.localCost)} qty=${p.quantity ?? "-"} status=${p.status ?? "-"}${ratio}`);
+      }
       const fromSom = rrPrefill.buildRepairReplacePrefill({ serviceOrder: `${district}-${so}`, row: null, hssom: facts });
       const filled = Object.entries(fromSom.fields).filter(([, f]) => f?.source === "hssom");
       console.log(`   calculator from SOM: ${filled.map(([name, f]) => `${name}=${String(f!.value)}`).join(", ") || "nothing"}`);

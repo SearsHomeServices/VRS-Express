@@ -999,6 +999,7 @@ export const RR_FIELD_LABELS: Record<string, string> = {
   servicer_type: "Servicer",
   age_band: "PA 2.0 age band",
   tax_rate: "Tax rate",
+  sell_price: "Sell price",
 };
 
 export const RR_RULE_LABELS: Record<string, string> = {
@@ -1071,6 +1072,9 @@ export const RR_PREFILL_FIELDS = [
   "appliance_reference", "servicer_type",
   // The order's parts tax rate (SOM estimate.partsTaxPerc).
   "tax_rate",
+  // The parts' total customer sell price (SOM parts[].price, line totals);
+  // the discounted estimators price parts from it.
+  "sell_price",
 ] as const;
 export type RrPrefillFieldName = (typeof RR_PREFILL_FIELDS)[number];
 

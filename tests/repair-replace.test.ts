@@ -309,7 +309,6 @@ describe("prefill mapping", () => {
       labor_cost: { value: "443.95", source: "snowflake", source_field: "TechHub deLabor estimate (3 lines)", observed_at: "2026-10-15T16:36:18" },
       trip_cost: { value: "139.00", source: "snowflake", source_field: "TechHub deTripCharge", observed_at: "2026-10-15T16:36:18" },
       technician_confident: { value: true, source: "snowflake", source_field: "TechHub applianceAssessment repair confidence 4 of 5", observed_at: "2026-10-15T16:36:18" },
-      parts_cost: { value: "474.40", source: "snowflake", source_field: "NPSXTPN selling price (2 part lines)" },
     });
     expect(result.warnings).toContain(
       "Billed job code is 'door gasket'. That is not necessarily the failed component, so component was not filled.",
@@ -381,7 +380,7 @@ describe("prefill mapping", () => {
     }
   });
 
-  it("sums live part lines, marks parts available only from a received line, never unavailable", () => {
+  it("never fills parts cost from selling prices, marks parts available only from a received line, never unavailable", () => {
     const onOrder = prefill({ parts: parts(
       { SVC_PRT_STS_CD: "H", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "100.00" },
       { SVC_PRT_STS_CD: "O", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "50.00" },
@@ -389,17 +388,12 @@ describe("prefill mapping", () => {
       { SVC_PRT_STS_CD: "V", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "900.00" },
       { SVC_PRT_STS_CD: "R", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "900.00" },
     ) });
-    expect(onOrder.fields.parts_cost?.value).toBe("150.00");
+    expect(onOrder.fields.parts_cost).toBeUndefined();
+    expect(onOrder.warnings.some((warning) => warning.includes("selling prices only"))).toBe(true);
     expect(onOrder.fields.parts_available).toBeUndefined();
     expect(onOrder.warnings.some((warning) => warning.includes("on order but none has arrived yet"))).toBe(true);
     const installed = prefill({ parts: parts({ SVC_PRT_STS_CD: "I", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "100.00" }) });
     expect(installed.fields.parts_available?.value).toBe(true);
-    for (const line of [
-      { SVC_PRT_STS_CD: "I", SVC_PRT_QT: 2, PRT_SEL_PRC_AM: "10.00" },
-      { SVC_PRT_STS_CD: "I", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: null },
-    ]) {
-      expect(prefill({ parts: parts(line) }).fields.parts_cost).toBeUndefined();
-    }
   });
 
   it("keeps a failed lookup a failed lookup", () => {
@@ -421,7 +415,10 @@ describe("prefill mapping", () => {
       });
       const filled = Object.fromEntries(Object.entries(result.fields).map(([key, field]) => [key, field!.value]));
       expect(result.status, order.service_order).toBe(order.prefill_status);
-      expect(filled, order.service_order).toEqual(order.prefill_fields);
+      // VRS Express no longer fills parts_cost from NPSXTPN selling prices
+      // (2026-10-30: parts cost is the cost); everything else matches Python.
+      const { parts_cost: _sell, ...expected } = order.prefill_fields;
+      expect(filled, order.service_order).toEqual(expected);
     }
   });
 });
@@ -522,9 +519,10 @@ const SOM_FACTS: HssomRepairFacts = {
     { jobCode: "90300", description: "Service Completed", chargeCode: "B", chargeAmount: 139, coverageCode: "CC" },
   ],
   parts: [
-    { price: 120.5, quantity: 2, status: "I" },
-    { price: 40, quantity: 1, status: "O" },
-    { price: 999, quantity: 1, status: "X" },
+    { price: 120.5, costPrice: 70.25, quantity: 1, status: "I" },
+    { price: 40, localCost: 22, quantity: 1, status: "O" },
+    { price: 999, costPrice: 600, quantity: 1, status: "X" },
+    { price: 0, costPrice: 300, quantity: 1, status: "U" },
   ],
 };
 
@@ -539,7 +537,7 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     const result = buildRepairReplacePrefill({
       serviceOrder: "7108-14201974", row: { MDS_CD: "WASHERFL" }, techhub, parts, hssom: SOM_FACTS, servicerType: "1099",
     });
-    expect(result.fields.parts_cost).toMatchObject({ value: "281.00", source: "hssom" });
+    expect(result.fields.parts_cost).toMatchObject({ value: "92.25", source: "hssom", source_field: "SOM part cost (2 lines)" });
     expect(result.fields.labor_cost).toMatchObject({ value: "468.00", source: "hssom" });
     expect(result.fields.labor_cost?.source_field).toContain("13130 Blower Sq. Cage Rep/Repl $369.00");
     expect(result.fields.trip_cost).toMatchObject({ value: "139.00", source: "hssom" });
@@ -550,7 +548,78 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     expect(result.warnings.some((w) => w.includes("90300 Service Completed") && w.includes("left out of labor_cost"))).toBe(true);
   });
 
-  it("falls back to TechHub and NPSXTPN when SOM has no usable amounts", () => {
+  it("leaves a deductible job code out of labor (PROD 7108-14201974 shape)", () => {
+    const result = buildRepairReplacePrefill({
+      serviceOrder: "7108-14201974", row: null,
+      hssom: {
+        jobCodes: [
+          { jobCode: "56320", description: "Main PCB/Replace", chargeCode: "B", chargeAmount: 171, coverageCode: "PT" },
+          { jobCode: "90000", description: "Deductible", chargeCode: "X", chargeAmount: 75, coverageCode: "CC" },
+        ],
+        parts: [
+          { price: 0, costPrice: 0, quantity: 1, status: "X" }, { price: 0, costPrice: 0, quantity: 1, status: "U" },
+          { price: 219.92, costPrice: 131.95, quantity: 1, status: "R" },
+          { price: 350.95, costPrice: 210.57, quantity: 1, status: "O" }, { price: 353.64, costPrice: 212.18, quantity: 1, status: "O" },
+        ],
+      },
+    });
+    expect(result.fields.labor_cost).toMatchObject({ value: "171.00", source: "hssom" });
+    expect(result.fields.parts_cost).toMatchObject({ value: "422.75", source: "hssom" });
+    expect(result.warnings.some((w) => w.includes("90000 Deductible") && w.includes("not repair labor"))).toBe(true);
+  });
+
+  it("takes each part line's cost as the line total, never times quantity (PROD 7995-14335804 shape)", () => {
+    const sell = [236.79, 75.85, 198.19, 127.13, 171.67, 24.83, 35.16];
+    const result = buildRepairReplacePrefill({
+      serviceOrder: "7995-14335804", row: null,
+      hssom: {
+        jobCodes: [],
+        parts: [
+          ...sell.map((price) => ({ price, costPrice: price / 2, quantity: 1, status: "F" })),
+          { price: 142.44, costPrice: 71.22, quantity: 6, status: "F" },
+        ],
+      },
+    });
+    // Sell total 1012.06 (not 1724.26, which multiplied the screws line by 6); cost is half.
+    expect(result.fields.parts_cost).toMatchObject({ value: "506.03", source: "hssom" });
+    expect(result.fields.sell_price).toMatchObject({ value: "1012.06", source: "hssom", source_field: "SOM part sell price (8 lines)" });
+    expect(result.fields.parts_available).toMatchObject({ value: true, source: "hssom" });
+    expect(result.warnings.some((w) => w.includes("quantity above 1") && w.includes("line total"))).toBe(true);
+  });
+
+  it("leaves 9xxxx job codes out of labor whatever their description (8228-14169759 showed labor = trip)", () => {
+    const tripOnly = buildRepairReplacePrefill({
+      serviceOrder: "8228-14169759", row: null,
+      hssom: { tripCharge: 129, jobCodes: [{ jobCode: "90150", description: "SVC CALL", chargeAmount: 129 }], parts: [] },
+    });
+    expect(tripOnly.fields.labor_cost).toBeUndefined();
+    expect(tripOnly.fields.trip_cost?.value).toBe("129.00");
+    expect(tripOnly.warnings.some((w) => w.includes("90150 SVC CALL") && w.includes("not repair labor"))).toBe(true);
+    const repair = buildRepairReplacePrefill({
+      serviceOrder: "8228-14169759", row: null,
+      hssom: { tripCharge: 129, parts: [], jobCodes: [
+        { jobCode: "14335", description: "Coupler, Motor/Gearcase", chargeAmount: 171 },
+        { jobCode: "90000", description: "Ded", chargeAmount: 129 },
+      ] },
+    });
+    expect(repair.fields.labor_cost?.value).toBe("171.00");
+  });
+
+  it("leaves parts cost blank when a SOM line has no cost, and never uses the sell price", () => {
+    for (const line of [{ price: 50, quantity: 1, status: "I" }, { price: 50, costPrice: 0, quantity: 1, status: "I" }]) {
+      const result = buildRepairReplacePrefill({ serviceOrder: "7995-14335804", row: null, hssom: { jobCodes: [], parts: [line] } });
+      expect(result.fields.parts_cost).toBeUndefined();
+      expect(result.fields.sell_price?.value).toBe("50.00");
+      expect(result.warnings.some((w) => w.includes("SOM part line has no cost"))).toBe(true);
+    }
+    const free = buildRepairReplacePrefill({
+      serviceOrder: "7995-14335804", row: null,
+      hssom: { jobCodes: [], parts: [{ price: 0, costPrice: 0, quantity: 1, status: "I" }, { price: 30, costPrice: 12.5, quantity: 1, status: "I" }] },
+    });
+    expect(free.fields.parts_cost?.value).toBe("12.50");
+  });
+
+  it("falls back to TechHub when SOM has no usable amounts", () => {
     const covered: HssomRepairFacts = {
       jobCodes: [{ jobCode: "13130", description: "Blower Sq. Cage Rep/Repl", chargeAmount: 0 }],
       parts: [{ quantity: 1, status: "I" }],
@@ -558,9 +627,9 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     const result = buildRepairReplacePrefill({ serviceOrder: "7108-14201974", row: { MDS_CD: "WASHERFL" }, techhub, parts, hssom: covered });
     expect(result.fields.labor_cost).toMatchObject({ value: "344.95", source: "snowflake" });
     expect(result.fields.trip_cost).toMatchObject({ value: "89.00", source: "snowflake" });
-    expect(result.fields.parts_cost).toMatchObject({ value: "10.00", source: "snowflake" });
+    expect(result.fields.parts_cost).toBeUndefined();
     expect(result.warnings.some((w) => w.includes("charge $0.00 to the customer (covered)"))).toBe(true);
-    expect(result.warnings.some((w) => w.includes("SOM part line has no readable price"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("SOM part line has no cost"))).toBe(true);
   });
 
   it("uses SOM when Snowflake has no row, and the account servicer when SOM has no provider", () => {
@@ -611,7 +680,7 @@ describe("prefill from parts labor lines, CC_LAB_NET, history and WOM", () => {
       { SVC_PRT_STS_CD: "O", SVC_PRT_TYP_CD: "L", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "89.50" },
       { SVC_PRT_STS_CD: "X", SVC_PRT_TYP_CD: "L", SVC_PRT_QT: 1, PRT_SEL_PRC_AM: "500" },
     ] });
-    expect(result.fields.parts_cost?.value).toBe("100.00");
+    expect(result.fields.parts_cost).toBeUndefined();
     expect(result.fields.labor_cost).toMatchObject({ value: "89.50", source_field: "NPSXTPN labor lines (1 line, type L)" });
     const techhubWins = prefill({ techhub: techhub(), parts: [{ SVC_PRT_STS_CD: "O", SVC_PRT_TYP_CD: "L", PRT_SEL_PRC_AM: "89.50" }] });
     expect(techhubWins.fields.labor_cost?.source_field).toContain("TechHub");

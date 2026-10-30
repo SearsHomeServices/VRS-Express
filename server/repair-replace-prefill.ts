@@ -12,7 +12,8 @@
 //   TechHub (NPSXTFS) deLabor, latest submission, summed when positive -> labor_cost
 //   TechHub deTripCharge, latest submission, when positive -> trip_cost
 //   TechHub applianceAssessment repair confidence 4-5 / 1-2 -> technician_confident
-//   NPSXTPN selling prices of lines not cancelled, voided or returned -> parts_cost
+//   NPSXTPN selling prices: no longer parts_cost (2026-10-30, parts cost is
+//     what the parts cost, not the customer's price; see SOM below)
 //   NPSXTPN: a line installed or fulfilled -> parts_available = true (never false)
 // VRS Express adds (2026-10-28):
 //   NPSXTPN type 'L' lines (labor coded as a part) -> labor_cost when TechHub
@@ -26,8 +27,11 @@
 //   the technician's account (1099 provider company or not) -> servicer_type
 // The HSSOM Order Lookup (SOM, server/services/hssom-order-lookup.ts
 // repairFactsFromOrder), ahead of TechHub and Snowflake (2026-10-29):
-//   parts[] price x quantity, lines not cancelled, voided or returned -> parts_cost
-//   jobCodes[].chargeAmount, summed, without service-call codes -> labor_cost
+//   parts[] costPrice (else localCost) per line, never times quantity, lines
+//     not cancelled, voided, returned or uninstalled -> parts_cost
+//   parts[] price (the line's customer sell price), same lines -> sell_price
+//   jobCodes[].chargeAmount, summed, without 9xxxx codes (90000 Deductible,
+//     90300 Service Completed) or service-call descriptions -> labor_cost
 //   estimate.tripCharge -> trip_cost; estimate.partsTaxPerc -> tax_rate
 //   serviceInfo.attemptCount -> visit_number
 //   providerId (W2 = Sears employed) -> servicer_type, ahead of the account
@@ -417,37 +421,45 @@ function mapParts(parts: Row[], fields: RrPrefillResponse["fields"], warnings: s
       );
     }
   }
-  let total = 0;
-  for (const row of active) {
-    const quantityRaw = cell(row, "SVC_PRT_QT");
-    const quantity = rrNumber(quantityRaw);
-    if ((present(quantityRaw) && quantity == null) || (quantity != null && quantity > 1)) {
-      // Above 1 was never observed live, so per-unit versus per-line price
-      // is unknown; an unreadable quantity is treated the same.
-      warnings.push("A part line has a quantity above 1, so parts_cost was not filled.");
-      return;
-    }
-    const price = rrNumber(cell(row, "PRT_SEL_PRC_AM"));
-    if (price == null || price < 0) {
-      warnings.push("A part line has no readable selling price, so parts_cost was not filled.");
-      return;
-    }
-    total += price;
+  // Selling prices only, and parts_cost is the cost (2026-10-30): the SOM
+  // cost fills it, or the person does.
+  if (!fields.parts_cost) {
+    warnings.push("The Snowflake part lines have selling prices only, so parts_cost was not filled from them (parts cost is the cost, not the sell price).");
   }
-  if (cents(total) <= 0) return;
-  fields.parts_cost = {
-    value: money(total),
-    source: "snowflake",
-    source_field: `NPSXTPN selling price (${active.length} part line${active.length === 1 ? "" : "s"})`,
-  };
 }
 
-// Job codes that are the service call itself, not repair labor: on QA
-// orders "Service Completed" (90300) carried exactly the trip charge.
-const SERVICE_CALL_JOB = /service (call|completed)|trip charge|diagnos/i;
+// Job codes that are not repair labor: the service call itself (on QA
+// orders "Service Completed" 90300 carried exactly the trip charge) and the
+// customer's deductible (PROD 7108-14201974: 90000 "Deductible"). Matched by
+// description, and by the 9xxxx range those two share (repair codes seen:
+// 13130, 14335, 56320, 60000, 84100, 85225), which also catches a service
+// code with an unusual description. The warning names every code dropped.
+const SERVICE_CALL_JOB = /service (call|completed)|trip charge|diagnos|deductible/i;
+const SERVICE_CALL_CODE = /^9\d{4}$/;
+
+function isServiceCallJob(line: HssomRepairFacts["jobCodes"][number]): boolean {
+  return SERVICE_CALL_JOB.test(line.description ?? "") || SERVICE_CALL_CODE.test(line.jobCode ?? "");
+}
 
 function jobLabel(line: HssomRepairFacts["jobCodes"][number]): string {
   return [line.jobCode, line.description].filter(Boolean).join(" ") || "job code";
+}
+
+// SOM part statuses (Order Lookup spec V0.13): I installed, O ordered,
+// U uninstalled, H hold, D downloaded; F fulfilled seen live. Uninstalled
+// lines are not in the repair.
+const SOM_INACTIVE_PART_STATUSES = new Set([...INACTIVE_PART_STATUSES, "U"]);
+
+// What a SOM part line costs Sears: costPrice, else localCost (a local
+// purchase). Both are per line, like price: PROD 7995-14335804 returned
+// price=142.44 for 6 screws at 23.74, so quantity is never multiplied in.
+// A line with no cost is unreadable, unless it is a $0 line with a $0 cost.
+function somPartCost(line: HssomRepairFacts["parts"][number]): number | undefined {
+  for (const cost of [line.costPrice, line.localCost]) {
+    if (cost != null && cost > 0) return cost;
+  }
+  const zero = line.costPrice === 0 || line.localCost === 0;
+  return zero && (line.price ?? 0) === 0 ? 0 : undefined;
 }
 
 // SOM first: the live order, ahead of TechHub and the warehouse copy.
@@ -455,21 +467,28 @@ function mapHssom(som: HssomRepairFacts | null | undefined, fields: RrPrefillRes
   if (!som) return;
   const field = (value: string | boolean, sourceField: string): RrPrefillField => ({ value, source: "hssom", source_field: sourceField });
 
-  const active = som.parts.filter((line) => !INACTIVE_PART_STATUSES.has(line.status ?? ""));
+  const active = som.parts.filter((line) => !SOM_INACTIVE_PART_STATUSES.has(line.status ?? ""));
   if (active.length) {
-    let total = 0;
-    let readable = true;
-    for (const line of active) {
-      const quantity = line.quantity ?? 1;
-      if (line.price == null || line.price < 0 || !Number.isFinite(quantity) || quantity < 0) {
-        readable = false;
-        break;
+    const costs = active.map(somPartCost);
+    if (costs.some((cost) => cost == null)) {
+      warnings.push("A SOM part line has no cost (costPrice or localCost), so parts_cost was not filled. Parts cost is the cost, not the sell price.");
+    } else {
+      const total = (costs as number[]).reduce((sum, cost) => sum + cost, 0);
+      if (cents(total) > 0) {
+        fields.parts_cost = field(money(total), `SOM part cost (${active.length} line${active.length === 1 ? "" : "s"})`);
+        const multi = active.filter((line) => (line.quantity ?? 1) > 1).length;
+        if (multi) {
+          warnings.push(`${multi} SOM part line${multi === 1 ? " has" : "s have"} a quantity above 1; its cost was taken as the line total, like its sell price. Check it against the order.`);
+        }
       }
-      total += line.price * quantity;
     }
-    if (!readable) warnings.push("A SOM part line has no readable price or quantity, so parts_cost was not taken from SOM.");
-    else if (cents(total) > 0) {
-      fields.parts_cost = field(money(total), `SOM parts, price x quantity (${active.length} line${active.length === 1 ? "" : "s"})`);
+    // Sell price: the same lines' customer price, also per line. Only the
+    // discounted estimators (First American, AHS) price parts from it.
+    if (active.some((line) => line.price == null || line.price < 0)) {
+      warnings.push("A SOM part line has no readable sell price, so sell_price was not filled.");
+    } else {
+      const sell = active.reduce((sum, line) => sum + (line.price as number), 0);
+      if (cents(sell) > 0) fields.sell_price = field(money(sell), `SOM part sell price (${active.length} line${active.length === 1 ? "" : "s"})`);
     }
     if (active.some((line) => RECEIVED_PART_STATUSES.has(line.status ?? ""))) {
       fields.parts_available = field(true, "SOM part status (installed or fulfilled)");
@@ -477,10 +496,10 @@ function mapHssom(som: HssomRepairFacts | null | undefined, fields: RrPrefillRes
   }
 
   const charged = som.jobCodes.filter((line) => line.chargeAmount != null);
-  const serviceCall = charged.filter((line) => SERVICE_CALL_JOB.test(line.description ?? ""));
+  const serviceCall = charged.filter(isServiceCallJob);
   const repair = charged.filter((line) => !serviceCall.includes(line));
   if (serviceCall.length) {
-    warnings.push(`SOM job code${serviceCall.length === 1 ? "" : "s"} ${serviceCall.map(jobLabel).join(", ")} ${serviceCall.length === 1 ? "is" : "are"} the service call, not repair labor, so ${serviceCall.length === 1 ? "it was" : "they were"} left out of labor_cost.`);
+    warnings.push(`SOM job code${serviceCall.length === 1 ? "" : "s"} ${serviceCall.map(jobLabel).join(", ")} ${serviceCall.length === 1 ? "is" : "are"} not repair labor (service call, trip or deductible; 9xxxx codes), so ${serviceCall.length === 1 ? "it was" : "they were"} left out of labor_cost.`);
   }
   if (repair.length) {
     const total = repair.reduce((sum, line) => sum + (line.chargeAmount as number), 0);
@@ -613,7 +632,7 @@ export function buildRepairReplacePrefill(input: RrPrefillInput): RrPrefillRespo
   if (!fields.labor_cost) mapLabor(input.techhub ?? [], fields, warnings);
   if (!fields.trip_cost) mapTrip(input.techhub ?? [], fields, warnings);
   mapConfidence(input.techhub ?? [], fields, warnings);
-  if (!fields.parts_cost) mapParts(input.parts ?? [], fields, warnings);
+  mapParts(input.parts ?? [], fields, warnings);
   mapWom(input.wom ?? null, fields);
   if (!fields.labor_cost) {
     const lines = laborLines(input.parts ?? [], warnings);

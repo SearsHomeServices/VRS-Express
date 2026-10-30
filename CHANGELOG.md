@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Calculator parts cost is the parts' cost, per line (2026-10-30)
+- A technician reported SO 7995-14335804 showing $1,724.26 parts cost for
+  about $1,012 of parts at sell price. SOM `parts[].price` is the customer sell
+  price for the whole line (6 screws at $23.74 came back `price=142.44 qty=6`),
+  and the prefill multiplied it by the quantity again.
+- Parts cost now comes from SOM `parts[].costPrice` (else `localCost`), summed
+  per line and never multiplied by quantity. A line with a quantity above 1
+  adds a warning to check it. A line with no cost leaves parts cost blank with
+  a warning; the sell price is never used.
+- Uninstalled SOM part lines (status U) are left out.
+- NPSXTPN selling prices no longer fill parts cost (they still set parts
+  available).
+- The diagnostic prints sell, cost, local cost and cost/sell per SOM part line.
+- New prefill field `sell_price`: the same lines' SOM `price` (line totals),
+  filling the legacy "Sell price" field. First American and AHS take their
+  discount off the sell price; with it blank they had used the cost.
+- Job codes in the 9xxxx range (90000 Deductible, 90300 Service Completed)
+  are left out of labor whatever their description. SO 8228-14169759 showed
+  labor $129.00 equal to the trip charge.
+
 ### Added - Calculator fills labor, trip, parts, tax and visits from SOM (2026-10-29)
 - The repair / replace calculator now reads the HSSOM (SOM) Order Lookup
   (`server/services/hssom-order-lookup.ts` `repairFactsFromOrder`; spec
@@ -14,7 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - parts `price x quantity` (lines not cancelled, voided or returned) ->
     parts cost; an installed or fulfilled part -> parts available;
   - job-code `chargeAmount`, summed -> labor, with the job codes listed in the
-    source; service-call codes ("Service Completed", trip, diagnostic) are left
+    source; service-call and deductible codes ("Service Completed", trip,
+    diagnostic, "Deductible") are left
     out so the trip is not counted twice; $0 (covered) job codes fall back to
     TechHub with a warning;
   - `estimate.tripCharge` -> trip; `estimate.partsTaxPerc` -> new prefill field

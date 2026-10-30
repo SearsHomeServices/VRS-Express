@@ -296,13 +296,16 @@ describe("repair facts for the calculator", () => {
       serviceInfo: { attemptCount: 2 },
       previousAttempts: [{ callCode: "30" }],
       jobCodes: { jobCode: 13130, description: "Blower Sq. Cage Rep/Repl", chargeCode: "B", chargeAmount: "369", coverage: { coverageCode: "CC" } },
-      parts: [{ price: 10, quantity: "1", status: "i" }, { price: "n/a" }],
+      parts: [{ price: 10, costPrice: "6.25", localCost: 0, quantity: "1", status: "i" }, { price: "n/a" }],
       customer: { name: { firstName: "Helen" } },
     });
     expect(facts).toEqual({
       tripCharge: 139, partsTaxRate: 0.0825, attemptCount: 2, previousAttemptCount: 1, providerId: "W2",
       jobCodes: [{ jobCode: "13130", description: "Blower Sq. Cage Rep/Repl", chargeCode: "B", chargeAmount: 369, coverageCode: "CC" }],
-      parts: [{ price: 10, quantity: 1, status: "I" }, { price: undefined, quantity: undefined, status: undefined }],
+      parts: [
+        { price: 10, costPrice: 6.25, localCost: 0, quantity: 1, status: "I" },
+        { price: undefined, costPrice: undefined, localCost: undefined, quantity: undefined, status: undefined },
+      ],
     });
     expect(JSON.stringify(facts)).not.toContain("Helen");
   });
