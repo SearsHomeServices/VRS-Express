@@ -102,6 +102,7 @@ export async function seedDatabase() {
   await ensureAhsDetailsColumn();
   await ensureTechApplianceDetailsColumn();
   await ensureServiceOrderProductColumn();
+  await ensureApplianceKindColumn();
   await ensureWeeklyReportsTable();
   // Must precede scheduler startup and any report-delivery query on a fresh
   // dev/prod database.  This table is an audit ledger, not seed data.
@@ -464,6 +465,22 @@ async function ensureServiceOrderProductColumn() {
     console.log("[service-order-product] submissions.service_order_product ensured (nullable)");
   } catch (err: any) {
     console.warn(`[service-order-product] Failed to ensure column: ${err?.message || err}`);
+  }
+}
+
+// 2026-11-04 — submissions.appliance_kind (the technician's specific
+// appliance pick, 2026-10-23) is in the Drizzle schema but had no boot-time
+// migration, so a production database that never ran db:push would fail
+// every submissions query. Same idempotent pattern; safe to re-run.
+async function ensureApplianceKindColumn() {
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE submissions
+        ADD COLUMN IF NOT EXISTS appliance_kind TEXT
+    `));
+    console.log("[appliance-kind] submissions.appliance_kind ensured (nullable)");
+  } catch (err: any) {
+    console.warn(`[appliance-kind] Failed to ensure column: ${err?.message || err}`);
   }
 }
 

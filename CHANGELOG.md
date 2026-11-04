@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - production boot adds submissions.appliance_kind (2026-11-04)
+- `server/seed.ts` `ensureApplianceKindColumn` adds the nullable
+  `appliance_kind` column if missing (`ADD COLUMN IF NOT EXISTS`). It was in
+  the schema since 2026-10-23 without a boot-time migration, so publishing to
+  a production database that never ran `db:push` would break every
+  submissions query.
+
 ### Changed - SASHA client ids; VRS AI always gets its exact partner key (2026-11-04)
 - SASHA's warranty client ids are accepted as `partner_id`: `61380` is AHS and
   `20730` is First American. `90550` (Sears Protect) and `61481` (Assurant PA)
