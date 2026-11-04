@@ -1062,6 +1062,11 @@ export function rrSummaryText(result: RrResult, serviceOrder: string, legacy?: R
 
 // The fields the form can fill from a lookup; everything else is entered by
 // hand. Order is the form's.
+// SOM has the order but no job codes and no parts: the technician's estimate
+// is not on it yet (PROD 7108-14342474 right after it was created).
+export const RR_ORDER_HAS_NO_ESTIMATE =
+  "The service order has no job codes or parts yet, so the technician's estimate is not on it. Press Refresh after they save it.";
+
 export const RR_PREFILL_FIELDS = [
   "appliance_type", "age_years", "labor_cost", "component", "parts_cost", "trip_cost",
   "replacement_cost", "visit_number", "unresolved", "failed_attempt_count",

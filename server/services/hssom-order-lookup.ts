@@ -228,7 +228,10 @@ export function classifyHssomOrderBody(body: unknown): HssomOrderLookupResult {
   if (responseCode(root, order) === HSSOM_NO_DATA_CODE) return { status: "not_found" };
   const customer = obj(order.customer);
   const merchandise = obj(order.merchandise);
-  const thirdParty = obj(order.thirdParty);
+  // The spec (V0.13) and live PROD orders (7108-14342474, 2026-10-30) carry
+  // the contract under serviceInfo.thirdPartyInfo; thirdParty is the older
+  // path the Python port read, kept as a fallback.
+  const thirdParty = obj(obj(order.serviceInfo)?.thirdPartyInfo) ?? obj(order.thirdParty);
   if (!customer && !merchandise && !thirdParty) return { status: "unavailable" };
 
   const name = obj(customer?.name);
@@ -382,7 +385,8 @@ export function createHssomOrderLookup(options: HssomOrderLookupOptions = {}) {
     while (cache.size > cacheSize) cache.delete(cache.keys().next().value!);
   }
 
-  return async function lookup(district: string, bareServiceOrder: string): Promise<HssomOrderLookupResult> {
+  // fresh: skip a cached answer (the calculator's Refresh), still cache the new one.
+  return async function lookup(district: string, bareServiceOrder: string, opts: { fresh?: boolean } = {}): Promise<HssomOrderLookupResult> {
     if (!enabled()) return { status: "unavailable" };
     const orderId = buildHssomOrderId(district, bareServiceOrder);
     if (!orderId) return { status: "not_found" };
@@ -392,7 +396,7 @@ export function createHssomOrderLookup(options: HssomOrderLookupOptions = {}) {
       return { status: "unavailable" };
     }
 
-    const hit = cache.get(orderId);
+    const hit = opts.fresh ? undefined : cache.get(orderId);
     if (hit && hit.expires > now()) {
       cache.delete(orderId);
       cache.set(orderId, hit);

@@ -310,6 +310,16 @@ describe("repair facts for the calculator", () => {
     expect(JSON.stringify(facts)).not.toContain("Helen");
   });
 
+  it("reads the contract number from serviceInfo.thirdPartyInfo (spec V0.13), else thirdParty", () => {
+    const body = (order: Record<string, unknown>) => ({ serviceOrder: { merchandise: { modelNumber: "M1" }, ...order } });
+    expect(classifyHssomOrderBody(body({ serviceInfo: { thirdPartyInfo: { contractNumber: " 551200/0003 " } } })))
+      .toMatchObject({ status: "found", serviceContractId: "551200/0003" });
+    expect(classifyHssomOrderBody(body({
+      serviceInfo: { thirdPartyInfo: { contractNumber: "NEW" } }, thirdParty: { contractNumber: "OLD" },
+    }))).toMatchObject({ serviceContractId: "NEW" });
+    expect(classifyHssomOrderBody(body({ thirdParty: { contractNumber: "OLD" } }))).toMatchObject({ serviceContractId: "OLD" });
+  });
+
   it("attaches repairFacts to a found result only when the order has any", () => {
     expect(classifyHssomOrderBody({ serviceOrder: { merchandise: { modelNumber: "M1" } } })).not.toHaveProperty("repairFacts");
     const found = classifyHssomOrderBody({ serviceOrder: { merchandise: { modelNumber: "M1" }, estimate: { tripCharge: 119 } } });
@@ -518,6 +528,21 @@ describe("cache", () => {
     clock = 30 * 60 * 1000;
     await lookup("8175", "13717195");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a fresh lookup skips the cached answer and caches the new one", async () => {
+    let clock = 0;
+    const fetchMock = vi.fn(async () => json(200, orderBody));
+    const { lookup } = lookupWith(fetchMock, { now: () => clock, foundTtlMs: 2 * 60 * 1000 });
+    await lookup("8175", "13717195");
+    await lookup("8175", "13717195", { fresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    clock = 2 * 60 * 1000 - 1;
+    await lookup("8175", "13717195");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    clock = 2 * 60 * 1000;
+    await lookup("8175", "13717195");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("not_found is cached for 2 minutes", async () => {

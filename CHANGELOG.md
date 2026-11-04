@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - Calculator Refresh, empty orders, SOM contract number (2026-10-30)
+- "Refresh from service order" now asks SOM fresh (`?refresh=1` skips the
+  cached answer), and the calculator's SOM answers are kept 2 minutes instead
+  of 30: an order changes while the technician works it.
+- When SOM has the order but no job codes and no parts (7108-14342474 right
+  after the technician created it), the calculator says the technician's
+  estimate is not on the order yet, instead of just showing few fields.
+- The SOM contract number (AHS dispatch number fallback) is read from
+  `serviceInfo.thirdPartyInfo.contractNumber`, the path in spec V0.13 and on
+  live orders; the old `thirdParty.contractNumber` path never matched, so
+  `serviceContractId` was always empty. Still never shown to technicians.
+
 ### Fixed - Calculator parts cost is the parts' cost, per line (2026-10-30)
 - A technician reported SO 7995-14335804 showing $1,724.26 parts cost for
   about $1,012 of parts at sell price. SOM `parts[].price` is the customer sell

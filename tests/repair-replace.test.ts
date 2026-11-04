@@ -12,6 +12,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ILLUSTRATIVE_POLICY,
+  RR_ORDER_HAS_NO_ESTIMATE,
   evaluateFrc,
   evaluateLegacy,
   rrSummaryText,
@@ -588,6 +589,18 @@ describe("prefill from SOM (HSSOM Order Lookup)", () => {
     expect(result.fields.parts_available).toMatchObject({ value: true, source: "hssom" });
   });
 
+  it("says when the order has no job codes or parts yet (PROD 7108-14342474 right after it was created)", () => {
+    const empty = buildRepairReplacePrefill({
+      serviceOrder: "7108-14342474", row: null, hssom: { tripCharge: 129, attemptCount: 1, providerId: "W2", jobCodes: [], parts: [] },
+    });
+    expect(empty.warnings).toContain(RR_ORDER_HAS_NO_ESTIMATE);
+    expect(empty.fields.trip_cost?.value).toBe("129.00");
+    const started = buildRepairReplacePrefill({
+      serviceOrder: "7108-14342474", row: null, hssom: { jobCodes: [{ jobCode: "14335", chargeAmount: 171 }], parts: [] },
+    });
+    expect(started.warnings).not.toContain(RR_ORDER_HAS_NO_ESTIMATE);
+  });
+
   it("leaves 9xxxx job codes out of labor whatever their description (8228-14169759 showed labor = trip)", () => {
     const tripOnly = buildRepairReplacePrefill({
       serviceOrder: "8228-14169759", row: null,
@@ -842,7 +855,7 @@ describe("repair / replace endpoints", () => {
     const off = harness({ enabled: false });
     expect((await request(off.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT))).status).toBe(404);
     expect(off.deps.getSubmission).not.toHaveBeenCalled();
-    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", { ticketApplianceKind: "washer", techDetails: null, servicerType: "Sears Tech" });
+    expect(deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", { ticketApplianceKind: "washer", techDetails: null, servicerType: "Sears Tech" }, { refresh: false });
     const provider = harness({ companyName: "A1 APPLIANCE REPAIR" });
     await request(provider.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT));
     expect(provider.deps.loadPrefill.mock.calls[0][1]).toMatchObject({ servicerType: "1099" });
@@ -850,7 +863,10 @@ describe("repair / replace endpoints", () => {
     await request(told.app).get("/api/submissions/601/repair-replace/prefill").set(as(AGENT));
     expect(told.deps.loadPrefill).toHaveBeenCalledWith("8175-13538277", {
       ticketApplianceKind: "washer", techDetails: { ...TECH_DETAILS, applianceAgeYears: 6 }, servicerType: "Sears Tech",
-    });
+    }, { refresh: false });
+    const refreshed = harness();
+    await request(refreshed.app).get("/api/submissions/601/repair-replace/prefill?refresh=1").set(as(AGENT));
+    expect(refreshed.deps.loadPrefill.mock.calls[0][2]).toEqual({ refresh: true });
   });
 
   it("returns the prefill contract", async () => {

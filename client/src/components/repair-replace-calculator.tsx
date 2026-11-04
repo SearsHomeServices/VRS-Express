@@ -37,6 +37,7 @@ import {
   RR_FIELD_LABELS,
   RR_MAJOR_COMPONENTS,
   RR_NOT_MAJOR_COMPONENT,
+  RR_ORDER_HAS_NO_ESTIMATE,
   RR_RULE_LABELS,
   RR_SERVICER_TYPES,
   CONTRACTOR_LABOR,
@@ -365,11 +366,21 @@ export function RepairReplaceCalculator({
   const [prefilled, setPrefilled] = useState<Partial<Record<FieldKey, RrPrefillField>>>({});
   const edited = useRef(new Set<FieldKey>());
 
+  const prefillKey = ["/api/submissions", String(ticket.id), "repair-replace", "prefill"];
   const prefillQuery = useQuery<RrPrefillResponse>({
-    queryKey: ["/api/submissions", String(ticket.id), "repair-replace", "prefill"],
+    queryKey: prefillKey,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
+  // Refresh asks the server to skip its cached lookups: the order changes
+  // while the technician works it.
+  const refreshPrefill = useMutation({
+    mutationFn: async () =>
+      (await apiRequest("GET", `/api/submissions/${ticket.id}/repair-replace/prefill?refresh=1`)).json() as Promise<RrPrefillResponse>,
+    onSuccess: (data) => queryClient.setQueryData(prefillKey, data),
+    onError: () => toast({ title: "Refresh failed", description: "The service-order lookup failed. Try again or enter the visit by hand.", variant: "destructive" }),
+  });
+  const prefillBusy = prefillQuery.isFetching || refreshPrefill.isPending;
 
   // Fill blank or still-prefilled fields; never what the manager typed.
   useEffect(() => {
@@ -460,11 +471,11 @@ export function RepairReplaceCalculator({
         <div className="flex gap-1 flex-wrap">
           <Button
             type="button" size="sm" variant="outline"
-            onClick={() => prefillQuery.refetch()}
-            disabled={prefillQuery.isFetching}
+            onClick={() => refreshPrefill.mutate()}
+            disabled={prefillBusy}
             data-testid="button-rr-refresh"
           >
-            {prefillQuery.isFetching ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+            {prefillBusy ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
             Refresh from service order
           </Button>
           {onUseOldCalculator && (
@@ -482,7 +493,8 @@ export function RepairReplaceCalculator({
             : prefillQuery.isError ? "The service-order lookup failed. Enter the visit by hand."
             : prefillStatus === "unavailable" || prefillStatus === "not_found"
               ? `${prefillQuery.data?.warnings[0] ?? "No service-order data."} ${filledCount ? `${filledCount} field(s) filled from the ticket.` : ""}`
-              : `${filledSummary(prefilled)} Everything else is blank until you enter it; blank is never treated as zero.`}
+              : `${filledSummary(prefilled)} Everything else is blank until you enter it; blank is never treated as zero.${
+                prefillQuery.data?.warnings.includes(RR_ORDER_HAS_NO_ESTIMATE) ? ` ${RR_ORDER_HAS_NO_ESTIMATE}` : ""}`}
         </span>
       </div>
 

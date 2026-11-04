@@ -3655,7 +3655,9 @@ export async function registerRoutes(
 
   // Repair / replace calculator on Sears Protect tickets: service-order
   // prefill and the staff-only result note (server/repair-replace-api.ts).
-  const repairReplaceHssomLookup = createHssomOrderLookup({ enabled: isRepairReplaceCalculatorEnabled });
+  // A repair in progress changes as the technician works, so answers are
+  // kept 2 minutes (not the customer lookup's 30), and Refresh skips them.
+  const repairReplaceHssomLookup = createHssomOrderLookup({ enabled: isRepairReplaceCalculatorEnabled, foundTtlMs: 2 * 60 * 1000 });
   registerRepairReplaceApi(app, {
     authenticateToken,
     requireRole,
@@ -3668,9 +3670,9 @@ export async function registerRoutes(
     // it answers unavailable until the HSSOM settings are configured. Only
     // the date and repair facts are kept: the customer's name and address
     // are dropped here.
-    loadPrefill: (serviceOrder, ticket) =>
+    loadPrefill: (serviceOrder, ticket, options) =>
       loadRepairReplacePrefill(serviceOrder, ticket, fetchRepairReplaceRows, async (district, so) => {
-        const found = await repairReplaceHssomLookup(district, so);
+        const found = await repairReplaceHssomLookup(district, so, { fresh: options?.refresh });
         return found.status === "found" ? { status: "found", purchaseDate: found.purchaseDate, repair: found.repairFacts } : found;
       }, lookupWomRepairFacts),
     createNote: (note) => storage.createSubmissionNote(note),

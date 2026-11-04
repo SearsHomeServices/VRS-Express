@@ -37,7 +37,8 @@ export interface RepairReplaceApiDeps {
   getUser(id: number): Promise<{ role: string; companyName?: string | null } | undefined>;
   // loadRepairReplacePrefill with the Snowflake and HSSOM lookups (or null
   // when off); bounded and never rejects.
-  loadPrefill(serviceOrder: string, ticket: RepairReplaceTicketInput): Promise<RrPrefillResponse>;
+  // refresh: the manager pressed Refresh, so skip cached lookups.
+  loadPrefill(serviceOrder: string, ticket: RepairReplaceTicketInput, options?: { refresh?: boolean }): Promise<RrPrefillResponse>;
   createNote(note: {
     submissionId: number;
     authorId: number;
@@ -125,7 +126,7 @@ export function registerRepairReplaceApi(app: Express, deps: RepairReplaceApiDep
         ticketApplianceKind: ticket.submission.applianceKind ?? null,
         techDetails: parseStoredTechApplianceDetails(ticket.submission.techApplianceDetails),
         servicerType: technician?.role === "technician" ? (technician.companyName?.trim() ? "1099" : "Sears Tech") : null,
-      });
+      }, { refresh: req.query.refresh === "1" });
       console.info(`[repair-replace] prefill submission=${ticket.submission.id} status=${prefill.status} fields=${Object.keys(prefill.fields).join(",") || "none"}`);
       res.json(prefill);
     } catch (error) {

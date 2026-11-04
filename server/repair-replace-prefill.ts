@@ -49,6 +49,7 @@
 //
 // Nothing here is customer data. Logs carry the service order and statuses.
 import {
+  RR_ORDER_HAS_NO_ESTIMATE,
   RR_PREFILL_FIELDS,
   cents,
   money,
@@ -468,6 +469,7 @@ function somPartCost(line: HssomRepairFacts["parts"][number]): number | undefine
 function mapHssom(som: HssomRepairFacts | null | undefined, fields: RrPrefillResponse["fields"], warnings: string[]): void {
   if (!som) return;
   const field = (value: string | boolean, sourceField: string): RrPrefillField => ({ value, source: "hssom", source_field: sourceField });
+  if (!som.jobCodes.length && !som.parts.length) warnings.push(RR_ORDER_HAS_NO_ESTIMATE);
 
   const active = som.parts.filter((line) => !SOM_INACTIVE_PART_STATUSES.has(line.status ?? ""));
   if (active.length) {

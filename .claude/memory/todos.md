@@ -183,3 +183,4 @@
 - [x] Diagnostic on 7995-14335804: SOM `costPrice` is per unit (x quantity); localCost is the unit sell price
 - [x] Prefill the legacy calculator's Sell price from SOM `price`
 - [ ] Confirm on 8228-14169759 which job code gave labor $129 (Labor badge tooltip) and that 9xxxx are never repair labor
+- [ ] Check an AHS order in the diagnostic: serviceContractId=yes now, and the dispatch number matches the Snowflake one
