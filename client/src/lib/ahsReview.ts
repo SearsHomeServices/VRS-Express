@@ -23,7 +23,7 @@ import {
   parseStoredTechApplianceDetails,
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
-import type { WarrantyType } from "@shared/warranty";
+import { isVrsAiWarrantyType, type WarrantyType } from "@shared/warranty";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
 
 export type AhsTechRecommendation = "repair" | "replace";
@@ -277,7 +277,7 @@ export function isAhsDetailsEditable(
 ): boolean {
   if (!ticket) return false;
   if (ticket.requestType !== "authorization") return false;
-  if (ticket.warrantyType !== "american_home_shield") return false;
+  if (!isVrsAiWarrantyType(ticket.warrantyType)) return false;
   if (ticket.ticketStatus !== "pending") return false;
   if ((ticket.stage1Status ?? "pending") !== "pending") return false;
   if (ticket.submissionApproved) return false;

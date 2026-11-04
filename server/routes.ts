@@ -73,7 +73,7 @@ import { issueMediaToken, issueTechHubPhotoToken, verifyTechHubPhotoToken } from
 import { timingSafeEqual } from "crypto";
 import type { User, Technician } from "@shared/schema";
 import { submissions, TECH_PDC_ROOT_CAUSES } from "@shared/schema";
-import { deriveWarrantyFromProcId, type WarrantyLookupResponse } from "@shared/warranty";
+import { deriveWarrantyFromProcId, isVrsAiWarrantyType, vrsAiPartnerName, type WarrantyLookupResponse } from "@shared/warranty";
 import {
   parseStoredAhsDetailsDraft,
   type AhsDetailsDraft,
@@ -1565,7 +1565,7 @@ export async function registerRoutes(
         snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,
         hssom: lookupHssomOrder,
       });
-      const earlyAhsPrefillLookup = wantsAhsDraft && parsed.data.warrantyType === "american_home_shield"
+      const earlyAhsPrefillLookup = wantsAhsDraft && isVrsAiWarrantyType(parsed.data.warrantyType)
         ? startAhsPrefillLookup()
         : null;
 
@@ -1641,7 +1641,8 @@ export async function registerRoutes(
       // nothing was found ({}), so the VRS manager gets the editor. Logs
       // field names, never values.
       let ahsDraft: AhsDetailsDraft | null = null;
-      if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {
+      // AHS and First American (shared/warranty.ts VRS_AI_PARTNER_IDS).
+      if (wantsAhsDraft && isVrsAiWarrantyType(finalWarrantyType)) {
         const sources = await (earlyAhsPrefillLookup ?? startAhsPrefillLookup());
         ahsDraft = applyAhsSubmitPrefill(draftFromPrevious(previousAhsDraft), sources, {
           finalWarrantyType,
@@ -3691,9 +3692,7 @@ export async function registerRoutes(
           store: vrsBridgeStore,
           decryptCallbackSecret: decryptVrsCallbackSecret,
           async applyResult(submissionId, callbackEvent) {
-            const decision =
-              mapVrsAiWebhookToSubmissionDecision(callbackEvent);
-            if (decision.kind === "status_only") return;
+            if (mapVrsAiWebhookToSubmissionDecision(callbackEvent).kind === "status_only") return;
 
             const submission = await storage.getSubmission(submissionId);
             if (!submission) {
@@ -3701,6 +3700,13 @@ export async function registerRoutes(
                 `Submission ${submissionId} for VRS AI callback was not found`,
               );
             }
+            // Mapped again with the partner the ticket's warranty names, for
+            // the technician's message ("First American partially authorized ...").
+            const decision = mapVrsAiWebhookToSubmissionDecision(
+              callbackEvent,
+              vrsAiPartnerName(submission.warrantyType),
+            );
+            if (decision.kind === "status_only") return;
 
             // Recovery shortcuts still require matching identity and workflow.
             const callbackTech = submission.technicianLdapId ? undefined : await storage.getUser(submission.technicianId);

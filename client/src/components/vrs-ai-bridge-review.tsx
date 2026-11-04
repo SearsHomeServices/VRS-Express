@@ -6,14 +6,18 @@ import { AhsTicketReview, type AhsReviewMedia } from "@/components/ahs-ticket-re
 import { AhsDetailsEditor } from "@/components/ahs-details-editor";
 import { isAhsDetailsEditable, parseAhsDetailsForReview, techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
+import { vrsAiPartnerName } from "@shared/warranty";
 import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
 
 export const VRS_SOURCE_APP_LABEL = "Submitted by technician in VRS Express";
 export const VRS_SOURCE_SASHA_LABEL = "SASHA";
-export const AHS_NOT_ENROLLED_EDITABLE_TEXT =
-  "This ticket is not enrolled in VRS AI yet. Complete the AHS details below and save them to send it to VRS AI.";
-export const AHS_NOT_ENROLLED_TEXT =
-  "This ticket is not enrolled in VRS AI. The VRS manager can complete the AHS details at Stage 1 to send it to VRS AI; otherwise use the manual authorization flow.";
+// partner: "AHS" or "First American" (vrsAiPartnerName).
+export const notEnrolledEditableText = (partner: string) =>
+  `This ticket is not enrolled in VRS AI yet. Complete the ${partner} details below and save them to send it to VRS AI.`;
+export const notEnrolledText = (partner: string) =>
+  `This ticket is not enrolled in VRS AI. The VRS manager can complete the ${partner} details at Stage 1 to send it to VRS AI; otherwise use the manual authorization flow.`;
+export const AHS_NOT_ENROLLED_EDITABLE_TEXT = notEnrolledEditableText("AHS");
+export const AHS_NOT_ENROLLED_TEXT = notEnrolledText("AHS");
 
 // Blank values in the payload review (a field VRS AI will confirm with AHS).
 const REVIEW_NOT_PROVIDED = "Not provided";
@@ -347,6 +351,7 @@ export function VrsAiBridgePanel({
     isAhsDetailsEditable(submission, bridge);
   const ahsDetails = parseAhsDetailsForReview(submission?.ahsDetails);
   const techDetails = techApplianceDetailsForTicket(submission);
+  const partner = vrsAiPartnerName(submission?.warrantyType);
   let ahsSection: ReactNode = null;
   if (editable && submission) {
     // Open the editor only once the detail fetch has the stored draft, so
@@ -354,7 +359,7 @@ export function VrsAiBridgePanel({
     ahsSection =
       submission.ahsDetails === undefined ? (
         <p className="mt-3 text-xs text-muted-foreground" data-testid="ahs-details-editor-loading">
-          Loading AHS details…
+          Loading {partner} details…
         </p>
       ) : (
         <AhsDetailsEditor
@@ -366,6 +371,7 @@ export function VrsAiBridgePanel({
           onOpenPhoto={onOpenPhoto}
           hasBridge={!!bridge}
           techDetails={techDetails}
+          partner={partner}
         />
       );
   } else if (ahsDetails && submission) {
@@ -375,6 +381,7 @@ export function VrsAiBridgePanel({
         media={ahsReviewMedia(submission)}
         onOpenPhoto={onOpenPhoto}
         techDetails={techDetails}
+        partner={partner}
       />
     );
   }
@@ -387,7 +394,7 @@ export function VrsAiBridgePanel({
         data-testid="ahs-details-no-bridge"
       >
         <div className="flex items-center justify-between gap-3">
-          <span className="font-medium">AHS ticket</span>
+          <span className="font-medium">{partner} ticket</span>
           <span className="whitespace-nowrap rounded-md bg-secondary px-2.5 py-0.5 text-xs font-semibold text-secondary-foreground">
             not sent to VRS AI
           </span>
@@ -396,7 +403,7 @@ export function VrsAiBridgePanel({
           Source: {VRS_SOURCE_APP_LABEL}
         </p>
         <p className="mt-2 text-xs text-muted-foreground" data-testid="text-ahs-not-enrolled">
-          {editable ? AHS_NOT_ENROLLED_EDITABLE_TEXT : AHS_NOT_ENROLLED_TEXT}
+          {editable ? notEnrolledEditableText(partner) : notEnrolledText(partner)}
         </p>
         {ahsSection}
       </div>

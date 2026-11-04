@@ -175,7 +175,6 @@ describe("PATCH /api/submissions/:id/ahs-details — access", () => {
 
   it.each([
     ["a Sears ticket", { warrantyType: "sears_protect" }, 400],
-    ["a First American ticket", { warrantyType: "first_american" }, 400],
     ["an NLA ticket", { requestType: "parts_nla" }, 400],
     ["a queued ticket", { ticketStatus: "queued" }, 409],
     ["a completed ticket", { ticketStatus: "completed" }, 409],
@@ -200,6 +199,14 @@ describe("PATCH /api/submissions/:id/ahs-details — access", () => {
     expect(res.status).toBe(409);
     expect(deps.updateSubmissionIfStatus).not.toHaveBeenCalled();
     expect(store.replaceUndispatchedAppIntake).not.toHaveBeenCalled();
+  });
+
+  it("saves a First American ticket's details and enrolls it as partner FIRST_AMERICAN", async () => {
+    const { app, store } = harness({ submission: ticket({ warrantyType: "first_american" }) });
+    const res = await save(app, ADMIN, { ahsDetails: completed });
+    expect(res.status).toBe(200);
+    expect(store.createIntake).toHaveBeenCalledTimes(1);
+    expect(store.createIntake.mock.calls[0][0].requestPayload).toMatchObject({ partner_id: "FIRST_AMERICAN" });
   });
 
   it("answers 404 for a missing ticket and 400 for a bad id", async () => {

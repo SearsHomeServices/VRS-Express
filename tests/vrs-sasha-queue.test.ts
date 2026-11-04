@@ -1261,6 +1261,18 @@ describe("VRS Express bridge orchestration", () => {
     ).toEqual({ kind: "status_only" });
   });
 
+  it("names the partner in the partial-authorization message (AHS by default, First American)", () => {
+    const partial = {
+      version: 1 as const, eventId: "evt_partial", callId: "c", soNo: "13538277", occurredAt: "2026-07-24T17:24:00Z",
+      state: "partial" as const, authNumber: "A1", authorizedAmount: 100, requestedAmount: 250,
+    };
+    const message = (decision: ReturnType<typeof bridgeModule.mapVrsAiWebhookToSubmissionDecision>) =>
+      decision.kind === "process" ? decision.body.technicianMessage : undefined;
+    expect(message(bridgeModule.mapVrsAiWebhookToSubmissionDecision(partial as any))).toBe("AHS partially authorized $100.00 of $250.00.");
+    expect(message(bridgeModule.mapVrsAiWebhookToSubmissionDecision(partial as any, "First American")))
+      .toBe("First American partially authorized $100.00 of $250.00.");
+  });
+
   it("builds truthful signed-callback notes from only supplied metadata", () => {
     const approved = bridgeModule.mapVrsAiWebhookToSubmissionDecision({
       version: 1,

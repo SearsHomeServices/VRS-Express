@@ -13,7 +13,7 @@ import {
 } from "@shared/ahs-prefill";
 import { ahsApplianceKind, type AhsDetails, type AhsDetailsDraft, type AhsPartDraft } from "@shared/ahs-details";
 import { ahsGradeFromTechGrade, type TechApplianceDetails } from "@shared/tech-appliance-details";
-import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { deriveWarrantyFromProcId, isVrsAiWarrantyType, type VrsAiWarrantyType } from "@shared/warranty";
 import type { AhsPrefillLookupResult, AhsServiceOrderPart } from "./services/snowflake-lookup";
 import type { HssomOrderLookupResult } from "./services/hssom-order-lookup";
 
@@ -109,24 +109,32 @@ export function mergeAhsPrefillSources(
   return values;
 }
 
-// Same classification POST /api/submissions applies to the ProcID lookup.
-export function isAhsOrder(lookup: AhsPrefillLookupResult | null | undefined): boolean {
+// Same classification POST /api/submissions applies to the ProcID lookup:
+// whether the Snowflake row's warranty is the given one (AHS by default).
+export function isAhsOrder(
+  lookup: AhsPrefillLookupResult | null | undefined,
+  warrantyType: VrsAiWarrantyType = "american_home_shield",
+): boolean {
   if (lookup?.status !== "found") return false;
-  return deriveWarrantyFromProcId(lookup.partnerId, lookup.clientName)?.warrantyType === "american_home_shield";
+  return deriveWarrantyFromProcId(lookup.partnerId, lookup.clientName)?.warrantyType === warrantyType;
 }
 
-// Whether the order is AHS and what may fill it. A Snowflake row decides on
-// its own: not AHS there means neither source fills anything. HSSOM carries
-// no warranty data, so without a Snowflake row its values count only when
-// hssomOnlyAhs (the server's ProcID derivation) says AHS; undefined means
-// that derivation is unknown.
+// Whether the order has the ticket's warranty (AHS or First American) and
+// what may fill it. A Snowflake row decides on its own: another warranty
+// there means neither source fills anything. HSSOM carries no warranty data,
+// so without a Snowflake row its values count only when hssomOnlyAhs (the
+// server's ProcID derivation matches the ticket's warranty) is true;
+// undefined means that derivation is unknown. The fields are the same for
+// both: FA's contract number is the same service contract ID AHS calls the
+// dispatch number.
 function prefillOutcome(
   snowflake: AhsPrefillLookupResult,
   hssom: HssomOrderLookupResult,
   hssomOnlyAhs: boolean | undefined,
+  warrantyType: VrsAiWarrantyType = "american_home_shield",
 ): PrefillOutcome {
   if (snowflake.status === "found") {
-    return isAhsOrder(snowflake) ? { status: "found", values: mergeAhsPrefillSources(snowflake, hssom) } : NOT_FOUND;
+    return isAhsOrder(snowflake, warrantyType) ? { status: "found", values: mergeAhsPrefillSources(snowflake, hssom) } : NOT_FOUND;
   }
   if (hssom.status === "found") {
     if (hssomOnlyAhs === true) return { status: "found", values: mergeAhsPrefillSources(snowflake, hssom) };
@@ -207,22 +215,24 @@ export function applyAhsServiceOrderPrefill(
   return fillAhsDraft(draft, mergeAhsPrefillSources(snowflake, hssom));
 }
 
-// The AHS draft (POST /api/submissions, and the Stage 1 refresh): fills the
-// draft only for an AHS ticket. The ticket's final warranty must be AHS, and
-// then either the Snowflake row is AHS, or (no Snowflake row) the
-// ProcID-derived warranty itself is AHS; a tech-selected warranty alone never
-// lets HSSOM fill. Otherwise the draft comes back unchanged (an empty draft
+// The AHS / FA draft (POST /api/submissions, and the Stage 1 refresh): fills
+// the draft only for an AHS or First American ticket. Then either the
+// Snowflake row has that same warranty, or (no Snowflake row) the
+// ProcID-derived warranty itself is that warranty; a tech-selected warranty
+// alone never lets HSSOM fill. Otherwise the draft comes back unchanged (an empty draft
 // stays {}).
 export function applyAhsSubmitPrefill(
   draft: AhsDetailsDraft,
   sources: AhsPrefillSources,
   warranty: { finalWarrantyType: string | null | undefined; derivedWarrantyType: string | null | undefined },
 ): AhsDetailsDraft {
-  if (warranty.finalWarrantyType !== "american_home_shield") return draft;
+  const finalWarrantyType = warranty.finalWarrantyType;
+  if (!isVrsAiWarrantyType(finalWarrantyType)) return draft;
   const outcome = prefillOutcome(
     sources.snowflake,
     sources.hssom,
-    warranty.derivedWarrantyType === "american_home_shield",
+    warranty.derivedWarrantyType === finalWarrantyType,
+    finalWarrantyType,
   );
   return outcome.status === "found" ? fillAhsDraft(draft, outcome.values) : draft;
 }

@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - First American tickets go to VRS AI like AHS (2026-11-04)
+- First American authorization tickets now follow the AHS path to VRS AI:
+  at submit they get the details draft (Snowflake + SOM prefill: contract
+  number, brand, model, serial, customer, parts), the VRS manager completes it
+  in the Stage 1 panel, the save enrolls the ticket, and Approve & Send
+  dispatches it. Same flag (`VRS_AI_APP_ENROLL_ENABLED`), same payload.
+- `partner_id` comes from the ticket's warranty: `ahs` for AHS,
+  `FIRST_AMERICAN` for First American (`shared/warranty.ts`
+  `VRS_AI_PARTNER_IDS`). VRS AI matches its registry keys exactly (case
+  insensitive, no aliases); an unknown id such as `fa` would run the AHS flow. FA's contract number is the same
+  service contract ID AHS calls the dispatch number (`contract_number` and
+  `cta_no`).
+- The service-order prefill fills an FA ticket only when the order's own
+  warranty (Snowflake ProcID / client name) is First American, as for AHS.
+- Stage 1 views say "First American details" / "First American ticket" on FA
+  tickets; a partial authorization tells the technician "First American
+  partially authorized ...". Sears Protect is never sent to VRS AI.
+- The diagnostic compares the contract number from SOM and Snowflake CTA_NO
+  by shape and equality (never the value) and says whether each has First
+  American's own format (9 digits starting 622, trailing -N, e.g.
+  622900001-3): FA's rep finds the claim by that number.
+
 ### Fixed - Calculator Refresh, empty orders, SOM contract number (2026-10-30)
 - "Refresh from service order" now asks SOM fresh (`?refresh=1` skips the
   cached answer), and the calculator's SOM answers are kept 2 minutes instead

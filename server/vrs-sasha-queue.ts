@@ -546,8 +546,11 @@ export function buildVrsAiWebhookAgentNotes(event: VrsWebhookEvent): string {
   return "";
 }
 
+// partner: who VRS AI called, for the technician's message ("AHS" or
+// "First American", vrsAiPartnerName).
 export function mapVrsAiWebhookToSubmissionDecision(
   event: VrsWebhookEvent,
+  partner = "AHS",
 ): VrsAiSubmissionDecision {
   if (event.state === "approved") {
     return {
@@ -561,7 +564,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
   }
 
   if (event.state === "partial") {
-    const detail = `AHS partially authorized $${event.authorizedAmount.toFixed(2)} of $${event.requestedAmount.toFixed(2)}.${event.denyReason ? ` ${event.denyReason}` : ""}`;
+    const detail = `${partner} partially authorized $${event.authorizedAmount.toFixed(2)} of $${event.requestedAmount.toFixed(2)}.${event.denyReason ? ` ${event.denyReason}` : ""}`;
     return {
       kind: "process",
       body: {

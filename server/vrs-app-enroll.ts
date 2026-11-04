@@ -1,4 +1,7 @@
-// Technician-submitted AHS tickets → VRS AI bridge enrollment.
+// Technician-submitted AHS and First American tickets → VRS AI bridge
+// enrollment (shared/warranty.ts VRS_AI_PARTNER_IDS; FA since 2026-11-04,
+// same flow and payload as AHS, partner_id "FIRST_AMERICAN"). "AHS details" below is the
+// stored details' name for both.
 //
 // SASHA-originated AHS calls get a vrs_ai_calls row at intake
 // (vrs-sasha-intake.ts), which is what routes Stage 1 approval through
@@ -42,6 +45,7 @@ import {
   type VrsStoredAuthorizeRequest,
 } from "./vrs-sasha-queue";
 import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
+import { VRS_AI_PARTNER_IDS, isVrsAiWarrantyType } from "@shared/warranty";
 
 export const APP_ORIGIN_VRS_COMMENT =
   "Submitted directly in VRS Express by the technician (not via SASHA).";
@@ -84,7 +88,7 @@ export function toE164UsPhone(value: string | null | undefined): string | null {
   return null;
 }
 
-// An open AHS authorization ticket whose Stage 1 is not decided yet: queued,
+// An open AHS or FA authorization ticket whose Stage 1 is not decided yet: queued,
 // or claimed by the VRS manager completing its details.
 export function isAppVrsAiEnrollEligible(
   submission: Pick<
@@ -93,7 +97,7 @@ export function isAppVrsAiEnrollEligible(
   >,
 ): boolean {
   return (
-    submission.warrantyType === "american_home_shield" &&
+    isVrsAiWarrantyType(submission.warrantyType) &&
     submission.requestType === "authorization" &&
     (submission.ticketStatus === "queued" || submission.ticketStatus === "pending") &&
     submission.stage1Status === "pending" &&
@@ -130,6 +134,10 @@ export function buildAppVrsAuthorizePayload(
   if (!serviceOrder) {
     return { ok: false, reason: `service order ${submission.serviceOrder} has no 8-digit order number` };
   }
+  if (!isVrsAiWarrantyType(submission.warrantyType)) {
+    return { ok: false, reason: `warranty ${submission.warrantyType} is not one VRS AI calls` };
+  }
+  const partnerId = VRS_AI_PARTNER_IDS[submission.warrantyType];
   const techId = (submission.technicianLdapId || technician.racId || "").trim();
   if (!techId || techId.length > 50) {
     return { ok: false, reason: "ticket has no usable technician id" };
@@ -180,7 +188,7 @@ export function buildAppVrsAuthorizePayload(
     tech_recommendation: details.techRecommendation,
     repair_replace_rationale: description,
     appliance_grade: details.applianceGrade ?? "",
-    partner_id: "ahs",
+    partner_id: partnerId,
     appliance_photos: [],
     comments: [
       {

@@ -164,6 +164,7 @@ export function AhsDetailsEditor({
   onOpenPhoto,
   hasBridge = false,
   techDetails,
+  partner = "AHS",
 }: {
   submissionId: number;
   // submissions.ahs_details as the detail endpoint returns it. Read once when
@@ -177,6 +178,8 @@ export function AhsDetailsEditor({
   hasBridge?: boolean;
   // submissions.tech_appliance_details, parsed: which values the tech supplied.
   techDetails?: TechApplianceDetails | null;
+  // "AHS" or "First American" (vrsAiPartnerName): only the titles change.
+  partner?: string;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -221,10 +224,10 @@ export function AhsDetailsEditor({
     onSuccess: (response) => {
       if (!response.ok) {
         setOutcome(null);
-        applyIssues(response.error || "The AHS details could not be saved.", response.issues);
+        applyIssues(response.error || `The ${partner} details could not be saved.`, response.issues);
         toast({
-          title: "AHS details not saved",
-          description: "See the messages in the AHS details panel.",
+          title: `${partner} details not saved`,
+          description: `See the messages in the ${partner} details panel.`,
           variant: "destructive",
         });
         return;
@@ -239,7 +242,7 @@ export function AhsDetailsEditor({
           : { kind: "skipped", reason: response.enrollSkipReason?.trim() || "No reason was given." },
       );
       invalidateTicket();
-      toast({ title: "AHS details saved" });
+      toast({ title: `${partner} details saved` });
     },
     onError: (err) => {
       setOutcome(null);
@@ -350,7 +353,7 @@ export function AhsDetailsEditor({
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-sm font-medium">{AHS_EDITOR_TITLE}</p>
+          <p className="text-sm font-medium">{partner === "AHS" ? AHS_EDITOR_TITLE : `${partner} details for VRS AI`}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Complete or correct what the service order lookup found, using the technician's
             photos and description. Fields marked * are required. VRS AI confirms anything

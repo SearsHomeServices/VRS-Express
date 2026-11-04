@@ -184,3 +184,7 @@
 - [x] Prefill the legacy calculator's Sell price from SOM `price`
 - [ ] Confirm on 8228-14169759 which job code gave labor $129 (Labor badge tooltip) and that 9xxxx are never repair labor
 - [ ] Check an AHS order in the diagnostic: serviceContractId=yes now, and the dispatch number matches the Snowflake one
+- [x] FA partner_id confirmed with the VRS AI agent-service: `FIRST_AMERICAN` (FA is live on the phone path there)
+- [ ] Run one FA ticket end to end in DEV (submit, Stage 1 save, Approve & Send, staging VRS AI call, result back)
+- [ ] SASHA-origin FA calls: vrs-sasha-intake.ts still accepts only ahs / american_home_shield / n/a partner ids
+- [ ] On a real FA order, run the diagnostic: does the service contract ID (CTA_NO / SOM thirdPartyInfo.contractNumber) have FA's own 622xxxxxx-N format? If not, find where FA's number lives before go-live

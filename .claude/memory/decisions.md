@@ -334,3 +334,7 @@ Use this format for new entries:
 - No sell-price fallback: a line without a cost leaves parts cost blank with a warning, and NPSXTPN (selling prices only) no longer fills it. A blank the agent fills beats a sell price shown as cost.
 - Why: a technician showed 7995-14335804 at $1,724.26 (sell x quantity again) and asked for cost; Enzo chose cost.
 - Sell price is still filled, into its own field (`sell_price`), because First American / AHS discount the sell price. 9xxxx job codes are treated as service call / deductible, not labor (unverified range; the warning names each dropped code).
+
+## 2026-11-04: First American reuses the AHS path to VRS AI
+- One list of the warranties VRS AI calls and their partner_id (`shared/warranty.ts` VRS_AI_PARTNER_IDS: ahs, fa) drives enrollment, the Stage 1 editor, the submit draft and the prefill. The stored details keep the `ahsDetails` name for both rather than a schema rename.
+- Why: FA moved to the phone path (VRS AI voice-authorizes it like AHS) and needs the same fields; the contract number is the same service contract ID. Enzo asked to focus on FA; the VRS AI agent-service confirmed partner_id must be the registry key `FIRST_AMERICAN` (exact match; `fa` falls back to AHS).

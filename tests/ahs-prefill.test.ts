@@ -515,11 +515,15 @@ describe("HSSOM customer prefill merge", () => {
 
   it("does not fill from HSSOM alone unless the server derived AHS", () => {
     const hssomOnly = sources({ status: "unavailable" }, hssomFound);
-    // Derived Sears / First American, or no derivation (tech-selected AHS).
+    // Derived Sears, a derivation that differs from the ticket's warranty, or
+    // no derivation (tech-selected AHS).
     expect(applyAhsSubmitPrefill(blankDetails, hssomOnly, { finalWarrantyType: "sears_protect", derivedWarrantyType: "sears_protect" }))
       .toEqual(blankDetails);
-    expect(applyAhsSubmitPrefill(blankDetails, hssomOnly, { finalWarrantyType: "first_american", derivedWarrantyType: "first_american" }))
+    expect(applyAhsSubmitPrefill(blankDetails, hssomOnly, { finalWarrantyType: "first_american", derivedWarrantyType: "american_home_shield" }))
       .toEqual(blankDetails);
+    // First American derived for a First American ticket fills like AHS.
+    expect(applyAhsSubmitPrefill(blankDetails, hssomOnly, { finalWarrantyType: "first_american", derivedWarrantyType: "first_american" }))
+      .not.toEqual(blankDetails);
     expect(applyAhsSubmitPrefill(blankDetails, hssomOnly, { finalWarrantyType: "american_home_shield", derivedWarrantyType: undefined }))
       .toEqual(blankDetails);
     // Not AHS at submit means no fill even with an AHS Snowflake row.
@@ -983,7 +987,7 @@ describe("POST /api/submissions stores a draft", () => {
     expect(handler).toContain("hssom: lookupHssomOrder");
     const earlyAt = handler.indexOf("const earlyAhsPrefillLookup = wantsAhsDraft");
     const procAt = handler.indexOf("await fetchProcIdForServiceOrder(parsed.data.serviceOrder)");
-    const draftAt = handler.indexOf('if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {');
+    const draftAt = handler.indexOf('if (wantsAhsDraft && isVrsAiWarrantyType(finalWarrantyType)) {');
     const applyAt = handler.indexOf("applyAhsSubmitPrefill(draftFromPrevious(previousAhsDraft), sources, {");
     const storeAt = handler.indexOf("ahsDetails: ahsDraft ? JSON.stringify(ahsDraft) : null,");
     expect(earlyAt).toBeGreaterThan(0);
@@ -998,7 +1002,7 @@ describe("POST /api/submissions stores a draft", () => {
   it("stores the draft whatever the lookups returned (they never reject)", () => {
     // The draft is assigned unconditionally inside the AHS branch: an empty
     // lookup leaves {} (see "is an empty draft when the lookups found nothing").
-    const branch = handler.slice(handler.indexOf('if (wantsAhsDraft && finalWarrantyType === "american_home_shield") {'));
+    const branch = handler.slice(handler.indexOf('if (wantsAhsDraft && isVrsAiWarrantyType(finalWarrantyType)) {'));
     expect(branch.slice(0, branch.indexOf("console.log("))).not.toMatch(/if \(sources\./);
   });
 

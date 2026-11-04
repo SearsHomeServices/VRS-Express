@@ -6,6 +6,29 @@ export const WARRANTY_PROVIDER_LABELS: Record<WarrantyType, string> = {
   first_american: "First American",
 };
 
+// The warranty companies VRS AI calls for authorization, and the partner_id
+// each is sent as. VRS AI resolves partner_id by its exact registry key, case
+// insensitive, with no aliases (confirmed by the VRS AI agent-service,
+// 2026-11-04): keys AHS and FIRST_AMERICAN. An unknown id (e.g. "fa") falls
+// back to the AHS flow, so FA must be "FIRST_AMERICAN". "ahs" matches AHS.
+// Sears Protect is never sent: Sears is the warranty company, so the VRS
+// agent decides.
+export const VRS_AI_PARTNER_IDS = {
+  american_home_shield: "ahs",
+  first_american: "FIRST_AMERICAN",
+} as const;
+export type VrsAiWarrantyType = keyof typeof VRS_AI_PARTNER_IDS;
+
+export function isVrsAiWarrantyType(value: string | null | undefined): value is VrsAiWarrantyType {
+  return value === "american_home_shield" || value === "first_american";
+}
+
+// The short name the Stage 1 views use ("AHS details", "First American
+// details"); AHS when the warranty is not one VRS AI calls.
+export function vrsAiPartnerName(warrantyType: string | null | undefined): string {
+  return warrantyType === "first_american" ? "First American" : "AHS";
+}
+
 export interface DerivedWarranty {
   warrantyType: WarrantyType;
   warrantyProvider: string;

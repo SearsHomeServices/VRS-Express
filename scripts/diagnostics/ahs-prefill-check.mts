@@ -83,6 +83,12 @@ const run = (sqlText: string, binds: string[]): Promise<any[]> =>
 const errorText = (e: any) => String(e?.message || e).split("\n")[0].slice(0, 200);
 const present = (value: unknown) => value != null && String(value).trim() !== "";
 const shape = (value: unknown) => (present(value) ? String(value).trim().replace(/\d/g, "9").replace(/[A-Za-z]/g, "A") : "(blank)");
+// Snowflake CTA_NO (section 5), compared with SOM's contract number in
+// section 8 by shape and equality only: the number itself is never printed.
+let snowflakeContract: string | undefined;
+// First American's own contract numbers are 9 digits starting 622 with a
+// trailing -N (622900001-3, technician's research 2026-11-04).
+const faContract = (value: string | undefined) => (value ? (/^622\d{6}(-\d+)?$/.test(value.trim()) ? "yes" : "no") : "-");
 const unitLabel = (unit: unknown) => (String(unit ?? "").trim() === districtUnit ? "district unit" : "OTHER unit");
 const warranty = (row: any, partner = "CMB_THD_PTY_ID", client = "CLIENT_NM") =>
   deriveWarrantyFromProcId(row?.[partner], row?.[client])?.warrantyType ?? "none";
@@ -131,6 +137,7 @@ try {
     try {
       const values = await run(`SELECT ${column} AS V FROM ${TABLE} WHERE SO_NO = ? AND SVC_UN_NO = ? LIMIT 20`, [so, unit]);
       const filled = values.filter((v) => present(v.V));
+      if (column === "CTA_NO" && filled.length) snowflakeContract = String(filled[0].V).trim();
       console.log(`   - ${column}: exists, value in ${filled.length} of ${values.length} row(s)${filled.length ? `, shape ${shape(filled[0].V)}` : ""}`);
     } catch (e) {
       console.log(`   - ${column}: QUERY ERROR ${errorText(e)}`);
@@ -233,6 +240,14 @@ if (!lookupConfig) {
     const fields = ["customerName", "customerAddress", "serviceContractId", "brand", "modelNumber", "serialNumber", "purchaseDate"] as const;
     console.log(`   fields: ${fields.map((f) => `${f}=${present(result[f]) ? "yes" : "no"}`).join(", ")}`);
     if (result.purchaseDate) console.log(`   purchase year: ${String(result.purchaseDate).slice(0, 4)}`);
+    // What VRS AI sends as contract_number (Snowflake first, else SOM); the
+    // AHS / FA cleanup only cuts at "/".
+    const somContract = result.serviceContractId?.trim();
+    console.log(
+      `   contract number: SOM shape ${shape(somContract)}, Snowflake CTA_NO shape ${shape(snowflakeContract)}, ` +
+      `same=${somContract && snowflakeContract ? (somContract === snowflakeContract ? "yes" : "no") : "-"}, ` +
+      `First American 622 format: SOM=${faContract(somContract)} Snowflake=${faContract(snowflakeContract)}`,
+    );
     // The calculator's facts from SOM: amounts, codes, statuses and counts
     // only (repairFactsFromOrder never reads customer fields).
     const facts = result.repairFacts;

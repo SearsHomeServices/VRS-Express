@@ -219,13 +219,17 @@ describe("POST /api/submissions — techApplianceDetails", () => {
     expect(JSON.parse(res.body.submission.techApplianceDetails)).toEqual(tech);
   });
 
-  it("stores it for a First American authorization ticket (no AHS draft)", async () => {
+  it("stores it for a First American authorization ticket, with a draft like AHS (VRS AI calls FA too)", async () => {
     mocks.fetchProcIdForServiceOrder.mockResolvedValue({ status: "FOUND", ...PROC.first_american });
     const res = await submit(body({ warrantyType: "first_american" }));
     expect(res.status).toBe(201);
     expect(inserted().warrantyType).toBe("first_american");
     expect(JSON.parse(inserted().techApplianceDetails)).toEqual(tech);
-    expect(inserted().ahsDetails).toBeNull();
+    expect(JSON.parse(inserted().ahsDetails)).toMatchObject({
+      applianceGrade: "top",
+      applianceColor: "Black Stainless Steel",
+      parts: [{ partFunction: "Controls wash cycle timing" }],
+    });
   });
 
   it("follows the server-derived warranty, not the tech's choice", async () => {

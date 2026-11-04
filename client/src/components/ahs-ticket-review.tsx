@@ -300,7 +300,10 @@ export function AhsTicketReview({
   media,
   onOpenPhoto,
   techDetails,
+  partner = "AHS",
 }: {
+  // "AHS" or "First American" (vrsAiPartnerName): only the title changes.
+  partner?: string;
   details: AhsReviewDetails;
   media?: AhsReviewMedia;
   onOpenPhoto?: (photos: string[], index: number) => void;
@@ -322,7 +325,7 @@ export function AhsTicketReview({
 
   return (
     <div className="mt-3 space-y-3 border-t border-blue-200 pt-3 text-xs dark:border-blue-900" data-testid="ahs-ticket-review">
-      <p className="text-sm font-medium">AHS details</p>
+      <p className="text-sm font-medium">{partner} details</p>
       {prefilled.size > 0 && (
         <div
           className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"

@@ -20,7 +20,7 @@ import {
   type AhsDetailsDraft,
 } from "@shared/ahs-details";
 import type { AhsReviewRefreshResponse, AhsReviewSaveResponse } from "@shared/ahs-review";
-import { deriveWarrantyFromProcId } from "@shared/warranty";
+import { deriveWarrantyFromProcId, isVrsAiWarrantyType } from "@shared/warranty";
 import type { AuthenticatedRequest } from "./middleware/auth";
 import {
   applyAhsSubmitPrefill,
@@ -93,8 +93,8 @@ async function loadReviewableTicket(
     res.status(403).json({ ok: false, error: "This ticket is not assigned to you" });
     return null;
   }
-  if (submission.requestType !== "authorization" || submission.warrantyType !== "american_home_shield") {
-    res.status(400).json({ ok: false, error: "AHS details apply only to American Home Shield authorization tickets" });
+  if (submission.requestType !== "authorization" || !isVrsAiWarrantyType(submission.warrantyType)) {
+    res.status(400).json({ ok: false, error: "These details apply only to American Home Shield and First American authorization tickets" });
     return null;
   }
   if (submission.ticketStatus !== "pending") {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   APP_ORIGIN_VRS_COMMENT,
   buildAppVrsAuthorizePayload,
+  isAppVrsAiEnrollEligible,
   isUndispatchedVrsBridgeRecord,
   saveAppSubmissionVrsAiIntake,
   toE164UsPhone,
@@ -228,7 +229,6 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
 
   it.each([
     ["Sears Protect", { warrantyType: "sears_protect" }],
-    ["First American", { warrantyType: "first_american" }],
     ["NLA parts", { requestType: "parts_nla" }],
     ["completed", { ticketStatus: "completed" }],
     ["rejected", { ticketStatus: "rejected" }],
@@ -244,6 +244,21 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
     expect(result.kind).toBe("skipped");
     expect(store.createIntake).not.toHaveBeenCalled();
     expect(store.getBySubmissionId).not.toHaveBeenCalled();
+  });
+
+  it("enrolls a First American ticket with partner_id FIRST_AMERICAN and the same payload", async () => {
+    const fa = { ...appTicket, warrantyType: "first_american" };
+    expect(isAppVrsAiEnrollEligible(fa)).toBe(true);
+    const built = buildAppVrsAuthorizePayload(fa, technician);
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.payload).toMatchObject({ partner_id: "FIRST_AMERICAN", contract_number: "AHS-778812", cta_no: "AHS-778812" });
+    expect(getVrsAuthorizeContractVersion(built.payload)).toBe("v9");
+    const store = saveStore();
+    const result = await saveAppSubmissionVrsAiIntake({ store, generateCallId: () => "vrs_call_fa" }, fa, technician);
+    expect(result.kind).toBe("enrolled");
+    expect(buildAppVrsAuthorizePayload({ ...appTicket, warrantyType: "sears_protect" }, technician))
+      .toEqual({ ok: false, reason: "warranty sears_protect is not one VRS AI calls" });
   });
 
   it("enrolls a ticket the VRS manager has claimed (pending) at Stage 1", async () => {
