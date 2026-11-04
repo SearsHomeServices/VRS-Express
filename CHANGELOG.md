@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - SASHA's data is trusted as sent; the VRS agent may correct it (2026-11-04)
+- A SASHA ticket keeps the warranty SASHA sent. The ProcID lookup no longer
+  replaces it (a disagreement is only logged), so a First American order is
+  never saved as Sears or AHS while VRS AI calls First American.
+- New `PATCH /api/submissions/:id/vrs-ai-request`: at Stage 1, before
+  approving, the VRS agent may correct values in SASHA's request. Only the
+  fields they change are replaced; everything else stays exactly as SASHA
+  sent it. Only fields SASHA sent can be changed (nothing is added), the
+  service order, technician, partner, callback and photos are not editable,
+  and the result must pass the same contract check dispatch uses. A contract
+  number correction also updates `cta_no` (the contract requires them
+  equal). A staff-only note lists the corrected field names.
+- The Stage 1 panel shows a "request from SASHA" editor for SASHA tickets
+  instead of the details-draft editor (whose save always failed on them).
+  Nothing is prefilled or looked up for SASHA tickets.
+
 ### Added - SASHA can send First American orders (2026-11-04)
 - `POST /vrs/authorize` (SASHA intake) accepts First American as well as AHS:
   `partner_id` `FA`, `First American` or `FIRST_AMERICAN`, ignoring case,

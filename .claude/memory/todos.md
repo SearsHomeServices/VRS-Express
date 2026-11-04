@@ -190,3 +190,5 @@
 - [ ] On a real FA order, run the diagnostic: does the service contract ID (CTA_NO / SOM thirdPartyInfo.contractNumber) have FA's own 622xxxxxx-N format? If not, find where FA's number lives before go-live
 - [ ] Confirm SASHA's exact partner_id for First American (accepting FA / First American / FIRST_AMERICAN for now)
 - [ ] Sears Protect (SPHW / SP / PA) from SASHA: accept, never dispatch, send the agent's decision back to SASHA (needs SASHA's partner ids and result format)
+- [ ] Ask Enzo: dispatch enrichment fills a missing tech phone/name and attaches photos on SASHA requests. Keep, or stop it under the 'trust SASHA as sent' rule?
+- [ ] Run tests/vrs-ai-bridge-ui.test.ts where jsdom is installed (could not install locally; npm registry unreachable)

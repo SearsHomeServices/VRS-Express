@@ -4,7 +4,13 @@ import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
 import { useFeatureFlags, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { AhsTicketReview, type AhsReviewMedia } from "@/components/ahs-ticket-review";
 import { AhsDetailsEditor } from "@/components/ahs-details-editor";
-import { isAhsDetailsEditable, parseAhsDetailsForReview, techApplianceDetailsForTicket } from "@/lib/ahsReview";
+import {
+  isAhsDetailsEditable,
+  isSashaRequestEditable,
+  parseAhsDetailsForReview,
+  techApplianceDetailsForTicket,
+} from "@/lib/ahsReview";
+import { SashaRequestEditor } from "@/components/sasha-request-editor";
 import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
 import { vrsAiPartnerName } from "@shared/warranty";
 import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
@@ -352,6 +358,13 @@ export function VrsAiBridgePanel({
   const ahsDetails = parseAhsDetailsForReview(submission?.ahsDetails);
   const techDetails = techApplianceDetailsForTicket(submission);
   const partner = vrsAiPartnerName(submission?.warrantyType);
+  // A SASHA request: the VRS manager may correct values before approving
+  // (not gated on vrsAiAppEnrollEnabled, which is about technician tickets).
+  const sashaEditable =
+    allowAhsEdit &&
+    typeof submission?.id === "number" &&
+    !!bridge?.reviewContext &&
+    isSashaRequestEditable(submission, bridge);
   let ahsSection: ReactNode = null;
   if (editable && submission) {
     // Open the editor only once the detail fetch has the stored draft, so
@@ -440,6 +453,14 @@ export function VrsAiBridgePanel({
         </p>
       )}
       {ahsSection}
+      {sashaEditable && bridge.reviewContext && (
+        <SashaRequestEditor
+          key={`${submission!.id}-${bridge.callId}`}
+          submissionId={submission!.id!}
+          context={bridge.reviewContext}
+          partner={partner}
+        />
+      )}
       <VrsAiBridgeReview bridge={bridge} />
     </div>
   );

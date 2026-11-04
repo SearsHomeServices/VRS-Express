@@ -32,6 +32,7 @@ import {
   groupAhsIssues,
   holdsTechValue,
   isAhsDetailsEditable,
+  isSashaRequestEditable,
   techApplianceDetailsForTicket,
   techSuppliedAhsValues,
 } from "../client/src/lib/ahsReview";
@@ -869,19 +870,30 @@ describe("Stage 1 AHS editor: when it shows", () => {
   it("decides editability from the ticket and the bridge row", () => {
     const ticket = stageOneTicket({});
     expect(isAhsDetailsEditable(ticket, null)).toBe(true);
-    expect(isAhsDetailsEditable(ticket, { state: "pending_review", providerCallId: null, dispatchedAt: null })).toBe(true);
-    expect(isAhsDetailsEditable(ticket, { state: "dispatch_failed", providerCallId: null, dispatchedAt: null })).toBe(true);
+    const app = { origin: "app" as const };
+    expect(isAhsDetailsEditable(ticket, { ...app, state: "pending_review", providerCallId: null, dispatchedAt: null })).toBe(true);
+    expect(isAhsDetailsEditable(ticket, { ...app, state: "dispatch_failed", providerCallId: null, dispatchedAt: null })).toBe(true);
     // Dispatched or VRS AI already working on it.
-    expect(isAhsDetailsEditable(ticket, { state: "dispatching", providerCallId: null, dispatchedAt: null })).toBe(false);
-    expect(isAhsDetailsEditable(ticket, { state: "queued", providerCallId: "p-1", dispatchedAt: "2026-10-23T12:00:00Z" })).toBe(false);
-    expect(isAhsDetailsEditable(ticket, { state: "pending_review", providerCallId: "p-1", dispatchedAt: null })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, { ...app, state: "dispatching", providerCallId: null, dispatchedAt: null })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, { ...app, state: "queued", providerCallId: "p-1", dispatchedAt: "2026-10-23T12:00:00Z" })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, { ...app, state: "pending_review", providerCallId: "p-1", dispatchedAt: null })).toBe(false);
+    // A SASHA request (origin "sasha" or missing) never opens the draft editor;
+    // the VRS manager corrects it with the SASHA request editor instead.
+    const sasha = { state: "pending_review", providerCallId: null, dispatchedAt: null };
+    expect(isAhsDetailsEditable(ticket, { ...sasha, origin: "sasha" })).toBe(false);
+    expect(isAhsDetailsEditable(ticket, sasha)).toBe(false);
+    expect(isSashaRequestEditable(ticket, { ...sasha, origin: "sasha" })).toBe(true);
+    expect(isSashaRequestEditable(ticket, sasha)).toBe(true);
+    expect(isSashaRequestEditable(ticket, { ...sasha, origin: "app" })).toBe(false);
+    expect(isSashaRequestEditable(ticket, { ...sasha, state: "queued", providerCallId: "p-1" })).toBe(false);
+    expect(isSashaRequestEditable(ticket, null)).toBe(false);
     // Stage 1 decided, or not an AHS authorization ticket.
     expect(isAhsDetailsEditable({ ...ticket, stage1Status: "approved", submissionApproved: true }, null)).toBe(false);
     expect(isAhsDetailsEditable({ ...ticket, stage1Status: "rejected" }, null)).toBe(false);
     expect(isAhsDetailsEditable({ ...ticket, ticketStatus: "completed" }, null)).toBe(false);
     expect(isAhsDetailsEditable({ ...ticket, ticketStatus: "queued" }, null)).toBe(false);
     expect(isAhsDetailsEditable({ ...ticket, warrantyType: "sears_protect" }, null)).toBe(false);
-    expect(isAhsDetailsEditable({ ...ticket, warrantyType: "first_american" }, null)).toBe(false);
+    expect(isAhsDetailsEditable({ ...ticket, warrantyType: "first_american" }, null)).toBe(true);
     expect(isAhsDetailsEditable({ ...ticket, requestType: "parts_nla" }, null)).toBe(false);
     expect(isAhsDetailsEditable(null, null)).toBe(false);
   });

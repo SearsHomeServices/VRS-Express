@@ -1233,6 +1233,10 @@ export async function registerRoutes(
       ignoreLegacyDuplicateSubmissionIds?: readonly number[];
       // SASHA intake creates its own bridge row right after this handler.
       skipAppVrsAiEnroll?: boolean;
+      // SASHA intake: the warranty SASHA sent is kept; the ProcID lookup
+      // never replaces it (SASHA's data is trusted as sent; a mismatch is
+      // only logged). Its partner_id is also what VRS AI calls.
+      keepCallerWarranty?: boolean;
     },
   ) => {
     try {
@@ -1612,9 +1616,12 @@ export async function registerRoutes(
         }
       }
 
-      const finalWarrantyType = derivedWarranty ? derivedWarranty.warrantyType : parsed.data.warrantyType;
-      const finalWarrantyProvider = derivedWarranty ? derivedWarranty.warrantyProvider : (parsed.data.warrantyProvider || null);
-      if (derivedWarranty && derivedWarranty.warrantyType !== parsed.data.warrantyType) {
+      const useDerivedWarranty = !!derivedWarranty && !internalOptions?.keepCallerWarranty;
+      const finalWarrantyType = useDerivedWarranty ? derivedWarranty!.warrantyType : parsed.data.warrantyType;
+      const finalWarrantyProvider = useDerivedWarranty ? derivedWarranty!.warrantyProvider : (parsed.data.warrantyProvider || null);
+      if (derivedWarranty && !useDerivedWarranty && derivedWarranty.warrantyType !== parsed.data.warrantyType) {
+        console.warn(`[warranty-derive] SO ${parsed.data.serviceOrder}: SASHA sent ${parsed.data.warrantyType}, ProcID lookup says ${derivedWarranty.warrantyType} (${derivedWarranty.source}); kept SASHA's`);
+      } else if (derivedWarranty && derivedWarranty.warrantyType !== parsed.data.warrantyType) {
         console.log(`[warranty-derive] SO ${parsed.data.serviceOrder}: tech selected ${parsed.data.warrantyType}, derived ${derivedWarranty.warrantyType} from ${derivedWarranty.source} (procId=${procIdResult.procId}, clientNm=${procIdResult.clientNm})`);
       }
 
@@ -1907,6 +1914,7 @@ export async function registerRoutes(
       await createSubmissionHandler(internalRequest, capturedRes, {
         ...internalOptions,
         skipAppVrsAiEnroll: true,
+        keepCallerWarranty: true,
       });
       const responseBody = captured.body as any;
       if (captured.statusCode === 201 && responseBody?.submission?.id) {
@@ -3641,6 +3649,7 @@ export async function registerRoutes(
       store: vrsBridgeStore,
       generateCallId: () => `vrs_call_${randomUUID()}`,
     },
+    replaceSashaRequest: (id, requestPayload) => vrsBridgeStore.replaceUndispatchedSashaIntake(id, requestPayload),
     isEnrollEnabled: isVrsAiAppEnrollEnabled,
     lookupSources: (serviceOrder) => lookupAhsPrefillSources(serviceOrder, {
       snowflake: isAhsServiceOrderPrefillEnabled() ? fetchAhsServiceOrderPrefill : null,

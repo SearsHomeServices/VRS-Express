@@ -434,6 +434,29 @@ export class DrizzleVrsBridgeStore
     return rows.length === 1;
   }
 
+  // Stage 1 corrections to a SASHA request (server/vrs-sasha-edit.ts): the
+  // VRS agent changed values before approving. Replaces the stored request of
+  // a SASHA row VRS AI never received; false once a dispatch has started or
+  // VRS AI has the call, and never matches an app-origin row.
+  async replaceUndispatchedSashaIntake(
+    id: number,
+    requestPayload: VrsStoredAuthorizeRequest,
+  ): Promise<boolean> {
+    const rows = await db
+      .update(vrsAiCalls)
+      .set({ requestPayload: requestPayload as Record<string, unknown>, updatedAt: new Date() })
+      .where(
+        and(
+          eq(vrsAiCalls.id, id),
+          inArray(vrsAiCalls.state, ["pending_review", "dispatch_failed"]),
+          isNull(vrsAiCalls.providerCallId),
+          ne(vrsAiCalls.callbackUrl, VRS_APP_ORIGIN_CALLBACK_URL),
+        ),
+      )
+      .returning({ id: vrsAiCalls.id });
+    return rows.length === 1;
+  }
+
   async getBySubmissionId(
     submissionId: number,
   ): Promise<VrsBridgeRecord | undefined> {

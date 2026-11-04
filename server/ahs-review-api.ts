@@ -9,6 +9,11 @@
 // ticket's undispatched one, server/vrs-app-enroll.ts); the existing
 // "Approve & Send to VRS AI" Stage 1 action then dispatches it.
 //
+// A SASHA ticket arrives with its request already built and is trusted as
+// sent: no draft, no lookups. The VRS manager may only correct values:
+//   PATCH /api/submissions/:id/vrs-ai-request  replace the changed fields
+// (server/vrs-sasha-edit.ts).
+//
 // Staff only. Responses carry the details (customer PII included) to the VRS
 // manager; logs, notes and broadcasts carry ids and statuses, never values.
 import type { Express, Request, RequestHandler, Response } from "express";
@@ -36,7 +41,13 @@ import {
   type AppVrsAiEnrollResult,
   type AppVrsAiIntakeSaveDeps,
 } from "./vrs-app-enroll";
-import { isAppOriginVrsBridgeRecord } from "./vrs-sasha-queue";
+import {
+  isAppOriginVrsBridgeRecord,
+  projectVrsBridgeReviewContext,
+  type VrsBridgeRecord,
+  type VrsStoredAuthorizeRequest,
+} from "./vrs-sasha-queue";
+import { applySashaRequestEdits, type SashaRequestEdits } from "./vrs-sasha-edit";
 
 export const AHS_REVIEW_ROLES = ["vrs_agent", "admin", "super_admin"] as const;
 
@@ -54,6 +65,8 @@ export interface AhsReviewApiDeps {
   ): Promise<Submission | undefined>;
   getUser(id: number): Promise<{ name?: string | null; racId?: string | null } | undefined>;
   bridge: AppVrsAiIntakeSaveDeps;
+  // store.replaceUndispatchedSashaIntake: false once VRS AI has it.
+  replaceSashaRequest(id: number, requestPayload: VrsStoredAuthorizeRequest): Promise<boolean>;
   isEnrollEnabled(): boolean;
   // lookupAhsPrefillSources with the submit path's sources and flags;
   // bounded (~5s) and never rejects.
@@ -69,14 +82,21 @@ export interface AhsReviewApiDeps {
   broadcastTicketUpdated(submission: Submission): void;
 }
 
-type ReviewableTicket = { submission: Submission; user: NonNullable<AuthenticatedRequest["user"]> };
+type ReviewableTicket = {
+  submission: Submission;
+  user: NonNullable<AuthenticatedRequest["user"]>;
+  bridge?: VrsBridgeRecord;
+};
 
 // The Stage 1 process route's access rules plus the AHS review conditions.
-// Responds and returns null when the ticket can't be reviewed.
+// Responds and returns null when the ticket can't be reviewed. origin: which
+// request the route edits: "app" (the details draft; no SASHA row allowed)
+// or "sasha" (the SASHA row's request; one must exist).
 async function loadReviewableTicket(
   deps: AhsReviewApiDeps,
   req: Request,
   res: Response,
+  origin: "app" | "sasha" = "app",
 ): Promise<ReviewableTicket | null> {
   const user = (req as AuthenticatedRequest).user!;
   const id = Number.parseInt(String(req.params.id), 10);
@@ -106,15 +126,19 @@ async function loadReviewableTicket(
     return null;
   }
   const bridge = await deps.bridge.store.getBySubmissionId(submission.id);
-  if (bridge && !isAppOriginVrsBridgeRecord(bridge)) {
+  if (origin === "app" && bridge && !isAppOriginVrsBridgeRecord(bridge)) {
     res.status(409).json({ ok: false, error: "This ticket's VRS AI request came from SASHA and can't be edited here" });
+    return null;
+  }
+  if (origin === "sasha" && (!bridge || isAppOriginVrsBridgeRecord(bridge))) {
+    res.status(409).json({ ok: false, error: "This ticket has no request from SASHA to correct" });
     return null;
   }
   if (bridge && !isUndispatchedVrsBridgeRecord(bridge)) {
     res.status(409).json({ ok: false, error: "This ticket has already been sent to VRS AI" });
     return null;
   }
-  return { submission, user };
+  return { submission, user, bridge };
 }
 
 function enrollSkipReason(result: AppVrsAiEnrollResult): string | undefined {
@@ -174,6 +198,73 @@ const STALE_TICKET = {
 
 export function registerAhsReviewApi(app: Express, deps: AhsReviewApiDeps): void {
   const guard = [deps.authenticateToken, deps.requireRole(...AHS_REVIEW_ROLES)];
+
+  // Body: { fields?: { name: value }, parts?: [{ index, name: value }] }
+  // (server/vrs-sasha-edit.ts). Only changed values are replaced. Logs and
+  // the audit note carry field names, never values.
+  app.patch("/api/submissions/:id/vrs-ai-request", ...guard, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const ticket = await loadReviewableTicket(deps, req, res, "sasha");
+      if (!ticket?.bridge) return;
+      const { bridge } = ticket;
+      const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+      const edits: SashaRequestEdits = {
+        fields: body.fields && typeof body.fields === "object" && !Array.isArray(body.fields) ? body.fields : undefined,
+        parts: Array.isArray(body.parts) ? body.parts : undefined,
+      };
+      const result = applySashaRequestEdits(bridge.requestPayload, edits);
+      if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+      if (!result.changed.length) {
+        return res.status(200).json({ ok: true, changed: [], reviewContext: projectVrsBridgeReviewContext(bridge.requestPayload) });
+      }
+
+      // Still pending and (for a vrs_agent) still theirs, then the request.
+      if (!(await storeDetails(deps, ticket, {}))) return res.status(409).json(STALE_TICKET);
+      if (!(await deps.replaceSashaRequest(bridge.id, result.payload))) {
+        return res.status(409).json({ ok: false, error: "This ticket has already been sent to VRS AI" });
+      }
+      // The ticket's total and part numbers, as intake set them from the request.
+      const payload = result.payload as unknown as {
+        labor_amount?: number; tax_amount?: number; part_price?: number; parts?: Array<{ part_id?: string }>;
+      };
+      const total = (payload.labor_amount ?? 0) + (payload.tax_amount ?? 0) + (payload.part_price ?? 0);
+      const updated = await storeDetails(deps, ticket, {
+        estimateAmount: total.toFixed(2),
+        partNumbers: JSON.stringify((payload.parts ?? []).map((part) => part.part_id)),
+      });
+      console.log(
+        `[ahs-review] submission=${ticket.submission.id} SASHA request corrected by user=${ticket.user.id} ` +
+        `call=${bridge.callId} fields=${result.changed.join(",")}`,
+      );
+      try {
+        await deps.createNote({
+          submissionId: ticket.submission.id,
+          authorId: ticket.user.id,
+          authorRole: ticket.user.role,
+          visibility: "staff_only",
+          body: `SASHA request corrected by ${ticket.user.name} before VRS AI: ${result.changed.join(", ")}`,
+        });
+      } catch (noteError) {
+        console.error(`[ahs-review] audit note failed for submission ${ticket.submission.id}:`, noteError);
+      }
+      if (updated) {
+        try {
+          deps.broadcastTicketUpdated(updated);
+        } catch (broadcastError) {
+          console.error(`[ahs-review] broadcast failed for submission ${updated.id}:`, broadcastError);
+        }
+      }
+      return res.status(200).json({
+        ok: true,
+        changed: result.changed,
+        reviewContext: projectVrsBridgeReviewContext(result.payload),
+      });
+    } catch (error) {
+      console.error("[ahs-review] SASHA correction error:", error instanceof Error ? error.message : String(error));
+      return res.status(500).json({ ok: false, error: "Failed to save the corrections" });
+    }
+  });
 
   app.patch("/api/submissions/:id/ahs-details", ...guard, async (req, res) => {
     res.set("Cache-Control", "no-store");

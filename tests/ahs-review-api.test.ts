@@ -8,6 +8,7 @@ import { registerAhsReviewApi, type AhsReviewApiDeps } from "../server/ahs-revie
 import type { AhsPrefillSources } from "../server/ahs-prefill";
 import { safeParseVrsAppOriginOutboundRequest } from "../server/vrs-sasha-contract";
 import type { AhsDetails, AhsDetailsDraft } from "../shared/ahs-details";
+import { validV9AuthorizePayload } from "./fixtures/vrs-authorize-payloads";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -88,6 +89,7 @@ function harness(options: {
   enrollEnabled?: boolean;
   sources?: AhsPrefillSources;
   updateLoses?: boolean;
+  sashaReplaceLoses?: boolean;
 } = {}) {
   const rows = new Map<number, any>();
   const submission = options.submission === undefined ? ticket() : options.submission;
@@ -127,6 +129,11 @@ function harness(options: {
     }),
     getUser: vi.fn(async () => ({ name: "Carlos Rivera", racId: "crivera" })),
     bridge: { store, generateCallId: () => "vrs_call_app_1" },
+    replaceSashaRequest: vi.fn(async (_id: number, requestPayload: any) => {
+      if (options.sashaReplaceLoses) return false;
+      bridgeRow = { ...bridgeRow, requestPayload };
+      return true;
+    }),
     isEnrollEnabled: () => options.enrollEnabled ?? true,
     lookupSources: vi.fn(async () => options.sources ?? unavailable),
     createNote: vi.fn(async () => ({})),
@@ -518,5 +525,68 @@ describe("Tech appliance details on the draft (grade, color, part 1's function)"
       appliance_grade: "mid",
       appliance_color: "Stainless Steel",
     });
+  });
+});
+
+// A SASHA row as the bridge stores it: SASHA's request without the secret.
+const { callback_secret: _sashaSecret, ...sashaRequest } = validV9AuthorizePayload;
+const sashaRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 90, callId: "vrs_call_sasha", state: "pending_review", providerCallId: null,
+  callbackUrl: validV9AuthorizePayload.callback_url,
+  requestPayload: structuredClone({ ...sashaRequest, partner_id: "FA" }),
+  ...overrides,
+});
+const correct = (app: express.Express, user: object, body: unknown, id = 501) =>
+  request(app).patch(`/api/submissions/${id}/vrs-ai-request`).set(as(user)).send(body as object);
+
+describe("PATCH /api/submissions/:id/vrs-ai-request (correcting a SASHA request)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("replaces only the agent's changes, keeps SASHA's other values, and notes field names only", async () => {
+    quietLogs();
+    const { app, deps, bridge, rows } = harness({ submission: ticket({ warrantyType: "first_american" }), bridgeRow: sashaRow() });
+    const res = await correct(app, AGENT, { fields: { serial_number: "C31290999", labor_amount: 130 }, parts: [{ index: 0, sell_price: 250 }] });
+    expect(res.status).toBe(200);
+    expect(res.body.changed).toEqual(["serial_number", "labor_amount", "parts[0].sell_price"]);
+    expect(bridge().requestPayload).toEqual({
+      ...sashaRequest, partner_id: "FA", serial_number: "C31290999", labor_amount: 130,
+      parts: [{ ...sashaRequest.parts[0], sell_price: 250 }],
+    });
+    expect(res.body.reviewContext).not.toHaveProperty("callback_url");
+    expect(rows.get(501).estimateAmount).toBe((130 + sashaRequest.tax_amount + sashaRequest.part_price).toFixed(2));
+    const note = deps.createNote.mock.calls[0][0] as { body: string };
+    expect(note.body).toBe("SASHA request corrected by Vera Agent before VRS AI: serial_number, labor_amount, parts[0].sell_price");
+    expect(note.body).not.toContain("C31290999");
+    // The details-draft route stays closed for SASHA rows; nothing was enrolled or prefilled.
+    expect((await save(app, AGENT, { ahsDetails: completed })).status).toBe(409);
+    expect(deps.lookupSources).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing when nothing differs, and refuses additions or bad values", async () => {
+    quietLogs();
+    const { app, deps } = harness({ bridgeRow: sashaRow() });
+    const same = await correct(app, AGENT, { fields: { brand: sashaRequest.brand } });
+    expect(same.body).toMatchObject({ ok: true, changed: [] });
+    expect(deps.replaceSashaRequest).not.toHaveBeenCalled();
+    expect((await correct(app, AGENT, { fields: { partner_id: "AHS" } })).status).toBe(400);
+    expect((await correct(app, AGENT, { fields: { labor_amount: -5 } })).status).toBe(400);
+    expect(deps.replaceSashaRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a technician-filed (app) row", { callbackUrl: "" }],
+    ["a dispatched SASHA row", { state: "queued", providerCallId: "vrs_ai_1" }],
+  ])("refuses %s", async (_label, overrides) => {
+    quietLogs();
+    const { app, deps } = harness({ bridgeRow: sashaRow(overrides) });
+    expect((await correct(app, AGENT, { fields: { brand: "GE" } })).status).toBe(409);
+    expect(deps.replaceSashaRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses a ticket with no SASHA row, another agent's ticket, and a send that won the race", async () => {
+    quietLogs();
+    expect((await correct(harness().app, AGENT, { fields: { brand: "GE" } })).status).toBe(409);
+    expect((await correct(harness({ submission: ticket({ assignedTo: 99 }), bridgeRow: sashaRow() }).app, AGENT, { fields: { brand: "GE" } })).status).toBe(403);
+    expect((await correct(harness({ bridgeRow: sashaRow(), sashaReplaceLoses: true }).app, AGENT, { fields: { brand: "GE" } })).status).toBe(409);
   });
 });

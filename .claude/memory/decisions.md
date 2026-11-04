@@ -338,3 +338,8 @@ Use this format for new entries:
 ## 2026-11-04: First American reuses the AHS path to VRS AI
 - One list of the warranties VRS AI calls and their partner_id (`shared/warranty.ts` VRS_AI_PARTNER_IDS: ahs, fa) drives enrollment, the Stage 1 editor, the submit draft and the prefill. The stored details keep the `ahsDetails` name for both rather than a schema rename.
 - Why: FA moved to the phone path (VRS AI voice-authorizes it like AHS) and needs the same fields; the contract number is the same service contract ID. Enzo asked to focus on FA; the VRS AI agent-service confirmed partner_id must be the registry key `FIRST_AMERICAN` (exact match; `fa` falls back to AHS).
+
+## 2026-11-04: SASHA's data is trusted as sent; only the human corrects it
+- No automatic change or addition to a SASHA request: no ProcID warranty override, no prefill, no service-order refresh. The VRS agent at Stage 1 may correct values they disagree with; only changed fields are replaced, fields SASHA didn't send can't be added.
+- Why: Enzo, "we must trust that data - period ... if the human in the loop sees something they disagree with, they should be able to correct it but that's it."
+- Open: dispatch still fills a missing technician phone/name and attaches ticket photos when SASHA sent none (enrichVrsAuthorizeForDispatch); that predates this and was left as is pending Enzo's call.

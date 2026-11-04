@@ -266,27 +266,44 @@ export interface AhsEditableTicket {
 // when the manager saves again.
 const UNDISPATCHED_BRIDGE_STATES = ["pending_review", "dispatch_failed"];
 
-// Whether the VRS manager may still complete or correct the AHS details: an
-// AHS authorization ticket, claimed and at Stage 1 (not yet decided), whose
-// VRS AI request (if one exists) was never dispatched. The server enforces
-// the same conditions; this only decides which view to show. The feature
-// flag (vrsAiAppEnrollEnabled) is checked by the caller.
-export function isAhsDetailsEditable(
-  ticket: AhsEditableTicket | null | undefined,
-  bridge: Pick<VrsAiBridgeStatus, "state" | "providerCallId" | "dispatchedAt"> | null | undefined,
-): boolean {
+type EditableBridge = Pick<VrsAiBridgeStatus, "state" | "providerCallId" | "dispatchedAt" | "origin">;
+
+function isStageOneOpen(ticket: AhsEditableTicket | null | undefined): boolean {
   if (!ticket) return false;
   if (ticket.requestType !== "authorization") return false;
   if (!isVrsAiWarrantyType(ticket.warrantyType)) return false;
   if (ticket.ticketStatus !== "pending") return false;
   if ((ticket.stage1Status ?? "pending") !== "pending") return false;
-  if (ticket.submissionApproved) return false;
+  return !ticket.submissionApproved;
+}
+
+function isUndispatched(bridge: EditableBridge): boolean {
+  return UNDISPATCHED_BRIDGE_STATES.includes(bridge.state) && !bridge.providerCallId && !bridge.dispatchedAt;
+}
+
+// Whether the VRS manager may still complete or correct the AHS / FA details
+// draft: an AHS or First American authorization ticket, claimed and at Stage
+// 1 (not yet decided), with no VRS AI request yet or an undispatched one built
+// from the draft. Never for a SASHA request (origin missing means SASHA):
+// that one is corrected with isSashaRequestEditable. The server enforces the
+// same conditions; this only decides which view to show. The feature flag
+// (vrsAiAppEnrollEnabled) is checked by the caller.
+export function isAhsDetailsEditable(
+  ticket: AhsEditableTicket | null | undefined,
+  bridge: EditableBridge | null | undefined,
+): boolean {
+  if (!isStageOneOpen(ticket)) return false;
   if (!bridge) return true;
-  return (
-    UNDISPATCHED_BRIDGE_STATES.includes(bridge.state) &&
-    !bridge.providerCallId &&
-    !bridge.dispatchedAt
-  );
+  return bridge.origin === "app" && isUndispatched(bridge);
+}
+
+// Whether the VRS manager may correct the request SASHA sent: the same Stage 1
+// conditions, a SASHA row (origin "sasha" or missing) VRS AI never received.
+export function isSashaRequestEditable(
+  ticket: AhsEditableTicket | null | undefined,
+  bridge: EditableBridge | null | undefined,
+): boolean {
+  return isStageOneOpen(ticket) && !!bridge && bridge.origin !== "app" && isUndispatched(bridge);
 }
 
 // Field names of the editor's form, under its "ahsDetails" root.
