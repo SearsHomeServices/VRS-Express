@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - screen tests expect Sears Protect technician details (2026-11-04)
+- `tests/vrs-ai-bridge-ui.test.ts`: two tests still expected technician
+  appliance details hidden on Sears Protect tickets, which show them since
+  2026-10-28. They blocked the production build's release check.
+
 ### Fixed - production boot adds submissions.appliance_kind (2026-11-04)
 - `server/seed.ts` `ensureApplianceKindColumn` adds the nullable
   `appliance_kind` column if missing (`ADD COLUMN IF NOT EXISTS`). It was in

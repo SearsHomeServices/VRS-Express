@@ -1457,10 +1457,13 @@ describe("Technician appliance details: parsing and labels", () => {
     expect(techSuppliedAhsValues(null)).toEqual({});
   });
 
-  it("reads the stored JSON defensively and only for AHS and First American", () => {
+  // Sears Protect has had technician appliance details since 2026-10-28
+  // (TECH_APPLIANCE_DETAILS_WARRANTIES).
+  it("reads the stored JSON defensively and only for AHS, First American and Sears Protect", () => {
     expect(techApplianceDetailsForTicket({ warrantyType: "first_american", techApplianceDetails: techDetailsJson })).toEqual(techDetails);
     expect(techApplianceDetailsForTicket({ warrantyType: "american_home_shield", techApplianceDetails: techDetailsJson })).toEqual(techDetails);
-    expect(techApplianceDetailsForTicket({ warrantyType: "sears_protect", techApplianceDetails: techDetailsJson })).toBeNull();
+    expect(techApplianceDetailsForTicket({ warrantyType: "sears_protect", techApplianceDetails: techDetailsJson })).toEqual(techDetails);
+    expect(techApplianceDetailsForTicket({ warrantyType: "b2b", techApplianceDetails: techDetailsJson })).toBeNull();
     for (const raw of [null, undefined, "", "not-json", "[]", "{}", JSON.stringify({ ...techDetails, applianceGrade: "entry" }), techDetails]) {
       expect(techApplianceDetailsForTicket({ warrantyType: "first_american", techApplianceDetails: raw }), String(raw)).toBeNull();
     }
@@ -1497,7 +1500,7 @@ describe("Technician appliance details: read-only block", () => {
     for (const raw of [null, undefined, "", "not-json", "{}"]) {
       expect(renderTechBlock({ warrantyType: "first_american", techApplianceDetails: raw }), String(raw)).toBe("");
     }
-    expect(renderTechBlock({ warrantyType: "sears_protect", techApplianceDetails: techDetailsJson })).toBe("");
+    expect(renderTechBlock({ warrantyType: "b2b", techApplianceDetails: techDetailsJson })).toBe("");
   });
 });
 
