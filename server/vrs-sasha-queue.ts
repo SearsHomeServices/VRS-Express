@@ -1,3 +1,9 @@
+import {
+  VRS_AI_PARTNER_IDS,
+  WARRANTY_PROVIDER_LABELS,
+  vrsAiWarrantyFromPartnerId,
+  type VrsAiWarrantyType,
+} from "@shared/warranty";
 import { VrsCallbackError } from "./vrs-callback-safety";
 import type {
   VrsAiAuthorizeResult,
@@ -43,8 +49,8 @@ export function mapVrsPayloadToSubmission(
   serviceOrder: string;
   applianceType: VrsExpressApplianceDivision;
   requestType: "authorization";
-  warrantyType: "american_home_shield";
-  warrantyProvider: "American Home Shield";
+  warrantyType: VrsAiWarrantyType;
+  warrantyProvider: string;
   issueDescription: string;
   estimateAmount: string;
   partNumbers: string;
@@ -52,6 +58,12 @@ export function mapVrsPayloadToSubmission(
 } {
   if (!/^\d{4}$/.test(districtCode)) {
     throw new Error("Technician district must be exactly four digits");
+  }
+  // AHS or First American from partner_id; intake rejects any other partner
+  // before mapping.
+  const warrantyType = vrsAiWarrantyFromPartnerId(payload.partner_id);
+  if (!warrantyType) {
+    throw new Error(`Unsupported VRS partner_id: ${payload.partner_id}`);
   }
 
   const rationale = payload.repair_replace_rationale.trim();
@@ -75,8 +87,8 @@ export function mapVrsPayloadToSubmission(
     serviceOrder: `${districtCode}-${payload.service_order}`,
     applianceType: mapVrsApplianceType(payload.appliance_type),
     requestType: "authorization" as const,
-    warrantyType: "american_home_shield" as const,
-    warrantyProvider: "American Home Shield",
+    warrantyType,
+    warrantyProvider: WARRANTY_PROVIDER_LABELS[warrantyType],
     issueDescription,
     estimateAmount: (
       payload.labor_amount +
@@ -439,8 +451,16 @@ export async function dispatchVrsAiForSubmission(options: {
         `Stored VRS ${sourceVersion.toUpperCase()} payload failed revalidation: ${fields}`,
       );
     }
+    // VRS AI resolves partner_id by exact registry key with no aliases, so
+    // SASHA's "FA"/"First American" would silently run the AHS flow. Send
+    // First American as its key; AHS and a missing partner_id go as stored.
+    const partnerId = (enrichedPayload as { partner_id?: string }).partner_id;
     const payload = {
       ...enrichedPayload,
+      ...(partnerId !== undefined &&
+      vrsAiWarrantyFromPartnerId(partnerId) === "first_american"
+        ? { partner_id: VRS_AI_PARTNER_IDS.first_american }
+        : {}),
       callback_url: options.callbackUrl,
       callback_secret: options.callbackSecret,
     } as VrsAuthorizeRequest;

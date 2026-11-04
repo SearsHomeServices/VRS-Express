@@ -1,8 +1,6 @@
+import { vrsAiWarrantyFromPartnerId } from "@shared/warranty";
 import type { VrsExpressIntake } from "./vrs-sasha-api";
-import {
-  getVrsAuthorizeContractVersion,
-  type VrsAuthorizeRequest,
-} from "./vrs-sasha-contract";
+import { getVrsAuthorizeContractVersion } from "./vrs-sasha-contract";
 import { projectVrsBridgeIntake } from "./vrs-sasha-queue";
 import type { NewVrsBridgeIntake, VrsBridgeIntakeStore } from "./vrs-sasha-store";
 
@@ -79,20 +77,15 @@ function usablePhone(value: string | null | undefined): string {
   return trimmed && trimmed.toUpperCase() !== "N/A" ? trimmed : "";
 }
 
-function normalizePartner(payload: VrsAuthorizeRequest): string {
-  return (payload.partner_id ?? "ahs")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-}
-
 export function createVrsSashaIntake(
   deps: VrsSashaIntakeDependencies,
 ): VrsExpressIntake {
   return {
     async receive(payload) {
-      const partnerId = normalizePartner(payload);
-      if (!["ahs", "american_home_shield", "n/a"].includes(partnerId)) {
+      // AHS or First American; the ticket's warranty is mapped from the same
+      // partner_id in mapVrsPayloadToSubmission.
+      const warrantyType = vrsAiWarrantyFromPartnerId(payload.partner_id);
+      if (!warrantyType) {
         return {
           kind: "unsupported_partner",
           partnerId: payload.partner_id ?? "unknown",

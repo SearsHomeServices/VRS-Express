@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - SASHA can send First American orders (2026-11-04)
+- `POST /vrs/authorize` (SASHA intake) accepts First American as well as AHS:
+  `partner_id` `FA`, `First American` or `FIRST_AMERICAN`, ignoring case,
+  spaces and hyphens (`shared/warranty.ts` `vrsAiWarrantyFromPartnerId`;
+  SASHA's exact value still to be confirmed). The ticket is created as a
+  First American ticket instead of AHS. AHS values (`ahs`, `American Home
+  Shield`, `N/A`, missing) are unchanged; anything else, including Sears
+  Protect, is still rejected with `UNSUPPORTED_PARTNER`.
+- The ticket still waits at Stage 1: a VRS agent checks the details and
+  approves it before anything is sent to VRS AI. At that dispatch a First
+  American payload always carries `partner_id` `FIRST_AMERICAN` (VRS AI
+  matches its registry keys exactly; `FA` would run the AHS flow). AHS
+  payloads are sent exactly as stored.
+
 ### Added - First American tickets go to VRS AI like AHS (2026-11-04)
 - First American authorization tickets now follow the AHS path to VRS AI:
   at submit they get the details draft (Snowflake + SOM prefill: contract

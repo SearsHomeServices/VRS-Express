@@ -65,10 +65,15 @@ human Stage 1 dispatch. These app-origin records:
 - retire (`superseded`) an earlier undispatched record for the same order whose
   ticket was rejected or invalid, so resubmissions can enroll.
 
-The current automated bridge is for American Home Shield authorization. VRS
+The automated bridge is for American Home Shield and First American
+authorization; a VRS agent approves each ticket at Stage 1 before it is sent
+to VRS AI. A First American ticket is always sent to VRS AI with `partner_id`
+`FIRST_AMERICAN` (VRS AI matches its registry keys exactly). VRS
 Express normalizes `partner_id` case, spaces, and hyphens and accepts `ahs`,
-`american_home_shield`, or `N/A`; missing V5 `partner_id` defaults to AHS.
-Other partner values are rejected before ticket creation.
+`american_home_shield`, or `N/A` (American Home Shield ticket), or `FA`,
+`First American`, or `FIRST_AMERICAN` (First American ticket); missing V5
+`partner_id` defaults to AHS. Other partner values are rejected before ticket
+creation.
 
 | Placeholder | Required development value |
 |---|---|

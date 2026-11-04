@@ -123,7 +123,7 @@ export function registerVrsSashaApi(
         return res.status(422).json({
           error: "UNSUPPORTED_PARTNER",
           message:
-            "Phase 1 VRS AI phone automation supports American Home Shield only",
+            "VRS AI phone automation supports American Home Shield and First American only",
           partner_id: result.partnerId,
         });
       }

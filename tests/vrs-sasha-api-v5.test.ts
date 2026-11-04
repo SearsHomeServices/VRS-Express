@@ -506,23 +506,23 @@ describe("VRS Express bridge — V5 contract boundary", () => {
     expect(JSON.stringify(response.body)).not.toContain("provider_call_id");
   });
 
-  it("rejects First American at the AHS-only Phase 1 bridge gate", async () => {
+  it("rejects a partner outside AHS and First American (SPHW) at the bridge gate", async () => {
     const intake = new FakeIntake({
       kind: "unsupported_partner",
-      partnerId: "first_american",
+      partnerId: "SPHW",
     });
 
     const response = await request(makeIntakeApp(intake))
       .post("/vrs/authorize")
       .set("X-API-Key", "test-vrs-api-key")
-      .send({ ...validPayload, partner_id: "first_american" });
+      .send({ ...validPayload, partner_id: "SPHW" });
 
     expect(response.status).toBe(422);
     expect(response.body).toEqual({
       error: "UNSUPPORTED_PARTNER",
       message:
-        "Phase 1 VRS AI phone automation supports American Home Shield only",
-      partner_id: "first_american",
+        "VRS AI phone automation supports American Home Shield and First American only",
+      partner_id: "SPHW",
     });
   });
 

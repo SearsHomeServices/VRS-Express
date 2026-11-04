@@ -23,6 +23,18 @@ export function isVrsAiWarrantyType(value: string | null | undefined): value is 
   return value === "american_home_shield" || value === "first_american";
 }
 
+// The warranty a VRS partner_id names (SASHA's /vrs/authorize payloads and
+// VRS AI's registry keys), ignoring case, spaces and hyphens. AHS: missing,
+// "ahs", "American Home Shield", "N/A" (V5 default). First American: "FA",
+// "First American", "FIRST_AMERICAN" (Enzo, 2026-11-04; SASHA's exact value
+// still to be confirmed). Anything else: null (not a partner VRS AI calls).
+export function vrsAiWarrantyFromPartnerId(partnerId: string | null | undefined): VrsAiWarrantyType | null {
+  const key = (partnerId ?? "ahs").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["ahs", "american_home_shield", "n/a"].includes(key)) return "american_home_shield";
+  if (["fa", "first_american", "firstamerican"].includes(key)) return "first_american";
+  return null;
+}
+
 // The short name the Stage 1 views use ("AHS details", "First American
 // details"); AHS when the warranty is not one VRS AI calls.
 export function vrsAiPartnerName(warrantyType: string | null | undefined): string {
