@@ -67,13 +67,16 @@ human Stage 1 dispatch. These app-origin records:
 
 The automated bridge is for American Home Shield and First American
 authorization; a VRS agent approves each ticket at Stage 1 before it is sent
-to VRS AI. A First American ticket is always sent to VRS AI with `partner_id`
-`FIRST_AMERICAN` (VRS AI matches its registry keys exactly). VRS
-Express normalizes `partner_id` case, spaces, and hyphens and accepts `ahs`,
-`american_home_shield`, or `N/A` (American Home Shield ticket), or `FA`,
-`First American`, or `FIRST_AMERICAN` (First American ticket); missing V5
-`partner_id` defaults to AHS. Other partner values are rejected before ticket
-creation.
+to VRS AI. Every dispatch carries the exact VRS AI registry key, `AHS` or
+`FIRST_AMERICAN`, never SASHA's own spelling (VRS AI matches keys exactly and
+falls back to AHS for anything else). VRS Express normalizes `partner_id`
+case, spaces, and hyphens and accepts `ahs`, `american_home_shield`, `N/A`, or
+SASHA client id `61380` (American Home Shield ticket), or `FA`,
+`First American`, `FIRST_AMERICAN`, or SASHA client id `20730` (First American
+ticket); missing V5 `partner_id` defaults to AHS. Other partner values,
+including SASHA's Sears Protect (`90550`) and Assurant PA (`61481`) clients,
+are rejected before ticket creation, and dispatch refuses them without calling
+VRS AI.
 
 | Placeholder | Required development value |
 |---|---|

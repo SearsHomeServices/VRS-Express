@@ -1,3 +1,7 @@
+## Open — SASHA partner ids (2026-11-04)
+- [ ] Ask the SASHA team the exact `partner_id` string on each clientId (61380, 20730, 90550, 61481) and whether it is ever omitted or `N/A`. Once every client sends an explicit value, reject missing / `N/A` at intake (today they become AHS tickets, so an unlabelled Sears Protect / Assurant ticket would reach Stage 1 as AHS).
+- [ ] Sears Protect / Assurant from SASHA are rejected (422). If they should land in VRS Express for the calculator (no call), that is the deferred Sears-from-SASHA work.
+
 ## Open — repair / replace calculator, Sears Protect (2026-10-28)
 
 - [x] Port the calculator (legacy + Forward Repair Cost) and its service-order prefill; built-in panel in the Calculator tab behind `REPAIR_REPLACE_CALCULATOR_ENABLED` (DEV on).

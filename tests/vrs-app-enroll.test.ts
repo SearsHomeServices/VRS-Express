@@ -171,7 +171,7 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
       tech_id: "crivera",
       tech_phone: "+12145550199",
       tech_name: "Carlos Rivera",
-      partner_id: "ahs",
+      partner_id: "AHS",
       district_number: "8175",
       contract_number: "AHS-778812",
       cta_no: "AHS-778812",

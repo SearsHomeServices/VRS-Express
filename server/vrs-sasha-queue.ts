@@ -451,16 +451,19 @@ export async function dispatchVrsAiForSubmission(options: {
         `Stored VRS ${sourceVersion.toUpperCase()} payload failed revalidation: ${fields}`,
       );
     }
-    // VRS AI resolves partner_id by exact registry key with no aliases, so
-    // SASHA's "FA"/"First American" would silently run the AHS flow. Send
-    // First American as its key; AHS and a missing partner_id go as stored.
+    // VRS AI resolves partner_id by exact registry key with no aliases and
+    // falls back to AHS for anything it doesn't know, so SASHA's own spelling
+    // ("FA", "N/A", "20730", none) is never sent: always the exact key, AHS or
+    // FIRST_AMERICAN. Any other partner (Sears Protect, Assurant) fails here
+    // without a call; intake already rejects them.
     const partnerId = (enrichedPayload as { partner_id?: string }).partner_id;
+    const partnerWarranty = vrsAiWarrantyFromPartnerId(partnerId);
+    if (!partnerWarranty) {
+      throw new Error(`partner_id ${partnerId ?? "(none)"} is not one VRS AI calls`);
+    }
     const payload = {
       ...enrichedPayload,
-      ...(partnerId !== undefined &&
-      vrsAiWarrantyFromPartnerId(partnerId) === "first_american"
-        ? { partner_id: VRS_AI_PARTNER_IDS.first_american }
-        : {}),
+      partner_id: VRS_AI_PARTNER_IDS[partnerWarranty],
       callback_url: options.callbackUrl,
       callback_secret: options.callbackSecret,
     } as VrsAuthorizeRequest;

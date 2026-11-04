@@ -1,3 +1,6 @@
+## 2026-11-04 — VRS AI always gets its exact partner key; only AHS and First American reach it
+SASHA routes four clients to the VRS agent (61380 AHS, 20730 FA, 90550 Sears Protect, 61481 Assurant PA). VRS AI only calls AHS and FA, and falls back to AHS for any unknown partner_id (it would dial Assurant's real number with the AHS script for `ASSURANT`). So VRS Express is the gate: intake accepts only AHS / FA spellings plus their client ids, and dispatch always sends `AHS` or `FIRST_AMERICAN` and refuses anything else. Canonical keys on dispatch let VRS AI add its own fail-closed guard without rejecting real AHS traffic. Missing / `N/A` stays AHS until SASHA confirms explicit partner ids (rejecting it could 422 live AHS tickets).
+
 ## 2026-10-29 — Diagnostic HSSOM checks run without Snowflake and the feature flag
 
 - **Decision:** the diagnostic's Order Lookup call bypasses `AHS_HSSOM_CUSTOMER_PREFILL_ENABLED`, and sections 8-9 run even when Snowflake fails. The response's key paths (names only, depth 3; odd key names masked) are printed to learn whether SOM's Order Lookup carries anything for the calculator; values are never printed.

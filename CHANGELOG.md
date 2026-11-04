@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - SASHA client ids; VRS AI always gets its exact partner key (2026-11-04)
+- SASHA's warranty client ids are accepted as `partner_id`: `61380` is AHS and
+  `20730` is First American. `90550` (Sears Protect) and `61481` (Assurant PA)
+  are still rejected with `UNSUPPORTED_PARTNER`; VRS AI never calls them.
+- Dispatch to VRS AI now always sends `partner_id` `AHS` or `FIRST_AMERICAN`.
+  AHS used to go as SASHA sent it (`ahs`, `N/A`, or none). VRS AI already
+  treated those as AHS, so calls are unchanged, but VRS AI can now reject
+  unknown partners without turning away real AHS traffic.
+- Dispatch refuses (dispatch failed, no call) any stored partner that is not
+  AHS or First American.
+- Still open: a missing or `N/A` partner_id is an AHS ticket. SASHA must confirm
+  it always sends an explicit partner on all four clients before that is
+  rejected.
+
 ### Changed - SASHA's data is trusted as sent; the VRS agent may correct it (2026-11-04)
 - A SASHA ticket keeps the warranty SASHA sent. The ProcID lookup no longer
   replaces it (a disagreement is only logged), so a First American order is

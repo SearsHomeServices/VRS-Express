@@ -81,7 +81,7 @@ function withPartner(
 }
 
 describe("VRS SASHA intake partner_id → ticket warranty", () => {
-  it.each(["FA", "fa", "First American", "FIRST_AMERICAN"])(
+  it.each(["FA", "fa", "First American", "FIRST_AMERICAN", "20730"])(
     "accepts partner_id %j and creates a First American ticket",
     async (partnerId) => {
       const harness = makeHarness();
@@ -103,6 +103,7 @@ describe("VRS SASHA intake partner_id → ticket warranty", () => {
     ["American Home Shield", validV8AuthorizePayload],
     ["N/A", validV5AuthorizePayload],
     [undefined, validV5AuthorizePayload],
+    ["61380", validV8AuthorizePayload],
   ] as const)(
     "keeps partner_id %j as an American Home Shield ticket",
     async (partnerId, base) => {
@@ -119,14 +120,18 @@ describe("VRS SASHA intake partner_id → ticket warranty", () => {
     },
   );
 
-  it("still rejects SPHW as an unsupported partner before any ticket work", async () => {
+  // SASHA's other two clients: Sears Protect (90550) and Assurant PA (61481).
+  it.each(["SPHW", "90550", "61481", "SEARS_PROTECT", "ASSURANT"])(
+    "still rejects partner_id %j as an unsupported partner before any ticket work",
+    async (partnerId) => {
     const harness = makeHarness();
 
     await expect(
-      harness.intake.receive(withPartner(validV8AuthorizePayload, "SPHW")),
-    ).resolves.toEqual({ kind: "unsupported_partner", partnerId: "SPHW" });
+      harness.intake.receive(withPartner(validV8AuthorizePayload, partnerId)),
+    ).resolves.toEqual({ kind: "unsupported_partner", partnerId });
     expect(harness.deps.store.findActiveByServiceOrder).not.toHaveBeenCalled();
     expect(harness.deps.createTicket).not.toHaveBeenCalled();
     expect(harness.ticketBodies).toHaveLength(0);
-  });
+  },
+  );
 });
