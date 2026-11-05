@@ -1,3 +1,9 @@
+## Open — VRS AI calls off (2026-11-05)
+- [x] Switch `VRS_AI_CALLS_ENABLED` (default off): Stage 1 manual for every ticket, no "Send to VRS AI" button, no tech-ticket enrollment (no AHS draft, no Stage 1 AHS editor; tech form unchanged).
+- [ ] Ask Enzo whether SASHA should keep sending requests (`sashaVRSAgentByGlobal`). Today intake still accepts them and they become manual tickets, but SASHA's status polling stays `pending_review` because nothing updates the vrs_ai_calls row.
+- [ ] Bridge tickets already dispatched (queued / in progress at VRS AI) when ElevenLabs stopped: check for any stuck in Stage 1 in PROD and approve or reject them manually.
+- [ ] V11 is stashed (`git stash list`); revisit only if VRS AI comes back.
+
 ## Open — SASHA partner ids (2026-11-04)
 - [ ] Ask the SASHA team the exact `partner_id` string on each clientId (61380, 20730, 90550, 61481) and whether it is ever omitted or `N/A`. Once every client sends an explicit value, reject missing / `N/A` at intake (today they become AHS tickets, so an unlabelled Sears Protect / Assurant ticket would reach Stage 1 as AHS).
 - [ ] Sears Protect / Assurant from SASHA are rejected (422). If they should land in VRS Express for the calculator (no call), that is the deferred Sears-from-SASHA work.

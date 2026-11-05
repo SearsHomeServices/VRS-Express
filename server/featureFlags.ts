@@ -42,7 +42,20 @@ export function isVrsBridgePhotoProxyEnabled(): boolean {
 // details section (shared/ahs-details.ts) on the tech submit/resubmit forms;
 // tickets without those details are never enrolled.
 export function isVrsAiAppEnrollEnabled(): boolean {
-  return process.env.VRS_AI_APP_ENROLL_ENABLED === "true";
+  return process.env.VRS_AI_APP_ENROLL_ENABLED === "true" && isVrsAiCallsEnabled();
+}
+
+// VRS AI authorization calls (the ElevenLabs voice agent). Default OFF
+// everywhere; only the exact value "true" enables it. Off since 2026-11-05
+// (ElevenLabs API ended): Stage 1 "Approve Submission" never sends a ticket to
+// VRS AI, so AHS / First American tickets (SASHA ones included) use the
+// manual flow — the agent obtains the authorization code and enters it at
+// Stage 2. Also turns off technician-ticket enrollment
+// (isVrsAiAppEnrollEnabled): no AHS draft at submit and no Stage 1 AHS
+// details editor. The tech form's own fields are unchanged.
+// SASHA intake is unaffected. Set VRS_AI_CALLS_ENABLED=true to restore.
+export function isVrsAiCallsEnabled(): boolean {
+  return process.env.VRS_AI_CALLS_ENABLED === "true";
 }
 
 // AHS service-order prefill from Snowflake (server/ahs-prefill.ts). Default

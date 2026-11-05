@@ -133,7 +133,7 @@ import { VrsAiBridgePanel } from "@/components/vrs-ai-bridge-review";
 import { parseServiceOrderProduct, ServiceOrderProductText, TechApplianceDetailsBlock } from "@/components/ahs-ticket-review";
 import { techApplianceDetailsForTicket } from "@/lib/ahsReview";
 import { VrsAiBridgePhotos } from "@/components/vrs-ai-bridge-photos";
-import { useRepairReplaceCalculatorEnabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
+import { useRepairReplaceCalculatorEnabled, useVrsAiCallsEnabled, useVrsBridgePhotoProxyEnabled } from "@/hooks/use-feature-flags";
 import { VrsAiPilotTable } from "@/components/vrs-ai-pilot-table";
 import { VrsAiPilotClosedReview } from "@/components/vrs-ai-pilot-closed-review";
 import { isDevelopmentRuntime } from "@/lib/runtime-environment";
@@ -1187,8 +1187,13 @@ export default function AgentDashboard() {
   // Backward-compatible alias retained so any callsite still using the old
   // name continues to work; both reference the same snapshot-fallback value.
   const effectiveSelectedSubmission = selectedSubmission;
+  // Stage 1 approval sends this ticket to VRS AI only while VRS AI calls are
+  // on (VRS_AI_CALLS_ENABLED); otherwise it is the manual flow.
+  const vrsAiCallsEnabled = useVrsAiCallsEnabled();
+  const sendsToVrsAi = vrsAiCallsEnabled && !!selectedSubmission?.vrsAi;
   const vrsAiApprovalCopy = getVrsAiApprovalCopy(
     selectedSubmission?.vrsAi,
+    vrsAiCallsEnabled,
   );
 
   // Tyler 2026-07-08 (perf) — batch-prefetch media tokens the moment the
@@ -1480,8 +1485,8 @@ export default function AgentDashboard() {
         };
       }
 
-      const actionLabel = selectedAction === "approve_submission" ? (selectedSubmission?.vrsAi ? "Sent to VRS AI" : "Submission Approved") : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : "Approved") : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Rejected") : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
-      const actionDesc = selectedAction === "approve_submission" ? (selectedSubmission?.vrsAi ? "VRS AI accepted the authorization request and the technician has been notified." : "Technician has been notified. Enter the authorization code to complete this ticket.") : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : selectedAction === "b2b_approved_replacement" ? "Technician has been notified. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
+      const actionLabel = selectedAction === "approve_submission" ? (sendsToVrsAi ? "Sent to VRS AI" : "Submission Approved") : selectedAction === "approve" ? (isSubmissionApprovedStage(selectedSubmission) ? "Approved to Repair" : "Approved") : selectedAction === "approve_replacement_review" ? "Replacement Review" : selectedAction === "b2b_approved_replacement" ? "B2B Approved Replacement" : selectedAction === "reject" ? (isSubmissionApprovedStage(selectedSubmission) ? "Declined Repair" : "Rejected") : selectedAction === "reject_and_close" ? "Rejected & Closed" : "Marked Invalid";
+      const actionDesc = selectedAction === "approve_submission" ? (sendsToVrsAi ? "VRS AI accepted the authorization request and the technician has been notified." : "Technician has been notified. Enter the authorization code to complete this ticket.") : selectedAction === "reject_and_close" ? "Technician has been notified. This service order is permanently closed." : selectedAction === "approve_replacement_review" ? "Replacement Code sent. Warranty company will handle the replacement; ticket closed in VRS." : selectedAction === "b2b_approved_replacement" ? "Technician has been notified. Warranty company will handle the replacement; ticket closed in VRS." : "Technician has been notified.";
       toast({ title: actionLabel, description: actionDesc });
 
       // Tyler 2026-04-28 (REQUIREMENT CHANGE — overrides prior post-Authorize-
@@ -4716,10 +4721,10 @@ export default function AgentDashboard() {
                               {selectedAction === "approve_submission" && (
                                 <div className="space-y-2 border rounded-lg p-4 bg-green-50/50 dark:bg-green-950/10">
                                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                    {selectedSubmission.vrsAi ? "Human approval to VRS AI" : "Submission Approval"}
+                                    {sendsToVrsAi ? "Human approval to VRS AI" : "Submission Approval"}
                                   </p>
                                   <p className="text-sm text-muted-foreground">
-                                    {selectedSubmission.vrsAi
+                                    {sendsToVrsAi
                                       ? "Approving confirms the request is ready, sends the reviewed bridge payload to VRS AI for the AHS authorization call, and keeps this ticket pending until VRS AI returns the result."
                                       : "Approving the submission will notify the technician that their photos and information meet the requirements. You will then need to obtain the authorization code from the warranty provider to complete this ticket."}
                                   </p>
@@ -5326,7 +5331,7 @@ export default function AgentDashboard() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedAction === "approve_submission" && (
-                selectedSubmission?.vrsAi
+                sendsToVrsAi
                   ? <>This sends the approved AHS request to VRS AI. The technician will receive the existing approval SMS, and VRS AI will return the authorization result to this ticket.</>
                   : <>The technician will be notified via SMS that their submission has been approved and VRS is working on obtaining authorization. The ticket will remain pending for you to enter the authorization code.</>
               )}

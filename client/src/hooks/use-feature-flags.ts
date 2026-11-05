@@ -5,6 +5,7 @@ interface AppConfig {
   techHubPhotosEnabled: boolean;
   vrsBridgePhotoProxyEnabled: boolean;
   vrsAiAppEnrollEnabled?: boolean;
+  vrsAiCallsEnabled?: boolean;
   ahsServiceOrderPrefill?: boolean;
   ahsHssomCustomerPrefill?: boolean;
   techApplianceDetailsEnabled?: boolean;
@@ -37,6 +38,13 @@ export function useVrsAiAppEnrollEnabled(): boolean {
   return data?.vrsAiAppEnrollEnabled ?? false;
 }
 
+// Stage 1 approval sends bridge tickets to VRS AI (server
+// VRS_AI_CALLS_ENABLED). Off: the manual authorization flow for every ticket.
+export function useVrsAiCallsEnabled(): boolean {
+  const { data } = useAppConfig();
+  return data?.vrsAiCallsEnabled ?? false;
+}
+
 // Built-in repair / replace calculator on Sears Protect tickets (server
 // REPAIR_REPLACE_CALCULATOR_ENABLED); off keeps the Streamlit iframe.
 export function useRepairReplaceCalculatorEnabled(): boolean {
@@ -52,6 +60,7 @@ export function useFeatureFlags() {
     techHubPhotosEnabled: data?.techHubPhotosEnabled ?? false,
     vrsBridgePhotoProxyEnabled: data?.vrsBridgePhotoProxyEnabled ?? false,
     vrsAiAppEnrollEnabled: data?.vrsAiAppEnrollEnabled ?? false,
+    vrsAiCallsEnabled: data?.vrsAiCallsEnabled ?? false,
     // AHS form reads brand/model/serial from GET /api/tech/ahs-prefill
     // (server AHS_SERVICE_ORDER_PREFILL_ENABLED).
     ahsServiceOrderPrefill: data?.ahsServiceOrderPrefill ?? false,

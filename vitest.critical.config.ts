@@ -22,6 +22,7 @@ export default defineConfig({
       "tests/vrs-sasha-intake.test.ts",
       "tests/vrs-sasha-queue.test.ts",
       "tests/vrs-sasha-stage-one.test.ts",
+      "tests/vrs-ai-calls-switch.test.ts",
       "tests/vrs-sasha-contract-v5-v8.test.ts",
       "tests/vrs-sasha-contract-v9.test.ts",
       "tests/vrs-callback-safety.test.ts",

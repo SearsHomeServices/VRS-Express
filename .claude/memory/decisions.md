@@ -1,3 +1,7 @@
+## 2026-11-05 — VRS AI calls behind one default-off switch, not deleted
+- **Decision:** a single env switch `VRS_AI_CALLS_ENABLED` (exact `"true"`, off by default) instead of removing the bridge code. Off, the Stage 1 gate returns `not_applicable` before it even reads the bridge row, so every ticket takes the legacy approve path; the client hides every VRS AI wording and the SASHA editor; enrollment is off. SASHA intake, stored bridge rows and the VRS AI webhook are untouched.
+- **Why:** Enzo (2026-11-05): the ElevenLabs API is done; remove the send-to-VRS-AI button and go back to manual. Default off means publishing alone takes it out of PROD with no secret change; setting the secret restores it without a code change.
+
 ## 2026-11-04 — VRS AI always gets its exact partner key; only AHS and First American reach it
 SASHA routes four clients to the VRS agent (61380 AHS, 20730 FA, 90550 Sears Protect, 61481 Assurant PA). VRS AI only calls AHS and FA, and falls back to AHS for any unknown partner_id (it would dial Assurant's real number with the AHS script for `ASSURANT`). So VRS Express is the gate: intake accepts only AHS / FA spellings plus their client ids, and dispatch always sends `AHS` or `FIRST_AMERICAN` and refuses anything else. Canonical keys on dispatch let VRS AI add its own fail-closed guard without rejecting real AHS traffic. Missing / `N/A` stays AHS until SASHA confirms explicit partner ids (rejecting it could 422 live AHS tickets).
 

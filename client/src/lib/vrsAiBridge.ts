@@ -56,14 +56,17 @@ export interface VrsAiBridgeStatus {
   };
 }
 
+// callsEnabled: GET /api/config vrsAiCallsEnabled. Off, a bridge ticket is
+// approved like any other (manual authorization).
 export function getVrsAiApprovalCopy(
   bridge: VrsAiBridgeStatus | null | undefined,
+  callsEnabled: boolean,
 ): {
   button: string;
   confirmTitle: string;
   confirmAction: string;
 } {
-  if (bridge) {
+  if (bridge && callsEnabled) {
     return {
       button: "Approve & Send to VRS AI",
       confirmTitle: "Approve & Send to VRS AI",

@@ -146,11 +146,17 @@ export interface VrsStageOneBridgeOptions {
     | undefined
     | Promise<VrsAuthorizeEnrichment | undefined>;
   signObjectPhotoUrl?: (objectPath: string) => Promise<string>;
+  // VRS AI calls switch (isVrsAiCallsEnabled). When it returns false, every
+  // ticket takes the manual Stage 1 flow, bridge row or not. Omitted: on.
+  isCallsEnabled?: () => boolean;
 }
 
 export async function decideVrsStageOneBridge(
   options: VrsStageOneBridgeOptions,
 ): Promise<VrsStageOneBridgeResult> {
+  if (options.isCallsEnabled && !options.isCallsEnabled()) {
+    return { kind: "not_applicable" };
+  }
   const bridge = await options.store.getBySubmissionId(options.submissionId);
   if (!bridge) return { kind: "not_applicable" };
 

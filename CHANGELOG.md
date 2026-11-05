@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - VRS AI calls off; AHS / First American back to manual authorization (2026-11-05)
+- The ElevenLabs API behind VRS AI ended. New switch `VRS_AI_CALLS_ENABLED`
+  (`server/featureFlags.ts` `isVrsAiCallsEnabled`), off unless exactly `"true"`.
+- Off: Stage 1 "Approve Submission" never sends a ticket to VRS AI
+  (`decideVrsStageOneBridge` `isCallsEnabled` option). Every AHS / First
+  American ticket, SASHA ones included, follows the manual flow: the technician
+  gets the approval SMS, the agent obtains the authorization code and enters it
+  at Stage 2.
+- Agent dashboard: no "Approve & Send to VRS AI" button, dialog or toast
+  (`/api/config` `vrsAiCallsEnabled`, `getVrsAiApprovalCopy(bridge, callsEnabled)`).
+  The review panel still shows the SASHA request data, titled
+  "Authorization request", without the SASHA correction editor.
+- Technician tickets are no longer enrolled in VRS AI: no AHS draft at submit
+  and no Stage 1 AHS details editor (`isVrsAiAppEnrollEnabled` also requires
+  the switch). The technician form is unchanged.
+- SASHA intake and VRS AI result callbacks are unchanged.
+- Tests: `tests/vrs-ai-calls-switch.test.ts` (in test:critical), off-state
+  cases in `tests/vrs-ai-bridge-ui.test.ts`.
+
 ### Fixed - screen tests expect Sears Protect technician details (2026-11-04)
 - `tests/vrs-ai-bridge-ui.test.ts`: two tests still expected technician
   appliance details hidden on Sears Protect tickets, which show them since

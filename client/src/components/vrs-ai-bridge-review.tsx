@@ -349,7 +349,7 @@ export function VrsAiBridgePanel({
   // editable (isAhsDetailsEditable) and vrsAiAppEnrollEnabled is on.
   allowAhsEdit?: boolean;
 }) {
-  const { vrsAiAppEnrollEnabled } = useFeatureFlags();
+  const { vrsAiAppEnrollEnabled, vrsAiCallsEnabled } = useFeatureFlags();
   const editable =
     allowAhsEdit &&
     vrsAiAppEnrollEnabled &&
@@ -360,8 +360,10 @@ export function VrsAiBridgePanel({
   const partner = vrsAiPartnerName(submission?.warrantyType);
   // A SASHA request: the VRS manager may correct values before approving
   // (not gated on vrsAiAppEnrollEnabled, which is about technician tickets).
+  // The corrections only feed the VRS AI call, so not while calls are off.
   const sashaEditable =
     allowAhsEdit &&
+    vrsAiCallsEnabled &&
     typeof submission?.id === "number" &&
     !!bridge?.reviewContext &&
     isSashaRequestEditable(submission, bridge);
@@ -429,7 +431,9 @@ export function VrsAiBridgePanel({
       data-testid="vrs-ai-bridge-status"
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">VRS AI bridge</span>
+        <span className="font-medium">
+          {vrsAiCallsEnabled ? "VRS AI bridge" : "Authorization request"}
+        </span>
         <span className="whitespace-nowrap rounded-md bg-secondary px-2.5 py-0.5 text-xs font-semibold text-secondary-foreground">
           {bridge.state.replace(/_/g, " ")}
         </span>

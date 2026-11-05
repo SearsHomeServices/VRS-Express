@@ -1,7 +1,7 @@
 import {registerVrsAiWebhookApi} from "../../server/vrs-sasha-api";
 import {buildVrsAiWebhookAgentNotes,mapVrsAiWebhookToSubmissionDecision} from "../../server/vrs-sasha-queue";
 import {browserBridgeStatus} from "../../server/vrs-bridge-photo-proxy";
-import {isVrsBridgePhotoProxyEnabled} from "../../server/featureFlags";
+import {isVrsAiCallsEnabled,isVrsBridgePhotoProxyEnabled} from "../../server/featureFlags";
 import {vrsAiPartnerName} from "../../shared/warranty";
 import fs from "node:fs";
 import ts from "typescript";
@@ -27,7 +27,7 @@ export function createHandlerHarness(overrides:Record<string,any>={},options:{sm
  const storage={getSubmission:async()=>({...row}),getUser:async()=>({id:8,name:"Fixture Reviewer",racId:"TESTTECH"}),getDailyRgcCode:async()=>options.noRgc?undefined:{code:"TEST-RGC"},getSubmissionCandidatesByServiceOrderSuffix:async()=>[{...row,submissionId:row.id}],updateSubmissionIfStatus:async(_id:number,statuses:string[],data:any,_assignee:any,snapshot:any)=>{if(!statuses.includes(row.ticketStatus))return undefined;updates.push({data,snapshot});Object.assign(row,data);return {...row}},updateUser:async(...args:any[])=>{userUpdates.push(args)}};
  const signedApplications:any[]=[];
  const noop=()=>{};
-   const deps={app,z,registerVrsAiWebhookApi,mapVrsAiWebhookToSubmissionDecision,vrsAiPartnerName,buildVrsAiWebhookAgentNotes,browserBridgeStatus,isVrsBridgePhotoProxyEnabled,runVrsStageOneRouteGate:options.stageOneGate ?? (async()=>"continue" as const),dispatchVrsAiForSubmission:async()=>{},buildSubmissionApprovedMessage:async()=>"fixture stage one approval",
+   const deps={app,z,registerVrsAiWebhookApi,mapVrsAiWebhookToSubmissionDecision,vrsAiPartnerName,buildVrsAiWebhookAgentNotes,browserBridgeStatus,isVrsBridgePhotoProxyEnabled,isVrsAiCallsEnabled,runVrsStageOneRouteGate:options.stageOneGate ?? (async()=>"continue" as const),dispatchVrsAiForSubmission:async()=>{},buildSubmissionApprovedMessage:async()=>"fixture stage one approval",
   processVrsAiWebhookEvent:async(options:any)=>{await options.applyResult(1,options.event);signedApplications.push(options.event);return "processed"},decryptVrsCallbackSecret:()=>"test-secret",deliverVrsWebhook:async()=>({delivered:true,attempts:1,status:200}),storage:options.storage ?? storage,automatedCallbackContexts,validateAutomatedApproval,VrsCallbackError,directResultReceipts:options.receipts ?? testReceipts(),vrsBridgeStore:options.bridge ?? {getByProviderCallId:async()=>({submissionId:1}),getByAnyCallId:async()=>options.linkId?{submissionId:options.linkId}:undefined,getStatusBySubmissionId:async()=>null},registerVrsAiCallResultApi,buildVrsAiCallResultAgentNotes,makeCapturedResponse,getEtDateString:()=>"2026-09-08",buildAuthCodeMessage:async()=>"fixture auth",buildNlaApprovalMessage:async()=>"fixture nla",sendSms:async(...args:any[])=>{sms.push(args);return {success:!options.smsFailure,error:options.smsFailure?"fixture SMS outage":undefined}},broadcastToAgent:noop,broadcastToAdmins:noop,broadcastVrsAvailability:async()=>{},updateClientStatus:noop,safeLogActivity:async()=>{}};
  const availabilityDeps = { ...deps, pool: {}, releaseProcessedTicketAgent: options.releaseAgent ?? (async (_pool:any, id:number) => { userUpdates.push([id,{agentStatus:"online"}]); return {id,name:"Fixture Reviewer"}; }) };
  const handler=new Function(...Object.keys(availabilityDeps),code+"\nreturn processSubmissionHandler;")(...Object.values(availabilityDeps));

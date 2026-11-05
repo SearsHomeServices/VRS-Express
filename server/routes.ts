@@ -90,6 +90,7 @@ import {
   isTechHubPhotosEnabled,
   isVrsBridgePhotoProxyEnabled,
   isVrsAiAppEnrollEnabled,
+  isVrsAiCallsEnabled,
   isAhsServiceOrderPrefillEnabled,
   isAhsHssomCustomerPrefillEnabled,
   isTechApplianceDetailsEnabled,
@@ -727,6 +728,7 @@ export async function registerRoutes(
       techHubPhotosEnabled: isTechHubPhotosEnabled(),
       vrsBridgePhotoProxyEnabled: isVrsBridgePhotoProxyEnabled(),
       vrsAiAppEnrollEnabled: isVrsAiAppEnrollEnabled(),
+      vrsAiCallsEnabled: isVrsAiCallsEnabled(),
       ahsServiceOrderPrefill: isAhsServiceOrderPrefillEnabled(),
       ahsHssomCustomerPrefill: isAhsHssomCustomerPrefillEnabled(),
       techApplianceDetailsEnabled: isTechApplianceDetailsEnabled(),
@@ -3167,6 +3169,7 @@ export async function registerRoutes(
               24 * 60 * 60,
             ),
           dispatch: dispatchVrsAiForSubmission,
+          isCallsEnabled: isVrsAiCallsEnabled,
         }, (bridgeError) => {
           res.status(bridgeError.status).json({
             error: bridgeError.message,

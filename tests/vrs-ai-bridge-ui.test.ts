@@ -138,6 +138,7 @@ function renderReview(
     portal1099Enabled: false,
     techHubPhotosEnabled: false,
     vrsBridgePhotoProxyEnabled: bridgePhotoProxyEnabled,
+    vrsAiCallsEnabled: true,
   });
   return renderToStaticMarkup(
     createElement(
@@ -157,15 +158,23 @@ function expectField(html: string, field: string, value: string): void {
 
 describe("VRS AI bridge agent approval copy", () => {
   it("makes the human-to-AI handoff explicit for bridge tickets", () => {
-    expect(getVrsAiApprovalCopy(v8Bridge)).toEqual({
+    expect(getVrsAiApprovalCopy(v8Bridge, true)).toEqual({
       button: "Approve & Send to VRS AI",
       confirmTitle: "Approve & Send to VRS AI",
       confirmAction: "Approve, Send & Notify",
     });
   });
 
+  it("uses the manual approval copy for bridge tickets while VRS AI calls are off", () => {
+    expect(getVrsAiApprovalCopy(v8Bridge, false)).toEqual({
+      button: "Approve Submission",
+      confirmTitle: "Approve Submission",
+      confirmAction: "Approve Submission & Notify",
+    });
+  });
+
   it("keeps the existing human-only approval copy for ordinary tickets", () => {
-    expect(getVrsAiApprovalCopy(null)).toEqual({
+    expect(getVrsAiApprovalCopy(null, true)).toEqual({
       button: "Approve Submission",
       confirmTitle: "Approve Submission",
       confirmAction: "Approve Submission & Notify",
@@ -380,6 +389,7 @@ describe("VRS AI bridge review rendering", () => {
         portal1099Enabled: false,
         techHubPhotosEnabled: false,
         vrsBridgePhotoProxyEnabled: false,
+        vrsAiCallsEnabled: true,
       });
       return renderToStaticMarkup(
         createElement(
@@ -504,6 +514,7 @@ function renderAhsPanel(props: PanelProps): string {
     portal1099Enabled: false,
     techHubPhotosEnabled: false,
     vrsBridgePhotoProxyEnabled: false,
+    vrsAiCallsEnabled: true,
   });
   return renderToStaticMarkup(
     createElement(
@@ -844,6 +855,7 @@ function editorClient(flag: boolean): QueryClient {
     techHubPhotosEnabled: false,
     vrsBridgePhotoProxyEnabled: false,
     vrsAiAppEnrollEnabled: flag,
+    vrsAiCallsEnabled: true,
   });
   return queryClient;
 }
@@ -1638,5 +1650,46 @@ describe("Technician appliance details: AHS editor", () => {
       expect(queryTestId(`badge-ahs-from-so-${field}`)).toBeNull();
     }
     expect(calls).toEqual([]);
+  });
+});
+
+// ElevenLabs ended 2026-11-05: with VRS_AI_CALLS_ENABLED off, a SASHA ticket
+// is reviewed like any manual ticket — no "VRS AI bridge" header and no SASHA
+// correction editor (its edits only fed the VRS AI call).
+describe("Stage 1 panel while VRS AI calls are off", () => {
+  function renderSashaPanel(vrsAiCallsEnabled: boolean): string {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData(["/api/config"], {
+      portal1099Enabled: false,
+      techHubPhotosEnabled: false,
+      vrsBridgePhotoProxyEnabled: false,
+      vrsAiCallsEnabled,
+    });
+    return renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(reviewComponents.VrsAiBridgePanel, {
+          bridge: { ...v9Bridge, origin: "sasha" },
+          submission: editableTicket,
+          allowAhsEdit: true,
+        }),
+      ),
+    );
+  }
+
+  it("shows the SASHA editor and VRS AI header only while calls are on", () => {
+    const on = renderSashaPanel(true);
+    expect(on).toContain("VRS AI bridge");
+    expect(on).toContain('data-testid="sasha-request-editor"');
+
+    const off = renderSashaPanel(false);
+    expect(off).toContain("Authorization request");
+    expect(off).not.toContain("VRS AI bridge");
+    expect(off).not.toContain('data-testid="sasha-request-editor"');
+    // The SASHA data stays visible for the manual authorization call.
+    expect(off).toContain('data-testid="vrs-ai-bridge-status"');
   });
 });
