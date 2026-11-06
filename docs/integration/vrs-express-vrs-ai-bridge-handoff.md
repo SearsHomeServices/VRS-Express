@@ -68,15 +68,29 @@ human Stage 1 dispatch. These app-origin records:
 The automated bridge is for American Home Shield and First American
 authorization; a VRS agent approves each ticket at Stage 1 before it is sent
 to VRS AI. Every dispatch carries the exact VRS AI registry key, `AHS` or
-`FIRST_AMERICAN`, never SASHA's own spelling (VRS AI matches keys exactly and
-falls back to AHS for anything else). VRS Express normalizes `partner_id`
-case, spaces, and hyphens and accepts `ahs`, `american_home_shield`, `N/A`, or
-SASHA client id `61380` (American Home Shield ticket), or `FA`,
-`First American`, `FIRST_AMERICAN`, or SASHA client id `20730` (First American
-ticket); missing V5 `partner_id` defaults to AHS. Other partner values,
-including SASHA's Sears Protect (`90550`) and Assurant PA (`61481`) clients,
-are rejected before ticket creation, and dispatch refuses them without calling
-VRS AI.
+`FIRST_AMERICAN`, never the upstream display name (VRS AI matches keys exactly
+and falls back to AHS for anything else). VRS Express never defaults to AHS;
+it resolves the partner the same way at intake, at ticket creation and at
+dispatch:
+
+1. A `partner_id` that is missing, blank or a placeholder (`N/A`, `NA`, `TBD`,
+   `NONE`, `NULL`, `UNKNOWN`; any case) is unsupported, whatever else is sent.
+2. When `b2b_client_id` or `proc_id` is present (V11), both must have a
+   non-placeholder value. `b2b_client_id` picks the partner: `2276` American
+   Home Shield, `2151` First American (a number is read the same way). Any
+   other client, such as `2318` Assurant PA or `2172` Sears, is unsupported.
+   `proc_id` must be a plan of that client: `AHS`, `AHZ` or `AHT` prefix for
+   AHS, `FAA` for First American. A `partner_id` naming the other partner is a
+   contradiction and is unsupported; a `partner_id` naming neither is ignored.
+3. Without those ids, `partner_id` decides, ignoring case, spaces and hyphens:
+   `AHS` or `American Home Shield` (American Home Shield ticket); `FA`,
+   `First American`, `FIRST_AMERICAN` or `First American Home Buyers` (First
+   American ticket). Anything else is unsupported.
+
+Intake answers an unsupported partner with `422 UNSUPPORTED_PARTNER` before
+any ticket work, and dispatch refuses one (including a record stored before
+these rules) without calling VRS AI. `b2b_client_id` and `proc_id` are
+forwarded to VRS AI as strings, as received.
 
 | Placeholder | Required development value |
 |---|---|

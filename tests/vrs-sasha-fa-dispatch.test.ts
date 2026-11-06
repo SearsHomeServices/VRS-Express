@@ -7,7 +7,9 @@ import {
 
 // VRS AI matches partner_id by exact registry key and falls back to AHS for
 // anything else, so every SASHA spelling leaves VRS Express as exactly "AHS" or
-// "FIRST_AMERICAN", and Sears Protect / Assurant are never sent.
+// "FIRST_AMERICAN". Anything else (Sears Protect, Assurant, "N/A", a missing
+// partner_id, the SRDM client ids) is never sent: VRS Express never defaults
+// to AHS (resolveSashaPartner, 2026-11-06).
 
 function fakeStore(requestPayload: Record<string, unknown>) {
   return {
@@ -60,7 +62,7 @@ function storedV8(partnerId: string) {
 }
 
 describe("VRS AI dispatch partner_id", () => {
-  it.each(["FA", "fa", "First American", "FIRST_AMERICAN"])(
+  it.each(["FA", "fa", "First American", "FIRST_AMERICAN", "First American Home Buyers"])(
     "sends stored First American partner_id %j as FIRST_AMERICAN",
     async (partnerId) => {
       const sent = await dispatchStored(storedV8(partnerId));
@@ -68,7 +70,7 @@ describe("VRS AI dispatch partner_id", () => {
     },
   );
 
-  it.each(["ahs", "American Home Shield", "N/A", "61380", "AHS"])(
+  it.each(["ahs", "American Home Shield", "AHS"])(
     "sends stored AHS partner_id %j as AHS",
     async (partnerId) => {
       const sent = await dispatchStored(storedV8(partnerId));
@@ -76,22 +78,31 @@ describe("VRS AI dispatch partner_id", () => {
     },
   );
 
-  it("sends SASHA's First American client id 20730 as FIRST_AMERICAN", async () => {
-    const sent = await dispatchStored(storedV8("20730"));
-    expect(sent.partner_id).toBe("FIRST_AMERICAN");
-  });
-
-  it("sends a V5 payload without partner_id as AHS", async () => {
+  it("never calls VRS AI for a stored V5 payload without partner_id (was AHS)", async () => {
     const {
       callback_secret: _callbackSecret,
       partner_id: _partnerId,
       ...storedPayload
     } = validV5AuthorizePayload;
-    const sent = await dispatchStored(storedPayload);
-    expect(sent.partner_id).toBe("AHS");
+    const store = fakeStore(storedPayload);
+    const client = fakeClient();
+    const result = await bridgeModule.dispatchVrsAiForSubmission({
+      submissionId: 61,
+      store,
+      client,
+      callbackUrl:
+        "https://vrs-express.example.test/api/integrations/vrs-ai/v1/webhook",
+      callbackSecret: "express-to-vrs-ai-test-secret",
+    });
+    expect(result).toEqual({
+      kind: "failed",
+      message: "Not sent to VRS AI: partner_id is missing or a placeholder",
+    });
+    expect(client.authorize).not.toHaveBeenCalled();
   });
 
-  it.each(["90550", "61481", "SEARS_PROTECT", "ASSURANT"])(
+  // "N/A", "61380" and "20730" were sent as AHS / FIRST_AMERICAN before.
+  it.each(["N/A", "61380", "20730", "90550", "61481", "SEARS_PROTECT", "ASSURANT"])(
     "never calls VRS AI for partner_id %j",
     async (partnerId) => {
       const store = fakeStore(storedV8(partnerId));

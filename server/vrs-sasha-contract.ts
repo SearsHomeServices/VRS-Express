@@ -224,10 +224,12 @@ export const vrsAuthorizeV8RequestSchema = z
   .strict();
 
 // V11 (SASHA SHSAI-3374) adds b2b_client_id and proc_id to the V9 payload.
-// Pass-through only: any value is accepted and stored as sent (a number too),
-// and dispatchVrsAiForSubmission forwards both to VRS AI as strings ("" when
-// SASHA omitted them). VRS AI owns partner routing on these ids and refuses
-// unsupported partners itself (422 UNSUPPORTED_PARTNER).
+// The schema accepts any value (a number too, so no 400), and the ids are
+// stored as sent; dispatchVrsAiForSubmission forwards both to VRS AI as
+// strings ("" when SASHA omitted them). Partner routing on them is
+// resolveSashaPartner (shared/warranty.ts): intake answers 422
+// UNSUPPORTED_PARTNER for placeholder or unsupported ids and dispatch refuses
+// them too; VRS AI also refuses unsupported partners itself.
 const sashaV11Id = z
   .union([z.string().max(50), z.number().finite()])
   .nullable()

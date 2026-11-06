@@ -22,6 +22,7 @@ import {
   type VrsWebhookEvent,
 } from "../server/vrs-sasha-contract";
 import type { AhsDetails } from "../shared/ahs-details";
+import { resolveSashaPartner } from "../shared/warranty";
 
 const EXPRESS_WEBHOOK =
   "https://vrs-express.example/api/integrations/vrs-ai/v1/webhook";
@@ -166,6 +167,7 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
     expect(getVrsAuthorizeContractVersion(built.payload)).toBe("v9");
     expect(built.payload).not.toHaveProperty("callback_secret");
     expect(built.payload.callback_url).toBe("");
+    expect(resolveSashaPartner(built.payload)).toEqual({ ok: true, warrantyType: "american_home_shield", source: "partner_id" });
     expect(built.payload).toMatchObject({
       service_order: "13538277",
       tech_id: "crivera",
@@ -253,6 +255,9 @@ describe("technician AHS ticket → VRS AI bridge enrollment", () => {
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     expect(built.payload).toMatchObject({ partner_id: "FIRST_AMERICAN", contract_number: "AHS-778812", cta_no: "AHS-778812" });
+    // No V11 ids on app-origin rows: dispatch resolves the registry key itself.
+    expect(built.payload).not.toHaveProperty("b2b_client_id");
+    expect(resolveSashaPartner(built.payload)).toEqual({ ok: true, warrantyType: "first_american", source: "partner_id" });
     expect(getVrsAuthorizeContractVersion(built.payload)).toBe("v9");
     const store = saveStore();
     const result = await saveAppSubmissionVrsAiIntake({ store, generateCallId: () => "vrs_call_fa" }, fa, technician);

@@ -30,6 +30,8 @@ export type ReceiveVrsIntakeResult =
   | {
       kind: "unsupported_partner";
       partnerId: string;
+      // Why (resolveSashaPartner); identifiers only, no customer data.
+      reason?: string;
     }
   | {
       kind: "rejected";
@@ -120,11 +122,17 @@ export function registerVrsSashaApi(
       }
 
       if (result.kind === "unsupported_partner") {
+        // V11: echo b2b_client_id (as a string) when SASHA sent the key.
+        const b2bClientId = (parsed.data as { b2b_client_id?: unknown })
+          .b2b_client_id;
         return res.status(422).json({
           error: "UNSUPPORTED_PARTNER",
           message:
-            "VRS AI phone automation supports American Home Shield and First American only",
+            `VRS AI phone automation supports American Home Shield and First American only${result.reason ? ` (${result.reason})` : ""}`,
           partner_id: result.partnerId,
+          ...(b2bClientId === undefined
+            ? {}
+            : { b2b_client_id: b2bClientId === null ? null : String(b2bClientId) }),
         });
       }
 

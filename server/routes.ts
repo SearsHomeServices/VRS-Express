@@ -1242,7 +1242,8 @@ export async function registerRoutes(
       skipAppVrsAiEnroll?: boolean;
       // SASHA intake: the warranty SASHA sent is kept; the ProcID lookup
       // never replaces it (SASHA's data is trusted as sent; a mismatch is
-      // only logged). Its partner_id is also what VRS AI calls.
+      // only logged). The warranty is resolveSashaPartner's (b2b_client_id
+      // + proc_id when sent, else partner_id), the partner VRS AI calls.
       keepCallerWarranty?: boolean;
     },
   ) => {

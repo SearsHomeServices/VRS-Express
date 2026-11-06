@@ -41,7 +41,7 @@ describe("SASHA request corrections (trusted as sent; only the agent's changes)"
     const v5 = stored(validV5AuthorizePayload);
     expect(applySashaRequestEdits(v5, { fields: { contract_number: "622900001-3" } }))
       .toEqual({ ok: false, error: "contract_number was not in SASHA's request, so it can't be added" });
-    for (const name of ["service_order", "tech_id", "partner_id", "callback_url", "appliance_photos"]) {
+    for (const name of ["service_order", "tech_id", "partner_id", "b2b_client_id", "proc_id", "callback_url", "appliance_photos"]) {
       expect(applySashaRequestEdits(v5, { fields: { [name]: "x" } })).toMatchObject({ ok: false, error: `${name} can't be changed here` });
     }
     expect(applySashaRequestEdits(v5, { parts: [{ index: 3, sell_price: 1 }] })).toMatchObject({ ok: false });

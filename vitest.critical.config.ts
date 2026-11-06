@@ -26,6 +26,7 @@ export default defineConfig({
       "tests/vrs-sasha-contract-v5-v8.test.ts",
       "tests/vrs-sasha-contract-v9.test.ts",
       "tests/vrs-sasha-v11-ids.test.ts",
+      "tests/vrs-sasha-partner-resolution.test.ts",
       "tests/vrs-callback-safety.test.ts",
       "tests/vrs-callback-handler.test.ts",
       "tests/vrs-ai-call-result.test.ts",

@@ -1,7 +1,7 @@
 import {
   VRS_AI_PARTNER_IDS,
   WARRANTY_PROVIDER_LABELS,
-  vrsAiWarrantyFromPartnerId,
+  resolveSashaPartner,
   type VrsAiWarrantyType,
 } from "@shared/warranty";
 import { vrsAiTicketAuthCode } from "@shared/fa-auth-code";
@@ -76,12 +76,13 @@ export function mapVrsPayloadToSubmission(
   if (!/^\d{4}$/.test(districtCode)) {
     throw new Error("Technician district must be exactly four digits");
   }
-  // AHS or First American from partner_id; intake rejects any other partner
-  // before mapping.
-  const warrantyType = vrsAiWarrantyFromPartnerId(payload.partner_id);
-  if (!warrantyType) {
-    throw new Error(`Unsupported VRS partner_id: ${payload.partner_id}`);
+  // AHS or First American (resolveSashaPartner, as at intake, which rejects
+  // any other partner before mapping). Never AHS by default.
+  const partner = resolveSashaPartner(payload);
+  if (!partner.ok) {
+    throw new Error(`Unsupported VRS partner: ${partner.reason}`);
   }
+  const warrantyType = partner.warrantyType;
 
   const rationale = payload.repair_replace_rationale.trim();
   const symptom = "symptom" in payload ? payload.symptom.trim() : "";
@@ -470,14 +471,18 @@ export async function dispatchVrsAiForSubmission(options: {
     }
     // VRS AI resolves partner_id by exact registry key with no aliases and
     // falls back to AHS for anything it doesn't know, so SASHA's own spelling
-    // ("FA", "N/A", "20730", none) is never sent: always the exact key, AHS or
-    // FIRST_AMERICAN. Any other partner (Sears Protect, Assurant) fails here
-    // without a call; intake already rejects them.
-    const partnerId = (enrichedPayload as { partner_id?: string }).partner_id;
-    const partnerWarranty = vrsAiWarrantyFromPartnerId(partnerId);
-    if (!partnerWarranty) {
-      throw new Error(`partner_id ${partnerId ?? "(none)"} is not one VRS AI calls`);
+    // ("FA", "First American Home Buyers") is never sent: always the exact
+    // key, AHS or FIRST_AMERICAN, from resolveSashaPartner (as at intake).
+    // Any other partner fails here without a call: intake already rejects
+    // them, and a row stored before this rule (e.g. partner_id "N/A") is
+    // refused too.
+    const partner = resolveSashaPartner(
+      enrichedPayload as { partner_id?: unknown; proc_id?: unknown; b2b_client_id?: unknown },
+    );
+    if (!partner.ok) {
+      throw new Error(`Not sent to VRS AI: ${partner.reason}`);
     }
+    const partnerWarranty = partner.warrantyType;
     // V11: b2b_client_id and proc_id go to VRS AI as SASHA sent them, as
     // strings, always present on V9 ("" when SASHA omitted them). VRS AI
     // routes on them; partner_id above is unchanged.

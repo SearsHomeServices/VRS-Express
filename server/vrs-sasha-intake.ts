@@ -1,4 +1,4 @@
-import { vrsAiWarrantyFromPartnerId } from "@shared/warranty";
+import { resolveSashaPartner } from "@shared/warranty";
 import type { VrsExpressIntake } from "./vrs-sasha-api";
 import { getVrsAuthorizeContractVersion } from "./vrs-sasha-contract";
 import { projectVrsBridgeIntake } from "./vrs-sasha-queue";
@@ -82,13 +82,15 @@ export function createVrsSashaIntake(
 ): VrsExpressIntake {
   return {
     async receive(payload) {
-      // AHS or First American; the ticket's warranty is mapped from the same
-      // partner_id in mapVrsPayloadToSubmission.
-      const warrantyType = vrsAiWarrantyFromPartnerId(payload.partner_id);
-      if (!warrantyType) {
+      // AHS or First American (resolveSashaPartner: b2b_client_id + proc_id
+      // when SASHA sends them, else the partner_id name); never AHS by
+      // default. mapVrsPayloadToSubmission and dispatch resolve the same way.
+      const partner = resolveSashaPartner(payload);
+      if (!partner.ok) {
         return {
           kind: "unsupported_partner",
           partnerId: payload.partner_id ?? "unknown",
+          reason: partner.reason,
         };
       }
 

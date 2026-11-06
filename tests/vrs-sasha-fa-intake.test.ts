@@ -81,7 +81,7 @@ function withPartner(
 }
 
 describe("VRS SASHA intake partner_id → ticket warranty", () => {
-  it.each(["FA", "fa", "First American", "FIRST_AMERICAN", "20730"])(
+  it.each(["FA", "fa", "First American", "FIRST_AMERICAN", "First American Home Buyers"])(
     "accepts partner_id %j and creates a First American ticket",
     async (partnerId) => {
       const harness = makeHarness();
@@ -101,9 +101,7 @@ describe("VRS SASHA intake partner_id → ticket warranty", () => {
   it.each([
     ["ahs", validV5AuthorizePayload],
     ["American Home Shield", validV8AuthorizePayload],
-    ["N/A", validV5AuthorizePayload],
-    [undefined, validV5AuthorizePayload],
-    ["61380", validV8AuthorizePayload],
+    ["AHS", validV8AuthorizePayload],
   ] as const)(
     "keeps partner_id %j as an American Home Shield ticket",
     async (partnerId, base) => {
@@ -120,15 +118,34 @@ describe("VRS SASHA intake partner_id → ticket warranty", () => {
     },
   );
 
-  // SASHA's other two clients: Sears Protect (90550) and Assurant PA (61481).
-  it.each(["SPHW", "90550", "61481", "SEARS_PROTECT", "ASSURANT"])(
-    "still rejects partner_id %j as an unsupported partner before any ticket work",
-    async (partnerId) => {
+  // Never AHS by default (2026-11-06): "N/A" and a V5 payload without
+  // partner_id were AHS tickets before; the SRDM client ids 61380 / 20730
+  // were aliases before (a namespace SASHA never sends). SASHA's other
+  // clients (Sears Protect, Assurant PA) were and are rejected.
+  it.each([
+    ["N/A", validV5AuthorizePayload],
+    [undefined, validV5AuthorizePayload],
+    ["61380", validV8AuthorizePayload],
+    ["20730", validV8AuthorizePayload],
+    ["SPHW", validV8AuthorizePayload],
+    ["90550", validV8AuthorizePayload],
+    ["61481", validV8AuthorizePayload],
+    ["SEARS_PROTECT", validV8AuthorizePayload],
+    ["ASSURANT", validV8AuthorizePayload],
+    ["Assurant - PA", validV8AuthorizePayload],
+    ["Sears, Roebuck & Co.", validV8AuthorizePayload],
+  ] as const)(
+    "rejects partner_id %j as an unsupported partner before any ticket work",
+    async (partnerId, base) => {
     const harness = makeHarness();
 
     await expect(
-      harness.intake.receive(withPartner(validV8AuthorizePayload, partnerId)),
-    ).resolves.toEqual({ kind: "unsupported_partner", partnerId });
+      harness.intake.receive(withPartner(base, partnerId)),
+    ).resolves.toMatchObject({
+      kind: "unsupported_partner",
+      partnerId: partnerId ?? "unknown",
+      reason: expect.any(String),
+    });
     expect(harness.deps.store.findActiveByServiceOrder).not.toHaveBeenCalled();
     expect(harness.deps.createTicket).not.toHaveBeenCalled();
     expect(harness.ticketBodies).toHaveLength(0);

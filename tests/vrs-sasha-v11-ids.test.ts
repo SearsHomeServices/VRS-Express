@@ -17,13 +17,16 @@ import {
   validV9AuthorizePayload,
 } from "./fixtures/vrs-authorize-payloads";
 
-// V11 (SASHA SHSAI-3374): b2b_client_id and proc_id are pass-through only.
-// VRS Express accepts them, keeps them on the ticket and forwards them to VRS
-// AI as strings ("" when omitted). VRS AI owns partner routing on them and
-// refuses unsupported partners itself with a 422 UNSUPPORTED_PARTNER.
+// V11 (SASHA SHSAI-3374): VRS Express accepts b2b_client_id and proc_id,
+// keeps them on the ticket and forwards them to VRS AI as strings ("" when
+// omitted). VRS Express also routes on them (resolveSashaPartner,
+// tests/vrs-sasha-partner-resolution.test.ts) and refuses placeholder or
+// unsupported ids before any call; VRS AI's own 422 UNSUPPORTED_PARTNER is
+// still handled.
 
 const v11Payload = {
   ...validV9AuthorizePayload,
+  partner_id: "First American Home Buyers",
   b2b_client_id: "2151",
   proc_id: "FAA00001",
 };
@@ -171,24 +174,29 @@ describe("V11 ids outbound to VRS AI", () => {
     expect(sent?.proc_id).toBe("AHZ000");
   });
 
-  it('sends "" for both when SASHA omitted them (or sent null)', async () => {
+  it('sends "" for both when SASHA omitted them', async () => {
     const omitted = await dispatchStored(storedFrom(validV9AuthorizePayload));
     expect(omitted.sent).toMatchObject({ b2b_client_id: "", proc_id: "" });
-
-    const nulls = await dispatchStored(
-      storedFrom({ ...validV9AuthorizePayload, b2b_client_id: null, proc_id: null }),
-    );
-    expect(nulls.sent).toMatchObject({ b2b_client_id: "", proc_id: "" });
   });
 
-  it('passes "N/A" through unchanged', async () => {
-    const { sent } = await dispatchStored(
-      storedFrom({ ...validV9AuthorizePayload, b2b_client_id: "N/A", proc_id: "N/A" }),
+  // Was pass-through until 2026-11-06: null / "N/A" ids now mean no partner
+  // VRS AI calls, so the dispatch fails without calling VRS AI.
+  it.each([
+    [null, null],
+    ["N/A", "N/A"],
+  ])("refuses b2b_client_id %j / proc_id %j without calling VRS AI", async (b2b, proc) => {
+    const { result, client, store } = await dispatchStored(
+      storedFrom({ ...validV9AuthorizePayload, b2b_client_id: b2b, proc_id: proc }),
     );
-    expect(sent).toMatchObject({ b2b_client_id: "N/A", proc_id: "N/A" });
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(client.authorize).not.toHaveBeenCalled();
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      31,
+      "Not sent to VRS AI: b2b_client_id is missing or a placeholder",
+    );
   });
 
-  it("leaves partner_id behaviour unchanged", async () => {
+  it("sends the VRS AI registry key as partner_id with the ids unchanged", async () => {
     const { sent } = await dispatchStored(
       storedFrom({ ...v11Payload, partner_id: "FA" }),
     );
@@ -275,8 +283,10 @@ describe("VRS AI 422 UNSUPPORTED_PARTNER", () => {
       status: 422,
       message: unsupportedBody.message,
     };
+    // VRS Express accepts these ids; VRS AI refusing them anyway is still
+    // recorded as a failure.
     const { result, store, client } = await dispatchStored(
-      storedFrom({ ...validV9AuthorizePayload, b2b_client_id: "2318" }),
+      storedFrom(v11Payload),
       failed,
     );
     expect(result).toEqual(failed);
