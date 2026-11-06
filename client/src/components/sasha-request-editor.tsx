@@ -12,6 +12,13 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, friendlyApiErrorMessage } from "@/lib/queryClient";
 import type { VrsAiBridgeStatus } from "@/lib/vrsAiBridge";
+import {
+  FA_APPLIANCE_AGE_BUCKETS,
+  FA_APPLIANCE_AGE_PLACEHOLDER,
+  faApplianceAgeBucket,
+  faApplianceAgeFromBucket,
+  isFirstAmericanPartner,
+} from "@shared/fa-appliance-age";
 
 type Context = NonNullable<VrsAiBridgeStatus["reviewContext"]>;
 
@@ -102,6 +109,7 @@ export function SashaRequestEditor({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const source = context as unknown as Record<string, unknown>;
+  const firstAmerican = isFirstAmericanPartner(partner);
   const initialValues = () =>
     Object.fromEntries([...TEXT_FIELDS, ...NUMBER_FIELDS].filter(([n]) => n in source).map(([n]) => [n, asText(source[n])]));
   const initialParts = () =>
@@ -147,6 +155,30 @@ export function SashaRequestEditor({
     save.mutate(edits);
   };
 
+  // First American: appliance age is FA's own bucket list, not a number box.
+  // The value kept (and sent) is still a number: SASHA's own, until the
+  // agent picks a bucket, then that bucket's lower bound.
+  const faAgeField = (name: string, label: string) => (
+    <div key={name} className="space-y-1">
+      <Label htmlFor={`sasha-${name}`} className="text-xs">{label}</Label>
+      <select
+        id={`sasha-${name}`}
+        data-testid={`input-sasha-${name}`}
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
+        value={faApplianceAgeBucket(values[name]) ?? ""}
+        onChange={(e) => {
+          const age = faApplianceAgeFromBucket(e.target.value);
+          setValues((prev) => ({ ...prev, [name]: age === undefined ? "" : String(age) }));
+        }}
+      >
+        <option value="">{FA_APPLIANCE_AGE_PLACEHOLDER}</option>
+        {FA_APPLIANCE_AGE_BUCKETS.map((bucket) => (
+          <option key={bucket} value={bucket}>{bucket}</option>
+        ))}
+      </select>
+    </div>
+  );
+
   const field = (name: string, label: string, numeric = false) => (
     <div key={name} className="space-y-1">
       <Label htmlFor={`sasha-${name}`} className="text-xs">{label}</Label>
@@ -170,7 +202,8 @@ export function SashaRequestEditor({
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {TEXT_FIELDS.filter(([n]) => n in source).map(([n, l]) => field(n, l))}
-        {NUMBER_FIELDS.filter(([n]) => n in source).map(([n, l]) => field(n, l, true))}
+        {NUMBER_FIELDS.filter(([n]) => n in source).map(([n, l]) =>
+          n === "appliance_age" && firstAmerican ? faAgeField(n, "Appliance age") : field(n, l, true))}
       </div>
       {(context.parts ?? []).map((_, index) => (
         <div key={index} className="grid gap-2 rounded border p-2 sm:grid-cols-2" data-testid={`sasha-part-${index}`}>

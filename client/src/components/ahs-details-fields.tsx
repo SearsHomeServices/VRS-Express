@@ -33,6 +33,12 @@ import {
   type AhsDetails,
 } from "@shared/ahs-details";
 import type { AhsPrefillResponse } from "@shared/ahs-prefill";
+import {
+  FA_APPLIANCE_AGE_BUCKETS,
+  FA_APPLIANCE_AGE_PLACEHOLDER,
+  faApplianceAgeBucket,
+  faApplianceAgeFromBucket,
+} from "@shared/fa-appliance-age";
 import type { AhsReviewDetails } from "@/lib/ahsReview";
 
 // AHS authorization details on the tech submit and resubmit forms. Shown
@@ -453,6 +459,67 @@ export function SelectField({
               {options.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
                   {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  );
+}
+
+// First American tickets: appliance age is FA's own bucket list
+// (shared/fa-appliance-age.ts) instead of a number box. The form value stays
+// the number as a string: a stored number shows as its bucket, and picking a
+// bucket stores its lower bound. The first item clears the age (a Radix
+// SelectItem can't have an empty value, hence the stand-in).
+const FA_AGE_NONE = "none";
+export function FaApplianceAgeField({
+  form,
+  name,
+  label,
+  testId,
+  badge,
+}: {
+  form: UseFormReturn<any>;
+  name: string;
+  label: string;
+  testId: string;
+  badge?: ReactNode;
+}) {
+  return (
+    <FormField
+      control={form.control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          {badge ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <FormLabel>{label}</FormLabel>
+              {badge}
+            </div>
+          ) : (
+            <FormLabel>{label}</FormLabel>
+          )}
+          <Select
+            onValueChange={(bucket) => {
+              const age = faApplianceAgeFromBucket(bucket);
+              field.onChange(age === undefined ? "" : String(age));
+            }}
+            value={faApplianceAgeBucket(field.value) ?? FA_AGE_NONE}
+          >
+            <FormControl>
+              <SelectTrigger ref={field.ref} data-testid={testId}>
+                <SelectValue placeholder={FA_APPLIANCE_AGE_PLACEHOLDER} />
+              </SelectTrigger>
+            </FormControl>
+            <SelectContent>
+              <SelectItem value={FA_AGE_NONE}>{FA_APPLIANCE_AGE_PLACEHOLDER}</SelectItem>
+              {FA_APPLIANCE_AGE_BUCKETS.map((bucket) => (
+                <SelectItem key={bucket} value={bucket}>
+                  {bucket}
                 </SelectItem>
               ))}
             </SelectContent>

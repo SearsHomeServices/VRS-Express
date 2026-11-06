@@ -40,6 +40,7 @@ import {
   type TechApplianceDetails,
 } from "@shared/tech-appliance-details";
 import type { ServiceOrderProduct } from "@shared/warranty";
+import { faApplianceAgeBucket, isFirstAmericanPartner } from "@shared/fa-appliance-age";
 
 export const AHS_NOT_PROVIDED = "Not provided";
 export const AHS_SOURCE_SERVICE_ORDER = "From service order";
@@ -302,7 +303,8 @@ export function AhsTicketReview({
   techDetails,
   partner = "AHS",
 }: {
-  // "AHS" or "First American" (vrsAiPartnerName): only the title changes.
+  // "AHS" or "First American" (vrsAiPartnerName): the title, and First
+  // American's appliance age bucket.
   partner?: string;
   details: AhsReviewDetails;
   media?: AhsReviewMedia;
@@ -318,10 +320,13 @@ export function AhsTicketReview({
   const techOr = (current: string | undefined, techValue: string | undefined, fallback: FieldSource): FieldSource =>
     holdsTechValue(current, techValue) ? "technician" : fallback;
   const checks = ahsPrefillChecks(prefilled);
+  // First American shows its own age bucket (shared/fa-appliance-age.ts).
   const age =
     details.applianceAge === undefined
       ? undefined
-      : `${details.applianceAge} ${details.applianceAge === 1 ? "year" : "years"}`;
+      : isFirstAmericanPartner(partner)
+        ? faApplianceAgeBucket(details.applianceAge)
+        : `${details.applianceAge} ${details.applianceAge === 1 ? "year" : "years"}`;
 
   return (
     <div className="mt-3 space-y-3 border-t border-blue-200 pt-3 text-xs dark:border-blue-900" data-testid="ahs-ticket-review">

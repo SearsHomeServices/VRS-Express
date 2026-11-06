@@ -32,7 +32,9 @@ import {
   ahsDetailsSchema,
 } from "@shared/ahs-details";
 import type { AhsReviewRefreshResponse, AhsReviewSaveResponse } from "@shared/ahs-review";
+import { isFirstAmericanPartner } from "@shared/fa-appliance-age";
 import {
+  FaApplianceAgeField,
   SelectField,
   TextField,
   ahsDraftToForm,
@@ -178,7 +180,8 @@ export function AhsDetailsEditor({
   hasBridge?: boolean;
   // submissions.tech_appliance_details, parsed: which values the tech supplied.
   techDetails?: TechApplianceDetails | null;
-  // "AHS" or "First American" (vrsAiPartnerName): only the titles change.
+  // "AHS" or "First American" (vrsAiPartnerName): the titles, and First
+  // American's appliance age buckets (shared/fa-appliance-age.ts).
   partner?: string;
 }) {
   const { toast } = useToast();
@@ -464,14 +467,24 @@ export function AhsDetailsEditor({
                 testId="input-ahs-serial"
                 badge={fromServiceOrder("serialNumber")}
               />
-              <TextField
-                form={form}
-                name="ahsDetails.applianceAge"
-                label="Appliance Age (years)"
-                inputMode="numeric"
-                testId="input-ahs-age"
-                badge={fromServiceOrder("applianceAge")}
-              />
+              {isFirstAmericanPartner(partner) ? (
+                <FaApplianceAgeField
+                  form={form}
+                  name="ahsDetails.applianceAge"
+                  label="Appliance Age"
+                  testId="select-ahs-age"
+                  badge={fromServiceOrder("applianceAge")}
+                />
+              ) : (
+                <TextField
+                  form={form}
+                  name="ahsDetails.applianceAge"
+                  label="Appliance Age (years)"
+                  inputMode="numeric"
+                  testId="input-ahs-age"
+                  badge={fromServiceOrder("applianceAge")}
+                />
+              )}
               <SelectField
                 form={form}
                 name="ahsDetails.applianceLocation"

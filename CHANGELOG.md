@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - First American appliance age is FA's own dropdown (2026-11-06)
+- On First American tickets the VRS agent picks the appliance age from FA's
+  buckets ("0 - 2 years", "3 years" ... "8 years", "9 - 11 years",
+  "12 - 14 years", "15+ years") instead of typing a number: the SASHA request
+  editor, the Stage 1 details editor and the read-only reviews. AHS and every
+  other warranty keep the number.
+- The stored value stays a number (`shared/fa-appliance-age.ts`): a stored age
+  shows as its bucket; picking a bucket stores its lower bound (0, 3-8, 9, 12,
+  15). An age the agent does not touch keeps SASHA's exact value.
+- Tests: `tests/fa-appliance-age.test.ts` (in test:critical), new cases in
+  `tests/vrs-ai-bridge-ui.test.ts`.
+
 ### Changed - VRS AI calls off; AHS / First American back to manual authorization (2026-11-05)
 - The ElevenLabs API behind VRS AI ended. New switch `VRS_AI_CALLS_ENABLED`
   (`server/featureFlags.ts` `isVrsAiCallsEnabled`), off unless exactly `"true"`.

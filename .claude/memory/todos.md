@@ -1,3 +1,8 @@
+## Open — SASHA call asks (2026-11-06)
+- [ ] Per-part `quantity` (optional integer, V11-style additive key); agree whether `sell_price` is unit or line total. VRS Express must accept the key first (V5/V8 parts schemas, app-origin shape, client type, review panel, editor), and VRS AI too.
+- [ ] Appliance age as a required technician field in SASHA (FA buckets or whole years) as a new key, keeping SIS `appliance_age`; send "N/A" or omit instead of `0` when unknown.
+- [ ] Ask the VRS AI session whether its FA flow maps `appliance_age` to FA's buckets itself and treats 0 as unknown.
+
 ## Open — VRS AI calls off (2026-11-05)
 - [x] Switch `VRS_AI_CALLS_ENABLED` (default off): Stage 1 manual for every ticket, no "Send to VRS AI" button, no tech-ticket enrollment (no AHS draft, no Stage 1 AHS editor; tech form unchanged).
 - [ ] Ask Enzo whether SASHA should keep sending requests (`sashaVRSAgentByGlobal`). Today intake still accepts them and they become manual tickets, but SASHA's status polling stays `pending_review` because nothing updates the vrs_ai_calls row.

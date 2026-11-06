@@ -13,6 +13,7 @@ import {
 import { SashaRequestEditor } from "@/components/sasha-request-editor";
 import { parseTicketMediaMetadata } from "@/lib/ticket-media-metadata";
 import { vrsAiPartnerName } from "@shared/warranty";
+import { faApplianceAgeBucket, isFirstAmericanPartner } from "@shared/fa-appliance-age";
 import { MAX_VIDEOS_PER_TICKET, parseVideoUrls } from "@/lib/videoUrls";
 
 export const VRS_SOURCE_APP_LABEL = "Submitted by technician in VRS Express";
@@ -117,8 +118,12 @@ function ReviewField({
 
 export function VrsAiBridgeReview({
   bridge,
+  partner,
 }: {
   bridge: VrsAiBridgeStatus;
+  // "AHS" or "First American" (vrsAiPartnerName): First American shows the
+  // appliance age as its own bucket (shared/fa-appliance-age.ts).
+  partner?: string;
 }) {
   const context = bridge.reviewContext;
   const bridgePhotoProxyEnabled = useVrsBridgePhotoProxyEnabled();
@@ -220,7 +225,9 @@ export function VrsAiBridgeReview({
             {context.serial_number}
           </ReviewField>
           <ReviewField label="Appliance age" dataField="appliance-age">
-            {context.appliance_age}
+            {isFirstAmericanPartner(partner)
+              ? faApplianceAgeBucket(context.appliance_age) ?? context.appliance_age
+              : context.appliance_age}
           </ReviewField>
           {context.appliance_grade !== undefined && (
             <ReviewField label="Appliance grade" dataField="appliance-grade">
@@ -465,7 +472,7 @@ export function VrsAiBridgePanel({
           partner={partner}
         />
       )}
-      <VrsAiBridgeReview bridge={bridge} />
+      <VrsAiBridgeReview bridge={bridge} partner={partner} />
     </div>
   );
 }

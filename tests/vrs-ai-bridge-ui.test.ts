@@ -1693,3 +1693,117 @@ describe("Stage 1 panel while VRS AI calls are off", () => {
     expect(off).toContain('data-testid="vrs-ai-bridge-status"');
   });
 });
+
+// First American: appliance age is FA's own bucket dropdown
+// (shared/fa-appliance-age.ts); AHS keeps the number box. The stored value is
+// a number either way.
+describe("First American appliance age", () => {
+  const faTicket = { ...editableTicket, warrantyType: "first_american" };
+  const sashaBridge = (age: number): VrsAiBridgeStatus => ({
+    ...v9Bridge,
+    origin: "sasha",
+    reviewContext: { ...v9Bridge.reviewContext!, appliance_age: age },
+  });
+
+  describe("SASHA request editor", () => {
+    it("shows FA's buckets as a dropdown, with SASHA's age selected by its bucket", () => {
+      const html = renderAhsPanel({ bridge: sashaBridge(10), submission: faTicket, allowAhsEdit: true } as never);
+      expect(html).toContain('data-testid="sasha-request-editor"');
+      expect(html).toMatch(/<select[^>]*data-testid="input-sasha-appliance_age"/);
+      expect(html).not.toMatch(/<input[^>]*data-testid="input-sasha-appliance_age"/);
+      const select = html.slice(html.indexOf('data-testid="input-sasha-appliance_age"'));
+      const options = [...select.slice(0, select.indexOf("</select>")).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)]
+        .map((match) => [match[1], match[2]]);
+      expect(options).toEqual([
+        ["", "Select appliance age"],
+        ...["0 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years"]
+          .map((bucket) => [bucket, bucket]),
+      ]);
+      expect(select).toMatch(/<option value="9 - 11 years" selected="">/);
+      // The read-only payload review shows the bucket too.
+      expectField(html, "appliance-age", "9 - 11 years");
+    });
+
+    it("keeps the number box for AHS", () => {
+      const html = renderAhsPanel({ bridge: sashaBridge(10), submission: editableTicket, allowAhsEdit: true } as never);
+      expect(html).toMatch(/<input[^>]*data-testid="input-sasha-appliance_age"[^>]*value="10"/);
+      expect(html).not.toMatch(/<select[^>]*data-testid="input-sasha-appliance_age"/);
+      expectField(html, "appliance-age", "10");
+    });
+
+    it("sends the chosen bucket's lower bound as a number", async () => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const calls: FetchCall[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return jsonResponse(200, { ok: true, changed: ["appliance_age"] });
+      }));
+      mountedContainer = document.createElement("div");
+      document.body.append(mountedContainer);
+      mountedRoot = createRoot(mountedContainer);
+      await act(async () =>
+        mountedRoot!.render(
+          createElement(
+            QueryClientProvider,
+            { client: editorClient(true) },
+            createElement(reviewComponents.VrsAiBridgePanel, { bridge: sashaBridge(10), submission: faTicket, allowAhsEdit: true } as never),
+          ),
+        ),
+      );
+      const select = byTestId<HTMLSelectElement>("input-sasha-appliance_age");
+      expect(select.value).toBe("9 - 11 years");
+      // Untouched: SASHA's 10 is kept, nothing to send.
+      await clickTestId("button-sasha-save");
+      expect(calls).toEqual([]);
+
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "12 - 14 years");
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(byTestId<HTMLSelectElement>("input-sasha-appliance_age").value).toBe("12 - 14 years");
+      await clickTestId("button-sasha-save");
+      expect(calls).toEqual([{
+        url: "/api/submissions/44/vrs-ai-request",
+        method: "PATCH",
+        body: { fields: { appliance_age: 12 }, parts: [] },
+      }]);
+    });
+  });
+
+  describe("Stage 1 details editor", () => {
+    it("shows the bucket dropdown for First American and the number box for AHS", () => {
+      const fa = renderEditorPanel({ bridge: null, submission: stageOneTicket(completeDraft, { warrantyType: "first_american" }), allowAhsEdit: true });
+      expect(fa).toContain('data-testid="select-ahs-age"');
+      expect(fa).not.toContain('data-testid="input-ahs-age"');
+
+      const ahs = renderEditorPanel({ bridge: null, submission: stageOneTicket(completeDraft), allowAhsEdit: true });
+      expect(ahs).toContain('data-testid="input-ahs-age"');
+      expect(ahs).not.toContain('data-testid="select-ahs-age"');
+    });
+
+    it("shows the stored age as its bucket and saves the chosen bucket as a number", async () => {
+      const { calls } = mockFetch({ save: () => jsonResponse(200, { ok: true, ahsDetails: { ...completeDraft, applianceAge: 12 }, enrolled: true }) });
+      await mountEditor(completeDraft, { submission: stageOneTicket(completeDraft, { warrantyType: "first_american" }) } as Partial<EditorPanelProps>);
+      const options = Array.from(nativeSelect("select-ahs-age").options)
+        .filter((option) => option.value !== "")
+        .map((option) => option.value);
+      expect(options).toEqual([
+        "none", "0 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years",
+      ]);
+      expect(byTestId("select-ahs-age").textContent).toContain("7 years");
+
+      await chooseOption("select-ahs-age", "12 - 14 years");
+      expect(byTestId("select-ahs-age").textContent).toContain("12 - 14 years");
+      await clickTestId("button-ahs-save");
+      expect(calls).toHaveLength(1);
+      expect((calls[0].body as { ahsDetails: { applianceAge: unknown } }).ahsDetails.applianceAge).toBe(12);
+    });
+  });
+
+  it("shows the bucket in the read-only details view for First American only", () => {
+    const fa = renderEditorPanel({ bridge: null, submission: stageOneTicket({ ...completeDraft, applianceAge: 13 }, { warrantyType: "first_american" }) });
+    expectField(fa, "ahs-appliance-age", "12 - 14 years");
+    const ahs = renderEditorPanel({ bridge: null, submission: stageOneTicket({ ...completeDraft, applianceAge: 13 }) });
+    expectField(ahs, "ahs-appliance-age", "13 years");
+  });
+});

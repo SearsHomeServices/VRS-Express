@@ -1,3 +1,7 @@
+## 2026-11-06 — FA appliance age: bucket in the UI, number on the wire
+- **Decision:** First American shows FA's age buckets as a dropdown; the stored and sent value stays a number (bucket lower bound when picked). No contract change.
+- **Why:** Enzo (2026-11-06) wants the VRS agent to answer FA's own "Select Appliance Age" options; `appliance_age` is a strict number in every contract version and VRS AI already reads it.
+
 ## 2026-11-05 — VRS AI calls behind one default-off switch, not deleted
 - **Decision:** a single env switch `VRS_AI_CALLS_ENABLED` (exact `"true"`, off by default) instead of removing the bridge code. Off, the Stage 1 gate returns `not_applicable` before it even reads the bridge row, so every ticket takes the legacy approve path; the client hides every VRS AI wording and the SASHA editor; enrollment is off. SASHA intake, stored bridge rows and the VRS AI webhook are untouched.
 - **Why:** Enzo (2026-11-05): the ElevenLabs API is done; remove the send-to-VRS-AI button and go back to manual. Default off means publishing alone takes it out of PROD with no secret change; setting the secret restores it without a code change.
