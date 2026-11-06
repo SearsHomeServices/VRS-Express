@@ -122,6 +122,7 @@ import {
   isTerminalTicketStatusForIntake,
 } from "@shared/intake-form-config";
 import { getEtDateString } from "@shared/business-hours";
+import { vrsAiTicketAuthCode } from "@shared/fa-auth-code";
 import * as fs from "fs";
 import * as path from "path";
 import { createWriteStream, createReadStream } from "fs";
@@ -3730,11 +3731,16 @@ export async function registerRoutes(
             // A webhook retry can arrive after the ticket transition won but
             // before its event-ledger stamp committed. Recognize the exact
             // resulting state so the retry never sends the technician twice.
+            // The ticket's code is the decision's (First American:
+            // FA+MMDD+VRS+AI from the event's occurredAt, so a retry maps to
+            // the same code); an FA ticket closed with VRS AI's raw number
+            // before that format still counts as the same result.
             if (
               (callbackEvent.state === "approved" ||
                 callbackEvent.state === "partial") &&
               submission.ticketStatus === "completed" &&
-              submission.authCode === callbackEvent.authNumber &&
+              (submission.authCode === decision.body.authCode ||
+                submission.authCode === callbackEvent.authNumber) &&
               submission.agentNotes?.includes(
                 buildVrsAiWebhookAgentNotes(callbackEvent),
               )
@@ -3944,7 +3950,9 @@ export async function registerRoutes(
         params: { id: String(ticket.submissionId) },
         body: {
           action: "approve",
-          authCode: result.authNumber,
+          // First American: FA+MMDD+VRS+AI (dated by occurredAt); others:
+          // VRS AI's authNumber, which the agent notes keep for audit.
+          authCode: vrsAiTicketAuthCode(ticket, result),
           agentNotes: buildVrsAiCallResultAgentNotes(result),
         },
         protocol: "https",
@@ -4003,7 +4011,7 @@ export async function registerRoutes(
       return {
         kind: "closed",
         ticketStatus: closed?.ticketStatus ?? "completed",
-        authCode: closed?.authCode ?? result.authNumber,
+        authCode: closed?.authCode ?? vrsAiTicketAuthCode(ticket, result),
         notification: callbackContext.notification ?? {status:"unknown"},
       };
     },

@@ -4,6 +4,7 @@ import {
   vrsAiWarrantyFromPartnerId,
   type VrsAiWarrantyType,
 } from "@shared/warranty";
+import { vrsAiTicketAuthCode } from "@shared/fa-auth-code";
 import { VrsCallbackError } from "./vrs-callback-safety";
 import type {
   VrsAiAuthorizeResult,
@@ -570,7 +571,10 @@ export function buildVrsAiWebhookAgentNotes(event: VrsWebhookEvent): string {
 }
 
 // partner: who VRS AI called, for the technician's message ("AHS" or
-// "First American", vrsAiPartnerName).
+// "First American", vrsAiPartnerName). First American approvals get the VRS
+// format code FA + MMDD (Eastern, from the event's own occurredAt so a retried
+// delivery maps to the same code) + VRS + AI; every other partner keeps VRS
+// AI's authNumber, which the agent notes carry either way.
 export function mapVrsAiWebhookToSubmissionDecision(
   event: VrsWebhookEvent,
   partner = "AHS",
@@ -580,7 +584,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
       kind: "process",
       body: {
         action: "approve",
-        authCode: event.authNumber,
+        authCode: vrsAiTicketAuthCode({ warrantyProvider: partner }, event),
         agentNotes: buildVrsAiWebhookAgentNotes(event),
       },
     };
@@ -592,7 +596,7 @@ export function mapVrsAiWebhookToSubmissionDecision(
       kind: "process",
       body: {
         action: "approve",
-        authCode: event.authNumber,
+        authCode: vrsAiTicketAuthCode({ warrantyProvider: partner }, event),
         agentNotes: buildVrsAiWebhookAgentNotes(event),
         technicianMessage: detail,
       },
