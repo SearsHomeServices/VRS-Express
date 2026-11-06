@@ -1,4 +1,5 @@
 import { applianceLabel } from "@shared/appliance-types";
+import { firstAmericanAuthCodePrefill } from "@shared/fa-auth-code";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -4213,7 +4214,14 @@ export default function AgentDashboard() {
                                   onClick={() => {
                                     if (isSubmissionApprovedStage(selectedSubmission)) {
                                       // Stage 2 — Approved to Repair (issues the auth/RGC code).
-                                      setSelectedAction(selectedAction === "approve" ? null : "approve");
+                                      const nextAction = selectedAction === "approve" ? null : "approve";
+                                      setSelectedAction(nextAction);
+                                      // First American: start from today's FA+MMDD+VRS+initials
+                                      // code (still editable); AHS stays empty.
+                                      const faCode = nextAction === "approve" && !authCode.trim()
+                                        ? firstAmericanAuthCodePrefill(selectedSubmission as any, user?.name, new Date())
+                                        : null;
+                                      if (faCode) setAuthCode(faCode);
                                     } else if (isTwoStageWarranty(selectedSubmission)) {
                                       setSelectedAction(selectedAction === "approve_submission" ? null : "approve_submission");
                                     } else {

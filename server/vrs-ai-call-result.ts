@@ -3,6 +3,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { bareCallbackOrder, normalizeCallbackTech, validateAutomatedApproval, VrsCallbackError, type AutomatedApprovalTicket } from "./vrs-callback-safety";
 import type { DirectResultReceipts, DirectResultBinding, DirectResultResponse } from "./vrs-direct-result-store";
+import { vrsAiTicketAuthCode } from "@shared/fa-auth-code";
 
 // ============================================================================
 // VRS AI CALL RESULT — close an Express ticket from a VRS AI call outcome
@@ -204,14 +205,18 @@ export function registerVrsAiCallResultApi(
         const alreadyBound = binding.submissionId === ticket.submissionId;
         if (binding.submissionId !== null && !alreadyBound) throw new VrsCallbackError("TICKET_BINDING_CONFLICT", "This event is bound to another ticket.");
         const responseBody = (closed: boolean, authCode: string | null, notification?: unknown) => ({ok:true,closed,deduped:!closed,submission_id:ticket.submissionId,service_order:ticket.serviceOrder,ticket_status:"completed",auth_number:authCode,call_id:result.callId,event_id:result.eventId,...(notification?{notification}:{})});
-        if (ticket.ticketStatus === "completed" && alreadyBound && ticket.authCode === result.authNumber && ticket.agentNotes?.includes(buildVrsAiCallResultAgentNotes(result))) {
+        // First American tickets carry FA+MMDD+VRS+AI (dated by occurredAt, so
+        // a retry expects the same code); others carry VRS AI's authNumber. An
+        // FA ticket closed with the raw number before that format still counts.
+        const expectedAuthCode = vrsAiTicketAuthCode(ticket, result);
+        if (ticket.ticketStatus === "completed" && alreadyBound && (ticket.authCode === expectedAuthCode || ticket.authCode === result.authNumber) && ticket.agentNotes?.includes(buildVrsAiCallResultAgentNotes(result))) {
           return {status:200,body:responseBody(false,ticket.authCode,{status:"unknown",message:"Ticket was already applied; notification was not repeated."})};
         }
         if (ticket.ticketStatus !== "pending") return {status:409,body:{error:"TICKET_NOT_CLOSABLE",message:`Ticket ${ticket.submissionId} is ${ticket.ticketStatus}; no approval was applied.`,submission_id:ticket.submissionId,ticket_status:ticket.ticketStatus,call_id:result.callId,event_id:result.eventId}};
         await binding.bind(ticket.submissionId);
         const outcome = await deps.closeTicket({ticket,result});
         if (outcome.kind === "failed") return {status:outcome.status,body:{error:"TICKET_CLOSE_FAILED",message:outcome.message,submission_id:ticket.submissionId,call_id:result.callId,event_id:result.eventId}};
-        if (outcome.ticketStatus !== "completed" || outcome.authCode !== result.authNumber) throw new VrsCallbackError("UNEXPECTED_CLOSE_RESULT", "Ticket outcome does not match this authorization; operator review is required.");
+        if (outcome.ticketStatus !== "completed" || outcome.authCode !== expectedAuthCode) throw new VrsCallbackError("UNEXPECTED_CLOSE_RESULT", "Ticket outcome does not match this authorization; operator review is required.");
         return {status:200,body:responseBody(true,outcome.authCode,outcome.notification)};
       });
       return res.status(response.status).json(response.body);
