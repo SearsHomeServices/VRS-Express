@@ -61,7 +61,7 @@ const howToGuidesItems: HelpItem[] = [
   {
     title: "Submitting an Authorization Request",
     content:
-      "Tap \"New Submission\" from your home screen. Select the request type — \"Authorization\" for repair approvals or \"Infestation / Non-Accessible\" if you are unable to service due to pests, mold, or access issues. Enter your Service Order number (format: DDDD-SSSSSSSS), select the appliance type and warranty provider, and describe the issue in detail (minimum 20 characters). You can use the AI Enhance button to help clarify your description. Upload required photos of the issue and of the model/serial tag and TechHub estimate. You can optionally add a short video (max 30 seconds) or record a voice note (up to 2 minutes). Once everything is filled in, tap Submit.",
+      "Tap \"New Submission\" from your home screen. Select the request type — \"Authorization\" for repair approvals or \"Parts — No Longer Available (NLA)\" when TechHub shows a part as No Longer Available on a Sears Protect, Sears PA, or Sears Home Warranty (Cinch) call. Enter your Service Order number (format: DDDD-SSSSSSSS), select the appliance type and warranty provider, and describe the issue in detail (minimum 20 characters). You can use the AI Enhance button to help clarify your description. Upload required photos of the issue and of the model/serial tag and TechHub estimate. You can optionally add a short video (max 30 seconds) or record a voice note (up to 2 minutes). Once everything is filled in, tap Submit.",
   },
   {
     title: "Understanding Submission Status",

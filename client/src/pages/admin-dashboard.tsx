@@ -782,6 +782,7 @@ export function TicketDetailDialog({ ticketId, open, onClose }: { ticketId: numb
                   </div>
                   <div className="rounded-lg border p-3">
                     <p className="text-xs text-muted-foreground">Request Type</p>
+                    {/* Infestation / Non-Accessible: legacy tickets only (type removed 2026-11). */}
                     <p className="text-sm font-medium">{sub.requestType === "authorization" ? "Authorization" : sub.requestType === "parts_nla" ? "Parts — NLA" : sub.requestType === "infestation_non_accessible" ? "Infestation / Non-Accessible" : (sub.requestType || "—")}</p>
                   </div>
                   <div className="rounded-lg border p-3">

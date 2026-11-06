@@ -255,10 +255,18 @@ describe("POST /api/submissions — techApplianceDetails", () => {
   });
 
   it("drops it silently for a non-authorization request", async () => {
-    const res = await submit(body({ requestType: "infestation_non_accessible" }));
+    const res = await submit(body({ requestType: "parts_nla", warrantyType: "sears_protect", partNumbers: JSON.stringify(["W10190965"]) }));
     expect(res.status).toBe(201);
     expect(inserted().techApplianceDetails).toBeNull();
     expect(inserted().ahsDetails).toBeNull();
+  });
+
+  // Infestation / Non-Accessible was removed 2026-11: new submissions and
+  // resubmissions (same schema) can no longer create it.
+  it.each([{}, { resubmissionOf: 77 }])("rejects the retired infestation_non_accessible request type (%j)", async (extra) => {
+    const res = await submit(body({ requestType: "infestation_non_accessible", ...extra }));
+    expect(res.status).toBe(400);
+    expect(mocks.createSubmissionWithIdempotency).not.toHaveBeenCalled();
   });
 
   it("drops it silently while TECH_APPLIANCE_DETAILS_ENABLED is off, and leaves the draft alone", async () => {

@@ -55,7 +55,7 @@ const resubmitFormSchema = z.object({
     required_error: "Select an appliance type",
   }),
   applianceKind: applianceKindSchema.optional(),
-  requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
+  requestType: z.enum(["authorization", "parts_nla"]),
   warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
   warrantyProvider: z.string().optional(),
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
@@ -163,7 +163,10 @@ export default function TechResubmitPage() {
       applianceType: sub.applianceType as any,
       applianceKind: applianceChoice(sub.applianceKind)?.division === sub.applianceType
         ? applianceChoice(sub.applianceKind)?.value : undefined,
-      requestType: sub.requestType as any,
+      // Infestation / Non-Accessible was removed 2026-11. A rejected legacy
+      // ticket of that type can still be opened here; it resubmits as
+      // Authorization (the server no longer accepts the old type).
+      requestType: sub.requestType === "parts_nla" ? "parts_nla" : "authorization",
       warrantyType: sub.warrantyType as any,
       warrantyProvider: sub.warrantyProvider || "",
       issueDescription: sub.issueDescription,
@@ -790,7 +793,6 @@ export default function TechResubmitPage() {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="authorization">Authorization</SelectItem>
-                            <SelectItem value="infestation_non_accessible">Infestation / Non-Accessible</SelectItem>
                             <SelectItem value="parts_nla">Parts — NLA</SelectItem>
                           </SelectContent>
                         </Select>
@@ -1001,9 +1003,7 @@ export default function TechResubmitPage() {
               <Card>
                 <CardContent className="p-4 space-y-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {form.watch("requestType") === "infestation_non_accessible"
-                      ? "Model / Serial Tag Photo"
-                      : "Model, Serial & Estimate Screenshots"}
+                    Model, Serial &amp; Estimate Screenshots
                   </p>
                   <div className="grid grid-cols-4 gap-2">
                     {estimatePhotoUrls.map((url, i) => (

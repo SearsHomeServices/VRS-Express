@@ -139,7 +139,7 @@ export const EXTERNAL_API_DOCS_HTML = `<!DOCTYPE html>
   <tr><td><code>technicianLdapId</code></td><td>string</td><td>yes</td><td>Resolved server-side against the technician roster (case-insensitive). Unknown → <code>422 UNKNOWN_TECHNICIAN</code>; inactive → <code>422 INACTIVE_TECHNICIAN</code>.</td></tr>
   <tr><td><code>serviceOrder</code></td><td>string</td><td>yes</td><td>Format <code>DDDD-SSSSSSSS</code></td></tr>
   <tr><td><code>applianceType</code></td><td>enum</td><td>yes</td><td><code>cooking</code> | <code>dishwasher</code> | <code>microwave</code> | <code>laundry</code> | <code>refrigeration</code> | <code>hvac</code> | <code>all_other</code></td></tr>
-  <tr><td><code>requestType</code></td><td>enum</td><td>yes</td><td><code>authorization</code> | <code>infestation_non_accessible</code> | <code>parts_nla</code></td></tr>
+  <tr><td><code>requestType</code></td><td>enum</td><td>yes</td><td><code>authorization</code> | <code>parts_nla</code> (<code>infestation_non_accessible</code> was retired and is rejected for new requests)</td></tr>
   <tr><td><code>warrantyType</code></td><td>enum</td><td>no</td><td><code>sears_protect</code> (default) | <code>american_home_shield</code> | <code>first_american</code></td></tr>
   <tr><td><code>warrantyProvider</code></td><td>string ≤100</td><td>no</td><td>Free-text provider name</td></tr>
   <tr><td><code>issueDescription</code></td><td>string ≤2000</td><td>yes</td><td>What the technician found / needs</td></tr>
@@ -201,7 +201,7 @@ export const EXTERNAL_API_DOCS_HTML = `<!DOCTYPE html>
   <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
   <tr><td><code>id</code></td><td>integer</td><td>Stable unique id</td></tr>
   <tr><td><code>serviceOrder</code></td><td>string</td><td></td></tr>
-  <tr><td><code>requestType</code></td><td>enum</td><td>authorization | infestation_non_accessible | parts_nla</td></tr>
+  <tr><td><code>requestType</code></td><td>enum</td><td>authorization | parts_nla | infestation_non_accessible (retired; historical tickets only)</td></tr>
   <tr><td><code>applianceType</code></td><td>enum</td><td>Division routing key</td></tr>
   <tr><td><code>ticketStatus</code></td><td>enum</td><td>queued | pending | completed | rejected | invalid</td></tr>
   <tr><td><code>stage1Status</code> / <code>stage2Status</code></td><td>string</td><td><code>stage1Status</code> reflects the <strong>overall outcome</strong>; stage2 fields are the AHS/FA second-stage audit</td></tr>

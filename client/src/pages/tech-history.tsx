@@ -117,6 +117,7 @@ function RequestTypeBadge({ requestType }: { requestType: string }) {
   switch (requestType) {
     case "authorization":
       return <Badge variant="outline" className="text-blue-700 border-blue-300 bg-blue-50 dark:text-blue-300 dark:border-blue-700 dark:bg-blue-950">Authorization</Badge>;
+    // Legacy: type removed for new tickets 2026-11; old ones still render.
     case "infestation_non_accessible":
       return <Badge variant="outline" className="text-yellow-700 border-yellow-300 bg-yellow-50 dark:text-yellow-300 dark:border-yellow-700 dark:bg-yellow-950">Infestation</Badge>;
     case "parts_nla":

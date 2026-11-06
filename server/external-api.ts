@@ -108,7 +108,9 @@ export const externalCreateSubmissionSchema = z.object({
   technicianLdapId: z.string().min(1, "technicianLdapId is required").max(50),
   serviceOrder: z.string().regex(SERVICE_ORDER_REGEX, "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)"),
   applianceType: z.enum(["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other"]),
-  requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
+  // Infestation / Non-Accessible was removed 2026-11 for new tickets. The list
+  // filter below still accepts it so callers can read historical tickets.
+  requestType: z.enum(["authorization", "parts_nla"]),
   warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
   warrantyProvider: z.string().max(100).optional(),
   issueDescription: z.string().min(1, "Issue description is required").max(2000, "Description must be 2000 characters or less"),

@@ -2174,7 +2174,8 @@ export default function AgentDashboard() {
                       </SidebarMenuItem>
                       {[
                         { value: "authorization", label: "Authorization" },
-                        { value: "infestation_non_accessible", label: "Infestation / Non-Accessible" },
+                        // Infestation / Non-Accessible filter removed 2026-11 with the
+                        // request type; legacy tickets still show under All Types.
                       ].map((rt) => (
                         <SidebarMenuItem key={rt.value}>
                           <SidebarMenuButton
@@ -2560,6 +2561,8 @@ export default function AgentDashboard() {
                               </Badge>
                             </div>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              {/* Legacy: Infestation / Non-Accessible can no longer be
+                                  created (removed 2026-11); badge kept for old tickets. */}
                               {sub.requestType === "infestation_non_accessible" && (
                                 <Badge
                                   variant="secondary"
@@ -2685,6 +2688,7 @@ export default function AgentDashboard() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
+                        {/* infestation_non_accessible: legacy tickets only (type removed 2026-11). */}
                         <Badge
                           className={
                             selectedSubmission.requestType === "infestation_non_accessible"
@@ -2751,6 +2755,8 @@ export default function AgentDashboard() {
                             Send to VRS Authorization
                           </Button>
                         )}
+                        {/* Legacy: lets an agent correct a still-open old Infestation /
+                            Non-Accessible ticket (the type can't be created since 2026-11). */}
                         {isTicketWorkView && selectedSubmission?.requestType === "infestation_non_accessible" && (
                           <Button
                             size="sm"

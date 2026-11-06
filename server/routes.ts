@@ -1136,7 +1136,10 @@ export async function registerRoutes(
     serviceOrder: z.string().regex(/^\d{4}-\d{8}$/, "Service order must be in format DDDD-SSSSSSSS (e.g., 8175-12345678)"),
     applianceType: z.enum(["cooking", "dishwasher", "microwave", "laundry", "refrigeration", "hvac", "all_other"]),
     applianceKind: applianceKindSchema.nullish(),
-    requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
+    // Infestation / Non-Accessible was removed 2026-11: new submissions and
+    // resubmissions (same schema) can no longer create it. Existing rows keep
+    // the value and still read, export and correct (correct-request-type) fine.
+    requestType: z.enum(["authorization", "parts_nla"]),
     warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
     warrantyProvider: z.string().optional(),
     issueDescription: z.string().min(1, "Issue description is required").max(2000, "Description must be 2000 characters or less"),
@@ -5654,6 +5657,8 @@ export async function registerRoutes(
   // ticket that the technician selected by mistake. In-place flip to
   // "authorization" (ticket stays claimed); for NLA the client routes
   // through the existing /send-to-nla flow so queue routing stays uniform.
+  // Kept after the type was removed for new tickets (2026-11) so agents can
+  // still fix any open legacy Infestation/Non-Accessible ticket.
   // ========================================================================
 
   app.patch("/api/submissions/:id/correct-request-type", authenticateToken, requireRole("vrs_agent", "admin", "super_admin"), async (req, res) => {

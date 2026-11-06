@@ -140,8 +140,8 @@ describe("tech appliance details gate", () => {
     ["american_home_shield", "authorization", true],
     ["first_american", "authorization", true],
     ["sears_protect", "authorization", true],
-    ["american_home_shield", "infestation_non_accessible", false],
-    ["first_american", "infestation_non_accessible", false],
+    ["american_home_shield", "parts_nla", false],
+    ["first_american", "parts_nla", false],
     ["sears_protect", "parts_nla", false],
   ])("%s + %s → %s with the flag on, never with it off", (warranty, request, expected) => {
     expect(showTechApplianceDetails(true, warranty, request)).toBe(expected);
@@ -180,7 +180,7 @@ describe("techApplianceDetailsForPayload", () => {
   it("is null when hidden, whatever the form still holds", () => {
     const techApplianceDetails = DETAILS;
     expect(techApplianceDetailsForPayload({ warrantyType: "sears_protect", requestType: "authorization", techApplianceDetails }, true)).toBeNull();
-    expect(techApplianceDetailsForPayload({ warrantyType: "american_home_shield", requestType: "infestation_non_accessible", techApplianceDetails }, true)).toBeNull();
+    expect(techApplianceDetailsForPayload({ warrantyType: "american_home_shield", requestType: "parts_nla", techApplianceDetails }, true)).toBeNull();
     expect(techApplianceDetailsForPayload({ warrantyType: "american_home_shield", requestType: "authorization", techApplianceDetails }, false)).toBeNull();
   });
 });
@@ -222,7 +222,7 @@ describe("techApplianceDetailsResolver", () => {
   it("does not validate them when hidden", async () => {
     for (const [warrantyType, requestType, enabled] of [
       ["sears_protect", "authorization", true],
-      ["american_home_shield", "infestation_non_accessible", true],
+      ["american_home_shield", "parts_nla", true],
       ["american_home_shield", "authorization", false],
     ] as const) {
       const result = await run({ issueDescription: "long enough text", requestType, warrantyType, techApplianceDetails: empty }, enabled);
@@ -308,9 +308,29 @@ describe("tech-submit page", () => {
     expect(byTestId("section-tech-appliance-details")).toBeNull();
 
     await click("provider-first_american");
-    await click("tab-infestation-non-accessible");
-    expect(byTestId("section-tech-appliance-details")).toBeNull();
-    await click("tab-authorization");
+    expect(byTestId("section-tech-appliance-details")).not.toBeNull();
+  });
+
+  // Infestation / Non-Accessible was removed 2026-11 (Enzo).
+  it("offers only Authorization and Parts NLA as request types", async () => {
+    setConfig(true);
+    await mount(createElement(TechSubmitPage));
+    const cards = Array.from(container.querySelectorAll('[data-testid^="tab-"]')).map((el) => el.getAttribute("data-testid"));
+    expect(cards).toEqual(["tab-authorization", "tab-parts-nla"]);
+    expect(byTestId("tab-infestation-non-accessible")).toBeNull();
+    expect(container.textContent).not.toMatch(/infestation|non-accessible/i);
+  });
+
+  it("restores a pre-removal Infestation draft as Authorization", async () => {
+    setConfig(true);
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      identity: { userId: fixtures.user.id, ldapId: fixtures.user.ldapId },
+      formValues: { serviceOrder: "8175-12345678", requestType: "infestation_non_accessible", warrantyType: "american_home_shield" },
+    }));
+    await mount(createElement(TechSubmitPage));
+    await click("button-draft-prompt-resume");
+    await flush(10);
+    expect(byTestId("tab-authorization")!.className).toContain("border-primary");
     expect(byTestId("section-tech-appliance-details")).not.toBeNull();
   });
 
@@ -476,7 +496,6 @@ describe("tech-resubmit page", () => {
 
   it.each([
     ["sears_protect", "authorization", true],
-    ["american_home_shield", "infestation_non_accessible", true],
     ["american_home_shield", "authorization", false],
   ])("hides and does not send them for %s + %s (flag %s)", async (warrantyType, requestType, enabled) => {
     await mountResubmit(original({ warrantyType, requestType }), enabled);
@@ -484,6 +503,17 @@ describe("tech-resubmit page", () => {
     await submitForm();
     expect(fixtures.apiRequestWithRetry).toHaveBeenCalledTimes(1);
     expect(fixtures.apiRequestWithRetry.mock.calls[0][2]).not.toHaveProperty("techApplianceDetails");
+  });
+
+  // Infestation / Non-Accessible was removed 2026-11: a rejected legacy ticket
+  // of that type still opens, and resubmits as Authorization.
+  it("opens a legacy Infestation ticket and resubmits it as Authorization", async () => {
+    // Flag off so the (unrelated) appliance details don't gate the submit.
+    await mountResubmit(original({ warrantyType: "american_home_shield", requestType: "infestation_non_accessible" }), false);
+    expect(container.textContent).not.toMatch(/infestation|non-accessible/i);
+    await submitForm();
+    expect(fixtures.apiRequestWithRetry).toHaveBeenCalledTimes(1);
+    expect(fixtures.apiRequestWithRetry.mock.calls[0][2].requestType).toBe("authorization");
   });
 });
 

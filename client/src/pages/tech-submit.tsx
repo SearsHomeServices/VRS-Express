@@ -111,19 +111,17 @@ const WARRANTY_PROVIDERS = [
 
 // Tyler 2026-04-29 (warranty × request-type matrix): which warranty providers
 // are routable through VRS for each request type. Authorization is open to
-// all three; Infestation / No Model Tag / Non-Accessible is AHS + First
-// American only (Sears Protect family is handled through TechHub directly
-// for those scenarios); Parts NLA is the inverse — only the Sears Protect
-// family routes through VRS, AHS + FA NLA cases go through TechHub. Drives
+// all three; Parts NLA is only the Sears Protect family (AHS + FA NLA
+// cases go through TechHub). The Infestation / Non-Accessible request type
+// was removed 2026-11 (Enzo): techs can no longer choose it. Drives
 // the gray-out behavior on the warranty cards plus the onSubmit gate. UI
 // enforcement only — server-side validation deliberately omitted to match
 // the existing parts_nla precedent (additive 5-line z.refine in routes.ts
 // if Tyler later wants hard server enforcement).
 type WarrantyValue = "sears_protect" | "american_home_shield" | "first_american";
-type RequestTypeValue = "authorization" | "infestation_non_accessible" | "parts_nla";
+type RequestTypeValue = "authorization" | "parts_nla";
 const REQUEST_TYPE_WARRANTY_MATRIX: Record<RequestTypeValue, WarrantyValue[]> = {
   authorization: ["sears_protect", "american_home_shield", "first_american"],
-  infestation_non_accessible: ["american_home_shield", "first_american"],
   parts_nla: ["sears_protect"],
 };
 
@@ -400,7 +398,7 @@ const submissionFormSchema = z.object({
     required_error: "Select an appliance type",
   }),
   applianceKind: applianceKindSchema,
-  requestType: z.enum(["authorization", "infestation_non_accessible", "parts_nla"]),
+  requestType: z.enum(["authorization", "parts_nla"]),
   warrantyType: z.enum(["sears_protect", "american_home_shield", "first_american"]).default("sears_protect"),
   warrantyProvider: z.string().optional(),
   issueDescription: z.string().min(10, "Please provide at least 10 characters").max(2000, "Description must be 2000 characters or less"),
@@ -425,6 +423,12 @@ function pickSubmissionFormFields(values: Record<string, unknown>): Record<strin
   const picked = Object.fromEntries(Object.entries(values).filter(([key]) => SUBMISSION_FORM_FIELDS.includes(key)));
   if ("techApplianceDetails" in picked) {
     picked.techApplianceDetails = techApplianceDetailsFormValues(picked.techApplianceDetails);
+  }
+  // A draft saved before Infestation / Non-Accessible was removed (2026-11)
+  // can carry that request type; the form no longer offers it, so fall back
+  // to Authorization instead of restoring a value no card can show.
+  if ("requestType" in picked && picked.requestType !== "authorization" && picked.requestType !== "parts_nla") {
+    picked.requestType = "authorization";
   }
   // The division always comes from the kind the tech sees in the dropdown.
   // Without a valid kind (a draft saved before the 16 choices, or after a
@@ -1423,10 +1427,10 @@ export default function TechSubmitPage() {
     if (desc.length < 50) {
       warnings.push("Description is short (under 50 characters). Agents process requests faster with a clear diagnosis.");
     }
-    if (data.requestType !== "infestation_non_accessible" && estimatePhotoUrls.length < 2) {
+    if (estimatePhotoUrls.length < 2) {
       warnings.push("Only one model/serial & estimate image uploaded. Agents usually need BOTH the model/serial tag photo AND the TechHub estimate screenshot — double-check before you submit.");
     }
-    if (data.requestType !== "infestation_non_accessible" && issuePhotoUrls.length < 2) {
+    if (issuePhotoUrls.length < 2) {
       warnings.push("Only one issue photo uploaded. Multiple angles help the agent approve faster.");
     }
     if (data.requestType === "parts_nla") {
@@ -1440,7 +1444,6 @@ export default function TechSubmitPage() {
 
   function formatRequestTypeLabel(value: string | undefined): string {
     if (value === "authorization") return "Authorization";
-    if (value === "infestation_non_accessible") return "Infestation / Non-Accessible";
     if (value === "parts_nla") return "Parts — No Longer Available (NLA)";
     return value || "—";
   }
@@ -1816,21 +1819,9 @@ export default function TechSubmitPage() {
                   <div className="space-y-2">
                     {[
                       { value: "authorization", label: "Authorization", desc: "Request approval for repairs or non-repairable determination" },
-                      // Tyler 2026-04-29: renamed from "Infestation / Non-Accessible" to
-                      // include the "no model tag" case, with explicit "(FA & AHS Only)"
-                      // suffix so techs see at-a-glance that this option does not apply
-                      // to Sears Protect / Sears PA / Sears Home Warranty (Cinch) calls.
-                      // The wrong-warranty enforcement is the destructive banner below
-                      // (mirrors the parts_nla pattern at line ~1028 — UI-side gate;
-                      // request-type enum value `infestation_non_accessible` unchanged
-                      // so historical rows + downstream Smartsheet routing still match).
-                      //
-                      // 1099 provider portal: providers never see warranty info, so the
-                      // FA/AHS-specific copy is stripped for them; parts_nla is excluded
-                      // from the provider experience entirely (filtered out below).
-                      isProvider1099
-                        ? { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible", desc: "Unable to service due to infestation, missing model tag, or access limitations." }
-                        : { value: "infestation_non_accessible", label: "Infestation / No Model Tag or Infestation / Non-Accessible (FA & AHS Only)", desc: "Unable to service due to infestation, missing model tag, or access limitations. American Home Shield and First American calls only." },
+                      // Infestation / Non-Accessible was removed 2026-11 (Enzo): the form
+                      // offers only Authorization and Parts NLA. 1099 provider portal:
+                      // parts_nla is excluded from the provider experience (filtered below).
                       { value: "parts_nla", label: "Parts — No Longer Available (NLA)", desc: "Part is unavailable in TechHub. Submit for VRS parts team research. Sears Protect, Sears PA, and Sears Home Warranty (Cinch) calls only." },
                     ].filter((opt) => !(isProvider1099 && opt.value === "parts_nla")).map((opt) => (
                       <button
@@ -2068,9 +2059,7 @@ export default function TechSubmitPage() {
                     removed. The warranty section now ALWAYS renders — for
                     Parts NLA the AHS + First American cards gray out
                     (handled-in-TechHub) and Sears Protect is the only
-                    selectable option. Same gray-out logic also restricts
-                    Sears Protect under Infestation / No Model Tag /
-                    Non-Accessible. */}
+                    selectable option. */}
                 {!isProvider1099 && (
                 <div>
                   <div className="flex items-center gap-1.5">
@@ -2394,24 +2383,9 @@ export default function TechSubmitPage() {
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     Issue Photos <span className="text-destructive">*</span>
                   </p>
-                  <HelpTooltip content={
-                    watchedRequestType === "infestation_non_accessible"
-                      ? "You must upload clear photos documenting the infestation or unsafe conditions. These are required for claim review."
-                      : "Photos showing the issue, diagnosis, defective parts, error codes, damage."
-                  } />
+                  <HelpTooltip content="Photos showing the issue, diagnosis, defective parts, error codes, damage." />
                 </div>
                 <p className="text-sm text-muted-foreground">Photos showing the issue, diagnosis, defective parts, error codes, damage</p>
-                {watchedRequestType === "infestation_non_accessible" && (
-                  <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 space-y-2" data-testid="infestation-photo-requirements">
-                    <p className="text-sm font-medium text-destructive">Photo evidence is required. Document the following:</p>
-                    <ul className="text-sm text-muted-foreground space-y-1.5 list-none">
-                      <li className="flex items-start gap-2"><AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" /><span>Roaches, insects, or pest activity</span></li>
-                      <li className="flex items-start gap-2"><AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" /><span>Mouse or rodent droppings</span></li>
-                      <li className="flex items-start gap-2"><AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" /><span>Mold, biohazard, or unsanitary conditions</span></li>
-                      <li className="flex items-start gap-2"><AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" /><span>Blocked or unsafe access to the appliance</span></li>
-                    </ul>
-                  </div>
-                )}
                 <input
                   ref={issuePhotoInputRef}
                   type="file"
@@ -2517,21 +2491,12 @@ export default function TechSubmitPage() {
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-1.5">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {watchedRequestType === "infestation_non_accessible"
-                      ? <>Model / Serial Tag Photo <span className="text-destructive">*</span></>
-                      : <>Model, Serial &amp; Estimate Screenshots <span className="text-destructive">*</span></>
-                    }
+                    Model, Serial &amp; Estimate Screenshots <span className="text-destructive">*</span>
                   </p>
-                  <HelpTooltip content={
-                    watchedRequestType === "infestation_non_accessible"
-                      ? "Take a clear photo of the model/serial number tag on the appliance."
-                      : "Model/serial plate and TechHub estimate screenshots showing part numbers, costs, labor, tax, and total."
-                  } />
+                  <HelpTooltip content="Model/serial plate and TechHub estimate screenshots showing part numbers, costs, labor, tax, and total." />
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {watchedRequestType === "infestation_non_accessible"
-                    ? "Clear photo of the model/serial number tag on the appliance"
-                    : "Model/serial plate and TechHub estimate screenshots"}
+                  Model/serial plate and TechHub estimate screenshots
                 </p>
                   <input
                     ref={estimatePhotoInputRef}
@@ -2789,9 +2754,7 @@ export default function TechSubmitPage() {
             )}
             {estimatePhotoUrls.length === 0 && !estimatePhotoUploading && (
               <p className="text-sm text-destructive" data-testid="text-estimate-photo-error">
-                {watchedRequestType === "infestation_non_accessible"
-                  ? "Please upload a model/serial tag photo"
-                  : "Please upload at least one model/serial & estimate screenshot"}
+                Please upload at least one model/serial &amp; estimate screenshot
               </p>
             )}
 
