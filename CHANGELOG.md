@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - First American auth code is VRS's format (2026-11-06)
+- FA only: `FA` + MMDD (Eastern) + `VRS` + initials (`shared/fa-auth-code.ts`).
+  First American gives no number of its own, so this is the auth code.
+- VRS AI approvals (full or partial) get `FA<MMDD>VRSAI`, dated from the
+  event's own `occurredAt` so a retried callback gives the same code; VRS AI's
+  number stays in the agent notes. Duplicate checks compare against the code
+  (or the raw number for tickets closed before this change).
+- Human agents: Stage 2 "Approved to Repair" pre-fills `FA<today>VRS<initials>`
+  from the agent's name (editable; empty if initials can't be derived).
+- AHS and every other warranty unchanged. Tests: `tests/fa-auth-code.test.ts`.
+
+### Removed - Infestation / Non-Accessible request type (2026-11-06)
+- Technicians can no longer choose it (submit, resubmit); the server and the
+  external create API reject it. An old infestation ticket reopened for
+  resubmission becomes Authorization. Existing tickets still display, export
+  and can be corrected by agents (correct-request-type). No DB change.
+
+### Changed - VRS no longer handles NLA parts (2026-11-06)
+- Choosing Parts NLA on the tech submit / resubmit forms shows a red notice
+  (`client/src/components/nla-no-longer-handled.tsx`, text in
+  `shared/nla-policy.ts`): select "Needed for Repair" in TechHub, follow the
+  TH 2.0 prompts for SOM research, do not close the order. The rest of the
+  form is greyed out and cannot be submitted.
+- POST /api/submissions (and resubmit) answer 400 `NLA_NOT_HANDLED` for new
+  NLA requests. Existing NLA tickets are still worked by agents
+  (/process-nla). Help center updated.
+- Tests: `tests/nla-submission-rejected.test.ts`, `tests/tech-nla-not-handled.test.ts`.
+
 ### Changed - First American appliance age is FA's own dropdown (2026-11-06)
 - On First American tickets the VRS agent picks the appliance age from FA's
   buckets ("0 - 2 years", "3 years" ... "8 years", "9 - 11 years",

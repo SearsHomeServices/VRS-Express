@@ -1,3 +1,7 @@
+## Open — FA code / NLA follow-ups (2026-11-06)
+- [ ] NLA "MORE INFO NEEDED" SMS (`server/sms.ts` ~724) still sends a resubmit link; resubmit now blocks NLA. Decide whether agents should stop sending it.
+- [ ] Non-critical tests tech-appliance-details-form / -submit / -agent: ~26 failures already at 11bceef locally; check on Replit.
+
 ## Open — SASHA call asks (2026-11-06)
 - [ ] Per-part `quantity` (optional integer, V11-style additive key); agree whether `sell_price` is unit or line total. VRS Express must accept the key first (V5/V8 parts schemas, app-origin shape, client type, review panel, editor), and VRS AI too.
 - [ ] Appliance age as a required technician field in SASHA (FA buckets or whole years) as a new key, keeping SIS `appliance_age`; send "N/A" or omit instead of `0` when unknown.
