@@ -46,6 +46,8 @@ import {
 import imageCompression from "browser-image-compression";
 import { Camera, Send, X, AlertTriangle, ArrowLeft, Lock, Video, Upload, Info, Plus } from "lucide-react";
 import HelpTooltip from "@/components/help-tooltip";
+import { NlaBlockedFieldset, NlaNoLongerHandledNotice } from "@/components/nla-no-longer-handled";
+import { NLA_SUBMISSION_REJECTED_ERROR, isNlaRequestType } from "@shared/nla-policy";
 import type { Submission } from "@shared/schema";
 
 const resubmitFormSchema = z.object({
@@ -125,6 +127,10 @@ export default function TechResubmitPage() {
   });
 
   const watchedRequestType = form.watch("requestType");
+  // VRS no longer handles NLA parts: an NLA ticket cannot be resubmitted as
+  // NLA. The notice shows and the form is disabled until the tech picks
+  // another request type.
+  const nlaBlocked = isNlaRequestType(watchedRequestType);
   const watchedWarrantyType = form.watch("warrantyType");
   const techApplianceDetailsShown = showTechApplianceDetails(
     techApplianceDetailsEnabled,
@@ -481,6 +487,10 @@ export default function TechResubmitPage() {
   });
 
   function onSubmit(formData: ResubmitFormData) {
+    if (isNlaRequestType(formData.requestType)) {
+      toast({ title: "NLA parts are not handled by VRS", description: NLA_SUBMISSION_REJECTED_ERROR, variant: "destructive" });
+      return;
+    }
     const payload: any = { ...formData };
     delete payload.partNumbers;
     // Sent only when the section is shown (AHS / First American +
@@ -674,6 +684,8 @@ export default function TechResubmitPage() {
         {!isMaxReached && (
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+              {nlaBlocked && <NlaNoLongerHandledNotice />}
+              <NlaBlockedFieldset blocked={nlaBlocked} className="space-y-5">
               <Card>
                 <CardContent className="p-4 space-y-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Service Order</p>
@@ -741,10 +753,13 @@ export default function TechResubmitPage() {
                 </CardContent>
               </Card>
 
+              </NlaBlockedFieldset>
+
               <Card>
                 <CardContent className="p-4 space-y-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Appliance Details</p>
 
+                  <NlaBlockedFieldset blocked={nlaBlocked}>
                   <FormField
                     control={form.control}
                     name="applianceKind"
@@ -778,7 +793,10 @@ export default function TechResubmitPage() {
                       </FormItem>
                     )}
                   />
+                  </NlaBlockedFieldset>
 
+                  {/* Request Type stays usable while NLA is selected so the
+                      tech can switch the ticket to another type. */}
                   <FormField
                     control={form.control}
                     name="requestType"
@@ -813,6 +831,7 @@ export default function TechResubmitPage() {
                 </CardContent>
               </Card>
 
+              <NlaBlockedFieldset blocked={nlaBlocked} className="space-y-5">
               <Card>
                 <CardContent className="p-4 space-y-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Issue Description</p>
@@ -1110,12 +1129,13 @@ export default function TechResubmitPage() {
               <Button
                 type="submit"
                 className="w-full"
-                disabled={mutation.isPending || isRejectedClosed}
+                disabled={nlaBlocked || mutation.isPending || isRejectedClosed}
                 data-testid="button-resubmit"
               >
                 <Send className="w-4 h-4 mr-2" />
-                {mutation.isPending ? "Resubmitting..." : isRejectedClosed ? "Service Order Closed" : "Resubmit to VRS"}
+                {mutation.isPending ? "Resubmitting..." : isRejectedClosed ? "Service Order Closed" : nlaBlocked ? "NLA parts are not handled by VRS" : "Resubmit to VRS"}
               </Button>
+              </NlaBlockedFieldset>
             </form>
           </Form>
         )}

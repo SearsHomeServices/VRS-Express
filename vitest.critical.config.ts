@@ -45,6 +45,8 @@ export default defineConfig({
       "tests/pilot-queue-audio.test.ts",
       "tests/pilot-queue-alert.test.ts",
       "tests/appliance-types.test.ts",
+      "tests/nla-submission-rejected.test.ts",
+      "tests/tech-nla-not-handled.test.ts",
     ],
     maxWorkers: 2,
   },

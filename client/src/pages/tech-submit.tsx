@@ -55,6 +55,8 @@ import {
 import { Camera, Send, Lock, Video, X, Sparkles, Loader2, AlertTriangle, Square, Mic, MicOff, Trash2, Info, Plus, CheckCircle2 } from "lucide-react";
 import imageCompression from "browser-image-compression";
 import HelpTooltip from "@/components/help-tooltip";
+import { NlaBlockedFieldset, NlaNoLongerHandledNotice } from "@/components/nla-no-longer-handled";
+import { NLA_OPTION_DESCRIPTION, NLA_SUBMISSION_REJECTED_ERROR, isNlaRequestType } from "@shared/nla-policy";
 import {
   parseAndValidateDraft,
   stampDraftIdentity,
@@ -1339,6 +1341,12 @@ export default function TechSubmitPage() {
   const [additionalPromptOpen, setAdditionalPromptOpen] = useState(false);
 
   function onSubmit(data: SubmissionFormData) {
+    // VRS no longer handles NLA parts: the form is disabled while NLA is
+    // selected, and this refuses any submit that still gets through.
+    if (isNlaRequestType(data.requestType)) {
+      toast({ title: "NLA parts are not handled by VRS", description: NLA_SUBMISSION_REJECTED_ERROR, variant: "destructive" });
+      return;
+    }
     // Tyler 2026-04-29 (warranty × request-type matrix): hard gate. The UI
     // grays out incompatible warranty cards, but if the SO auto-detected a
     // warranty that doesn't match the chosen request type — or any state
@@ -1405,7 +1413,7 @@ export default function TechSubmitPage() {
   }
 
   function confirmAndSubmit() {
-    if (!pendingPayload || mutation.isPending) return;
+    if (!pendingPayload || mutation.isPending || isNlaRequestType(pendingPayload.requestType)) return;
     setReviewOpen(false);
     mutation.mutate(pendingPayload as any);
   }
@@ -1415,7 +1423,7 @@ export default function TechSubmitPage() {
   // the SO is currently active; it only succeeds when the prior ticket(s) are
   // fully resolved.
   function confirmAdditionalRequest() {
-    if (!pendingPayload || mutation.isPending) return;
+    if (!pendingPayload || mutation.isPending || isNlaRequestType(pendingPayload.requestType)) return;
     setAdditionalPromptOpen(false);
     mutation.mutate({ ...pendingPayload, additionalRequest: true } as any);
   }
@@ -1453,6 +1461,7 @@ export default function TechSubmitPage() {
   }
 
   const watchedRequestType = form.watch("requestType");
+  const nlaBlocked = isNlaRequestType(watchedRequestType);
   const watchedApplianceType = form.watch("applianceType");
   useEffect(() => {
     if (watchedRequestType === "parts_nla" && watchedApplianceType === "hvac") {
@@ -1820,9 +1829,12 @@ export default function TechSubmitPage() {
                     {[
                       { value: "authorization", label: "Authorization", desc: "Request approval for repairs or non-repairable determination" },
                       // Infestation / Non-Accessible was removed 2026-11 (Enzo): the form
-                      // offers only Authorization and Parts NLA. 1099 provider portal:
-                      // parts_nla is excluded from the provider experience (filtered below).
-                      { value: "parts_nla", label: "Parts — No Longer Available (NLA)", desc: "Part is unavailable in TechHub. Submit for VRS parts team research. Sears Protect, Sears PA, and Sears Home Warranty (Cinch) calls only." },
+                      // offers only Authorization and Parts NLA. Parts NLA stays
+                      // selectable only to show that VRS no longer handles NLA
+                      // (shared/nla-policy.ts); the form is blocked while it is chosen.
+                      // 1099 provider portal: parts_nla is excluded from the provider
+                      // experience (filtered below).
+                      { value: "parts_nla", label: "Parts — No Longer Available (NLA)", desc: NLA_OPTION_DESCRIPTION },
                     ].filter((opt) => !(isProvider1099 && opt.value === "parts_nla")).map((opt) => (
                       <button
                         key={opt.value}
@@ -1844,20 +1856,12 @@ export default function TechSubmitPage() {
               )}
             />
 
-            {watchedRequestType === "parts_nla" && (
-              <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 p-3" data-testid="nla-info-banner">
-                <div className="flex items-start gap-2">
-                  <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-blue-800 dark:text-blue-200">NLA Submissions Only</p>
-                    <p className="text-sm text-blue-700 dark:text-blue-300 mt-0.5">
-                      Submit this form ONLY when TechHub shows a part as "No Longer Available" for a Sears Protect (SPHW), Sears PA (MPA), or Sears Home Warranty (Cinch) service call. All other calls should be handled through TechHub directly.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* VRS no longer handles NLA parts: tell the tech what to do in
+                TechHub; everything below is disabled until another request
+                type is picked. */}
+            {nlaBlocked && <NlaNoLongerHandledNotice />}
 
+            <NlaBlockedFieldset blocked={nlaBlocked} className="space-y-5">
             {/* Tyler 2026-04-29 (warranty × request-type matrix): the previous
                 pair of destructive wrong-warranty banners (banner-nla-wrong-
                 warranty + banner-infestation-wrong-warranty) was removed in
@@ -2762,12 +2766,13 @@ export default function TechSubmitPage() {
               type="submit"
               className="w-full"
               size="lg"
-              disabled={mutation.isPending || estimatePhotoUploading || issuePhotoUploading || isUploading || isConverting || audioUploading || issuePhotoUrls.length === 0 || estimatePhotoUrls.length === 0 || (watchedRequestType === "parts_nla" && partNumbers.every(p => p.trim() === "") && availableParts.every(p => p.trim() === ""))}
+              disabled={nlaBlocked || mutation.isPending || estimatePhotoUploading || issuePhotoUploading || isUploading || isConverting || audioUploading || issuePhotoUrls.length === 0 || estimatePhotoUrls.length === 0 || (watchedRequestType === "parts_nla" && partNumbers.every(p => p.trim() === "") && availableParts.every(p => p.trim() === ""))}
               data-testid="button-submit-form"
             >
               <Send className="w-4 h-4 mr-2" />
-              {mutation.isPending ? "Submitting..." : estimatePhotoUploading || issuePhotoUploading ? "Uploading Photos..." : isUploading ? "Uploading Video..." : isConverting ? "Converting Video..." : audioUploading ? "Uploading Audio..." : watchedRequestType === "parts_nla" ? "Submit NLA Request" : "Submit for Review"}
+              {mutation.isPending ? "Submitting..." : estimatePhotoUploading || issuePhotoUploading ? "Uploading Photos..." : isUploading ? "Uploading Video..." : isConverting ? "Converting Video..." : audioUploading ? "Uploading Audio..." : nlaBlocked ? "NLA parts are not handled by VRS" : "Submit for Review"}
             </Button>
+            </NlaBlockedFieldset>
           </form>
         </Form>
 

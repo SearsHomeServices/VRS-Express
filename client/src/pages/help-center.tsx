@@ -81,12 +81,12 @@ const howToGuidesItems: HelpItem[] = [
   {
     title: "Which pathway do I use? (Authorization vs NLA vs TechHub)",
     content:
-      "Use the table below to decide where to submit.\n\n• Sears Protect / PA / Cinch — Authorization: submit in VRS.\n• Sears Protect / PA / Cinch — NLA: submit in VRS.\n• American Home Shield — Authorization: submit in VRS.\n• American Home Shield — NLA: handle through TechHub. VRS does not process AHS NLA.\n• First American — Authorization: submit in VRS.\n• First American — NLA: handle through TechHub. VRS does not process FA NLA.\n• B2B: handle through TechHub / call process. VRS does not process B2B tickets.\n\nIf you are not sure which pathway applies, check the TechHub work order — the warranty type is listed there.",
+      "Use the table below to decide where to submit.\n\n• Sears Protect / PA / Cinch — Authorization: submit in VRS.\n• Sears Protect / PA / Cinch — NLA: handle through TechHub. VRS no longer handles NLA parts.\n• American Home Shield — Authorization: submit in VRS.\n• American Home Shield — NLA: handle through TechHub. VRS does not process AHS NLA.\n• First American — Authorization: submit in VRS.\n• First American — NLA: handle through TechHub. VRS does not process FA NLA.\n• B2B: handle through TechHub / call process. VRS does not process B2B tickets.\n\nIf you are not sure which pathway applies, check the TechHub work order — the warranty type is listed there.",
   },
   {
-    title: "Submitting an NLA Parts Request",
+    title: "NLA Parts (No Longer Available) — handled in TechHub",
     content:
-      "If TechHub shows a part as \"No Longer Available,\" tap \"New Submission\" and select \"Parts — No Longer Available (NLA)\" as the request type. This option is for Sears Protect, Sears PA, and Sears Home Warranty (Cinch) calls only. Enter the part number(s) that showed as unavailable, describe the issue, and upload photos of the failed part along with your model/serial tag. The VRS parts team will research sourcing options and notify you of the outcome.",
+      "VRS no longer handles NLA parts for all Clients, including SHW, SPHW, and PA. Do not submit NLA parts in VRS.\n\n• After confirming a part is NLA through part inquiry, select \"Needed for Repair.\"\n• Follow all TH 2.0 prompts for SOM team research.\n• Do not close the order until research is complete.",
   },
 ];
 
@@ -99,7 +99,7 @@ const faqItems: HelpItem[] = [
   {
     title: "How long does approval usually take?",
     content:
-      "Wait time depends on the warranty provider.\n\n• Sears Protect / Sears PA / Sears Home Warranty (Cinch): typically 2–15 minutes during business hours.\n• American Home Shield and First American: these require VRS to call the provider for approval, which can take significantly longer — sometimes over an hour depending on their hold times. Plan to stay at the site until you receive the decision text.\n• NLA Parts requests: researched by the VRS parts team — typical turnaround is same-day. Reschedule this call for later today and move on to your next stop — you'll receive a follow-up text with the sourcing decision.\n\nIf your submission has been pending for an extended period, check with your supervisor.",
+      "Wait time depends on the warranty provider.\n\n• Sears Protect / Sears PA / Sears Home Warranty (Cinch): typically 2–15 minutes during business hours.\n• American Home Shield and First American: these require VRS to call the provider for approval, which can take significantly longer — sometimes over an hour depending on their hold times. Plan to stay at the site until you receive the decision text.\n• NLA Parts: VRS no longer handles NLA parts. Follow the TechHub \"Needed for Repair\" process for SOM team research instead.\n\nIf your submission has been pending for an extended period, check with your supervisor.",
   },
   {
     title: "Can I edit a submission after sending it?",
