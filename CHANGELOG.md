@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - SASHA partner resolution is strict, never AHS by default (2026-11-06)
+- One resolver (`resolveSashaPartner`, `shared/warranty.ts`) decides AHS or
+  First American at intake (422 `UNSUPPORTED_PARTNER` with the reason), on
+  the ticket's warranty, and again at "Send to VRS AI".
+- `partner_id` missing, blank or a placeholder ("", N/A, NA, TBD, NONE, NULL,
+  UNKNOWN, any case) is refused, even with valid V11 ids. Before, "N/A" and a
+  missing partner_id became American Home Shield.
+- With the V11 ids: both must have a value; `b2b_client_id` 2276 (AHS) or
+  2151 (First American) decides; `proc_id` must be one of that client's plans
+  (AHS/AHZ/AHT, FAA); a `partner_id` naming the other partner is refused.
+  Assurant (2318) and Sears (2172) are refused. Same placeholders and
+  prefixes as VRS AI's router.
+- Without the ids: the `partner_id` name decides (AHS, American Home Shield;
+  FA, First American, FIRST_AMERICAN, First American Home Buyers). The SRDM
+  client-id aliases (61380, 20730) are removed.
+- Stage 1 review shows SASHA's "Client ID (SASHA)" and "ProcID (SASHA)".
+- Bridge rows already stored with "N/A" are refused at "Send to VRS AI";
+  approve or reject them manually.
+- Tests: `tests/vrs-sasha-partner-resolution.test.ts` (critical); old-rule
+  assertions updated in the FA intake / dispatch, V11 ids, edit and app-enroll
+  tests.
+
 ### Added - SASHA V11 ids passed through to VRS AI (2026-11-06)
 - `POST /vrs/authorize` (V9) accepts the optional `b2b_client_id` and `proc_id`
   (SASHA SHSAI-3374) instead of rejecting them; a string, number or null is

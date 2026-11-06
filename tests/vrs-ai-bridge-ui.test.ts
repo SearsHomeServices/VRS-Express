@@ -191,6 +191,22 @@ describe("VRS AI bridge review rendering", () => {
     expectField(html, "district-number", "8206");
     expectField(html, "contract-number", "contract-number-CN-0008");
     expectField(html, "symptom", "symptom-not-draining");
+    expect(html).not.toContain('data-field="b2b-client-id"');
+    expect(html).not.toContain('data-field="sasha-proc-id"');
+  });
+
+  it("shows SASHA's V11 client id and ProcID when the request carries them", () => {
+    const html = renderReview({
+      ...v9Bridge,
+      reviewContext: {
+        ...v9Bridge.reviewContext!,
+        b2b_client_id: 2151,
+        proc_id: "FAA01A",
+      },
+    });
+
+    expectField(html, "b2b-client-id", "2151");
+    expectField(html, "sasha-proc-id", "FAA01A");
   });
 
   it("renders every V8 field into its exact row with placeholders, totals, and comment metadata", () => {

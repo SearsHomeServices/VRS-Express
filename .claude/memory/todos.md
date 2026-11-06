@@ -12,11 +12,14 @@
 - [ ] Ask Enzo whether SASHA should keep sending requests (`sashaVRSAgentByGlobal`). Today intake still accepts them and they become manual tickets, but SASHA's status polling stays `pending_review` because nothing updates the vrs_ai_calls row.
 - [ ] Bridge tickets already dispatched (queued / in progress at VRS AI) when ElevenLabs stopped: check for any stuck in Stage 1 in PROD and approve or reject them manually.
 - [x] V11 pass-through applied (2026-11-06): ids accepted and forwarded to VRS AI. The rest of the stash (routing/refusal on the ids) is not applied; drop or revisit.
-- [ ] Intake still decides AHS/FA from `partner_id` ("N/A" → AHS). If SASHA sends `partner_id` N/A with b2b_client_id 2151, the ticket shows as AHS in VRS Express though VRS AI routes it as FA. Ask SASHA what partner_id looks like with V11 on.
+- [x] Strict partner resolution (2026-11-06): no AHS default; b2b_client_id decides when present.
+- [ ] Before turning `VRS_AI_CALLS_ENABLED` back on: approve or reject by hand any Stage 1 bridge ticket stored with partner_id "N/A" (DEV had one on 2026-11-06), or dispatch refuses it.
+- [ ] Confirm SASHA's exact First American `partner_id` text (thirdPartyName); without V11 ids only AHS / American Home Shield / FA / First American / FIRST_AMERICAN / First American Home Buyers are accepted.
+- [ ] Optional (VRS AI side, Enzo's call): revoke VRS AI's unused `VRS_API_KEY_SASHA`.
 - [ ] SASHA turns on `VRS_CONTRACT_V11_IDS_ENABLED` only after this is published.
 
 ## Open — SASHA partner ids (2026-11-04)
-- [ ] Ask the SASHA team the exact `partner_id` string on each clientId (61380, 20730, 90550, 61481) and whether it is ever omitted or `N/A`. Once every client sends an explicit value, reject missing / `N/A` at intake (today they become AHS tickets, so an unlabelled Sears Protect / Assurant ticket would reach Stage 1 as AHS).
+- [x] Missing / `N/A` partner_id is rejected at intake (2026-11-06, strict partner resolution).
 - [ ] Sears Protect / Assurant from SASHA are rejected (422). If they should land in VRS Express for the calculator (no call), that is the deferred Sears-from-SASHA work.
 
 ## Open — repair / replace calculator, Sears Protect (2026-10-28)

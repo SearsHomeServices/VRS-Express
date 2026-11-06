@@ -46,6 +46,10 @@ export interface VrsAiBridgeStatus {
     purchase_year?: number | "TBD" | "N/A" | "";
     symptom?: string;
     partner_id?: string;
+    // SASHA contract V11: the client company id (decides the partner) and the
+    // plan id. A number or null is kept as SASHA sent it.
+    b2b_client_id?: string | number | null;
+    proc_id?: string | number | null;
     appliance_photos?: string[];
     comments?: Array<{
       tech_id: string;

@@ -1,3 +1,7 @@
+## 2026-11-06 — SASHA partner: fail closed, stricter than VRS AI
+- **Decision:** VRS Express refuses a SASHA request unless it can name AHS or First American from the payload: partner_id must have a value; with V11 ids, b2b_client_id decides and proc_id and partner_id must not contradict it. No AHS default anywhere. Same placeholder set and proc_id prefixes as VRS AI.
+- **Why:** Enzo (2026-11-06): "we need to know from the payload who to call. Anything like N/A … should be declined." On 2026-11-04, 13 of 33 SASHA orders had "N/A" and were Assurant / Sears labelled AHS. Being stricter than VRS AI's fallback chain is safe because VRS Express sits upstream and a human approves before any call.
+
 ## 2026-11-06 — V11 ids: pass-through only, VRS AI routes
 - **Decision:** VRS Express accepts SASHA's `b2b_client_id` / `proc_id`, stores them as sent and forwards them to VRS AI as strings ("" when omitted). No routing or refusal on them in VRS Express; VRS AI answers 422 UNSUPPORTED_PARTNER for partners it won't call.
 - **Why:** Enzo (2026-11-06) chose option A after the VRS AI session confirmed VRS AI owns routing; duplicating it here would risk two different answers. Strings because VRS AI's routing table keys on the string form.

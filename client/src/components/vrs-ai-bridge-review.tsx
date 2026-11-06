@@ -181,6 +181,16 @@ export function VrsAiBridgeReview({
                   >
                     {context.district_number}
                   </ReviewField>
+                  {context.b2b_client_id != null && (
+                    <ReviewField label="Client ID (SASHA)" dataField="b2b-client-id" mono>
+                      {String(context.b2b_client_id)}
+                    </ReviewField>
+                  )}
+                  {context.proc_id != null && (
+                    <ReviewField label="ProcID (SASHA)" dataField="sasha-proc-id" mono>
+                      {String(context.proc_id)}
+                    </ReviewField>
+                  )}
                 </>
               )}
             </>
