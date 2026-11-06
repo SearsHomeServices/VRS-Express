@@ -33,6 +33,7 @@ import {
 } from "./external-api";
 import { EXTERNAL_API_DOCS_HTML } from "./external-api-docs";
 import { getQueueWaitEnd } from "@shared/nla-ready-for-order";
+import { NLA_SUBMISSION_REJECTED_ERROR, isNlaRequestType } from "@shared/nla-policy";
 import {
   registerVrsAiWebhookApi,
   registerVrsSashaApi,
@@ -1246,6 +1247,14 @@ export async function registerRoutes(
       const parsed = createSubmissionSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
+      }
+      // VRS no longer handles NLA parts (shared/nla-policy.ts). The tech
+      // forms block NLA; this refuses new NLA tickets and NLA resubmissions
+      // from cached or older clients (and every other caller of this
+      // handler). Existing NLA tickets are still worked by agents through
+      // /process-nla, which this does not touch.
+      if (isNlaRequestType(parsed.data.requestType)) {
+        return res.status(400).json({ error: NLA_SUBMISSION_REJECTED_ERROR, code: "NLA_NOT_HANDLED" });
       }
       // AHS draft (shared/ahs-review.ts): for an authorization ticket whose
       // final warranty is AHS, the server stores what the service-order
