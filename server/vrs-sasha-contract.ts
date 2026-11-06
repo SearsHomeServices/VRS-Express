@@ -223,6 +223,16 @@ export const vrsAuthorizeV8RequestSchema = z
   .object(vrsAuthorizeV8RequestShape)
   .strict();
 
+// V11 (SASHA SHSAI-3374) adds b2b_client_id and proc_id to the V9 payload.
+// Pass-through only: any value is accepted and stored as sent (a number too),
+// and dispatchVrsAiForSubmission forwards both to VRS AI as strings ("" when
+// SASHA omitted them). VRS AI owns partner routing on these ids and refuses
+// unsupported partners itself (422 UNSUPPORTED_PARTNER).
+const sashaV11Id = z
+  .union([z.string().max(50), z.number().finite()])
+  .nullable()
+  .optional();
+
 const vrsAuthorizeV9RequestShape = {
   ...vrsAuthorizeV8RequestShape,
   cta_no: nonblankString("cta_no"),
@@ -230,6 +240,8 @@ const vrsAuthorizeV9RequestShape = {
     z.string().regex(/^\d{4}$/, "district_number must be 4 digits"),
     z.literal("N/A"),
   ]),
+  b2b_client_id: sashaV11Id,
+  proc_id: sashaV11Id,
 };
 
 export const vrsAuthorizeV9RequestSchema = z

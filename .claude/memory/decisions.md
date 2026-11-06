@@ -1,3 +1,7 @@
+## 2026-11-06 — V11 ids: pass-through only, VRS AI routes
+- **Decision:** VRS Express accepts SASHA's `b2b_client_id` / `proc_id`, stores them as sent and forwards them to VRS AI as strings ("" when omitted). No routing or refusal on them in VRS Express; VRS AI answers 422 UNSUPPORTED_PARTNER for partners it won't call.
+- **Why:** Enzo (2026-11-06) chose option A after the VRS AI session confirmed VRS AI owns routing; duplicating it here would risk two different answers. Strings because VRS AI's routing table keys on the string form.
+
 ## 2026-11-06 — FA auth code composed by VRS; NLA and infestation closed to technicians
 - **Decision:** FA's auth code is `FA` + Eastern MMDD + `VRS` + initials (AI for VRS AI, the agent's own for humans, pre-filled and editable). VRS AI's code date comes from the event's `occurredAt`, not "now", so retries are idempotent. Infestation and NLA are refused at the server for new tickets, not only hidden in the form; existing tickets keep working.
 - **Why:** Enzo (2026-11-06): FA gives no number, the VRS format is the code; VRS no longer handles NLA (manager's TechHub instructions); remove infestation completely. Server-side refusal covers cached PWA clients.

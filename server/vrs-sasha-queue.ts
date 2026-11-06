@@ -42,6 +42,22 @@ export function mapVrsApplianceType(
   return "all_other";
 }
 
+/**
+ * V11 ids for the outbound VRS AI body: both keys always present, as strings,
+ * exactly as SASHA sent them ("" when SASHA omitted them or sent null).
+ */
+export function sashaV11IdsForVrsAi(payload: Record<string, unknown>): {
+  b2b_client_id: string;
+  proc_id: string;
+} {
+  const asString = (value: unknown) =>
+    value === undefined || value === null ? "" : String(value);
+  return {
+    b2b_client_id: asString(payload.b2b_client_id),
+    proc_id: asString(payload.proc_id),
+  };
+}
+
 export function mapVrsPayloadToSubmission(
   payload: VrsAuthorizeRequest,
   districtCode: string,
@@ -462,8 +478,15 @@ export async function dispatchVrsAiForSubmission(options: {
     if (!partnerWarranty) {
       throw new Error(`partner_id ${partnerId ?? "(none)"} is not one VRS AI calls`);
     }
+    // V11: b2b_client_id and proc_id go to VRS AI as SASHA sent them, as
+    // strings, always present on V9 ("" when SASHA omitted them). VRS AI
+    // routes on them; partner_id above is unchanged.
+    const v11Ids = sourceVersion === "v9"
+      ? sashaV11IdsForVrsAi(enrichedPayload as Record<string, unknown>)
+      : {};
     const payload = {
       ...enrichedPayload,
+      ...v11Ids,
       partner_id: VRS_AI_PARTNER_IDS[partnerWarranty],
       callback_url: options.callbackUrl,
       callback_secret: options.callbackSecret,

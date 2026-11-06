@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added - SASHA V11 ids passed through to VRS AI (2026-11-06)
+- `POST /vrs/authorize` (V9) accepts the optional `b2b_client_id` and `proc_id`
+  (SASHA SHSAI-3374) instead of rejecting them; a string, number or null is
+  kept on the ticket as sent.
+- "Send to VRS AI" puts both in the body to VRS AI's `/vrs/authorize` as
+  strings, always present ("" when SASHA omitted them). VRS AI routes on them
+  and refuses unsupported partners (Assurant, Sears) itself with 422
+  `UNSUPPORTED_PARTNER`; that comes back as a failed dispatch with VRS AI's
+  message, no retry. Pass-through only: `partner_id` handling and intake's
+  partner check are unchanged; the stashed full V11 routing is not applied.
+- Tests: `tests/vrs-sasha-v11-ids.test.ts` (critical).
+
 ### Changed - First American auth code is VRS's format (2026-11-06)
 - FA only: `FA` + MMDD (Eastern) + `VRS` + initials (`shared/fa-auth-code.ts`).
   First American gives no number of its own, so this is the auth code.
