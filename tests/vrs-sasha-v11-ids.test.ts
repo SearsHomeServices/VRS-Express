@@ -241,6 +241,27 @@ describe("V11 ids outbound to VRS AI", () => {
   });
 });
 
+describe("appliance age is required to send", () => {
+  // 2026-11-12 (Enzo): SASHA sends appliance_age 0 when it has no age; the
+  // VRS agent picks it at Stage 1. Nothing goes to VRS AI without one.
+  it("refuses SASHA's 0 without calling VRS AI", async () => {
+    const { result, client, store } = await dispatchStored(
+      storedFrom({ ...v11Payload, appliance_age: 0 }),
+    );
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(client.authorize).not.toHaveBeenCalled();
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      31,
+      "Not sent to VRS AI: appliance age is missing. Pick the appliance age, save, and send again.",
+    );
+  });
+
+  it("sends once the agent picked an age", async () => {
+    const { sent } = await dispatchStored(storedFrom({ ...v11Payload, appliance_age: 1 }));
+    expect(sent?.appliance_age).toBe(1);
+  });
+});
+
 describe("VRS AI 422 UNSUPPORTED_PARTNER", () => {
   const unsupportedBody = {
     error: "UNSUPPORTED_PARTNER",

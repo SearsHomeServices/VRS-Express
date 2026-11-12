@@ -5,12 +5,18 @@
 // The stored value stays a number everywhere (SASHA's appliance_age,
 // ahsDetails.applianceAge): a number shows as the bucket it falls in, and a
 // chosen bucket stores its lower bound, so the two round-trip.
+//
+// There is no 0: the youngest bucket is "1 - 2 years" (stores 1). SASHA sends
+// appliance_age 0 when it has no age (the contract requires a number), so 0
+// has no bucket: the dropdown shows "Select appliance age" for the VRS agent
+// to answer. hasApplianceAge is the rule dispatch enforces: nothing is sent
+// to VRS AI without an age.
 import { vrsAiPartnerName } from "./warranty";
 
 export const FA_APPLIANCE_AGE_PLACEHOLDER = "Select appliance age";
 
 export const FA_APPLIANCE_AGE_BUCKETS = [
-  "0 - 2 years",
+  "1 - 2 years",
   "3 years",
   "4 years",
   "5 years",
@@ -25,7 +31,7 @@ export type FaApplianceAgeBucket = (typeof FA_APPLIANCE_AGE_BUCKETS)[number];
 
 // Each bucket's lower bound: what choosing it stores.
 const LOWER_BOUND: Record<FaApplianceAgeBucket, number> = {
-  "0 - 2 years": 0,
+  "1 - 2 years": 1,
   "3 years": 3,
   "4 years": 4,
   "5 years": 5,
@@ -38,15 +44,16 @@ const LOWER_BOUND: Record<FaApplianceAgeBucket, number> = {
 };
 
 // The bucket a stored age (a number, or the form's string) falls in.
-// Fractions go by whole years (floor). Missing, blank, unreadable or
-// negative ages have no bucket.
+// Fractions go by whole years (floor); anything above 0 and under 3 is
+// "1 - 2 years". Missing, blank, unreadable, negative or 0 (unknown) ages
+// have no bucket.
 export function faApplianceAgeBucket(age: number | string | null | undefined): FaApplianceAgeBucket | undefined {
   if (age === null || age === undefined) return undefined;
   if (typeof age === "string" && age.trim() === "") return undefined;
   const n = typeof age === "number" ? age : Number(age.trim());
-  if (!Number.isFinite(n) || n < 0) return undefined;
+  if (!Number.isFinite(n) || n <= 0) return undefined;
   const years = Math.floor(n);
-  if (years <= 2) return "0 - 2 years";
+  if (years <= 2) return "1 - 2 years";
   if (years <= 8) return `${years} years` as FaApplianceAgeBucket;
   if (years <= 11) return "9 - 11 years";
   if (years <= 14) return "12 - 14 years";
@@ -59,6 +66,13 @@ export function faApplianceAgeFromBucket(bucket: string | null | undefined): num
   return bucket && Object.prototype.hasOwnProperty.call(LOWER_BOUND, bucket)
     ? LOWER_BOUND[bucket as FaApplianceAgeBucket]
     : undefined;
+}
+
+// Whether a request carries a real appliance age: a number above 0 (0 is
+// SASHA's "no age") and at most 100, the contract's maximum. Dispatch refuses
+// to send to VRS AI without one.
+export function hasApplianceAge(age: unknown): boolean {
+  return typeof age === "number" && Number.isFinite(age) && age > 0 && age <= 100;
 }
 
 // partner is the Stage 1 display name (vrsAiPartnerName).

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - SASHA request editor: failure cause dropdown, FA age keeps SASHA's number (2026-11-12)
+- "Failure cause" in the Stage 1 "request from SASHA" editor is now a dropdown
+  of the seven values VRS AI accepts (Normal wear, Power surge, Impact,
+  Installation error, Abuse, Age, Other). Typed text such as "Normal wear"
+  failed the contract check on save. A value SASHA sent that is not on the
+  list stays selectable.
+- First American age: no 0 option. The youngest bucket is "1 - 2 years"
+  (stores 1). SASHA sends 0 when it has no age; the dropdowns now show
+  "Select appliance age" for it (the review panel shows "Not provided"), and
+  the SASHA editor flags "Appliance age is required". Re-picking the bucket
+  SASHA's own age falls in keeps SASHA's number.
+- Nothing is sent to VRS AI without an appliance age (`hasApplianceAge`,
+  above 0, at most 100): "Send to VRS AI" fails with "Not sent to VRS AI:
+  appliance age is missing. Pick the appliance age, save, and send again."
+  This covers SASHA requests (age 0) and app tickets with no age.
+- New mounted tests: picking an FA age and clicking Save once sends it, in
+  both the Stage 1 details editor and the SASHA editor
+  (tests/fa-age-save-once.test.ts, tests/sasha-request-editor-dropdowns.test.ts).
+
 ### Changed - SASHA partner resolution is strict, never AHS by default (2026-11-06)
 - One resolver (`resolveSashaPartner`, `shared/warranty.ts`) decides AHS or
   First American at intake (422 `UNSUPPORTED_PARTNER` with the reason), on

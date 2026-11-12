@@ -5,6 +5,7 @@ import {
   type VrsAiWarrantyType,
 } from "@shared/warranty";
 import { vrsAiTicketAuthCode } from "@shared/fa-auth-code";
+import { hasApplianceAge } from "@shared/fa-appliance-age";
 import { VrsCallbackError } from "./vrs-callback-safety";
 import type {
   VrsAiAuthorizeResult,
@@ -483,6 +484,14 @@ export async function dispatchVrsAiForSubmission(options: {
       throw new Error(`Not sent to VRS AI: ${partner.reason}`);
     }
     const partnerWarranty = partner.warrantyType;
+    // Every call to VRS AI carries an appliance age. SASHA sends 0 when it
+    // has none and app tickets may have none; the VRS agent picks it at
+    // Stage 1 (saving the correction), then sends again.
+    if (!hasApplianceAge((enrichedPayload as { appliance_age?: unknown }).appliance_age)) {
+      throw new Error(
+        "Not sent to VRS AI: appliance age is missing. Pick the appliance age, save, and send again.",
+      );
+    }
     // V11: b2b_client_id and proc_id go to VRS AI as SASHA sent them, as
     // strings, always present on V9 ("" when SASHA omitted them). VRS AI
     // routes on them; partner_id above is unchanged.

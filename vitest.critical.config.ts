@@ -35,6 +35,8 @@ export default defineConfig({
       "tests/vrs-agent-media.test.ts",
       "tests/vrs-ai-bridge-ui.test.ts",
       "tests/fa-appliance-age.test.ts",
+      "tests/fa-age-save-once.test.ts",
+      "tests/sasha-request-editor-dropdowns.test.ts",
       "tests/fa-auth-code.test.ts",
       "tests/vrs-object-storage-photo-url.test.ts",
       "tests/exec-summary-delivery.test.ts",

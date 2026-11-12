@@ -236,7 +236,8 @@ export function VrsAiBridgeReview({
           </ReviewField>
           <ReviewField label="Appliance age" dataField="appliance-age">
             {isFirstAmericanPartner(partner)
-              ? faApplianceAgeBucket(context.appliance_age) ?? context.appliance_age
+              ? faApplianceAgeBucket(context.appliance_age) ??
+                (context.appliance_age === 0 ? "Not provided" : context.appliance_age)
               : context.appliance_age}
           </ReviewField>
           {context.appliance_grade !== undefined && (

@@ -1732,7 +1732,7 @@ describe("First American appliance age", () => {
         .map((match) => [match[1], match[2]]);
       expect(options).toEqual([
         ["", "Select appliance age"],
-        ...["0 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years"]
+        ...["1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years"]
           .map((bucket) => [bucket, bucket]),
       ]);
       expect(select).toMatch(/<option value="9 - 11 years" selected="">/);
@@ -1804,7 +1804,7 @@ describe("First American appliance age", () => {
         .filter((option) => option.value !== "")
         .map((option) => option.value);
       expect(options).toEqual([
-        "none", "0 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years",
+        "none", "1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years",
       ]);
       expect(byTestId("select-ahs-age").textContent).toContain("7 years");
 

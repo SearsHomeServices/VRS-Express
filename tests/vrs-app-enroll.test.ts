@@ -647,11 +647,33 @@ describe("trimmed AHS form → VRS AI payload", () => {
     });
   });
 
-  it("dispatches a minimal app-origin row to VRS AI with the blanks intact", async () => {
+  // 2026-11-12 (Enzo): nothing goes to VRS AI without an appliance age. The
+  // VRS agent picks it at Stage 1; the other blanks still go as "".
+  it("refuses an app-origin row with no appliance age, without calling VRS AI", async () => {
     const built = buildAppVrsAuthorizePayload(minimalTicket, technician);
     if (!built.ok) throw new Error(built.reason);
     const fetchImpl = fetchAccepting();
     const store = dispatchStore(built.payload, "");
+    const result = await dispatchVrsAiForSubmission({
+      submissionId: 503,
+      store,
+      client: { authorize: vi.fn() },
+      callbackUrl: EXPRESS_WEBHOOK,
+      callbackSecret: "express-ai-webhook-secret",
+    });
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(store.markDispatchFailed).toHaveBeenCalledWith(
+      79,
+      "Not sent to VRS AI: appliance age is missing. Pick the appliance age, save, and send again.",
+    );
+  });
+
+  it("dispatches a minimal app-origin row to VRS AI with the blanks intact once it has an age", async () => {
+    const built = buildAppVrsAuthorizePayload(minimalTicket, technician);
+    if (!built.ok) throw new Error(built.reason);
+    const fetchImpl = fetchAccepting();
+    const store = dispatchStore({ ...built.payload, appliance_age: 3 }, "");
 
     const result = await dispatchVrsAiForSubmission({
       submissionId: 503,
@@ -675,8 +697,7 @@ describe("trimmed AHS form → VRS AI payload", () => {
     expect(store.markDispatchFailed).not.toHaveBeenCalled();
     expect(result).toMatchObject({ kind: "accepted", providerCallId: "vrs_ai_777" });
     const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(sent).toMatchObject({ brand: "", appliance_grade: "", cta_no: "", callback_url: EXPRESS_WEBHOOK });
-    expect(sent).not.toHaveProperty("appliance_age");
+    expect(sent).toMatchObject({ brand: "", appliance_grade: "", cta_no: "", callback_url: EXPRESS_WEBHOOK, appliance_age: 3 });
   });
 
   it("still requires VRS AI's hard fields on app-origin payloads", () => {

@@ -1,3 +1,12 @@
+## Open — Stage 1 editor reports (2026-11-12)
+- [x] Failure cause dropdown in the SASHA request editor.
+- [ ] "Save twice" for appliance age: ask what the first click shows (nothing / toast but value resets / error / 0), which box, which bucket, which device. Not reproduced in tests.
+- [x] FA age: "1 - 2 years" (no 0), 0 shows the placeholder, dispatch refuses a request without an age (2026-11-12).
+- [ ] Stage 1 details editor (app tickets) has no "age required" hint yet; the dispatch error tells the agent. Add one if agents trip on it.
+- [ ] Optional: dropdowns for appliance grade (entry/mid/top/N/A) and repair or replace in the SASHA editor; same contract-enum problem as failure cause.
+- [ ] 1099 contractor intake (`POST /vrs/authorize/contractor`, `VRS_SASHA_1099_API_KEY`) parked uncommitted in worktree agent-a1a406f75243e575c; open items: contractor techs in `technicians`, photo host allowlist, their webhook host.
+- [ ] VRS AI side (Enzo's OK needed): stale `blocked_no_age` rows never cleared (jobs 778/781); dashboard→agent write proxy key mismatch blocks "H-approved".
+
 ## Open — FA code / NLA follow-ups (2026-11-06)
 - [ ] NLA "MORE INFO NEEDED" SMS (`server/sms.ts` ~724) still sends a resubmit link; resubmit now blocks NLA. Decide whether agents should stop sending it.
 - [ ] Non-critical tests tech-appliance-details-form / -submit / -agent: ~26 failures already at 11bceef locally; check on Replit.

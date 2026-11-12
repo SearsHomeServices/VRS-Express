@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasApplianceAge,
   FA_APPLIANCE_AGE_BUCKETS,
   FA_APPLIANCE_AGE_PLACEHOLDER,
   faApplianceAgeBucket,
@@ -11,7 +12,7 @@ import { vrsAiPartnerName } from "../shared/warranty";
 describe("First American appliance age buckets", () => {
   it("lists FA's options in FA's order", () => {
     expect(FA_APPLIANCE_AGE_BUCKETS).toEqual([
-      "0 - 2 years",
+      "1 - 2 years",
       "3 years",
       "4 years",
       "5 years",
@@ -26,9 +27,8 @@ describe("First American appliance age buckets", () => {
   });
 
   it.each([
-    [0, "0 - 2 years"],
-    [1, "0 - 2 years"],
-    [2, "0 - 2 years"],
+    [1, "1 - 2 years"],
+    [2, "1 - 2 years"],
     [3, "3 years"],
     [4, "4 years"],
     [5, "5 years"],
@@ -50,7 +50,7 @@ describe("First American appliance age buckets", () => {
   });
 
   it("buckets fractions by whole years", () => {
-    expect(faApplianceAgeBucket(2.9)).toBe("0 - 2 years");
+    expect(faApplianceAgeBucket(2.9)).toBe("1 - 2 years");
     expect(faApplianceAgeBucket(3.5)).toBe("3 years");
     expect(faApplianceAgeBucket(8.99)).toBe("8 years");
     expect(faApplianceAgeBucket(11.5)).toBe("9 - 11 years");
@@ -58,7 +58,8 @@ describe("First American appliance age buckets", () => {
     expect(faApplianceAgeBucket(" 7.4 ")).toBe("7 years");
   });
 
-  it.each([null, undefined, "", "   ", Number.NaN, "abc", -1, "-3", Number.POSITIVE_INFINITY])(
+  // 0 is SASHA's "unknown" (VRS AI reads it as no age), so it has no bucket.
+  it.each([null, undefined, "", "   ", Number.NaN, "abc", -1, "-3", Number.POSITIVE_INFINITY, 0, "0"])(
     "has no bucket for %s",
     (age) => {
       expect(faApplianceAgeBucket(age as number | string | null | undefined)).toBeUndefined();
@@ -66,7 +67,21 @@ describe("First American appliance age buckets", () => {
   );
 
   it("stores each bucket's lower bound", () => {
-    expect(FA_APPLIANCE_AGE_BUCKETS.map(faApplianceAgeFromBucket)).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 12, 15]);
+    expect(FA_APPLIANCE_AGE_BUCKETS.map(faApplianceAgeFromBucket)).toEqual([1, 3, 4, 5, 6, 7, 8, 9, 12, 15]);
+  });
+
+  it("has no 0 option: the youngest bucket is 1 - 2 years", () => {
+    expect(FA_APPLIANCE_AGE_BUCKETS[0]).toBe("1 - 2 years");
+    expect(FA_APPLIANCE_AGE_BUCKETS.some((bucket) => bucket.startsWith("0"))).toBe(false);
+    expect(faApplianceAgeBucket(0.5)).toBe("1 - 2 years");
+  });
+
+  it.each([
+    [1, true], [2, true], [0.5, true], [100, true],
+    [0, false], [-1, false], [101, false], [Number.NaN, false],
+    [undefined, false], [null, false], ["5", false], ["", false],
+  ] as const)("hasApplianceAge(%j) is %s", (age, expected) => {
+    expect(hasApplianceAge(age)).toBe(expected);
   });
 
   it("stores nothing for the placeholder or an unknown label", () => {

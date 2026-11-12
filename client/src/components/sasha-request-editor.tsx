@@ -17,8 +17,10 @@ import {
   FA_APPLIANCE_AGE_PLACEHOLDER,
   faApplianceAgeBucket,
   faApplianceAgeFromBucket,
+  hasApplianceAge,
   isFirstAmericanPartner,
 } from "@shared/fa-appliance-age";
+import { AHS_FAILURE_CAUSES } from "@shared/ahs-details";
 
 type Context = NonNullable<VrsAiBridgeStatus["reviewContext"]>;
 
@@ -167,7 +169,13 @@ export function SashaRequestEditor({
         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
         value={faApplianceAgeBucket(values[name]) ?? ""}
         onChange={(e) => {
-          const age = faApplianceAgeFromBucket(e.target.value);
+          // Picking the bucket SASHA's own age falls in keeps SASHA's number
+          // (e.g. 2 stays 2 under "1 - 2 years") instead of the bucket's
+          // lower bound.
+          const original = source[name];
+          const keepOriginal =
+            typeof original === "number" && faApplianceAgeBucket(original) === e.target.value;
+          const age = keepOriginal ? original : faApplianceAgeFromBucket(e.target.value);
           setValues((prev) => ({ ...prev, [name]: age === undefined ? "" : String(age) }));
         }}
       >
@@ -178,6 +186,35 @@ export function SashaRequestEditor({
       </select>
     </div>
   );
+
+  // Failure cause: VRS AI accepts only its fixed list (the V5-V9 contract
+  // enum), so a typed value like "Normal wear" was refused on save. Pick from
+  // the list instead; the value sent is the contract value. A value SASHA
+  // sent that isn't on the list stays selectable so nothing is lost.
+  const failureCauseField = (name: string, label: string) => {
+    const current = values[name] ?? "";
+    const listed = AHS_FAILURE_CAUSES.some((cause) => cause.value === current);
+    return (
+      <div key={name} className="space-y-1">
+        <Label htmlFor={`sasha-${name}`} className="text-xs">{label}</Label>
+        <select
+          id={`sasha-${name}`}
+          data-testid={`input-sasha-${name}`}
+          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
+          value={current}
+          onChange={(e) => {
+            const next = e.target.value;
+            setValues((prev) => ({ ...prev, [name]: next }));
+          }}
+        >
+          {!listed && <option value={current}>{current || "Select failure cause"}</option>}
+          {AHS_FAILURE_CAUSES.map((cause) => (
+            <option key={cause.value} value={cause.value}>{cause.label}</option>
+          ))}
+        </select>
+      </div>
+    );
+  };
 
   const field = (name: string, label: string, numeric = false) => (
     <div key={name} className="space-y-1">
@@ -201,10 +238,17 @@ export function SashaRequestEditor({
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        {TEXT_FIELDS.filter(([n]) => n in source).map(([n, l]) => field(n, l))}
+        {TEXT_FIELDS.filter(([n]) => n in source).map(([n, l]) =>
+          n === "failure_cause" ? failureCauseField(n, l) : field(n, l))}
         {NUMBER_FIELDS.filter(([n]) => n in source).map(([n, l]) =>
           n === "appliance_age" && firstAmerican ? faAgeField(n, "Appliance age") : field(n, l, true))}
       </div>
+      {"appliance_age" in source &&
+        !hasApplianceAge((values.appliance_age ?? "").trim() === "" ? undefined : Number(values.appliance_age)) && (
+          <p className="text-destructive" data-testid="text-sasha-age-required">
+            Appliance age is required. Pick it and save before sending to VRS AI.
+          </p>
+        )}
       {(context.parts ?? []).map((_, index) => (
         <div key={index} className="grid gap-2 rounded border p-2 sm:grid-cols-2" data-testid={`sasha-part-${index}`}>
           <p className="font-medium sm:col-span-2">Part {index + 1}</p>
