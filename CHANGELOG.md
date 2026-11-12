@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - Technicians' failure-cause list; FA age up to "15 - 30 years" (2026-11-12)
+- Failure cause dropdown (technician form, Stage 1 details editor, SASHA
+  request editor): Electronic Failure/power surge (`power-surge`), Customer
+  neglect/abuse (`abuse`), Mechanical Failure (`mechanical-failure`, new),
+  Infestation (`infestation`, new), Normal wear and tear (`normal-wear`),
+  Other (`other`). Impact, installation error and age are no longer offered
+  but still accepted on stored tickets and from SASHA.
+- The VRS contract schemas (V5-V9, app tickets) accept the two new values.
+  VRS AI's failure_cause is free text (confirmed by the VRS AI session), so
+  it accepts them; it speaks them as sent until it adds wording for them.
+- First American age: "15+ years" is now "15 - 30 years" (still sends 15).
+
 ### Changed - SASHA request editor: failure cause dropdown, FA age keeps SASHA's number (2026-11-12)
 - "Failure cause" in the Stage 1 "request from SASHA" editor is now a dropdown
   of the seven values VRS AI accepts (Normal wear, Power surge, Impact,

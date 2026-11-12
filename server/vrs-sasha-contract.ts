@@ -70,6 +70,22 @@ const vrsV5CommentSchema = z
   })
   .strict();
 
+// failure_cause values VRS Express accepts and sends. The V5-V9 contract's
+// seven, plus "mechanical-failure" and "infestation" (Enzo's technicians,
+// 2026-11-12). VRS AI's failure_cause is free text, so new values are safe
+// there; it phrases the ones in its own map and passes others through.
+export const VRS_FAILURE_CAUSES = [
+  "normal-wear",
+  "power-surge",
+  "impact",
+  "installation-error",
+  "abuse",
+  "age",
+  "other",
+  "mechanical-failure",
+  "infestation",
+] as const;
+
 const vrsAuthorizeV5RequestShape = {
     service_order: z.string().regex(/^\d{8}$/, "service_order must be 8 digits"),
     tech_id: requiredText("tech_id", 50),
@@ -99,15 +115,7 @@ const vrsAuthorizeV5RequestShape = {
     tax_amount: money,
     part_price: money,
     appliance_location: requiredText("appliance_location", 100),
-    failure_cause: z.enum([
-      "normal-wear",
-      "power-surge",
-      "impact",
-      "installation-error",
-      "abuse",
-      "age",
-      "other",
-    ]),
+    failure_cause: z.enum(VRS_FAILURE_CAUSES),
     tech_recommendation: z.enum(["repair", "replace"]),
     repair_replace_rationale: z
       .string()
@@ -194,15 +202,7 @@ const vrsAuthorizeV8RequestShape = {
   tax_amount: money,
   part_price: money,
   appliance_location: nonblankText("appliance_location", 100),
-  failure_cause: z.enum([
-    "normal-wear",
-    "power-surge",
-    "impact",
-    "installation-error",
-    "abuse",
-    "age",
-    "other",
-  ]),
+  failure_cause: z.enum(VRS_FAILURE_CAUSES),
   tech_recommendation: z.enum(["repair", "replace"]),
   repair_replace_rationale: z.string(),
   appliance_grade: z.enum(["entry", "mid", "top", "N/A"]),

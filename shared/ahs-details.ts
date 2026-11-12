@@ -48,15 +48,27 @@ export const AHS_APPLIANCE_GRADES = [
   { value: "top", label: "Top" },
 ] as const;
 
+// The failure causes agents and technicians pick from (Enzo's technicians,
+// 2026-11-12), in their order. Each value is what VRS AI receives as
+// failure_cause; VRS AI takes any text and phrases the ones it knows.
 export const AHS_FAILURE_CAUSES = [
-  { value: "normal-wear", label: "Normal wear" },
-  { value: "power-surge", label: "Power surge" },
-  { value: "impact", label: "Impact" },
-  { value: "installation-error", label: "Installation error" },
-  { value: "abuse", label: "Abuse" },
-  { value: "age", label: "Age" },
+  { value: "power-surge", label: "Electronic Failure/power surge" },
+  { value: "abuse", label: "Customer neglect/abuse" },
+  { value: "mechanical-failure", label: "Mechanical Failure" },
+  { value: "infestation", label: "Infestation" },
+  { value: "normal-wear", label: "Normal wear and tear" },
   { value: "other", label: "Other" },
 ] as const;
+
+// No longer offered, still accepted: stored tickets and SASHA (whose V5-V9
+// contract lists them) may carry these.
+export const AHS_LEGACY_FAILURE_CAUSES = [
+  { value: "impact", label: "Impact" },
+  { value: "installation-error", label: "Installation error" },
+  { value: "age", label: "Age" },
+] as const;
+
+export const AHS_ALL_FAILURE_CAUSES = [...AHS_FAILURE_CAUSES, ...AHS_LEGACY_FAILURE_CAUSES] as const;
 
 const requiredText = (label: string, max: number) =>
   z
@@ -158,7 +170,7 @@ export const ahsDetailsSchema = z.object({
     enumOf(AHS_APPLIANCE_GRADES, "Select the appliance grade").optional(),
   ),
   applianceColor: optionalText("Appliance color", 40),
-  failureCause: enumOf(AHS_FAILURE_CAUSES, "Select the failure cause"),
+  failureCause: enumOf(AHS_ALL_FAILURE_CAUSES, "Select the failure cause"),
   // Absent on tickets stored before the choice existed; those were repairs.
   techRecommendation: z.preprocess(
     blankToUndefined,

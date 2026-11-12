@@ -25,6 +25,7 @@ import {
   AHS_APPLIANCE_GRADES,
   AHS_APPLIANCE_KINDS,
   AHS_APPLIANCE_LOCATIONS,
+  AHS_ALL_FAILURE_CAUSES,
   AHS_FAILURE_CAUSES,
   AHS_TECH_RECOMMENDATIONS,
   ahsApplianceKind,
@@ -165,7 +166,7 @@ export function ahsDraftToForm(details: AhsReviewDetails | null | undefined): Ah
       ? details.applianceGrade!
       : "",
     applianceColor: details.applianceColor ?? "",
-    failureCause: AHS_FAILURE_CAUSES.some((cause) => cause.value === details.failureCause)
+    failureCause: AHS_ALL_FAILURE_CAUSES.some((cause) => cause.value === details.failureCause)
       ? details.failureCause!
       : "",
     techRecommendation: details.techRecommendation ?? empty.techRecommendation,

@@ -21,7 +21,7 @@ describe("First American appliance age buckets", () => {
       "8 years",
       "9 - 11 years",
       "12 - 14 years",
-      "15+ years",
+      "15 - 30 years",
     ]);
     expect(FA_APPLIANCE_AGE_PLACEHOLDER).toBe("Select appliance age");
   });
@@ -41,9 +41,9 @@ describe("First American appliance age buckets", () => {
     [12, "12 - 14 years"],
     [13, "12 - 14 years"],
     [14, "12 - 14 years"],
-    [15, "15+ years"],
-    [16, "15+ years"],
-    [100, "15+ years"],
+    [15, "15 - 30 years"],
+    [16, "15 - 30 years"],
+    [100, "15 - 30 years"],
   ] as const)("puts %s in %s", (age, bucket) => {
     expect(faApplianceAgeBucket(age)).toBe(bucket);
     expect(faApplianceAgeBucket(String(age))).toBe(bucket);

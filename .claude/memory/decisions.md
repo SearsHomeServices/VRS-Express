@@ -1,3 +1,7 @@
+## 2026-11-12 — Failure causes: technicians' six, two new contract values
+- **Decision:** the picklist is the technicians' six (power-surge, abuse, mechanical-failure, infestation, normal-wear, other, with their labels). `VRS_FAILURE_CAUSES` (server/vrs-sasha-contract.ts) adds mechanical-failure and infestation to the contract enum; impact, installation-error and age stay accepted (`AHS_LEGACY_FAILURE_CAUSES`) but aren't offered. FA's top age bucket is "15 - 30 years" (stores 15).
+- **Why:** Enzo (2026-11-12) chose new values over mapping them to "other". VRS AI (router.py:164) takes failure_cause as free text and maps known codes to phrases (`_FAILURE_CAUSE_MAP`, router.py:344); unknown codes pass through raw. VRS AI's usable age window is 1-40 and only AHS is age-gated.
+
 ## 2026-11-12 — Appliance age always sent; FA has no 0 bucket
 - **Decision:** FA's youngest bucket is "1 - 2 years" (stores 1); 0 has no bucket and shows the placeholder. `dispatchVrsAiForSubmission` refuses any request whose `appliance_age` isn't a number above 0 (`hasApplianceAge`, shared/fa-appliance-age.ts), for SASHA and app tickets alike. HSSOM purchase year alone no longer lets an app ticket go out. Supersedes the 2026-11-06 lower-bound rule for that bucket.
 - **Why:** Enzo (2026-11-12): "there is no 'no age'. It should be 1-2 years. There's no option for 0 … make sure when we send it, it always has age." SASHA doesn't give an age today (sends 0); the VRS Express human fills it in.

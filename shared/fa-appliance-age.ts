@@ -25,7 +25,7 @@ export const FA_APPLIANCE_AGE_BUCKETS = [
   "8 years",
   "9 - 11 years",
   "12 - 14 years",
-  "15+ years",
+  "15 - 30 years",
 ] as const;
 export type FaApplianceAgeBucket = (typeof FA_APPLIANCE_AGE_BUCKETS)[number];
 
@@ -40,7 +40,7 @@ const LOWER_BOUND: Record<FaApplianceAgeBucket, number> = {
   "8 years": 8,
   "9 - 11 years": 9,
   "12 - 14 years": 12,
-  "15+ years": 15,
+  "15 - 30 years": 15,
 };
 
 // The bucket a stored age (a number, or the form's string) falls in.
@@ -57,7 +57,9 @@ export function faApplianceAgeBucket(age: number | string | null | undefined): F
   if (years <= 8) return `${years} years` as FaApplianceAgeBucket;
   if (years <= 11) return "9 - 11 years";
   if (years <= 14) return "12 - 14 years";
-  return "15+ years";
+  // Above 30 still shows here (nothing is hidden); re-picking keeps the
+  // number SASHA sent.
+  return "15 - 30 years";
 }
 
 // The number to store for a chosen bucket; undefined for anything else

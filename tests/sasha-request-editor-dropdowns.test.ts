@@ -86,13 +86,18 @@ afterEach(() => {
 });
 
 describe("failure cause dropdown", () => {
-  it("lists exactly the values VRS AI accepts, starting on SASHA's value", () => {
+  it("lists the technicians' six causes, starting on SASHA's value", () => {
     render("First American");
     const el = select("input-sasha-failure_cause");
     expect(el.tagName).toBe("SELECT");
     expect(el.value).toBe("normal-wear");
-    expect(Array.from(el.options).map((o) => o.value)).toEqual([
-      "normal-wear", "power-surge", "impact", "installation-error", "abuse", "age", "other",
+    expect(Array.from(el.options).map((o) => [o.value, o.text])).toEqual([
+      ["power-surge", "Electronic Failure/power surge"],
+      ["abuse", "Customer neglect/abuse"],
+      ["mechanical-failure", "Mechanical Failure"],
+      ["infestation", "Infestation"],
+      ["normal-wear", "Normal wear and tear"],
+      ["other", "Other"],
     ]);
   });
 
@@ -102,6 +107,20 @@ describe("failure cause dropdown", () => {
     await save();
     expect(sent.bodies).toHaveLength(1);
     expect(sent.bodies[0].fields).toEqual({ failure_cause: "power-surge" });
+  });
+
+  it("sends a new cause (mechanical failure) that passes the contract", async () => {
+    render("AHS");
+    choose(select("input-sasha-failure_cause"), "mechanical-failure");
+    await save();
+    expect(sent.bodies[0].fields).toEqual({ failure_cause: "mechanical-failure" });
+  });
+
+  it("keeps a no-longer-offered value SASHA sent selectable, with its label", () => {
+    render("AHS", context({ failure_cause: "impact" }));
+    const el = select("input-sasha-failure_cause");
+    expect(el.value).toBe("impact");
+    expect(el.options[0].text).toBe("Impact");
   });
 
   it("keeps an unlisted value SASHA sent selectable instead of dropping it", () => {
@@ -155,5 +174,19 @@ describe("First American age dropdown", () => {
     // Nothing changed: SASHA's 2 is kept, not replaced by the bucket's 1.
     expect(sent.bodies).toHaveLength(0);
     expect(container.querySelector('[data-testid="text-sasha-edit-error"]')).toBeNull();
+  });
+});
+
+describe("new failure causes pass the VRS contract", () => {
+  it.each(["mechanical-failure", "infestation"])("accepts %s on SASHA V9 and app requests", async (cause) => {
+    const { safeParseVrsAuthorizeRequest } = await import("../server/vrs-sasha-contract");
+    const { validV9AuthorizePayload } = await import("./fixtures/vrs-authorize-payloads");
+    expect(safeParseVrsAuthorizeRequest({ ...validV9AuthorizePayload, failure_cause: cause }).success).toBe(true);
+  });
+
+  it("still refuses free text", async () => {
+    const { safeParseVrsAuthorizeRequest } = await import("../server/vrs-sasha-contract");
+    const { validV9AuthorizePayload } = await import("./fixtures/vrs-authorize-payloads");
+    expect(safeParseVrsAuthorizeRequest({ ...validV9AuthorizePayload, failure_cause: "Mechanical Failure" }).success).toBe(false);
   });
 });

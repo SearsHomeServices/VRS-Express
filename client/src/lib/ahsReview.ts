@@ -11,7 +11,7 @@
 // carries customer name/address).
 import {
   AHS_APPLIANCE_GRADES,
-  AHS_FAILURE_CAUSES,
+  AHS_ALL_FAILURE_CAUSES,
   ahsApplianceKind,
   roundCents,
 } from "@shared/ahs-details";
@@ -205,7 +205,7 @@ export function holdsTechValue(current: unknown, techValue: string | undefined):
 
 export function ahsFailureCauseLabel(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  return AHS_FAILURE_CAUSES.find((cause) => cause.value === value)?.label ?? value;
+  return AHS_ALL_FAILURE_CAUSES.find((cause) => cause.value === value)?.label ?? value;
 }
 
 export function ahsRecommendationLabel(

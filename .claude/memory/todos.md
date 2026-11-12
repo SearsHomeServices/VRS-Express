@@ -1,4 +1,7 @@
 ## Open — Stage 1 editor reports (2026-11-12)
+- [x] Technicians' failure-cause list (6) with mechanical-failure and infestation; FA "15 - 30 years".
+- [ ] VRS AI (Enzo's OK): add `_FAILURE_CAUSE_MAP` wording for mechanical-failure and infestation (router.py:344) so the agent doesn't speak the raw code.
+- [ ] Tell SASHA the two new failure_cause values exist if they want to send them.
 - [x] Failure cause dropdown in the SASHA request editor.
 - [ ] "Save twice" for appliance age: ask what the first click shows (nothing / toast but value resets / error / 0), which box, which bucket, which device. Not reproduced in tests.
 - [x] FA age: "1 - 2 years" (no 0), 0 shows the placeholder, dispatch refuses a request without an age (2026-11-12).

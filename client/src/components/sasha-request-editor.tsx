@@ -20,7 +20,7 @@ import {
   hasApplianceAge,
   isFirstAmericanPartner,
 } from "@shared/fa-appliance-age";
-import { AHS_FAILURE_CAUSES } from "@shared/ahs-details";
+import { AHS_ALL_FAILURE_CAUSES, AHS_FAILURE_CAUSES } from "@shared/ahs-details";
 
 type Context = NonNullable<VrsAiBridgeStatus["reviewContext"]>;
 
@@ -187,10 +187,11 @@ export function SashaRequestEditor({
     </div>
   );
 
-  // Failure cause: VRS AI accepts only its fixed list (the V5-V9 contract
-  // enum), so a typed value like "Normal wear" was refused on save. Pick from
-  // the list instead; the value sent is the contract value. A value SASHA
-  // sent that isn't on the list stays selectable so nothing is lost.
+  // Failure cause: picked from the technicians' list (AHS_FAILURE_CAUSES);
+  // typed text such as "Normal wear" failed the contract check on save. The
+  // value sent is the code (e.g. "power-surge"). A value SASHA sent that
+  // isn't offered any more (impact, installation-error, age) stays
+  // selectable so nothing is lost.
   const failureCauseField = (name: string, label: string) => {
     const current = values[name] ?? "";
     const listed = AHS_FAILURE_CAUSES.some((cause) => cause.value === current);
@@ -207,7 +208,11 @@ export function SashaRequestEditor({
             setValues((prev) => ({ ...prev, [name]: next }));
           }}
         >
-          {!listed && <option value={current}>{current || "Select failure cause"}</option>}
+          {!listed && (
+            <option value={current}>
+              {AHS_ALL_FAILURE_CAUSES.find((cause) => cause.value === current)?.label ?? (current || "Select failure cause")}
+            </option>
+          )}
           {AHS_FAILURE_CAUSES.map((cause) => (
             <option key={cause.value} value={cause.value}>{cause.label}</option>
           ))}

@@ -622,7 +622,7 @@ describe("Stage 1 reviewer: technician-filed AHS tickets", () => {
     expectField(html, "ahs-model", "model-from-so-WTW5000");
     expectField(html, "ahs-serial", "serial-from-so-C3129");
     expectField(html, "ahs-appliance-type", "Washer");
-    expectField(html, "ahs-failure-cause", "Normal wear");
+    expectField(html, "ahs-failure-cause", "Normal wear and tear");
     expectField(html, "ahs-tech-recommendation", "Replace");
     expectField(html, "ahs-part-0-quantity", "2");
     expectField(html, "ahs-part-0-line-total", "$100.50");
@@ -1732,7 +1732,7 @@ describe("First American appliance age", () => {
         .map((match) => [match[1], match[2]]);
       expect(options).toEqual([
         ["", "Select appliance age"],
-        ...["1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years"]
+        ...["1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15 - 30 years"]
           .map((bucket) => [bucket, bucket]),
       ]);
       expect(select).toMatch(/<option value="9 - 11 years" selected="">/);
@@ -1804,7 +1804,7 @@ describe("First American appliance age", () => {
         .filter((option) => option.value !== "")
         .map((option) => option.value);
       expect(options).toEqual([
-        "none", "1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15+ years",
+        "none", "1 - 2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 - 11 years", "12 - 14 years", "15 - 30 years",
       ]);
       expect(byTestId("select-ahs-age").textContent).toContain("7 years");
 
